@@ -20,6 +20,14 @@ use rusqlite::Connection;
 
 // Session metadata.
 #[derive(Debug, Clone)]
+/// One stored row in flat form (tree picker input).
+pub struct TreeNode {
+    pub seq: i64,
+    pub parent_seq: Option<i64>,
+    pub kind: String,
+    pub payload: String,
+}
+
 pub struct SessionMeta {
     pub id: i64,
     // Name set explicitly via /name; NULL = unnamed.
@@ -82,6 +90,40 @@ impl Store {
         if !has_cwd {
             conn.execute_batch("ALTER TABLE sessions ADD COLUMN cwd TEXT;")?;
         }
+        // Tree layout (append-only): entries point at their parent row;
+        // sessions.leaf names the tip that the next append hangs from.
+        // NULL parent_seq on row seq=1 means "root"; on any later row it
+        // marks a legacy linear record and is backfilled below.
+        let has_parent: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name = 'parent_seq'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        let has_leaf: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'leaf'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if !has_parent {
+            conn.execute_batch("ALTER TABLE entries ADD COLUMN parent_seq INTEGER;")?;
+        }
+        if !has_leaf {
+            conn.execute_batch("ALTER TABLE sessions ADD COLUMN leaf INTEGER;")?;
+        }
+        // Legacy linear rows: every non-root entry's parent is the previous seq.
+        // Roots keep NULL. New rows always write parent_seq explicitly.
+        conn.execute_batch(
+            "UPDATE entries SET parent_seq = seq - 1
+             WHERE parent_seq IS NULL AND seq > 1;
+             UPDATE sessions SET leaf = COALESCE(
+                 (SELECT MAX(seq) FROM entries e WHERE e.session_id = sessions.id), NULL);",
+        )?;
         Ok(Self { conn })
     }
 
@@ -130,6 +172,12 @@ impl Store {
     // the round is either fully stored or not at all.
     pub fn append(&mut self, session_id: i64, entries: &[crate::tui::components::chat::Entry]) -> Result<()> {
         let tx = self.conn.transaction()?;
+        // The whole round hangs off the current leaf, and the leaf
+        // advances to the last appended row — one transaction makes
+        // "where is the tip" and "what was appended" atomic.
+        let leaf: Option<i64> = tx
+            .query_row("SELECT leaf FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+            .context("failed to query leaf")?;
         let next: i64 = tx
             .query_row(
                 "SELECT COALESCE(MAX(seq), 0) + 1 FROM entries WHERE session_id = ?1",
@@ -138,25 +186,40 @@ impl Store {
             )
             .context("failed to query max seq")?;
         let ts = now_stamp();
+        let mut parent = leaf;
         for (i, e) in entries.iter().enumerate() {
             let (kind, payload) = e.to_payload();
             tx.execute(
-                "INSERT INTO entries (session_id, seq, ts, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![session_id, next + i as i64, ts, kind, payload],
+                "INSERT INTO entries (session_id, seq, ts, kind, payload, parent_seq)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![session_id, next + i as i64, ts, kind, payload, parent],
             )?;
+            parent = Some(next + i as i64);
         }
+        tx.execute("UPDATE sessions SET leaf = ?1 WHERE id = ?2", rusqlite::params![parent, session_id])?;
         tx.commit()?;
         Ok(())
     }
 
-    // Load all entries of a session in seq order. Used by resume.
+    // Load the projected path (root → leaf) of a session. The tree is
+    // append-only, so "the conversation" is whatever chain the leaf
+    // pointer currently names; abandoned branches stay stored but off-path.
     pub fn load_entries(
         &self,
         session_id: i64,
     ) -> Result<Vec<crate::tui::components::chat::Entry>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT kind, payload FROM entries WHERE session_id = ?1 ORDER BY seq")?;
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE path(seq) AS (
+                 SELECT leaf FROM sessions WHERE id = ?1
+                 UNION ALL
+                 SELECT e.parent_seq FROM entries e
+                 JOIN path p ON e.session_id = ?1 AND e.seq = p.seq
+             )
+             SELECT e.kind, e.payload FROM entries e
+             JOIN path p ON e.seq = p.seq
+             WHERE e.session_id = ?1 AND e.seq IS NOT NULL
+             ORDER BY e.seq",
+        )?;
         let rows = stmt.query_map([session_id], |r| {
             let kind: String = r.get(0)?;
             let payload: String = r.get(1)?;
@@ -173,6 +236,56 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    // Move the tip to an arbitrary stored row. Nothing is deleted: the old
+    // branch stays reachable by re-pointing the leaf at any of its rows.
+    // `None` rewinds to the root (before the first entry).
+    pub fn set_leaf(&mut self, session_id: i64, seq: Option<i64>) -> Result<()> {
+        if let Some(s) = seq {
+            let exists: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM entries WHERE session_id = ?1 AND seq = ?2",
+                    rusqlite::params![session_id, s],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)?;
+            if !exists {
+                anyhow::bail!("no entry seq {} in session {}", s, session_id);
+            }
+        }
+        self.conn.execute(
+            "UPDATE sessions SET leaf = ?1 WHERE id = ?2",
+            rusqlite::params![seq, session_id],
+        )?;
+        Ok(())
+    }
+
+    // Flat view of every stored row of a session, for the tree picker:
+    // (seq, parent_seq, kind, payload) in seq order. Branch structure is
+    // visible directly through parent_seq.
+    pub fn load_tree(&self, session_id: i64) -> Result<Vec<TreeNode>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, parent_seq, kind, payload FROM entries
+             WHERE session_id = ?1 ORDER BY seq",
+        )?;
+        let rows = stmt.query_map([session_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, parent_seq, kind, payload) = row?;
+            out.push(TreeNode { seq, parent_seq, kind, payload });
+        }
+        Ok(out)
+    }
+
+    // Current tip row of a session.
+    pub fn get_leaf(&self, session_id: i64) -> Result<Option<i64>> {
+        self.conn
+            .query_row("SELECT leaf FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+            .map_err(Into::into)
     }
 
     // List all sessions, newest first. Used by the resume picker.
@@ -384,5 +497,109 @@ mod tests {
         let under_a = s.list_sessions_under(std::path::Path::new("/home/u/projA")).unwrap();
         assert_eq!(under_a.len(), 1, "only sessions created under projA");
         assert_eq!(under_a[0].id, a);
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use crate::tui::components::chat::Entry;
+
+    fn mem() -> Store {
+        let dir = std::env::temp_dir().join(format!("mypi-tree-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Store::open(&dir.join("t.db")).unwrap()
+    }
+
+    fn user(t: &str) -> Entry { Entry::User { content: t.into() } }
+    fn assistant(t: &str) -> Entry { Entry::Assistant { content: t.into(), usage: None, reasoning: None } }
+
+    #[test]
+    fn append_hangs_off_leaf_and_advances_it() {
+        let mut s = mem();
+        let id = s.create_session("t", "/").unwrap();
+        s.append(id, &[user("a")]).unwrap();
+        s.append(id, &[assistant("b"), user("c")]).unwrap();
+        // Root -> a -> b -> c
+        let leaf = s.get_leaf(id).unwrap();
+        let tree = s.load_tree(id).unwrap();
+        assert_eq!(leaf, Some(3));
+        assert_eq!(tree.len(), 3);
+        assert_eq!(tree[0].parent_seq, None);     // root has no parent
+        assert_eq!(tree[1].parent_seq, Some(1));  // b hangs off a
+        assert_eq!(tree[2].parent_seq, Some(2));  // c hangs off b
+    }
+
+    #[test]
+    fn branch_by_set_leaf_keeps_old_branch_rows() {
+        let mut s = mem();
+        let id = s.create_session("t", "/").unwrap();
+        s.append(id, &[user("a")]).unwrap();
+        s.append(id, &[assistant("old-1"), user("old-2")]).unwrap();
+        // Rewind to seq 1 (after "a") and start a new branch.
+        s.set_leaf(id, Some(1)).unwrap();
+        s.append(id, &[assistant("new-1")]).unwrap();
+        // Projected path: a, new-1. Old branch rows still exist on disk.
+        let entries = s.load_entries(id).unwrap();
+        let texts: Vec<&str> = entries.iter().map(|e| match e {
+            Entry::User { content } | Entry::Assistant { content, .. } => content.as_str(),
+            _ => "",
+        }).collect();
+        assert_eq!(texts, vec!["a", "new-1"]);
+        let tree = s.load_tree(id).unwrap();
+        assert_eq!(tree.len(), 4);            // nothing deleted
+        assert_eq!(tree[3].parent_seq, Some(1)); // new-1 forks from a
+        // Old branch still fully loadable by pointing back at it.
+        s.set_leaf(id, Some(3)).unwrap();
+        let texts_old: Vec<String> = s.load_entries(id).unwrap().iter().map(|e| match e {
+            Entry::User { content } | Entry::Assistant { content, .. } => content.clone(),
+            _ => String::new(),
+        }).collect();
+        assert_eq!(texts_old, vec!["a", "old-1", "old-2"]);
+    }
+
+    #[test]
+    fn set_leaf_root_then_append_starts_new_root() {
+        let mut s = mem();
+        let id = s.create_session("t", "/").unwrap();
+        s.append(id, &[user("a")]).unwrap();
+        s.set_leaf(id, None).unwrap();
+        s.append(id, &[user("b")]).unwrap();
+        let tree = s.load_tree(id).unwrap();
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree[1].parent_seq, None); // second root — pi's resetLeaf semantic
+        let entries = s.load_entries(id).unwrap();
+        let texts: Vec<&str> = entries.iter().map(|e| match e {
+            Entry::User { content } => content.as_str(),
+            _ => "",
+        }).collect();
+        assert_eq!(texts, vec!["b"]);
+    }
+
+    #[test]
+    fn legacy_linear_db_is_backfilled_on_open() {
+        let dir = std::env::temp_dir().join(format!("mypi-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("l.db");
+        // Simulate a pre-tree database: no parent_seq, no leaf columns.
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL, cwd TEXT);
+             CREATE TABLE entries (session_id INTEGER NOT NULL, seq INTEGER NOT NULL, ts TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (session_id, seq));
+             INSERT INTO sessions (id, started_at) VALUES (1, 't');
+             INSERT INTO entries VALUES (1, 1, 't', 'user', '{\"content\":\"a\"}');
+             INSERT INTO entries VALUES (1, 2, 't', 'assistant', '{\"content\":\"b\"}');",
+        ).unwrap();
+        drop(conn);
+        let s = Store::open(&db).unwrap();
+        // Projection over backfilled parents yields the original linear order.
+        let entries = s.load_entries(1).unwrap();
+        let texts: Vec<&str> = entries.iter().map(|e| match e {
+            Entry::User { content } => content.as_str(),
+            Entry::Assistant { content, .. } => content.as_str(),
+            _ => "",
+        }).collect();
+        assert_eq!(texts, vec!["a", "b"]);
+        assert_eq!(s.get_leaf(1).unwrap(), Some(2));
     }
 }
