@@ -557,18 +557,18 @@ impl App {
     // language action inside `editor_action`, and the epilogue runs
     // **once, here**. See the `editor_action` docs.
     fn apply(&mut self, action: Action, term_w: u16, cx: &Ctx) -> bool {
-        // ---- /resume session picker: modal; takes over navigation and confirm first ----
+        // ---- routing: modal > input (editor) > app-level. One chain,
+        // one place. A new overlay only adds a `modal.is_some()` branch
+        // here; zones declare their own acceptance in `zones_impl`.
         if self.resume_pick.is_some() {
             match action {
-                Action::SelectorUp => {
-                    if let Some((_, sel)) = self.resume_pick.as_mut() {
-                        *sel = sel.saturating_sub(1);
-                    }
-                    return true;
-                }
-                Action::SelectorDown => {
+                Action::SelectorUp | Action::SelectorDown => {
                     if let Some((v, sel)) = self.resume_pick.as_mut() {
-                        *sel = (*sel + 1).min(v.len().saturating_sub(1));
+                        let len = v.len().saturating_sub(1);
+                        *sel = match action {
+                            Action::SelectorUp => sel.saturating_sub(1),
+                            _ => (*sel + 1).min(len),
+                        };
                     }
                     return true;
                 }
@@ -583,7 +583,6 @@ impl App {
                 _ => {}
             }
         }
-        // Try the editor route first (the vast majority of keys).
         // `Action` contains `String`s (paste/insert) so it is not Copy;
         // ownership is only taken when the editor route is actually
         // taken, hence the borrow-based test first.
@@ -600,7 +599,11 @@ impl App {
             return !self.quit_requested;
         }
 
-        // Everything else is an application-level action: background thread, popup, quitting...
+        // Everything else is an application-level action: background
+        // thread, popup, quitting. Popup actions belong to the input
+        // zone (the popup is the input's completion surface); fold and
+        // wheel toggles belong to the history zone — each zone's
+        // acceptance table lives in `zones_impl`.
         match action {
             Action::Quit => return false,
 
@@ -619,13 +622,10 @@ impl App {
                 self.interrupt.store(true, Ordering::Relaxed);
             }
             Action::ToggleReasoning => {
-                // Global reasoning fold. History render height is
-                // recomputed per frame by estimated_height, so the next
-                // frame picks the change up automatically.
+                // History-zone fold; the next frame recomputes heights.
                 self.history.handle(Action::ToggleReasoning);
             }
             Action::ToggleTools => {
-                // Global tool-output expansion. Same mechanism; next frame applies it.
                 self.history.handle(Action::ToggleTools);
             }
 
@@ -635,7 +635,7 @@ impl App {
             // Handled by `editor_action`, or semantically a no-op.
             // Reaching here means the two match arms are out of sync —
             // a programming error.
-            other => debug_assert!(false, "动作未被处理: {other:?}"),
+            other => debug_assert!(false, "unhandled action: {other:?}"),
         }
         true
     }
