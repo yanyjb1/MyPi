@@ -37,9 +37,9 @@ use crate::ai::config::Config;
 use crate::ai::pricing::CostTracker;
 use crate::ai::types::{Context as ChatContext, Message};
 use crate::entry as entry;
-use crate::tui::editor::{Editor, Effect};
+use crate::tui::editor::{Editor, Effect, History};
 use crate::server::events::SessionEvent;
-use crate::tui::history;
+
 use crate::tui::keys::{Action, KeyContext, translate_with};
 use crate::tui::zones::Zone as _;
 use crate::tui::path;
@@ -89,7 +89,7 @@ struct App {
     // interrupt) + the SessionState. The TUI only calls protocol methods.
     session: crate::server::Session,
     // Input history (what ↑ cycles through).
-    input_history: history::History,
+    input_history: History,
     // Completion surface (popup state machine + word memo + model args).
     completion: crate::tui::completion::CompletionController,
     tracker: CostTracker,
@@ -140,7 +140,7 @@ impl App {
             editor: Editor::new(),
             goal_col: None,
             history: crate::tui::zones_impl::HistoryState::default(),
-            input_history: history::History::new(),
+            input_history: History::new(),
             completion: crate::tui::completion::CompletionController::new(),
             tracker: CostTracker::default(),
             spin_i: 0,

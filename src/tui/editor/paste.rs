@@ -36,15 +36,6 @@ pub struct Marker {
 }
 
 impl Marker {
-    // Whether a cursor position falls inside this marker (both ends included).
-    pub fn contains_inclusive(&self, pos: usize) -> bool {
-        pos >= self.start && pos <= self.end
-    }
-
-    // Whether the cursor is strictly inside the marker (at neither end).
-    pub fn contains_strict(&self, pos: usize) -> bool {
-        pos > self.start && pos < self.end
-    }
 }
 
 // The store of folded originals.

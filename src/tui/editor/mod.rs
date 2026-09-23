@@ -1,29 +1,45 @@
-//! Input editor — cursor model + editing actions + undo stack.
-//!
-//! `Vec<char>` instead of `String` + byte indexes:
-//! a CJK character is 3 bytes, and byte slicing can land mid-character and panic.
-//! With `Vec<char>`, index = character number is safe by construction.
-//!
-//! Cursor semantics: `cursor` is an **insertion point**, range `0..=chars.len()`.
-//! `cursor == 0` means before the first character, `cursor == len` after the last.
-//!
-//! Undo integration: **every method that mutates text snapshots first**
-//! (`self.checkpoint(kind)`), so callers never have to remember to save first —
-//! forgetting is the most common bug for this kind of feature.
-//!
-//! ## Paste markers are atomic
-//!
-//! Large pastes fold into `[paste #1 +30 lines]` (see `paste.rs`).
-//! The marker behaves as **one unit** in the editor: a single backspace removes
-//! the whole thing, one arrow key crosses it, Home/End treat it as indivisible.
-//! Implementation: before each operation, `paste::expand_over_markers` expands the
-//! range to cover whole markers; positions are never stored, so there is no
+//! Input editor domain — the text field state machine and its satellites.
+//
+// - `mod.rs` (this file): the Editor state machine (insert/delete/cursor
+//   moves) — see the Editor docs below for the historical notes;
+// - `undo`: snapshot-based undo/redo stack;
+// - `paste`: bracketed-paste markers, the paste store, collapse policy;
+// - `history`: ↑↓ input-history browsing (pi-compatible semantics).
+
+mod history;
+mod paste;
+mod undo;
+
+pub use history::History;
+pub use paste::PasteStore;
+pub use undo::EditKind;
+
+// Input editor — cursor model + editing actions + undo stack.
+//
+// `Vec<char>` instead of `String` + byte indexes:
+// a CJK character is 3 bytes, and byte slicing can land mid-character and panic.
+// With `Vec<char>`, index = character number is safe by construction.
+//
+// Cursor semantics: `cursor` is an **insertion point**, range `0..=chars.len()`.
+// `cursor == 0` means before the first character, `cursor == len` after the last.
+//
+// Undo integration: **every method that mutates text snapshots first**
+// (`self.checkpoint(kind)`), so callers never have to remember to save first —
+// forgetting is the most common bug for this kind of feature.
+//
+// ## Paste markers are atomic
+//
+// Large pastes fold into `[paste #1 +30 lines]` (see `paste.rs`).
+// The marker behaves as **one unit** in the editor: a single backspace removes
+// the whole thing, one arrow key crosses it, Home/End treat it as indivisible.
+// Implementation: before each operation, `paste::expand_over_markers` expands the
+// range to cover whole markers; positions are never stored, so there is no
 
 use std::time::Instant;
 
-use crate::tui::paste::{self, PasteStore};
+use undo::{Snapshot, UndoStack};
+
 use crate::tui::text;
-use crate::tui::undo::{EditKind, Snapshot, UndoStack};
 
 // Word-motion separators: whitespace plus common CJK/Latin punctuation.
 //
