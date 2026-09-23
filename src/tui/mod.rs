@@ -12,6 +12,7 @@ pub mod editor;
 pub mod events;
 pub mod history;
 pub mod keys;
+pub mod leaf;
 pub mod layout;
 pub mod paste;
 pub mod path;

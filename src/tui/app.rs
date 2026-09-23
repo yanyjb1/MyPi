@@ -44,6 +44,7 @@ use crate::tui::editor::{Editor, Effect};
 use crate::tui::events::AppEvent;
 use crate::tui::history;
 use crate::tui::keys::{Action, KeyContext, translate_with};
+use crate::tui::leaf;
 use crate::tui::zones::Zone as _;
 use crate::tui::path;
 use crate::tui::layout as tlayout;
@@ -311,12 +312,12 @@ impl App {
                 match spec.args {
                     path::ArgKind::ModelId => {
                         if let Some(items) = self.command_args(&prefix) {
-                            // Leaf state: the single candidate reproduces the
-                            // current line verbatim (nothing left to extend).
-                            // Close so Tab/Enter stop re-confirming the same
+                            // Leaf state (single candidate == whole line):
+                            // close so Tab/Enter stop re-confirming the same
                             // completion and Enter submits again.
-                            let is_leaf = items.len() == 1 && items[0].insert == text;
-                            if items.is_empty() || is_leaf {
+                            if items.is_empty()
+                                || leaf::leaf_state(&items, prefix_text, true, &text).is_some()
+                            {
                                 self.popup.close();
                                 self.last_completion_word = None;
                             } else {
@@ -356,23 +357,12 @@ impl App {
                 if at_start && items.is_empty() && let Some(arg) = self.command_args(&word) {
                     items = arg;
                 }
-                // Final-stage detection (close the popup; Enter submits
-                // directly):
-                // 1. file/dir completed to a leaf: the single candidate's
-                //    replacement equals the current word
-                //    ("zstd.h" -> "zstd.h", "src/" -> "src/");
-                // 2. exact command-name hit ("/q", "/model"): no longer
-                //    listed alongside longer commands, so Enter submits
-                //    in one step instead of confirming the completion
-                //    first.
-                let is_leaf_file = items.len() == 1 && items[0].insert == word;
-                let is_exact_command =
-                    at_start && path::COMMANDS.iter().any(|c| c.name == word);
-                if is_leaf_file || is_exact_command {
+                // Final-stage detection: the single leaf rule lives in
+                // `leaf::leaf_state` (file leaf / exact command / argument
+                // line-leaf). Close there -> Enter submits directly.
+                if items.is_empty() || leaf::leaf_state(&items, &word, at_start, &text).is_some() {
                     self.popup.close();
                     self.last_completion_word = None;
-                } else if items.is_empty() {
-                    self.popup.close();
                 } else {
                     self.popup.open(items, from, cursor);
                 }
