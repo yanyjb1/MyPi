@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<()> {
         // Validate the id now — fail before the TUI starts, not on the
         // first request.
         cfg.model_by_id(spec)?;
-        cfg.default = Some(spec.clone());
+        cfg.app.default = Some(spec.clone());
     }
     app::run_tui(cfg, cli)
 }

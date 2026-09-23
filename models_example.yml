@@ -1,86 +1,73 @@
-# MyPi model configuration — endpoints, credentials, and pricing all live
-# in this file; zero hardcoding in code.
+# MyPi model configuration — providers, credentials, and pricing.
 #
-# Location (XDG spec):
-#   1. $MYPI_CONFIG            — explicit override (tests/CI)
-#   2. $XDG_CONFIG_HOME/mypi/config.yaml
-#   3. ~/.config/mypi/config.yaml   <- normal usage; put your keys here
+# THIS FILE IS HAND-MAINTAINED. The program never writes it: /model and
+# startup bootstrap only ever touch config.yaml. Keep your keys here,
+# back this file up, and don't expect mypi to repair it.
+#
+# Location (XDG):
+#   1. $MYPI_MODELS            — explicit override (tests/CI)
+#   2. $XDG_CONFIG_HOME/mypi/models.yml  <- put your keys here
+#                                             (~/.config/mypi/models.yml)
 #
 # Copy this file there to start:
-#   mkdir -p ~/.config/mypi && cp models_example.yml ~/.config/mypi/config.yaml
+#   mkdir -p ~/.config/mypi && cp models_example.yml ~/.config/mypi/models.yml
 #
 # Pricing: unit prices are per 1M tokens, in each vendor's native currency
 # (`currency` only picks the display symbol ¥/$ — no conversion).
 # All-zero cost = the statusline hides spend for that model.
 
-# ---- Palette -------------------------------------------------------------
-# accent: frame / model name / used-ctx gauge; gold: money; black: pill base.
-# Named colors (green/blue/magenta/...) or "#rrggbb". black defaults to true
-# black "0,0,0" because ANSI index black renders grayish on Konsole.
-theme:
-  accent: green
-  gold: yellow
-  black: "0,0,0"
-
 # ---- Providers -----------------------------------------------------------
+# api is REQUIRED. All providers speak an OpenAI-compatible wire protocol;
+# the value selects vendor-specific deltas on top:
+#   openai-completions — plain OpenAI protocol (default for most gateways)
+#   deepseek           — DeepSeek: reasoning_content streams before content
+# baseUrl may be written `base_url` — both spellings are accepted.
 # api_key: literal string, or a ${ENV_VAR} reference (resolved at load).
 providers:
   local:
+    api: openai-completions
     baseUrl: http://localhost:7863/v1
     apiKey: ""                       # empty = no auth header
-  sdu:
+    # Models this provider serves — nested, ids are provider-internal.
+    models:
+      - id: global:gpt-5.6-luna      # model id sent to the server
+        name: GPT5.6L(LC)            # display name (statusline); falls back to id
+        contextWindow: 1000000       # statusline ctx-gauge denominator
+        maxOutputTokens: 64000       # optional: actual max_tokens per request
+        currency: Usd
+        cost:
+          input: 0.20
+          output: 1.20
+          cacheRead: 0.02
+          cacheWrite: 0.0
+
+      - id: deepseek-ai/DeepSeek-V4.1-Flash
+        name: DSV4.1F(MS)
+        contextWindow: 1000000
+        maxOutputTokens: 128000      # take everything the model allows
+        currency: Cny
+        cost:
+          input: 1
+          output: 4
+          cacheRead: 0.02
+          cacheWrite: 0.0
+
+  vendor:
+    api: openai-completions
     baseUrl: https://gateway.example.com:4000/v1
-    apiKey: ${SDU_API_KEY}           # reference the env var, never commit keys
-    # api: deepseek                  # vendor-specific wire dialect (optional).
-    # All providers speak the OpenAI-compatible protocol; `api` only opts
-    # into vendor quirks (deepseek = reasoning_content streams before
-    # content). Omit for the default openai-compatible behavior.
+    apiKey: ${VENDOR_API_KEY}        # reference the env var, never commit keys
+    models:
+      - id: vendor-a/model-x
+        name: ModelX(GW)
+        contextWindow: 131072
+        # maxOutputTokens omitted -> conservative 4096
+        currency: Cny                # gateway reports no pricing -> all 0
+        cost:
+          input: 0.0
+          output: 0.0
+          cacheRead: 0.0
+          cacheWrite: 0.0
 
-# ---- Default model (MANDATORY) -------------------------------------------
-# "<provider>:<model id>" referencing an entry below. There is no implicit
-# fallback: without this line mypi refuses to start.
-default: local:gpt-5.6-luna
-
-# ---- Models --------------------------------------------------------------
-# maxOutputTokens is what **you** allow the model to emit per reply — the
-# actual `max_tokens` sent in every request. Models often accept far more
-# than their default (e.g. a 1M-context model whose API default is 4k);
-# set it here to override. Omit it and a conservative 4096 is used.
-# contextWindow is the statusline ctx-gauge denominator (capacity, not a
-# request parameter).
-models:
-  - id: global:gpt-5.6-luna          # model id sent to the server
-    name: GPT5.6L(LC)                # statusline display name
-    provider: local
-    contextWindow: 1000000
-    maxOutputTokens: 64000           # e.g. cap a 128k-capable model at 64k
-    currency: Usd
-    cost:
-      input: 0.20
-      output: 1.20
-      cacheRead: 0.02
-      cacheWrite: 0.0
-
-  - id: deepseek-ai/DeepSeek-V4.1-Flash
-    name: DSV4.1F(MS)
-    provider: local
-    contextWindow: 1000000
-    maxOutputTokens: 128000          # take everything the model allows
-    currency: Cny
-    cost:
-      input: 1
-      output: 4
-      cacheRead: 0.02
-      cacheWrite: 0.0
-
-  - id: vendor-a/model-x
-    name: ModelX(GW)
-    provider: sdu
-    contextWindow: 131072
-    # maxOutputTokens omitted -> conservative 4096
-    currency: Cny                    # gateway reports no pricing -> all 0
-    cost:
-      input: 0.0
-      output: 0.0
-      cacheRead: 0.0
-      cacheWrite: 0.0
+# ---- What NOT to put here ------------------------------------------------
+# default:      -> belongs in config.yaml (mypi writes it there; see /model)
+# theme:        -> belongs in config.yaml

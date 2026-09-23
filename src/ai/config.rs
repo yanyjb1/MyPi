@@ -178,30 +178,43 @@ impl Currency {
     }
 }
 
-/// Top-level config file. `models` is a list (hand-written format); `default` matches by id.
+/// **models.yml** — the user-maintained file of providers and models
+/// (credentials live here!). The program **never writes** this file:
+/// an editor bug must not be able to corrupt the user's keys.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Config {
+pub struct ModelsConfig {
     pub providers: std::collections::HashMap<String, Provider>,
-    /// Default model id (e.g. "global:gpt-5.6-luna"). Defaults to the first entry.
+}
+
+/// **config.yaml** — program-managed miscellany (default model, theme).
+/// Safe to rewrite: the program owns this file.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AppConfig {
+    /// Default model id, addressed as `<provider>:<model id>`.
     #[serde(default)]
     pub default: Option<String>,
     #[serde(default)]
     pub theme: Theme,
 }
 
+/// The merged view both files feed into (what the rest of the program sees).
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub models: ModelsConfig,
+    pub app: AppConfig,
+}
+
 /// Connection details for one provider.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Provider {
+    #[serde(alias = "baseUrl")]
     pub base_url: String,
-    #[serde(default)]
+    #[serde(default, alias = "apiKey")]
     pub api_key: String,
-    /// Wire dialect. All providers speak an OpenAI-compatible protocol;
-    /// this field only selects **vendor-specific deltas** on top of it.
-    /// Values: `openai-compatible` (default) | `deepseek`.
-    /// The user opts into a vendor's quirks explicitly — the code ships
-    /// the capability, the config decides whether it is used.
-    #[serde(default, rename = "api")]
-    pub api: Option<String>,
+    /// Wire dialect — **required** (copy it from the template). Values:
+    /// `openai-completions` (OpenAI-compatible) | `deepseek`.
+    #[serde(rename = "api")]
+    pub api: String,
     /// Models this provider serves — **nested inside the provider**, never
     /// a top-level flat list. The model id is provider-internal: the same
     /// gateway can expose `gpt-x`, DeepSeek's API exposes
@@ -211,10 +224,10 @@ pub struct Provider {
 }
 
 impl Provider {
-    /// Resolved dialect (config value or the default).
+    /// Resolved dialect (the required `api` value).
     pub fn dialect(&self) -> Dialect {
-        match self.api.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            Some(v) if v.eq_ignore_ascii_case("deepseek") => Dialect::DeepSeek,
+        match self.api.trim() {
+            v if v.eq_ignore_ascii_case("deepseek") => Dialect::DeepSeek,
             _ => Dialect::OpenAiCompatible,
         }
     }
@@ -276,101 +289,138 @@ impl ModelEntry {
 
 
 impl Config {
-    /// Load and parse the config file in lookup order.
+    /// XDG base for config files ($XDG_CONFIG_HOME, default ~/.config).
+    fn xdg_config_base() -> anyhow::Result<std::path::PathBuf> {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+            .ok_or_else(|| anyhow!("neither HOME nor XDG_CONFIG_HOME is set; cannot locate config"))
+    }
+
+    /// models.yml path: $MYPI_MODELS overrides, else $XDG_CONFIG_HOME/mypi/models.yml.
+    pub fn models_path() -> anyhow::Result<std::path::PathBuf> {
+        if let Ok(p) = std::env::var("MYPI_MODELS") {
+            return Ok(std::path::PathBuf::from(p));
+        }
+        Ok(Self::xdg_config_base()?.join("mypi").join("models.yml"))
+    }
+
+    /// config.yaml path: $MYPI_CONFIG overrides, else $XDG_CONFIG_HOME/mypi/config.yaml.
+    pub fn app_path() -> anyhow::Result<std::path::PathBuf> {
+        if let Ok(p) = std::env::var("MYPI_CONFIG") {
+            return Ok(std::path::PathBuf::from(p));
+        }
+        Ok(Self::xdg_config_base()?.join("mypi").join("config.yaml"))
+    }
+
+    /// Directory containing the config files. Used by saves.
+    pub fn config_dir() -> anyhow::Result<std::path::PathBuf> {
+        Ok(Self::xdg_config_base()?.join("mypi"))
+    }
+
+    /// Load both files.
+    ///
+    /// - models.yml missing -> **hard error** (the user must declare their
+    ///   providers/models/keys; nothing is invented on their behalf).
+    /// - config.yaml missing -> bootstrapped: the models are sorted by
+    ///   display name (A-Z) and the first becomes `default`; the file is
+    ///   written so subsequent /model changes persist. models.yml present
+    ///   but empty (no models) is also a hard error.
     pub fn load() -> anyhow::Result<Self> {
-        let path = Self::locate()?;
-        let text = std::fs::read_to_string(&path).with_context(|| {
+        let models_path = Self::models_path()?;
+        let app_path = Self::app_path()?;
+
+        let models_text = std::fs::read_to_string(&models_path).with_context(|| {
             format!(
-                "no config at {} — create it from models_example.yml (`mkdir -p ~/.config/mypi && cp models_example.yml ~/.config/mypi/config.yaml`), then fill in your providers and keys",
-                path.display()
+                "no models.yml at {} — create it from models_example.yml (`mkdir -p ~/.config/mypi && cp models_example.yml ~/.config/mypi/models.yml`), then fill in your providers and keys",
+                models_path.display()
             )
         })?;
-        let cfg: Config = serde_yaml::from_str(&text)
-            .with_context(|| format!("invalid config format: {}", path.display()))?;
+        let models: ModelsConfig = serde_yaml::from_str(&models_text)
+            .with_context(|| format!("invalid models.yml format: {}", models_path.display()))?;
+
+        let app: AppConfig = match std::fs::read_to_string(&app_path) {
+            Ok(text) => serde_yaml::from_str(&text)
+                .with_context(|| format!("invalid config.yaml format: {}", app_path.display()))?,
+            Err(_) => {
+                // Bootstrap: pick the alphabetically-first display name and
+                // persist the choice (config.yaml is program-owned; safe
+                // to write — unlike models.yml, which is never written).
+                let first = Self::alphabetical_default(&models)
+                    .ok_or_else(|| anyhow!("models.yml declares no models — add at least one `- id: ...` entry"))?;
+                let app = AppConfig { default: Some(first), theme: Theme::default() };
+                std::fs::create_dir_all(Self::config_dir()?)?;
+                let yaml = serde_yaml::to_string(&app)?;
+                std::fs::write(&app_path, yaml)
+                    .with_context(|| format!("failed to write {}", app_path.display()))?;
+                app
+            }
+        };
+
+        let cfg = Config { models, app };
         cfg.validate()?;
         Ok(cfg)
     }
 
-    /// Config lookup order (first existing wins):
-    ///   1. $MYPI_CONFIG (explicit; used by tests)
-    ///   2. $XDG_CONFIG_HOME/mypi/config.yaml (canonical location)
-    ///   3. ~/.config/mypi/config.yaml (XDG default)
-    ///   4. ./models.yml (legacy path, kept for existing repos)
-    pub fn locate() -> anyhow::Result<std::path::PathBuf> {
-        if let Ok(p) = std::env::var("MYPI_CONFIG") {
-            return Ok(std::path::PathBuf::from(p));
-        }
-        let xdg = std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+    /// The alphabetically-first model by display name (A-Z, case
+    /// insensitive), addressed as `<provider>:<id>`. The deterministic
+    /// choice when config.yaml has no default yet.
+    fn alphabetical_default(models: &ModelsConfig) -> Option<String> {
+        let mut all: Vec<(String, String, String)> = models
+            .providers
+            .iter()
+            .flat_map(|(p, prov)| {
+                prov.models.iter().map(move |m| {
+                    (m.display_name().to_lowercase(), p.clone(), m.id.clone())
+                })
             })
-            .ok_or_else(|| anyhow!("neither HOME nor XDG_CONFIG_HOME is set; cannot locate config"))?;
-        // XDG only — no CWD fallback. The repo never holds credentials;
-        // `models_example.yml` documents the format and users copy it to
-        // the canonical location.
-        Ok(xdg.join("mypi").join("config.yaml"))
-    }
-
-    /// Directory containing the config file ($XDG_CONFIG_HOME/mypi). Used by save.
-    pub fn config_dir() -> anyhow::Result<std::path::PathBuf> {
-        let xdg = std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
-            })
-            .ok_or_else(|| anyhow!("neither HOME nor XDG_CONFIG_HOME is set; cannot locate config"))?;
-        Ok(xdg.join("mypi"))
-    }
-
-    /// Write `default` back to the config file
-    /// (XDG_CONFIG_HOME/mypi/config.yaml).
-    ///
-    /// Even when the config was loaded from the legacy models.yml or
-    /// $MYPI_CONFIG, the canonical location is written — it has higher
-    /// precedence and takes over on the next launch.
-    pub fn save_default(&self, id: &str) -> anyhow::Result<()> {
-        let dir = Self::config_dir()?;
-        std::fs::create_dir_all(&dir)?;
-        let mut next = Clone::clone(self);
-        next.default = Some(id.to_string());
-        let path = dir.join("config.yaml");
-        // $MYPI_CONFIG has the highest precedence; write it directly so
-        // the change cannot be silently shadowed
-        let path = match std::env::var("MYPI_CONFIG") {
-            Ok(p) => std::path::PathBuf::from(p),
-            Err(_) => path,
-        };
-        let yaml = serde_yaml::to_string(&next)?;
-        std::fs::write(&path, yaml)
-            .with_context(|| format!("failed to write config: {}", path.display()))?;
-        Ok(())
+            .collect();
+        all.sort();
+        all.first().map(|(_, p, id)| format!("{p}:{id}"))
     }
 
     /// Fail fast: model ids are **provider-scoped** (the same id may
     /// appear under two providers), so uniqueness is checked per provider.
-    /// The globally-addressed form is `<provider>:<id>` — enforced where
-    /// models are looked up, not here.
     fn validate(&self) -> anyhow::Result<()> {
-        for (pname, p) in &self.providers {
+        let mut any = false;
+        for (pname, p) in &self.models.providers {
             let mut seen = std::collections::HashSet::new();
             for m in &p.models {
+                any = true;
                 if !seen.insert(&m.id) {
                     return Err(anyhow!("provider {pname}: duplicate model id `{}`", m.id));
                 }
             }
         }
+        if !any {
+            return Err(anyhow!("models.yml declares no models — add at least one `- id: ...` entry"));
+        }
+        // A persisted default must still address a declared model.
+        if let Some(d) = &self.app.default {
+            self.model_by_id(d)?;
+        }
+        Ok(())
+    }
+
+    /// Write the default model to config.yaml (never to models.yml).
+    pub fn save_default(&self, id: &str) -> anyhow::Result<()> {
+        let mut app = self.app.clone();
+        app.default = Some(id.to_string());
+        let path = Self::app_path()?;
+        std::fs::create_dir_all(Self::config_dir()?)?;
+        let yaml = serde_yaml::to_string(&app)?;
+        std::fs::write(&path, yaml).with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
 
     /// Every declared model with its owning provider name, in config
     /// order (providers are a map, so sort names for a stable listing).
     pub fn models(&self) -> impl Iterator<Item = (&str, &ModelEntry)> {
-        let mut names: Vec<&String> = self.providers.keys().collect();
+        let mut names: Vec<&String> = self.models.providers.keys().collect();
         names.sort();
         names
             .into_iter()
-            .flat_map(move |n| self.providers[n.as_str()].models.iter().map(move |m| (n.as_str(), m)))
+            .flat_map(move |n| self.models.providers[n.as_str()].models.iter().map(move |m| (n.as_str(), m)))
     }
 
     /// Fetch the default model entry. The `default:` key is **mandatory**
@@ -378,9 +428,10 @@ impl Config {
     /// first-model fallback, no implicit default).
     pub fn default_model(&self) -> anyhow::Result<ResolvedModel> {
         let id = self
+            .app
             .default
             .as_deref()
-            .ok_or_else(|| anyhow!("config has no `default:` model — add e.g. `default: local:gpt-5.6-luna` to the config"))?;
+            .ok_or_else(|| anyhow!("no default model set — run /model <provider>:<id>"))?;
         self.model_by_id(id)
     }
 
@@ -390,7 +441,7 @@ impl Config {
         let (pname, mid) = id.split_once(':').ok_or_else(|| {
             anyhow!("model id must be `<provider>:<id>`, got `{id}`")
         })?;
-        let p = self.providers.get(pname).ok_or_else(|| anyhow!("unknown provider: {pname}"))?;
+        let p = self.models.providers.get(pname).ok_or_else(|| anyhow!("unknown provider: {pname}"))?;
         let m = p.models.iter().find(|m| m.id == mid)
             .ok_or_else(|| anyhow!("provider {pname} has no model `{mid}`"))?;
         Ok(ResolvedModel { provider_name: pname.to_string(), entry: m.clone() })
@@ -415,14 +466,19 @@ impl Config {
 mod tests {
     use super::*;
 
+    fn parse_models(yaml: &str) -> anyhow::Result<ModelsConfig> {
+        Ok(serde_yaml::from_str(yaml)?)
+    }
+
     #[test]
     fn parses_nested_provider_models() {
-        let cfg: Config = serde_yaml::from_str(
+        let models = parse_models(
             r#"
 providers:
   local:
-    base_url: http://localhost:9999/v1
-    api_key: ""
+    baseUrl: http://localhost:9999/v1
+    api: openai-completions
+    apiKey: ""
     models:
       - id: vendor-a/model-x
         name: ModelX
@@ -437,10 +493,13 @@ providers:
       - id: vendor-b/model-y
         contextWindow: 1000000
         cost: { input: 0.8, output: 2.7, cacheRead: 0.1, cacheWrite: 1.25 }
-default: local:vendor-a/model-x
 "#,
         )
         .unwrap();
+        let cfg = Config {
+            models,
+            app: AppConfig { default: Some("local:vendor-a/model-x".into()), theme: Theme::default() },
+        };
         // Addressing is <provider>:<id>; the model entry itself keeps the bare id.
         let m = cfg.default_model().unwrap();
         assert_eq!(m.provider_name, "local");
@@ -459,23 +518,39 @@ default: local:vendor-a/model-x
         assert!(cfg.model_by_id("nope:vendor-b/model-y").is_err());
     }
 
+    /// `api` is required — a provider without it fails to parse.
+    #[test]
+    fn api_field_is_required() {
+        let r = parse_models(
+            r#"
+providers:
+  local: { baseUrl: "http://x/v1" }
+"#,
+        );
+        assert!(r.is_err(), "missing api must be rejected");
+    }
+
     /// A model id may itself contain colons (`global:x` — legacy vendor
     /// prefixes live inside the id). Addressing splits on the **first**
     /// colon only.
     #[test]
     fn model_id_may_contain_colons() {
-        let cfg: Config = serde_yaml::from_str(
+        let models = parse_models(
             r#"
 providers:
   local:
-    base_url: http://x/v1
+    baseUrl: http://x/v1
+    api: openai-completions
     models:
       - id: global:gpt-5.6-luna
         name: GPT5.6L
-default: local:global:gpt-5.6-luna
 "#,
         )
         .unwrap();
+        let cfg = Config {
+            models,
+            app: AppConfig { default: Some("local:global:gpt-5.6-luna".into()), theme: Theme::default() },
+        };
         let rm = cfg.default_model().unwrap();
         assert_eq!(rm.provider_name, "local");
         assert_eq!(rm.entry.id, "global:gpt-5.6-luna");
@@ -483,133 +558,169 @@ default: local:global:gpt-5.6-luna
         assert_eq!(rm.entry.id.split(':').count(), 2);
     }
 
-    /// `default:` is mandatory — no first-model fallback.
+    /// `default:` is mandatory — no first-model fallback at request time.
     #[test]
     fn default_is_mandatory() {
-        let cfg: Config = serde_yaml::from_str(
+        let models = parse_models(
             r#"
 providers:
-  local: { base_url: "http://x/v1", models: [{ id: m1 }] }
+  local: { baseUrl: "http://x/v1", api: openai-completions, models: [{ id: m1 }] }
 "#,
         )
         .unwrap();
+        let cfg = Config { models, app: AppConfig::default() };
         let err = cfg.default_model().unwrap_err().to_string();
-        assert!(err.contains("no `default:` model"), "{err}");
+        assert!(err.contains("no default model set"), "{err}");
     }
 
-    /// A missing config file is a hard error pointing at the template.
+    /// Alphabetical bootstrap: config.yaml missing + models present ->
+    /// the first model by display name (A-Z) becomes default and the
+    /// file is written.
     #[test]
-    fn load_errors_when_config_missing() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("mypi-missing-{}", std::process::id()));
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", &dir);
-            std::env::remove_var("MYPI_CONFIG");
-        }
-        let err = Config::load().unwrap_err().to_string();
-        assert!(err.contains("create it from models_example.yml"), "{err}");
-        unsafe {
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
+    fn alphabetical_default_bootstrap() {
+        let models = parse_models(
+            r#"
+providers:
+  local:
+    baseUrl: http://x/v1
+    api: openai-completions
+    models:
+      - id: m-zeta
+        name: Zeta
+      - id: m-alpha
+        name: Alpha
+      - id: m-bare
+"#,
+        )
+        .unwrap();
+        // "m-bare" (no name -> id fallback) sorts before "Alpha"? No:
+        // id fallback "m-bare" lowercase m vs "alpha"/"zeta" — sorted:
+        // alpha < m-bare < zeta. So "local:m-alpha" wins.
+        let got = Config::alphabetical_default(&models).unwrap();
+        assert_eq!(got, "local:m-alpha");
     }
 
     /// The theme section parses named/hex/r,g,b colors; defaults green/yellow/true black.
     #[test]
     fn theme_colors_parse() {
         use ratatui::style::Color;
-        let cfg: Config = serde_yaml::from_str(
+        let app: AppConfig = serde_yaml::from_str(
             r##"
-providers:
-  local: { base_url: "http://x/v1" }
 theme:
   accent: "#ff8800"
   gold: "12,34,56"
-models: []
 "##,
         )
         .unwrap();
-        assert_eq!(cfg.theme.accent.to_color(), Color::Rgb(0xff, 0x88, 0x00));
-        assert_eq!(cfg.theme.gold.to_color(), Color::Rgb(12, 34, 56));
+        assert_eq!(app.theme.accent.to_color(), Color::Rgb(0xff, 0x88, 0x00));
+        assert_eq!(app.theme.gold.to_color(), Color::Rgb(12, 34, 56));
         // Unconfigured black falls back to true black
-        assert_eq!(cfg.theme.black.to_color(), Color::Rgb(0, 0, 0));
+        assert_eq!(app.theme.black.to_color(), Color::Rgb(0, 0, 0));
 
         // Everything defaulted
-        let bare: Config = serde_yaml::from_str(
-            "providers: { local: { base_url: \"http://x/v1\" } }\nmodels: []\n",
-        )
-        .unwrap();
-        assert_eq!(bare.theme.accent.to_color(), Color::Green);
-        assert_eq!(bare.theme.gold.to_color(), Color::Yellow);
-        assert_eq!(bare.theme.black.to_color(), Color::Rgb(0, 0, 0));
+        let app: AppConfig = serde_yaml::from_str("{}").unwrap();
+        assert_eq!(app.theme.accent.to_color(), Color::Green);
+        assert_eq!(app.theme.gold.to_color(), Color::Yellow);
+        assert_eq!(app.theme.black.to_color(), Color::Rgb(0, 0, 0));
     }
-
 
     /// Cross-test mutex: tests that mutate environment variables share this lock.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Round-trip: /model persists the default into config.yaml only.
     #[test]
-    fn locate_prefers_mypi_config_env_then_xdg() {
+    fn save_default_writes_app_file_not_models() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("mypi-save2-{}", std::process::id()));
         unsafe {
-            std::env::set_var("MYPI_CONFIG", "/tmp/whatever.yaml");
+            std::env::set_var("MYPI_CONFIG", dir.join("config.yaml"));
+            std::env::set_var("MYPI_MODELS", dir.join("models.yml"));
         }
-        let p = Config::locate().unwrap();
-        assert_eq!(p, std::path::PathBuf::from("/tmp/whatever.yaml"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let models = parse_models(
+            r#"
+providers:
+  local:
+    baseUrl: http://x/v1
+    api: openai-completions
+    models:
+      - id: a
+      - id: b
+"#,
+        )
+        .unwrap();
+        let cfg = Config {
+            models,
+            app: AppConfig { default: Some("local:a".into()), theme: Theme::default() },
+        };
+        cfg.save_default("local:b").unwrap();
+        let text = std::fs::read_to_string(dir.join("config.yaml")).unwrap();
+        let back: AppConfig = serde_yaml::from_str(&text).unwrap();
+        assert_eq!(back.default.as_deref(), Some("local:b"));
+        // models.yml was never written by the program.
+        assert!(!dir.join("models.yml").exists());
         unsafe {
             std::env::remove_var("MYPI_CONFIG");
-        }
-        // 1) MYPI_CONFIG wins
-        unsafe {
-            std::env::set_var("MYPI_CONFIG", "/tmp/whatever.yaml");
-        }
-        let p = Config::locate().unwrap();
-        assert_eq!(p, std::path::PathBuf::from("/tmp/whatever.yaml"));
-        unsafe {
-            std::env::remove_var("MYPI_CONFIG");
-        }
-
-        // 2) config.yaml under XDG_CONFIG_HOME when it exists
-        let dir = std::env::temp_dir().join(format!("mypi-locate-{}", std::process::id()));
-        let mypi = dir.join("mypi");
-        std::fs::create_dir_all(&mypi).unwrap();
-        std::fs::write(mypi.join("config.yaml"), "providers: {}\n").unwrap();
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", &dir);
-        }
-        std::env::set_current_dir(std::env::temp_dir()).unwrap(); // XDG only: CWD is irrelevant now
-        let p = Config::locate().unwrap();
-        assert_eq!(p, mypi.join("config.yaml"));
-
-        // 3) canonical path missing -> still returns the canonical path
-        //    (no CWD fallback; the error message must point at the
-        //    expected location)
-        std::fs::remove_file(mypi.join("config.yaml")).unwrap();
-        let p = Config::locate().unwrap();
-        assert_eq!(p, mypi.join("config.yaml"));
-        unsafe {
-            std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("MYPI_MODELS");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Missing models.yml is a hard error pointing at the template.
     #[test]
-    fn save_default_writes_xdg_path_and_sets_field() {
+    fn load_errors_when_models_missing() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("mypi-save-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mypi-missing2-{}", std::process::id()));
         unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", &dir);
-            std::env::remove_var("MYPI_CONFIG");
+            std::env::set_var("MYPI_CONFIG", dir.join("config.yaml"));
+            std::env::set_var("MYPI_MODELS", dir.join("models.yml"));
         }
-        let yaml = "providers:\n  local:\n    base_url: http://x/v1\n    models:\n      - id: a\n      - id: b\ndefault: local:a\n";
-        let cfg: Config = serde_yaml::from_str(yaml).unwrap();
-        cfg.save_default("local:b").unwrap();
-        let text = std::fs::read_to_string(dir.join("mypi").join("config.yaml")).unwrap();
-        let back: Config = serde_yaml::from_str(&text).unwrap();
-        assert_eq!(back.default.as_deref(), Some("local:b"));
-        assert_eq!(back.models().count(), 2, "other config sections preserved verbatim");
+        let err = Config::load().unwrap_err().to_string();
+        assert!(err.contains("create it from models_example.yml"), "{err}");
         unsafe {
-            std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("MYPI_CONFIG");
+            std::env::remove_var("MYPI_MODELS");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// models.yml present + config.yaml missing -> bootstrap writes
+    /// config.yaml with the alphabetical default; no models -> error.
+    #[test]
+    fn bootstrap_writes_config_when_models_present() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("mypi-boot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("MYPI_CONFIG", dir.join("config.yaml"));
+            std::env::set_var("MYPI_MODELS", dir.join("models.yml"));
+        }
+        std::fs::write(
+            dir.join("models.yml"),
+            r#"
+providers:
+  local:
+    baseUrl: http://x/v1
+    api: openai-completions
+    models:
+      - id: m2
+        name: Beta
+      - id: m1
+        name: Alpha
+"#,
+        )
+        .unwrap();
+        let cfg = Config::load().unwrap();
+        assert_eq!(cfg.app.default.as_deref(), Some("local:m1"));
+        // And the bootstrapped config file exists on disk.
+        assert!(dir.join("config.yaml").exists());
+        // Empty models list -> hard error.
+        std::fs::write(dir.join("models.yml"), "providers:\n  local:\n    baseUrl: http://x/v1\n    api: openai-completions\n").unwrap();
+        let err = Config::load().unwrap_err().to_string();
+        assert!(err.contains("declares no models"), "{err}");
+        unsafe {
+            std::env::remove_var("MYPI_CONFIG");
+            std::env::remove_var("MYPI_MODELS");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

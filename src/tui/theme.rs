@@ -37,10 +37,10 @@ impl Palette {
     /// Build from configuration.
     pub fn from_config(cfg: &Config) -> Self {
         Self {
-            accent: cfg.theme.accent.to_color(),
-            gold: cfg.theme.gold.to_color(),
-            black: cfg.theme.black.to_color(),
-            muted: cfg.theme.muted.to_color(),
+            accent: cfg.app.theme.accent.to_color(),
+            gold: cfg.app.theme.gold.to_color(),
+            black: cfg.app.theme.black.to_color(),
+            muted: cfg.app.theme.muted.to_color(),
         }
     }
 

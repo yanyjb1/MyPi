@@ -943,7 +943,7 @@ impl App {
     fn cmd_model(&mut self, arg: &str, cx: &Ctx) {
         if arg.is_empty() {
             let cfg = cx.cfg.borrow();
-            let current = cfg.default.as_deref().unwrap_or("(第一个模型)");
+            let current = cfg.app.default.as_deref().unwrap_or("(未设置)");
             let mut lines = vec![format!("当前默认：{current}（/model <provider>:<id> 修改，写入 config.yaml）")];
             for (pname, m) in cfg.models() {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
@@ -990,7 +990,7 @@ impl App {
         }
         match cfg.model_by_id(arg) {
             Ok(rm) => {
-                let p = cfg.providers.get(&rm.provider_name).expect("validated provider");
+                let p = cfg.models.providers.get(&rm.provider_name).expect("validated provider");
                 let api_key = cfg.resolve_key(p);
                 cx.client.borrow_mut().switch_model(&p.base_url, &api_key, &rm.entry.id);
                 *cx.current_model.borrow_mut() = rm.entry.clone();
@@ -1280,6 +1280,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let rm = cfg.borrow().default_model()?;
     let provider = cfg
         .borrow()
+        .models
         .providers
         .get(&rm.provider_name)
         .ok_or_else(|| anyhow::anyhow!("provider {} 未定义", rm.provider_name))?
