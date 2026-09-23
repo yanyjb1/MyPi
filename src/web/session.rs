@@ -161,31 +161,49 @@ fn is_reset(e: &anyhow::Error) -> bool {
 
 struct Session {
     browser: Browser, // owns the child when we spawned it; Drop kills
-    work_tab: Option<String>,
+    /// Named tab pool: `name → target id`. "work" is the browser tool's
+    /// persistent page; other names can be pinned on demand. Tabs created
+    /// by OTHER mypi processes sharing this Chromium are invisible here —
+    /// by design, each process only owns its own pool.
+    tabs: std::collections::HashMap<String, String>,
 }
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
-fn ensure_browser() -> anyhow::Result<(u16, ())> {
+/// A live Chromium on `port` that some other mypi (or a human) started.
+fn discover_live_browser(profile: &std::path::Path) -> Option<u16> {
+    // DevToolsActivePort line 1 = port, written by Chromium at startup.
+    // A file from a previous boot describes a dead port, so TCP-probe it.
+    let first = std::fs::read_to_string(profile.join("DevToolsActivePort")).ok()?;
+    let port = first.lines().next()?.trim().parse::<u16>().ok()?;
+    Browser::port_alive(port).then_some(port)
+}
+
+fn ensure_browser() -> anyhow::Result<u16> {
     let mut guard = SESSION.lock();
     if let Some(s) = guard.as_ref() {
         if Browser::port_alive(s.browser.port) {
-            return Ok((s.browser.port, ()));
+            return Ok(s.browser.port);
         }
         // Dead browser: drop it (kills our child if any) and respawn.
         *guard = None;
     }
     let profile = browser_profile_dir();
+    // Rendezvous: another mypi in another directory may already run a
+    // Chromium on this very profile (the default profile is shared via
+    // XDG_DATA_HOME, which does not vary with cwd). Attaching keeps one
+    // browser serving every session; launch is the fallback, not the norm.
     let browser = match std::env::var("MYPI_BROWSER_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
+        .or_else(|| discover_live_browser(&profile))
     {
-        Some(port) => Browser::attach(&profile, port).context("attaching to MYPI_BROWSER_PORT")?,
+        Some(port) => Browser::attach(&profile, port).context("attaching to shared browser")?,
         None => Browser::launch(&profile).context("launching browser")?,
     };
     let port = browser.port;
-    *guard = Some(Session { browser, work_tab: None });
-    Ok((port, ()))
+    *guard = Some(Session { browser, tabs: Default::default() });
+    Ok(port)
 }
 
 fn connect_to(port: u16, target: &Target) -> anyhow::Result<Page> {
@@ -218,42 +236,61 @@ pub(super) fn with_transient<T>(
     url: &str,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let (port, ()) = ensure_browser()?;
+    let port = ensure_browser()?;
     let page = open_page(port, url)?;
     let result = f(&page);
     close_page(port, &page.target_id);
     result
 }
 
-/// Run `f` on the process-wide *work tab* (lazily created at about:blank).
-/// The browser tool uses this so consecutive `open`/`act`/`read` calls
-/// address the same page.
-pub(super) fn with_work<T>(f: impl FnOnce(&Page) -> anyhow::Result<T>) -> anyhow::Result<T> {
-    let (port, ()) = ensure_browser()?;
-    let (page, fresh) = {
+/// Run `f` on a named tab from this process's pool, creating it (at `url`,
+/// default about:blank) if absent. The pool is per-mypi-process — two
+/// sessions sharing one Chromium each keep their own named tabs, and a
+/// pooled tab survives between calls so consecutive tool invocations see
+/// the same page. Stale entries (tab closed externally) are evicted and
+/// re-created on the next call.
+pub(super) fn with_tab<T>(
+    name: &str,
+    url: Option<&str>,
+    f: impl FnOnce(&Page) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let port = ensure_browser()?;
+    let page = {
         let mut guard = SESSION.lock();
         let Some(session) = guard.as_mut() else {
             anyhow::bail!("session vanished");
         };
-        match session.work_tab.clone() {
-            Some(id) => {
-                // Re-pin the existing work tab (survives tab list churn).
-                let browser = Browser::attach(&browser_profile_dir(), port)?;
-                let target = browser
-                    .targets()?
-                    .into_iter()
-                    .find(|t| t.id == id)
-                    .ok_or_else(|| anyhow!("work tab vanished"))?;
-                (connect_to(port, &target)?, false)
-            }
-            None => {
-                let browser = Browser::attach(&browser_profile_dir(), port)?;
-                let target = browser.create_target("about:blank")?;
-                session.work_tab = Some(target.id.clone());
-                (connect_to(port, &target)?, true)
-            }
+        let browser = Browser::attach(&browser_profile_dir(), port)?;
+        let live = browser.targets()?;
+        match session.tabs.get(name).cloned() {
+            Some(id) => match live.into_iter().find(|t| t.id == id) {
+                Some(target) => connect_to(port, &target)?,
+                // Tab was closed behind our back: evict and fall through
+                // to re-creation below.
+                None => {
+                    session.tabs.remove(name);
+                    recreate_tab(&mut session.tabs, name, port, url)?
+                }
+            },
+            None => recreate_tab(&mut session.tabs, name, port, url)?,
         }
     };
-    let _ = fresh;
     f(&page)
+}
+
+fn recreate_tab(
+    tabs: &mut std::collections::HashMap<String, String>,
+    name: &str,
+    port: u16,
+    url: Option<&str>,
+) -> anyhow::Result<Page> {
+    let browser = Browser::attach(&browser_profile_dir(), port)?;
+    let target = browser.create_target(url.unwrap_or("about:blank"))?;
+    tabs.insert(name.to_string(), target.id.clone());
+    connect_to(port, &target)
+}
+
+/// The browser tool's persistent page: same tab across open/act/read.
+pub(super) fn with_work<T>(f: impl FnOnce(&Page) -> anyhow::Result<T>) -> anyhow::Result<T> {
+    with_tab("work", None, f)
 }
