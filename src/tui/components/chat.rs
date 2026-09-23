@@ -170,20 +170,44 @@ fn on_bg(spans: Vec<Span<'static>>, bg: Style) -> Vec<Span<'static>> {
         .collect()
 }
 
-// A card's horizontal edge: `+-` + dashes + `-+`, exactly `width` cells.
+// A card's horizontal edge, exactly `width` cells:
 //
-// A continuous run, deliberately: spaced dashes (`- - -`) were tried to dodge
-// font ligatures, but they read as a dotted line and looked worse than the
-// ligature they avoided. Kept whole, and sized exactly — an earlier version
-// emitted one cell too many, which the wrap pass split into a line of its own
-// (a lone black square between the border and the content).
+//     +- - -------…------- -+
+//     └┬┘└┬┘        └┬┘└┬┘
+//      │  │          │  └── right break: one space, one dash, corner
+//      │  └──────────────  left break: one dash, one space
+//      └─────────────────── corner
+//
+// The two single-dash **breaks** exist for ligature-capable fonts: Sarasa and
+// friends fuse a consecutive run of dashes into one glyph and draw it narrower
+// than the cells we reserved, so the frame stopped short of the body. Breaking
+// the run at both ends keeps the corners from touching the middle, which is
+// enough to defeat the fusion — while the long middle stretch still reads as
+// one continuous rule (the earlier attempt to space *every* dash looked like a
+// dotted line and was rejected).
+//
+// Both ends give up one cell to a break. Degenerate widths fall back to a plain
+// run so the row can never exceed the budget.
 fn card_edge(edge: Style, fill: Style, width: usize) -> Line<'static> {
-    let dashes = width.saturating_sub(4);
+    // `+-` + `-` + ` ` + mid + ` ` + `-` + `-+` = 7 cells of frame/scaffolding.
+    if width < 8 {
+        let dashes = width.saturating_sub(4);
+        return Line::from(on_bg(
+            vec![
+                Span::styled("+-", edge),
+                Span::styled("-".repeat(dashes), edge),
+                Span::styled("-+", edge),
+            ],
+            fill,
+        ));
+    }
+    let mid = width - 7;
     Line::from(on_bg(
         vec![
             Span::styled("+-", edge),
-            Span::styled("-".repeat(dashes), edge),
-            Span::styled("-+", edge),
+            Span::styled("- ", edge),
+            Span::styled("-".repeat(mid), edge),
+            Span::styled(" -+", edge),
         ],
         fill,
     ))
@@ -657,6 +681,32 @@ mod tests {
         for l in &call {
             let w: usize = l.spans.iter().map(|s| s.content.as_ref().width()).sum();
             assert_eq!(w, 30, "卡片行的宽度必须恰好等于目标宽度: {w}");
+        }
+    }
+
+    #[test]
+    fn card_edges_break_the_dash_run_at_both_ends() {
+        // The agreed shape (option F): symmetric breaks so a ligating font
+        // cannot fuse the run and draw the frame short.
+        let p = Palette::default();
+        let rows = tool_exchange(
+            "bash", r#"{"command":"ls"}"#, true, "out", &p, false, 40,
+        );
+        let edges: Vec<String> = rows
+            .iter()
+            .map(|l| text_of(std::slice::from_ref(l)))
+            .filter(|t| t.starts_with("+-"))
+            .collect();
+        assert_eq!(edges.len(), 3, "顶边/中缝/底边: {edges:?}");
+        for t in &edges {
+            // Confirmed shape: `+-- <one long run> -+`. Each end gives up one
+            // cell to a break (the left shows two dashes because the corner
+            // itself is a dash).
+            assert!(t.starts_with("+-- "), "左断口必须是 `+-- `: {t:?}");
+            assert!(t.ends_with(" -+"), "右断口必须是 ` -+`: {t:?}");
+            // …and the middle is still one continuous stretch.
+            let inner = &t[4..t.len() - 4];
+            assert!(inner.len() > 10 && !inner.contains(' '), "中段必须连续: {t:?}");
         }
     }
 
