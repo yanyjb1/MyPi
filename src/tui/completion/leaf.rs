@@ -7,7 +7,7 @@
 //! completion sources add a branch **here**, not another ad-hoc check in the
 //! caller.
 
-use crate::tui::completion::engine::Completion;
+use super::engine::Completion;
 
 /// Why the popup should close even though candidates exist (or None).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +69,7 @@ pub fn is_exact_command(word: &str) -> bool {
 }
 
 // Convenience re-export so callers need only this module.
-use crate::tui::completion::engine::COMMANDS;
+use super::engine::COMMANDS;
 
 #[cfg(test)]
 mod tests {

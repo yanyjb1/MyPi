@@ -7,7 +7,7 @@
 //! and the runtime config (model ids come from `Config`).
 
 use crate::ai::config::Config;
-use crate::tui::leaf;
+use super::leaf;
 use super::engine::{self, CompletionPopup};
 
 /// One model candidate as the controller sees it (id for the wire,

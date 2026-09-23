@@ -226,7 +226,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
         //   session drain — SessionEvents drained below, between signals
         // A burst of deltas marks the dirty bit repeatedly but repaints
         // once — coalescing is free because dirty is idempotent.
-        let (sig_tx, sig_rx) = mpsc::channel::<crate::tui::signal::Signal>();
+        let (sig_tx, sig_rx) = mpsc::channel::<crate::tui::session::signal::Signal>();
         // A second Sender handle for the session-event forwarder below.
         let sig_tx2 = sig_tx.clone();
 
@@ -235,11 +235,11 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             while let Ok(ev) = event::read() {
                 let fwd = match ev {
                     Event::Key(k) if k.kind == KeyEventKind::Press => {
-                        Some(crate::tui::signal::Signal::Key(k))
+                        Some(crate::tui::session::signal::Signal::Key(k))
                     }
-                    Event::Paste(s) => Some(crate::tui::signal::Signal::Paste(s)),
-                    Event::Mouse(m) => Some(crate::tui::signal::Signal::Mouse(m)),
-                    Event::Resize(_, _) => Some(crate::tui::signal::Signal::Resized),
+                    Event::Paste(s) => Some(crate::tui::session::signal::Signal::Paste(s)),
+                    Event::Mouse(m) => Some(crate::tui::session::signal::Signal::Mouse(m)),
+                    Event::Resize(_, _) => Some(crate::tui::session::signal::Signal::Resized),
                     _ => None,
                 };
                 if let Some(s) = fwd
@@ -258,7 +258,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
         // stream never reached the screen unless the user typed.)
         std::thread::spawn(move || {
             for ev in rx {
-                if sig_tx2.send(crate::tui::signal::Signal::Session(ev)).is_err() {
+                if sig_tx2.send(crate::tui::session::signal::Signal::Session(ev)).is_err() {
                     break; // main loop gone
                 }
             }
@@ -298,12 +298,12 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             let mut batch_tools_ran = false;
             for sig in batch {
                 match sig {
-                crate::tui::signal::Signal::Key(k) => {
+                crate::tui::session::signal::Signal::Key(k) => {
                     let term_w = terminal.size()?.width;
                     let action = translate_with(k, app.key_context(term_w));
                     quit = !app.apply(action, term_w);
                 }
-                crate::tui::signal::Signal::Paste(s) => {
+                crate::tui::session::signal::Signal::Paste(s) => {
                     // Paste also goes through `apply`.
                     //
                     // This used to be a **second** path: a direct
@@ -318,7 +318,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                     let term_w = terminal.size()?.width;
                     quit = !app.apply(Action::Paste(s), term_w);
                 }
-                crate::tui::signal::Signal::Mouse(m) => {
+                crate::tui::session::signal::Signal::Mouse(m) => {
                     // Hit-test the pointer row against the last frame's
                     // layout: only the history area scrolls (input and
                     // reserved ignore the wheel). Up unpin; back at 0
@@ -337,13 +337,13 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                         }
                     }
                 }
-                crate::tui::signal::Signal::Resized => {
+                crate::tui::session::signal::Signal::Resized => {
                     // Widths changed: every cached wrap is invalid. The
                     // recompute below always reads terminal.size(), so
                     // nothing else to do — the repaint below is
                     // unconditional after any signal.
                 }
-                crate::tui::signal::Signal::Session(ev) => {
+                crate::tui::session::signal::Signal::Session(ev) => {
                     if app.session.ingest(ev) == crate::server::events::Change::ToolActivity {
                         batch_tools_ran = true;
                     }
