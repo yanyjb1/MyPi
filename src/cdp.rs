@@ -22,10 +22,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 use tungstenite::Message;
-use tungstenite::stream::MaybeTlsStream;
-use tungstenite::WebSocket;
 
-type WsStream = WebSocket<MaybeTlsStream<std::net::TcpStream>>;
 
 // A browser handle: either a process we spawned (owned, killed on drop) or
 // one already running (attached; the owner keeps the lifecycle).
@@ -93,9 +90,9 @@ impl Browser {
         let port_file = self.profile.join("DevToolsActivePort");
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            if let Ok(first) = std::fs::read_to_string(&port_file) {
-                if let Some(line) = first.lines().next() {
-                    if let Ok(port) = line.trim().parse::<u16>() {
+            if let Ok(first) = std::fs::read_to_string(&port_file)
+                && let Some(line) = first.lines().next()
+                    && let Ok(port) = line.trim().parse::<u16>() {
                         // A stale file from a previous session describes a
                         // dead port — the file exists the instant the profile
                         // does. Only accept it once /json/version answers.
@@ -104,8 +101,6 @@ impl Browser {
                             return Ok(self);
                         }
                     }
-                }
-            }
             if self
                 .child
                 .as_mut()
@@ -298,7 +293,7 @@ impl Cdp {
             .context("ws send")?;
 
         let deadline = Instant::now() + timeout;
-        let mut acked = false;
+        let acked = false;
         while Instant::now() < deadline {
             // A cross-document navigation can make Chromium tear the
             // per-target socket down; the pump exits and this channel

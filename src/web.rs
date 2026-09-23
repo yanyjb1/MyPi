@@ -124,13 +124,11 @@ fn unwrap_tracking_href(href: &str) -> String {
         // Base64url, Bing pads with the leftover chars stripped. Decode
         // leniently; failure keeps the wrapper (a working redirect beats a
         // dropped result).
-        if let Some(bytes) = base64url_decode(enc) {
-            if let Ok(s) = String::from_utf8(bytes) {
-                if s.starts_with("http") {
+        if let Some(bytes) = base64url_decode(enc)
+            && let Ok(s) = String::from_utf8(bytes)
+                && s.starts_with("http") {
                     return s;
                 }
-            }
-        }
         return href.to_string();
     }
     if let Some(pos) = href.find("&u=http") {

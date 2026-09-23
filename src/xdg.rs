@@ -37,11 +37,10 @@ pub fn data_dir() -> std::path::PathBuf {
 /// and parallel sessions; a missing HOME falls back to a scratch directory
 /// inside [`std::env::temp_dir`] so a browser can still launch.
 pub fn browser_profile_dir() -> std::path::PathBuf {
-    if let Some(dir) = std::env::var_os("MYPI_BROWSER_PROFILE_DIR") {
-        if !dir.is_empty() {
+    if let Some(dir) = std::env::var_os("MYPI_BROWSER_PROFILE_DIR")
+        && !dir.is_empty() {
             return std::path::PathBuf::from(dir);
         }
-    }
     let base = std::env::var_os("HOME")
         .map(|_| data_dir())
         .unwrap_or_else(std::env::temp_dir);
