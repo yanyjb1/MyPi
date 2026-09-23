@@ -17,13 +17,11 @@ use anyhow::{Context as _, anyhow};
 use html_to_markdown_rs::convert;
 use html_to_markdown_rs::options::{ConversionOptions, PreprocessingOptions, PreprocessingPreset};
 use serde::Deserialize;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
-const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
 const RENDER_WAIT: Duration = Duration::from_secs(12);
-const POLL_TIMEOUT: Duration = Duration::from_secs(8);
 
 // Context-window guard. ~4 pages of text; omp caps at 500k which is far
 // beyond what a model can use in one tool result.
@@ -43,28 +41,10 @@ pub fn parse_fetch_args(arguments: &str) -> anyhow::Result<FetchArgs> {
     serde_json::from_str(arguments).map_err(|e| anyhow!("bad fetch args: {e}"))
 }
 
-// Scheme guard: only http(s). file:// would read local disks, and every
-// other scheme (ftp:, data:, chrome:) is either unwanted or a hazard.
+// Strict form of `url::normalize`: scheme guard + real URL parse, so a
+// malformed host fails here instead of inside the HTTP client.
 fn normalize_url(raw: &str) -> anyhow::Result<String> {
-    let url = raw.trim();
-    // Guard BEFORE prefixing: "file:///etc/passwd" has no http prefix, and
-    // blind prepending would mint "https://file:///etc/passwd" whose host
-    // parses as "file" — a live-looking URL that actually fetches nothing.
-    // Reject known-local schemes outright, then prefix the bare-domain form.
-    let lower = url.to_ascii_lowercase();
-    if lower.starts_with("file:")
-        || lower.starts_with("data:")
-        || lower.starts_with("ftp:")
-        || lower.starts_with("chrome:")
-        || lower.starts_with("javascript:")
-    {
-        return Err(anyhow!("scheme not allowed (http/https only)"));
-    }
-    let with_scheme = if lower.starts_with("http://") || lower.starts_with("https://") {
-        url.to_string()
-    } else {
-        format!("https://{url}")
-    };
+    let with_scheme = super::url::normalize(raw)?;
     let parsed = url::Url::parse(&with_scheme).map_err(|e| anyhow!("bad url: {e}"))?;
     match parsed.scheme() {
         "http" | "https" => Ok(with_scheme),
@@ -152,46 +132,23 @@ fn fetch_direct(url: &str) -> anyhow::Result<(String, u16, usize)> {
 }
 
 // --- Tier 2: browser ---------------------------------------------------------
+//
+// One line over the shared session: navigate, wait for real content, hand
+// back the rendered DOM. Readiness = the converted markdown stops looking
+// like a JS shell (or the budget expires and we take what we have).
 
 fn fetch_via_browser(url: &str) -> anyhow::Result<String> {
-    let profile = crate::xdg::browser_profile_dir();
-    let browser = match std::env::var("MYPI_BROWSER_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-    {
-        Some(port) => crate::cdp::Browser::attach(&profile, port)
-            .context("attaching to MYPI_BROWSER_PORT")?,
-        None => crate::cdp::Browser::launch(&profile).context("launching browser")?,
-    };
-    let mut target = browser.page_target().context("no page target")?;
-    let mut cdp = crate::cdp::Cdp::connect(&target.ws_url)?;
-
-    cdp.navigate(url, NAVIGATE_TIMEOUT)?;
-
-    let deadline = Instant::now() + RENDER_WAIT;
-    loop {
-        let html = match cdp.dom_html(POLL_TIMEOUT) {
-            Ok(html) => html,
-            Err(e) if e.to_string().contains("connection reset") => {
-                // Navigation reset the socket; re-resolve (tab id survives)
-                // and keep polling.
-                target = browser.page_target().context("no page target")?;
-                cdp = crate::cdp::Cdp::connect(&target.ws_url)?;
-                continue;
+    let url_owned = url.to_string();
+    super::session::with_page(|p| {
+        p.navigate(&url_owned)?;
+        p.wait(RENDER_WAIT, |html| {
+            if html.len() > 2_000 {
+                Some(Ok(()))
+            } else {
+                None
             }
-            Err(e) => return Err(e),
-        };
-        // Readiness: the DOM has real content once innerText-style length
-        // shows up. A cheap proxy — the DOM tree carries more than the bare
-        // shell script tags.
-        if html.len() > 2_000 {
-            return Ok(html);
-        }
-        if Instant::now() > deadline {
-            return Ok(html); // render what we have rather than fail
-        }
-        std::thread::sleep(Duration::from_millis(400));
-    }
+        })
+    })
 }
 
 /// Fetch a URL and return model-facing markdown. Public entry for the tool

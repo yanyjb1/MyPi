@@ -1,4 +1,4 @@
-use mypi::fetch::{FetchArgs, fetch};
+use mypi::web::fetch::{FetchArgs, fetch};
 fn main() -> anyhow::Result<()> {
     let args = FetchArgs {
         intent: "e2e".into(),

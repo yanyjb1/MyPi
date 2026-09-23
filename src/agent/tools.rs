@@ -545,12 +545,12 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
             "read" => read(&self.cwd, &parse_read_args(&call.function.arguments)?),
             "cd" => self.tool_cd(&parse_cd_args(&call.function.arguments)?),
             "fetch" => {
-                let args = crate::fetch::parse_fetch_args(&call.function.arguments)?;
-                crate::fetch::fetch(&args)
+                let args = crate::web::parse_fetch_args(&call.function.arguments)?;
+                crate::web::fetch(&args)
             }
             "browser" => {
-                let args = crate::browser::parse_browser_args(&call.function.arguments)?;
-                crate::browser::browser(&args)
+                let args = crate::web::parse_browser_args(&call.function.arguments)?;
+                crate::web::browser(&args)
             }
             "search" => {
                 let args = crate::web::parse_search_args(&call.function.arguments)?;
