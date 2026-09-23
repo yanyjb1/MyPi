@@ -1260,7 +1260,15 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let chat = ChatContext::new().push(Message::System {
         content: "你是一个简洁的编程助手。用中文回答。".into(),
     });
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // Workspace license: launching from $HOME would license the whole
+    // home directory for rm/mv — exactly what the guard exists to
+    // prevent. Degrade to /tmp instead; the user can /cd out of it.
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let cwd = match std::env::current_dir() {
+        Ok(d) if d == home => std::env::temp_dir(),
+        Ok(d) => d,
+        Err(_) => std::env::temp_dir(),
+    };
     // Session service facade: owns turn resources + SessionState + the
     // event channel. The TUI holds it and the rx.
     let max_tokens = model.max_output_tokens.unwrap_or(4096) as u32;

