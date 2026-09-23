@@ -109,17 +109,14 @@ fn bash(cwd: &std::path::Path, command: &str) -> Result<String> {
     let zone = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     match crate::agent::bash_guard::classify(cmd, &zone) {
         crate::agent::bash_guard::Verdict::Block(hits) => {
-            let reasons: Vec<String> =
-                hits.iter().map(|h| format!("{}: {}", h.rule_id, h.reason)).collect();
-            anyhow::bail!("blocked by safety guard — {}", reasons.join("; "));
+            let ids: Vec<&str> = hits.iter().map(|h| h.rule_id).collect();
+            anyhow::bail!("denied: {}", ids.join("+"));
         }
         crate::agent::bash_guard::Verdict::Warn(hits) => {
-            // High-tier: run, but surface the concerns in the output so the
-            // model sees what it just did.
-            let warnings: Vec<String> =
-                hits.iter().map(|h| format!("[warn] {}", h.reason)).collect();
+            // High-tier: run, but tag the output so the model sees it.
+            let tags: Vec<&str> = hits.iter().map(|h| h.rule_id).collect();
             let out = run_shell(cwd, cmd)?;
-            Ok(format!("{}\n{}", warnings.join("\n"), out))
+            Ok(format!("[warn: {}]\n{}", tags.join("+"), out))
         }
         crate::agent::bash_guard::Verdict::Allow => run_shell(cwd, cmd),
     }

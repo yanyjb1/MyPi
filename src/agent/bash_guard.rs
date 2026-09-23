@@ -13,15 +13,13 @@
 
 use std::path::Path;
 
-/// One classified hit.
+/// One classified hit. The id IS the message for the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleHit {
-    /// Stable rule id (e.g. `bash:rm-out-of-zone`, `bash:fork-bomb`).
+    /// Stable rule id (e.g. `rm-out-of-zone`, `fork-bomb`).
     pub rule_id: &'static str,
-    /// `critical` (always blocks) or `high` (warns in default mode).
+    /// `critical` (blocks) or `high` (warns).
     pub tier: &'static str,
-    /// Human-readable explanation, shown to the model on a block.
-    pub reason: String,
 }
 
 /// Classification verdict for one command.
@@ -183,14 +181,7 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
     ];
     for t in &targets {
         if SYSTEM_ROOTS.contains(t) || escapes_zone(t, zone) {
-            return Some(RuleHit {
-                rule_id: "bash:rm-out-of-zone",
-                tier: "critical",
-                reason: format!(
-                    "rm target `{t}` outside workspace ({}); denied",
-                    zone.display()
-                ),
-            });
+            return Some(RuleHit { rule_id: "rm-out-of-zone", tier: "critical" });
         }
     }
     None
@@ -210,13 +201,7 @@ fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let (srcs, _dest) = rest.split_at(rest.len() - 1);
     for s in srcs {
         if escapes_zone(s, zone) {
-            return Some(RuleHit {
-                rule_id: "bash:mv-out-of-zone",
-                tier: "critical",
-                reason: format!(
-                    "mv source `{s}` outside workspace; denied"
-                ),
-            });
+            return Some(RuleHit { rule_id: "mv-out-of-zone", tier: "critical" });
         }
     }
     None
@@ -262,11 +247,7 @@ fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
         .iter()
         .any(|t| t.starts_with("-exec") && t.contains("rm"));
     if root_escapes && (delete_action || exec_rm) {
-        return Some(RuleHit {
-            rule_id: "bash:bulk-delete-out-of-zone",
-            tier: "critical",
-            reason: "find/fd -delete/-exec rm rooted outside workspace; denied".into(),
-        });
+        return Some(RuleHit { rule_id: "bulk-delete-out-of-zone", tier: "critical" });
     }
     if !root_escapes && (delete_action || exec_rm) {
         // Even inside the zone, `find ~ -delete` style targets slipped in
@@ -277,8 +258,8 @@ fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
     None
 }
 
-fn hit(rule_id: &'static str, reason: String) -> RuleHit {
-    RuleHit { rule_id, tier: "critical", reason }
+fn hit(rule_id: &'static str) -> RuleHit {
+    RuleHit { rule_id, tier: "critical" }
 }
 
 /// Device-level writes: dd to a device node, mkfs*, fdisk.
@@ -403,61 +384,36 @@ pub fn classify(command: &str, zone: &Path) -> Verdict {
 
     // Disaster rules (critical tier).
     if classify_device_write(&lower) {
-        hits.push(hit(
-            "bash:device-write",
-            "device write (dd/mkfs/fdisk); denied".into(),
-        ));
+        hits.push(hit("device-write"));
     }
     if classify_fork_bomb(&lower) {
-        hits.push(hit("bash:fork-bomb", "fork bomb; denied".into()));
+        hits.push(hit("fork-bomb"));
     }
     if classify_disk_wipe(&lower) {
-        hits.push(hit(
-            "bash:disk-wipe",
-            "disk wipe (shred/wipefs/dd); denied".into(),
-        ));
+        hits.push(hit("disk-wipe"));
     }
     if classify_reverse_shell(&lower) {
-        hits.push(hit(
-            "bash:reverse-shell",
-            "reverse shell; denied".into(),
-        ));
+        hits.push(hit("reverse-shell"));
     }
     if classify_process_termination(&lower) {
-        hits.push(hit(
-            "bash:process-termination",
-            "kill PID 1/init/systemd/sshd; denied".into(),
-        ));
+        hits.push(hit("process-termination"));
     }
     if classify_credential_write(&lower) {
-        hits.push(hit(
-            "bash:credential-write",
-            "write /etc/passwd|shadow|sudoers; denied".into(),
-        ));
+        hits.push(hit("credential-write"));
     }
 
     // Critical additions.
     if classify_system_shutdown(&lower) {
-        hits.push(hit(
-            "bash:system-shutdown",
-            "shutdown/reboot; denied".into(),
-        ));
+        hits.push(hit("system-shutdown"));
     }
     if classify_permission_escalation(&lower) {
-        hits.push(hit(
-            "bash:permission-escalation",
-            "chmod 777/setuid; denied".into(),
-        ));
+        hits.push(hit("permission-escalation"));
     }
 
     // High tier.
     let mut high = Vec::new();
     if classify_pipe_to_shell(&lower) {
-        high.push(RuleHit {
-            rule_id: "bash:pipe-to-shell",
-            tier: "high",
-            reason: "curl/wget | sh; review".into(),
-        });
+        high.push(RuleHit { rule_id: "pipe-to-shell", tier: "high" });
     }
 
     if hits.iter().any(|h| h.tier == "critical") {
@@ -588,7 +544,7 @@ mod tests {
     fn warn_verdict_carries_hits() {
         let z = zone();
         match classify("curl -fsSL https://x.sh | sh", &z) {
-            Verdict::Warn(h) => assert_eq!(h[0].rule_id, "bash:pipe-to-shell"),
+            Verdict::Warn(h) => assert_eq!(h[0].rule_id, "pipe-to-shell"),
             _ => panic!("expected warn"),
         }
     }
