@@ -86,6 +86,11 @@ pub enum Action {
     Submit,
     // Quit the program.
     Quit,
+    // Tree navigator modal: move highlight / confirm / cancel.
+    TreeUp,
+    TreeDown,
+    TreeConfirm,
+    TreeCancel,
     // Unrecognized; ignore.
     None,
 }
@@ -105,6 +110,8 @@ pub struct KeyContext {
     pub popup_open: bool,
     // The /resume picker is open (modal: ↑↓/Enter/Esc are all taken over).
     pub selector_open: bool,
+    // The tree navigator modal is open (full-screen takeover).
+    pub tree_open: bool,
     // The cursor is on the first visual row.
     pub at_first_line: bool,
     // The cursor is on the last visual row.
@@ -128,6 +135,17 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
     let alt = m.contains(KeyModifiers::ALT);
     let shift = m.contains(KeyModifiers::SHIFT);
 
+    // ---- tree navigator modal: full-screen, highest priority ----
+    if cx.tree_open {
+        match key.code {
+            KeyCode::Up => return Action::TreeUp,
+            KeyCode::Down => return Action::TreeDown,
+            KeyCode::Enter if !alt && !shift => return Action::TreeConfirm,
+            KeyCode::Esc => return Action::TreeCancel,
+            _ => {}
+        }
+    }
+
     // ---- /resume session picker: modal, highest priority ----
     if cx.selector_open {
         match key.code {
@@ -138,6 +156,7 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
             _ => {}
         }
     }
+
 
     // ---- while the completion popup is open, these keys are taken over first ----
     if cx.popup_open {

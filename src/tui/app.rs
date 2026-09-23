@@ -115,6 +115,10 @@ struct App {
     cwd_seq: i64,
     // /resume picker: Some((candidates, highlighted index)). While Some, the reserved area shows the list.
     resume_pick: Option<(Vec<(i64, String)>, usize)>,
+    // Tree navigator modal: Some = full-screen takeover (double-Esc opens it).
+    tree_pick: Option<crate::tui::components::tree_picker::TreePicker>,
+    // Last Esc press instant, for double-Esc detection.
+    last_esc: std::time::Instant,
     // cwd note injected into the first turn after resume (written on resume, consumed on submit).
     pending_cwd_note: Option<String>,
     // Storage. None = DB unavailable (degrades to an in-memory session; never blocks usage).
@@ -171,6 +175,8 @@ impl App {
             quit_requested: false,
             cwd_seq: 0,
             resume_pick: None,
+            tree_pick: None,
+            last_esc: std::time::Instant::now() - std::time::Duration::from_secs(1),
             pending_cwd_note: None,
             store: crate::store::Store::open(&data_dir()).ok(),
             session_id: None,
@@ -202,6 +208,7 @@ impl App {
             streaming: self.streaming_active,
             popup_open: self.popup.is_open(),
             selector_open: self.resume_pick.is_some(),
+            tree_open: self.tree_pick.is_some(),
             at_first_line: row == 0,
             at_last_line: row >= last,
             browsing_history: self.input_history.browsing(),
@@ -422,6 +429,100 @@ impl App {
         self.apply_completion(action);
     }
 
+    // Open the tree navigator (double-Esc). Builds the full-tree rows from
+    // the store; a missing store degrades to an empty picker (never crashes).
+    fn open_tree_picker(&mut self) {
+        let Some(st) = self.store.as_ref() else { return };
+        let Some(sid) = self.session_id else {
+            self.transcript.push(chat::Entry::Error { text: "还没有会话可回溯".into() });
+            return;
+        };
+        let tree = st.load_tree(sid).unwrap_or_default();
+        let leaf = st.get_leaf(sid).unwrap_or(None);
+        if tree.is_empty() {
+            self.transcript.push(chat::Entry::Error { text: "会话为空".into() });
+            return;
+        }
+        self.tree_pick = Some(crate::tui::components::tree_picker::TreePicker::from_tree(&tree, leaf));
+    }
+
+    // Navigate the conversation tree to an arbitrary stored row (pi's
+    // branch() semantic: move the leaf pointer, delete nothing). The next
+    // append forks from there. Rebuilds transcript + protocol from the new
+    // projection; the prefix cache is keyed on the rebuilt history, so a
+    // cache hit survives navigation to a shared prefix.
+    fn tree_navigate_to(&mut self, seq: i64, cx: &Ctx) {
+        let Some(st) = self.store.as_mut() else { return };
+        let Some(sid) = self.session_id else { return };
+        if let Err(e) = st.set_leaf(sid, Some(seq)) {
+            self.transcript.push(chat::Entry::Error { text: format!("回溯失败：{e:#}") });
+            return;
+        }
+        let entries = match st.load_entries(sid) {
+            Ok(e) => e,
+            Err(e) => {
+                self.transcript.push(chat::Entry::Error { text: format!("重投影失败：{e:#}") });
+                return;
+            }
+        };
+
+        // 1) Rendering layer: the new path is the conversation.
+        self.transcript = entries.clone();
+        self.pending = Vec::new();
+
+        // 2) Protocol rebuild: same routine as resume (the projection is the
+        // single source of "what the model must see").
+        let mut rebuilt = ChatContext::new().push(Message::System {
+            content: "你是一个简洁的编程助手。用中文回答。".into(),
+        });
+        for e in &entries {
+            match e {
+                chat::Entry::User { content } => {
+                    rebuilt = rebuilt.push(Message::User { content: content.clone() });
+                }
+                chat::Entry::Assistant { content, .. } => {
+                    rebuilt = rebuilt.push(Message::Assistant {
+                        content: Some(content.clone()),
+                        tool_calls: Vec::new(),
+                    });
+                }
+                chat::Entry::ToolRequest { call_id, name, object } => {
+                    let call = crate::ai::types::ToolCall {
+                        id: call_id.clone(),
+                        kind: "function".into(),
+                        function: crate::ai::types::FunctionCall {
+                            name: name.clone(),
+                            arguments: object.clone(),
+                        },
+                    };
+                    rebuilt = rebuilt.push(Message::Assistant {
+                        content: None,
+                        tool_calls: vec![call],
+                    });
+                }
+                chat::Entry::ToolResult { call_id, result, .. } => {
+                    rebuilt = rebuilt.push(Message::Tool {
+                        tool_call_id: call_id.clone(),
+                        content: result.clone(),
+                    });
+                }
+                chat::Entry::Error { .. } | chat::Entry::Name { .. } => {}
+            }
+        }
+        *cx.chat.lock().expect("chat 锁中毒") = rebuilt;
+
+        // 3) Name: nearest marker on the new path.
+        self.session_name = st.effective_name(sid).ok().flatten().or(self.session_name.take());
+
+        // 4) Echo + editor draft semantics: navigating to a user entry puts
+        // that message back into the editor (pi behavior) — you usually
+        // rewound in order to rewrite it.
+        self.transcript.push(chat::Entry::Error { text: format!("已回到节点 #{seq}（后续消息仍保留在树中）") });
+        if let Some(d) = user_text_at(st, sid, seq) {
+            self.load_into_editor(&d);
+        }
+    }
+
     // Confirm restoring the highlighted session.
     //
     // Restore four things: the transcript (rendering), the chat context
@@ -560,6 +661,35 @@ impl App {
         // ---- routing: modal > input (editor) > app-level. One chain,
         // one place. A new overlay only adds a `modal.is_some()` branch
         // here; zones declare their own acceptance in `zones_impl`.
+        if self.tree_pick.is_some() {
+            match action {
+                Action::TreeUp => {
+                    if let Some(t) = self.tree_pick.as_mut() {
+                        t.move_selection(-1);
+                    }
+                    return true;
+                }
+                Action::TreeDown => {
+                    if let Some(t) = self.tree_pick.as_mut() {
+                        t.move_selection(1);
+                    }
+                    return true;
+                }
+                Action::TreeConfirm => {
+                    let target = self.tree_pick.as_ref().and_then(|t| t.confirm());
+                    self.tree_pick = None;
+                    if let Some(seq) = target {
+                        self.tree_navigate_to(seq, cx);
+                    }
+                    return true;
+                }
+                Action::TreeCancel => {
+                    self.tree_pick = None;
+                    return true;
+                }
+                _ => {}
+            }
+        }
         if self.resume_pick.is_some() {
             match action {
                 Action::SelectorUp | Action::SelectorDown => {
@@ -605,7 +735,19 @@ impl App {
         // wheel toggles belong to the history zone — each zone's
         // acceptance table lives in `zones_impl`.
         match action {
-            Action::Quit => return false,
+            Action::Quit => {
+                // Double-Esc (empty editor, 500ms window, pi's semantics):
+                // the first press arms, the second opens the tree navigator.
+                // Single press still quits.
+                let now = std::time::Instant::now();
+                if self.editor.is_empty() && now.duration_since(self.last_esc).as_millis() < 500 {
+                    self.last_esc = now - std::time::Duration::from_secs(1);
+                    self.open_tree_picker();
+                    return true;
+                }
+                self.last_esc = now;
+                return false;
+            }
 
             Action::Complete => self.complete(),
             Action::CompleteUp => self.popup.move_selection(-1),
@@ -1204,6 +1346,21 @@ fn data_dir() -> std::path::PathBuf {
 
 // Session name for the statusline: an explicit /name wins; otherwise
 // one is synthesized — first 7 chars of the first user message within the session.
+
+// The user message text stored at `seq`, if that row is a user entry.
+// Used for the navigate-to-user-node draft refill (pi's editorText).
+fn user_text_at(st: &crate::store::Store, sid: i64, seq: i64) -> Option<String> {
+    let tree = st.load_tree(sid).ok()?;
+    let row = tree.iter().find(|n| n.seq == seq)?;
+    if row.kind != "user" {
+        return None;
+    }
+    match chat::Entry::from_payload(&row.kind, &row.payload) {
+        Some(chat::Entry::User { content }) => Some(content),
+        _ => None,
+    }
+}
+
 fn display_name(app: &App) -> String {
     match &app.session_name {
         Some(n) => n.clone(),
@@ -1370,6 +1527,13 @@ pub fn run_tui(cfg: Config) -> Result<()> {
             let mut cursor_pos = (0u16, 0u16);
             let model_name = Config::display_name(&cx.current_model.borrow()).to_string();
             terminal.draw(|f| {
+                // Modal takeover: the tree navigator draws over the whole
+                // screen; base zones and the hardware cursor are skipped.
+                if let Some(tp) = app.tree_pick.as_ref() {
+                    let lines = crate::tui::components::tree_picker::render(tp, size.width, size.height, &palette);
+                    f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
+                    return;
+                }
                 let vs = ViewState {
                     history: &app.transcript,
                     chat_scroll: app.history.chat_scroll,
