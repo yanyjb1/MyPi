@@ -10,7 +10,6 @@ pub mod app;
 pub mod completion;
 pub mod components;
 pub mod editor;
-pub mod events;
 pub mod history;
 pub mod keys;
 pub mod leaf;

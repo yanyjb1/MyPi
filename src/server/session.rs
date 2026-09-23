@@ -9,7 +9,9 @@
 //! tree navigation, /name markers — all go through here, so the same
 //! rules apply no matter which surface triggered them.
 
+use crate::ai::types::Usage;
 use crate::entry::Entry;
+use crate::server::events::{Change, SessionEvent, StreamView};
 use crate::store::Store;
 
 /// Everything the renderer needs from the session, in one read-only
@@ -21,17 +23,6 @@ pub struct Snapshot {
     pub session_id: Option<i64>,
 }
 
-/// What happened after a mutation — the TUI reacts (redraw, scroll pin)
-/// without learning *how* the state changed internally.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Change {
-    /// Transcript contents changed (echo, commit, navigation...).
-    Transcript,
-    /// The current session changed (new session created, resumed...).
-    Session,
-    /// Nothing observable happened (e.g. store unavailable, no-op).
-    None,
-}
 
 pub struct SessionState {
     // Rendered entries (in-memory + DB-resumed share one path).
@@ -46,6 +37,10 @@ pub struct SessionState {
     session_name: Option<String>,
     // Sequence for persisted migrations (cwd_history.seq; 0 = origin).
     cwd_seq: i64,
+    // ---- streaming slots (owned here; the TUI only reads StreamView) ----
+    stream: StreamView,
+    // Last turn's usage (TurnDone), consumed by the caller's cost tracker.
+    last_usage: Option<Usage>,
 }
 
 impl SessionState {
@@ -57,7 +52,128 @@ impl SessionState {
             session_id: None,
             session_name: None,
             cwd_seq: 0,
+            stream: StreamView::default(),
+            last_usage: None,
         }
+    }
+
+    // ---- event intake (the protocolized write side) ----
+
+    /// Consume one protocol event, in order. This is the *only* path a
+    /// turn's data takes into the session; input surfaces and the turn
+    /// runner both speak [`SessionEvent`]. Returns what changed so the
+    /// renderer reacts without learning how.
+    ///
+    /// Usage lands on `last_usage` (read via [`take_last_usage`]); the
+    /// caller owns the model's price sheet and does the local pricing —
+    /// the session stays pricing-agnostic.
+    pub fn handle(&mut self, ev: SessionEvent) -> Change {
+        match ev {
+            SessionEvent::Delta(d) => {
+                self.stream.reasoning_done = true; // content started; reasoning frozen
+                self.stream.text.push_str(&d);
+                Change::Stream
+            }
+            SessionEvent::ReasoningDelta(r) => {
+                self.stream.reasoning.push_str(&r);
+                Change::Stream
+            }
+            SessionEvent::ToolStart { call_id, name, args_summary } => {
+                let e = Entry::ToolRequest { call_id, name, object: args_summary };
+                self.pending.push(e.clone());
+                self.transcript.push(e);
+                Change::Transcript
+            }
+            SessionEvent::ToolFinish { call_id, name, ok, result } => {
+                let e = Entry::ToolResult {
+                    call_id,
+                    name,
+                    ok,
+                    // Store data only (the raw text); the view is
+                    // synthesized at render time
+                    result,
+                };
+                self.pending.push(e.clone());
+                self.transcript.push(e);
+                Change::Transcript
+            }
+            SessionEvent::Error(e) => {
+                // Session-level errors are not persisted (not one of the
+                // four message kinds); memory stream only
+                self.transcript.push(Entry::Error { text: e });
+                Change::Transcript
+            }
+            SessionEvent::TurnDone(u, _stop) => {
+                let content = std::mem::take(&mut self.stream.text);
+                let content = if content.is_empty() { "(无输出)".into() } else { content };
+                let e = Entry::Assistant {
+                    content,
+                    usage: Some(Entry::usage_summary(&u)),
+                    reasoning: if self.stream.reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(self.stream.reasoning.clone())
+                    },
+                };
+                self.pending.push(e.clone());
+                self.transcript.push(e);
+                self.last_usage = Some(u);
+                self.stream.active = false;
+                Change::TurnDone
+            }
+            SessionEvent::Commit(entries) => {
+                // Persist the finalized round in one shot. `entries` is
+                // the runner's authoritative assembly (trusted over our
+                // incremental pending mirror, which also holds TurnDone's
+                // Assistant entry that the runner's list lacks).
+                if let Some((st, sid)) = self.persistence()
+                    && let Err(e) = st.append(sid, &entries)
+                {
+                    let msg = format!("落盘失败：{e:#}");
+                    self.transcript.push(Entry::Error { text: msg });
+                }
+                self.pending.clear();
+                Change::Transcript
+            }
+            SessionEvent::Done => {
+                self.stream.active = false;
+                Change::Stream
+            }
+            SessionEvent::Submit(_) => {
+                // Turn *starting* is the surface's job (it owns the turn
+                // runner and the Client); the session only records the
+                // resulting entries. Nothing to consume here.
+                Change::None
+            }
+        }
+    }
+
+    /// The last turn's usage (set by TurnDone). Cleared on read; the
+    /// caller folds it into its cost tracker.
+    pub fn take_last_usage(&mut self) -> Option<Usage> {
+        self.last_usage.take()
+    }
+
+    /// Read-only view of the streaming slots (renderer subscription).
+    pub fn stream_view(&self) -> &StreamView {
+        &self.stream
+    }
+
+    /// Is a turn currently streaming? (Surfaces check this before
+    /// starting a new one.)
+    pub fn busy(&self) -> bool {
+        self.stream.active
+    }
+
+    /// Start a turn: echo + stage the user message and reset the
+    /// streaming slots. Called by the surface right before spawning the
+    /// turn runner — one protocol action instead of three field pokes.
+    pub fn start_turn(&mut self, user_text: &str) -> Change {
+        let e = Entry::User { content: user_text.to_string() };
+        self.transcript.push(e.clone());
+        self.pending.push(e);
+        self.stream = StreamView { active: true, ..Default::default() };
+        Change::Stream
     }
 
     // ---- read side (renderer subscription) ----

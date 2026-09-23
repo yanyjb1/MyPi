@@ -1,20 +1,29 @@
 # MyPi 架构与耦合度报告
 
-日期：2026-09-23 · 代码规模：~10.9k 行 Rust · 测试 283 全绿 · clippy 0
+日期：2026-09-23 · 代码规模：~11.3k 行 Rust · 测试 317 全绿 · clippy 0
 
 ## 1. 分层与依赖边
 
 ```
-        ┌─────────────────────────────────────┐
-        │  tui/                               │
-        │   app ── keys ── editor ── path     │   app → {agent, ai, store, git, tui}
-        │   layout ── view ── components/*    │   chat → {ai}
-        └──────┬───────┬───────┬──────────────┘   editor/path/keys/layout/paste/undo → tui 内
-               │       │       │
-        ┌──────┘       │       └──────┐
-        ▼              ▼              ▼
+   ┌──────────────────────────────────────────────┐
+   │  tui/  （纯订阅端：事件 → Change → 画一帧）   │   tui → {server, ai, store, git}
+   │   app ── keys ── editor ── path               │   app 持有 SessionState，但不碰轮数据
+   │   layout ── view ── components/*              │   completion/leaf 独立状态机
+   └───────────────┬──────────────────────────────┘
+                   │ SessionEvent（协议输入）/ Change（协议输出）+ StreamView
+                   ▼
+   ┌──────────────────────────────────────────────┐
+   │  server/  （服务端：会话服务，终端无关）      │   server → {agent, ai, store, entry}
+   │   events    协议：SessionEvent / Change /     │   server → tui：0 条（刚扫描验证）
+   │             StreamView                       │
+   │   session   SessionState：按序消费事件，      │   无头可跑（headless 就绪）
+   │             拥有流式槽/转录/pending/存储      │
+   │   turn      轮线程机器：spawn_turn/           │   回调 → SessionEvent 翻译
+   │             collect_turn/entries_to_context   │
+   └──────┬──────────────┬──────────────┬─────────┘
+          ▼              ▼              ▼
    ┌────────┐     ┌─────────┐    ┌────────┐
-   │ agent  │ ──► │   ai    │    │ store  │ ──(反向)──► tui::chat::Entry   ← 结构瑕疵 A
+   │ agent  │ ──► │   ai    │    │ store  │ ──► entry（数据模型，叶子层）
    │ loop   │     │ client  │    │ sqlite │
    │ tools  │     │ config  │    └────────┘
    └────────┘     │ pricing │    git ── (无依赖)
@@ -22,16 +31,30 @@
      ai → 无（叶子层）
 ```
 
+协议化后的数据流（单向）：
+
+```
+   键盘/粘贴/CLI ─┐
+                  ├─► SessionEvent ─► SessionState::handle() ─► Change
+   轮线程 (turn) ─┘                                       │
+                                                          ▼
+                                TUI 读 Change + stream_view()/snapshot() → 画一帧
+```
+
 实测边（`crate::` 引用扫描）：
 
 | 源 | 目标 | 边数 | 评价 |
 |---|---|---|---|
-| ai | — | 0 | 叶子层，干净 |
+| ai / entry | — | 0 | 叶子层，干净 |
 | agent | ai | 2 文件（loop_rs/tools） | 单向，正确 |
-| tui | store/git/ai/agent | 各 1–4 | 顶层汇聚，符合预期 |
-| store | tui::components::chat | **反向边** | 瑕疵 A |
+| store | entry | 1 | 数据模型依赖，正确（瑕疵 A 已随 entry 抽取消解） |
+| server | agent/ai/store/entry | 各 1–2 | 服务端汇聚点，0 条指向 tui |
+| tui | server/ai/store/git | 各 1–4 | 订阅端，经协议消费服务端 |
 
-**关键改进（本轮）**：删除 `ToolExecutor::view` 后，`agent` 不再引用任何 tui 类型——之前 agent→tui 的渲染层泄漏彻底切断；界面视图 `ToolView::synthesize` 单向依赖留在 tui 内部。
+**关键改进（本轮）**：`AppEvent` 升级为 `server::events::SessionEvent` 协议；流式缓冲
+（streaming/reasoning_buf/streaming_active/reasoning_done）从 App 字段迁入
+SessionState；`drain_events` 退化为"事件泵进 session + TurnDone 时记价"。App 不再
+直接改任何会话内脏——它只认 `Change` 和 `StreamView`。
 
 ## 2. 斜杠命令：单表驱动（本轮重构）
 

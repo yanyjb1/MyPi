@@ -16,8 +16,8 @@
 //! Threading model:
 //!   main thread: event loop (keyboard + terminal events + background
 //!   messages) -> render
-//!   background thread: calls client.stream(), emitting an `AppEvent`
-//!   per delta
+//!   background thread: calls client.stream(), emitting a
+//!   `SessionEvent` per delta
 //!
 //! The two threads communicate over `mpsc::channel` (std) — data races
 //! are ruled out by the compiler.
@@ -34,14 +34,14 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 
-use crate::agent::loop_rs::{LoopConfig, run};
+use crate::agent::loop_rs::LoopConfig;
 use crate::ai::client::Client;
 use crate::ai::config::Config;
 use crate::ai::pricing::CostTracker;
 use crate::ai::types::{Context as ChatContext, Message};
 use crate::entry as entry;
 use crate::tui::editor::{Editor, Effect};
-use crate::tui::events::AppEvent;
+use crate::server::events::{Change, SessionEvent};
 use crate::tui::history;
 use crate::tui::keys::{Action, KeyContext, translate_with};
 use crate::tui::zones::Zone as _;
@@ -89,23 +89,17 @@ struct App {
     goal_col: Option<usize>,
     // Session viscera (transcript/pending/store/session_id/name/cwd_seq).
     // The TUI subscribes to it; mutations go through narrow mutators.
-    session: crate::session::SessionState,
+    session: crate::server::SessionState,
     // Input history (what ↑ cycles through).
     input_history: history::History,
     // Completion surface (popup state machine + word memo + model args).
     completion: crate::tui::completion::CompletionController,
     tracker: CostTracker,
-    streaming_active: bool,
-    // Reply currently streaming (the in-progress slot). Swapped for an
-    // Assistant entry once final; never touches the DB meanwhile.
-    streaming: String,
+    // Current model's price sheet (for local cost computation on TurnDone).
+    cost_cfg: crate::ai::config::Cost,
     // History-zone state (scroll follow, folds). Owned by the zone; the
     // app reads through it when rendering.
     history: crate::tui::zones_impl::HistoryState,
-    // Reasoning buffer currently streaming (in-progress slot; enters an entry when final).
-    reasoning_buf: String,
-    // Whether content has started (reasoning slot stops updating afterwards).
-    reasoning_done: bool,
     // Config handle: command argument completion reads the model list.
     cfg: Option<std::rc::Rc<std::cell::RefCell<crate::ai::config::Config>>>,
     // Set by /exit /quit /q: the main loop exits after the current apply finishes.
@@ -137,13 +131,10 @@ impl App {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| cwd.clone());
         Self {
+            cost_cfg: crate::ai::config::Cost::default(),
             editor: Editor::new(),
             goal_col: None,
-            streaming: String::new(),
-            streaming_active: false,
             history: crate::tui::zones_impl::HistoryState::default(),
-            reasoning_buf: String::new(),
-            reasoning_done: false,
             input_history: history::History::new(),
             completion: crate::tui::completion::CompletionController::new(),
             tracker: CostTracker::default(),
@@ -160,7 +151,7 @@ impl App {
             pending_cwd_note: None,
             session: {
                 migrate_legacy_db(&xdg_data_base());
-                crate::session::SessionState::new(crate::store::Store::open(&db_path()).ok())
+                crate::server::SessionState::new(crate::store::Store::open(&db_path()).ok())
             },
             cwd,
             home,
@@ -185,7 +176,7 @@ impl App {
         let last = w.len().saturating_sub(1);
         KeyContext {
             editor_empty: self.editor.is_empty(),
-            streaming: self.streaming_active,
+            streaming: self.session.busy(),
             popup_open: self.completion.is_open(),
             selector_open: self.resume_pick.is_some(),
             tree_open: self.tree_pick.is_some(),
@@ -293,7 +284,8 @@ impl App {
         // 2) Protocol rebuild: the shared routine — dangling tool tails
         // (leaf on a request without results) are repaired inside, so the
         // next run() always starts from a protocol-legal boundary.
-        *cx.chat.lock().expect("chat 锁中毒") = entries_to_context(&entries);
+        *cx.chat.lock().expect("chat 锁中毒") =
+            crate::server::turn::entries_to_context(&entries);
 
         // 4) Echo + editor draft semantics: navigating to a user entry puts
         // that message back into the editor (pi behavior) — you usually
@@ -442,8 +434,9 @@ impl App {
 
     fn refresh_completions(&mut self) {
         let models = crate::tui::completion::models_from_config(&self.cfg);
+        let text = self.editor.text().to_string();
         let cx = crate::tui::completion::InputCtx {
-            text: &self.editor.text().clone(),
+            text: &text,
             cursor: self.editor.cursor(),
             cwd: &self.cwd,
             home: &self.home,
@@ -1028,7 +1021,7 @@ impl App {
             self.run_command(cmd_name, cmd_arg, cx);
             return;
         }
-        if self.streaming_active {
+        if self.session.busy() {
             return;
         }
         self.editor.clear();
@@ -1050,12 +1043,7 @@ impl App {
             }
         }
 
-        self.session.echo(entry::Entry::User { content: text.clone() });
-        self.session.stage(entry::Entry::User { content: text.clone() });
-        self.streaming.clear();
-        self.reasoning_buf.clear();
-        self.reasoning_done = false;
-        self.streaming_active = true;
+        self.session.start_turn(&text);
         self.history.scroll_pinned = true;
         self.history.chat_scroll = 0;
         self.interrupt.store(false, Ordering::Relaxed);
@@ -1079,73 +1067,30 @@ impl App {
     }
 
     // Drain messages from the background thread.
-    fn drain_events(&mut self, rx: &mpsc::Receiver<AppEvent>, cost: &crate::ai::config::Cost) {
+    /// Drain the protocol channel into the session service, then fold
+    /// the usage into the local cost tracker. The App never touches turn
+    /// data — it only reacts to the `Change`s the session reports.
+    fn drain_events(&mut self, rx: &mpsc::Receiver<SessionEvent>) {
         while let Ok(ev) = rx.try_recv() {
-            match ev {
-                AppEvent::Delta(d) => {
-                    self.reasoning_done = true; // content started; reasoning frozen
-                    self.streaming.push_str(&d);
-                }
-                AppEvent::ReasoningDelta(r) => self.reasoning_buf.push_str(&r),
-                AppEvent::TurnDone(u, _stop) => {
-                    self.tracker.record(&u, cost);
-                    // Mark interrupts explicitly — otherwise the user
-                    // cannot tell "finished" from "cut off" and assumes
-                    // the model trailed off mid-answer.
-                    let content = std::mem::take(&mut self.streaming);
-                    let content = if content.is_empty() { "(无输出)".into() } else { content };
-                    let e = entry::Entry::Assistant {
-                        content,
-                        usage: Some(entry::Entry::usage_summary(&u)),
-                        reasoning: if self.reasoning_buf.is_empty() { None } else { Some(self.reasoning_buf.clone()) },
-                    };
-                    self.session.stage(e.clone());
-                    self.session.echo(e);
-                }
-                AppEvent::ToolStart { call_id, name, args_summary } => {
-                    let e = entry::Entry::ToolRequest { call_id, name, object: args_summary };
-                    self.session.stage(e.clone());
-                    self.session.echo(e);
-                }
-                AppEvent::ToolFinish { call_id, name, ok, result, .. } => {
-                    let e = entry::Entry::ToolResult {
-                        call_id,
-                        name,
-                        ok,
-                        // Store data only (the raw text); the view is synthesized at render time
-                        result,
-                    };
-                    self.session.stage(e.clone());
-                    self.session.echo(e);
-                }
-                AppEvent::Error(e) => {
-                    // Session-level errors are not persisted (not one of the four message kinds); memory stream only
-                    self.session.echo(entry::Entry::Error { text: e });
-                }
-                AppEvent::Commit(entries) => {
-                    if let Some((st, sid)) = self.session.persistence()
-                        && let Err(e) = st.append(sid, &entries)
-                    {
-                        let msg = format!("落盘失败：{e:#}");
-                        self.session.echo(entry::Entry::Error { text: msg });
-                    }
-                    self.session.clear_pending();
-                }
-                AppEvent::Done => self.streaming_active = false,
+            let change = self.session.handle(ev);
+            if change == Change::TurnDone
+                && let Some(u) = self.session.take_last_usage()
+            {
+                self.tracker.record(&u, &self.cost_cfg);
             }
         }
     }
 
     // Advance the spinner by time.
     fn tick_spinner(&mut self) {
-        if self.streaming_active && self.spin_at.elapsed() >= SPIN_FRAME {
+        if self.session.busy() && self.spin_at.elapsed() >= SPIN_FRAME {
             self.spin_i = (self.spin_i + 1) % SPINNER.len();
             self.spin_at = Instant::now();
         }
     }
 
     fn spinner(&self) -> Option<char> {
-        self.streaming_active.then(|| SPINNER[self.spin_i])
+        self.session.busy().then(|| SPINNER[self.spin_i])
     }
 
     // Refresh git status by time.
@@ -1159,7 +1104,7 @@ impl App {
 
 // Handles for interacting with the environment (send channel + model params), passed to `App::apply`.
 struct Ctx {
-    tx: mpsc::Sender<AppEvent>,
+    tx: mpsc::Sender<SessionEvent>,
     client: std::cell::RefCell<Client>,
     // Config replica: /model lists, /model sets default, /switch reads entries.
     cfg: std::rc::Rc<std::cell::RefCell<crate::ai::config::Config>>,
@@ -1178,15 +1123,17 @@ struct Ctx {
 
 impl Ctx {
     fn spawn_turn(&self, text: String, interrupt: Arc<AtomicBool>) {
-        spawn_turn(
+        crate::server::turn::spawn_turn(
             self.tx.clone(),
-            self.client.borrow().clone(),
-            self.chat.clone(),
-            text,
-            LoopConfig::new(self.max_tokens),
-            interrupt,
-            self.cwd.read().expect("cwd 锁中毒").clone(),
-            self.cwd.clone(),
+            crate::server::turn::TurnRequest {
+                client: self.client.borrow().clone(),
+                chat: self.chat.clone(),
+                text,
+                cfg: LoopConfig::new(self.max_tokens),
+                interrupt,
+                cwd: self.cwd.read().expect("cwd 锁中毒").clone(),
+                cwd_slot: self.cwd.clone(),
+            },
         );
     }
 
@@ -1308,6 +1255,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     ));
     let mut app = App::new(cwd.read().expect("cwd 锁中毒").clone());
     app.cfg = Some(cfg.clone());
+    app.cost_cfg = cost_cfg;
     // `--resume`: open the session picker before the first frame (the
     // same surface /resume shows; Esc here simply starts a fresh session).
     if cli.resume
@@ -1331,7 +1279,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
 
     let result = (|| -> Result<()> {
-        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let (tx, rx) = mpsc::channel::<SessionEvent>();
         // Environment handles are built once.
         // It used to be rebuilt inside the event loop, cloning client +
         // chat on every keystroke even though neither changes for the
@@ -1401,7 +1349,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             }
 
             // ---- background messages ----
-            app.drain_events(&rx, &cost_cfg);
+            app.drain_events(&rx);
             app.tick_spinner();
             app.tick_git();
 
@@ -1453,9 +1401,15 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                     scroll_pinned: app.history.scroll_pinned,
                     show_reasoning: !app.history.reasoning_folded,
                     tools_expanded: app.history.tools_expanded,
-                    live_reasoning: if app.reasoning_buf.is_empty() { None } else { Some(app.reasoning_buf.as_str()) },
-                    reasoning_done: app.reasoning_done,
-                    streaming: if app.streaming.is_empty() { None } else { Some(app.streaming.as_str()) },
+                    live_reasoning: {
+                        let sv = app.session.stream_view();
+                        if sv.reasoning.is_empty() { None } else { Some(sv.reasoning.as_str()) }
+                    },
+                    reasoning_done: app.session.stream_view().reasoning_done,
+                    streaming: {
+                        let sv = app.session.stream_view();
+                        if sv.text.is_empty() { None } else { Some(sv.text.as_str()) }
+                    },
                     wrapped: &wrapped,
                     cursor_char,
                     spinner,
@@ -1496,272 +1450,5 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     result
 }
 
-
-// Rebuild the **full protocol messages** from projected entries (the
-// inverse of `collect_turn`). Tool call details (call_id / arguments /
-// results) are all in the DB — the live build, resume, and tree
-// navigation all read the same source, so the model sees the history
-// exactly as it did the first time.
-//
-// Dangling safety: if the projection ends inside a tool chain (leaf on
-// a ToolRequest with no matching ToolResult, or vice versa), the tail
-// is repaired — a request without results is dropped together with its
-// pending calls (never a half-open tool_calls message), so the next
-// `run()` always starts from a protocol-legal boundary.
-fn entries_to_context(entries: &[entry::Entry]) -> ChatContext {
-    let mut rebuilt = ChatContext::new().push(Message::System {
-        content: "你是一个简洁的编程助手。用中文回答。".into(),
-    });
-    // Pair requests with their results first: call_id -> (name, object, result)
-    use std::collections::BTreeMap;
-    let mut results: BTreeMap<String, (bool, String)> = BTreeMap::new();
-    for e in entries {
-        if let entry::Entry::ToolResult { call_id, ok, result, .. } = e {
-            results.insert(call_id.clone(), (*ok, result.clone()));
-        }
-    }
-    let mut served: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for e in entries {
-        match e {
-            entry::Entry::User { content } => {
-                rebuilt = rebuilt.push(Message::User { content: content.clone() });
-            }
-            entry::Entry::Assistant { content, .. } => {
-                rebuilt = rebuilt.push(Message::Assistant {
-                    content: Some(content.clone()),
-                    tool_calls: Vec::new(),
-                });
-            }
-            entry::Entry::ToolRequest { call_id, name, object } => {
-                let call = crate::ai::types::ToolCall {
-                    id: call_id.clone(),
-                    kind: "function".into(),
-                    function: crate::ai::types::FunctionCall {
-                        name: name.clone(),
-                        arguments: object.clone(),
-                    },
-                };
-                rebuilt = rebuilt.push(Message::Assistant {
-                    content: None,
-                    tool_calls: vec![call],
-                });
-            }
-            entry::Entry::ToolResult { call_id, result, .. } => {
-                // The stored result is exactly what the model received
-                // back then — use it verbatim.
-                served.insert(call_id.clone());
-                rebuilt = rebuilt.push(Message::Tool {
-                    tool_call_id: call_id.clone(),
-                    content: result.clone(),
-                });
-            }
-            entry::Entry::Error { .. } | entry::Entry::Name { .. } => {}
-        }
-    }
-    // Repair pass: drop trailing requests whose results never arrived
-    // (dangling leaf). Walk backwards while the tail is ToolRequest-
-    // without-result or a Tool message whose request was dropped.
-    loop {
-        match rebuilt.messages.last() {
-            Some(Message::Tool { tool_call_id, .. }) if !served.is_empty() => {
-                // A Tool result always pairs with the preceding request;
-                // by construction requests come before results, so this
-                // cannot dangle. Stop when we hit anything else.
-                let id = tool_call_id.clone();
-                // Remove this Tool message and its (already emitted) request
-                // stays — a result with request is protocol-legal. Nothing
-                // to repair.
-                let _ = id;
-                break;
-            }
-            Some(Message::Assistant { content: None, tool_calls }) if !tool_calls.is_empty() => {
-                // Pure tool-call round with no results yet: dangling.
-                // Rewind to before this message.
-                rebuilt.messages.pop();
-                // Also remove the matching result markers (none here by
-                // construction) and continue checking the new tail.
-                continue;
-            }
-            _ => break,
-        }
-    }
-    rebuilt
-}
-
-// Extract this turn's entries from the finished chat replica (for persistence).
-//
-// Precondition: the last message in chat.messages before run() is this turn's user
-// message (the spawn_turn caller just pushed it), so scanning back to the previous
-// finalized assistant is enough.
-fn collect_turn(chat: &crate::ai::types::Context, text: &str) -> Vec<entry::Entry> {
-    // Note: this function assembles only the tool-chain entries; the final Assistant
-    // entry with reasoning is built separately by drain_events' TurnDone branch (reasoning_buf lives on App).
-    use crate::ai::types::Message;
-    // The turn starts at the last User message (pushed at the top of run()).
-    // Walk **forward** from there — the old "scan backward then reverse" approach
-    // inverted each request -> result pair into result -> request.
-    let start = chat
-        .messages
-        .iter()
-        .rposition(|m| matches!(m, Message::User { .. }))
-        .expect("本轮一定 push 过 User");
-    let mut out = Vec::new();
-    for m in &chat.messages[start..] {
-        match m {
-            Message::User { content } => {
-                out.push(entry::Entry::User { content: content.clone() });
-            }
-            Message::Assistant { content, tool_calls } => {
-                let c = content.clone().unwrap_or_default();
-                if !tool_calls.is_empty() {
-                    for tc in tool_calls {
-                        // Extract the path from the JSON arguments; empty when absent
-                        let object = tc.function.arguments_json().ok()
-                            .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(String::from))
-                            .unwrap_or_default();
-                        out.push(entry::Entry::ToolRequest {
-                            call_id: tc.id.clone(),
-                            name: tc.function.name.clone(),
-                            object,
-                        });
-                    }
-                    // The tool_calls assistant appears only as a request card;
-                    // no duplicate Assistant entry (its content is usually empty)
-                } else {
-                    out.push(entry::Entry::Assistant { content: c, usage: None, reasoning: None });
-                }
-            }
-            Message::Tool { tool_call_id, content } => {
-                // name/call_id backfill from the nearest preceding request card with the same name
-                // (pairing unchanged: tool_call_id is the protocol key, name is display-only)
-                let name = out
-                    .iter()
-                    .rev()
-                    .find_map(|e| match e {
-                        entry::Entry::ToolRequest { call_id, name, .. } if call_id == tool_call_id => {
-                            Some(name.clone())
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                out.push(entry::Entry::ToolResult {
-                    call_id: tool_call_id.clone(),
-                    name,
-                    ok: true,
-                    result: content.clone(),
-                });
-            }
-            Message::System { .. } => {}
-        }
-    }
-    // Sanity: the first extracted entry must be User (guards against misalignment).
-    // text is not compared — it is trimmed input and may differ in whitespace from chat.
-    let _ = text;
-    debug_assert!(out.first().is_some_and(|e| matches!(e, entry::Entry::User { .. })));
-    out
-}
-
-// The background thread runs one turn. Owns its client and message replica.
-#[allow(clippy::too_many_arguments)] // cwd and cwd_slot have distinct semantics; not worth a struct
-fn spawn_turn(
-    tx: mpsc::Sender<AppEvent>,
-    client: Client,
-    chat: Arc<Mutex<ChatContext>>,
-    text: String,
-    cfg: LoopConfig,
-    interrupt: Arc<AtomicBool>,
-    cwd: std::path::PathBuf,
-    cwd_slot: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
-) {
-    std::thread::spawn(move || {
-        let send = |ev: AppEvent| -> bool { tx.send(ev).is_ok() };
-        let chat_arc = chat.clone();
-        // Tool-relative paths resolve against the session directory
-        let mut tools = crate::agent::tools::BuiltinTools::new(cwd)
-            .with_cwd_slot(cwd_slot);
-        // Snapshot for this turn: the lock is held only for the clone, never during network I/O
-        let mut chat = chat.lock().expect("chat 锁中毒").clone();
-        // Tool manuals ship with the request — without them the model does not know the tools exist
-        chat.tools = crate::agent::tools::BuiltinTools::definitions();
-        // Callback returning false -> client stops reading and disconnects (a real interrupt; no wasted tokens)
-        let r = run(&client, &mut chat, &text, &cfg, &mut tools, |delta| {
-            let _ = send(AppEvent::Delta(delta.to_string()));
-            !interrupt.load(Ordering::Relaxed)
-        }, |r| {
-            let _ = send(AppEvent::ReasoningDelta(r.to_string()));
-        }, |ev| {
-            let _ = send(match ev {
-                crate::agent::loop_rs::ToolEvent::Start { call_id, name, args_summary } =>
-                    AppEvent::ToolStart { call_id, name, args_summary },
-                crate::agent::loop_rs::ToolEvent::Finish { call_id, name, ok, result } =>
-                    AppEvent::ToolFinish { call_id, name, ok, result },
-            });
-        });
-        match r {
-            Ok(outcome) => {
-                if outcome.hit_round_limit {
-                    let _ = send(AppEvent::Error(format!(
-                        "工具调用轮数撞上限（{}），被强制收工",
-                        cfg.max_rounds
-                    )));
-                }
-                let _ = send(AppEvent::TurnDone(outcome.message.usage, outcome.message.stop_reason));
-                // Write the finalized history back to the shared slot: the model remembers
-                // this turn next round (and prefix-cache hits depend on it). Not written on Err —
-                // never pollute the shared slot with a partial history.
-                *chat_arc.lock().expect("chat 锁中毒") = chat.clone();
-                // Whole turn finalized: user + (assistant.tool_calls + tool results) * N + assistant.
-                // Persisted in one shot by the main thread.
-                let _ = send(AppEvent::Commit(collect_turn(&chat, &text)));
-            }
-            Err(e) => {
-                let _ = send(AppEvent::Error(format!("{e:#}")));
-            }
-        }
-        let _ = send(AppEvent::Done);
-    });
-}
-
-#[cfg(test)]
-mod app_tests {
-    use super::*;
-    use crate::ai::types::Message;
-    use crate::entry::Entry;
-
-    #[test]
-    fn rebuild_handles_complete_and_dangling_tool_tails() {
-        // Complete chain: request + result survive.
-        let complete = vec![
-            Entry::User { content: "q".into() },
-            Entry::ToolRequest { call_id: "c1".into(), name: "bash".into(), object: "{}".into() },
-            Entry::ToolResult { call_id: "c1".into(), name: "bash".into(), ok: true, result: "out".into() },
-            Entry::Assistant { content: "done".into(), usage: None, reasoning: None },
-        ];
-        let ctx = entries_to_context(&complete);
-        let non_system = ctx.messages.iter().filter(|m| !matches!(m, Message::System { .. })).count();
-        assert_eq!(non_system, 4); // user, assistant(tool_calls), tool, assistant(done)
-        assert!(ctx.messages.iter().any(|m| matches!(m, Message::Assistant { tool_calls, .. } if !tool_calls.is_empty())));
-        assert!(ctx.messages.iter().any(|m| matches!(m, Message::Tool { .. })));
-
-        // Dangling: request without result (leaf stopped mid-chain) — the
-        // request is dropped, protocol stays legal.
-        let dangling = vec![
-            Entry::User { content: "q".into() },
-            Entry::ToolRequest { call_id: "c2".into(), name: "bash".into(), object: "{}".into() },
-        ];
-        let ctx = entries_to_context(&dangling);
-        let non_system = ctx.messages.iter().filter(|m| !matches!(m, Message::System { .. })).count();
-        assert_eq!(non_system, 1); // user only — the dangling request was dropped
-        assert!(matches!(ctx.messages.last(), Some(Message::User { .. })));
-
-        // Name markers pass through harmlessly.
-        let named = vec![
-            Entry::User { content: "q".into() },
-            Entry::Name { name: "分支".into() },
-            Entry::Assistant { content: "a".into(), usage: None, reasoning: None },
-        ];
-        let ctx = entries_to_context(&named);
-        let non_system = ctx.messages.iter().filter(|m| !matches!(m, Message::System { .. })).count();
-        assert_eq!(non_system, 2);
-    }
-}
+// Turn machinery (spawn runner, collect_turn, entries_to_context) lives
+// in `crate::server::turn` now — the TUI is only a subscriber.
