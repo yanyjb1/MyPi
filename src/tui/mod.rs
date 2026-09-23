@@ -7,6 +7,7 @@
 //! - Components (render state into Lines): `components/*`
 //! - Orchestration (event loop + rendering): `app` / `view` / `events`
 pub mod app;
+pub mod completion;
 pub mod components;
 pub mod editor;
 pub mod events;

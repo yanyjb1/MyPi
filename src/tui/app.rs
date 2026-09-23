@@ -44,7 +44,6 @@ use crate::tui::editor::{Editor, Effect};
 use crate::tui::events::AppEvent;
 use crate::tui::history;
 use crate::tui::keys::{Action, KeyContext, translate_with};
-use crate::tui::leaf;
 use crate::tui::zones::Zone as _;
 use crate::tui::path;
 use crate::tui::layout as tlayout;
@@ -93,8 +92,8 @@ struct App {
     session: crate::session::SessionState,
     // Input history (what ↑ cycles through).
     input_history: history::History,
-    // Path completion popup.
-    popup: path::CompletionPopup,
+    // Completion surface (popup state machine + word memo + model args).
+    completion: crate::tui::completion::CompletionController,
     tracker: CostTracker,
     streaming_active: bool,
     // Reply currently streaming (the in-progress slot). Swapped for an
@@ -130,14 +129,6 @@ struct App {
     home: std::path::PathBuf,
     // Input viewport start (wrapped row). Independent of the cursor — see `layout::adjust_scroll`.
     scroll: usize,
-    // The last "path word" completion candidates were computed for (start + text).
-    //
-    // Purpose: without the memo, every cursor move re-enters
-    // `refresh_completions()` and re-scans the directory via `read_dir`
-    // whenever the input contains a path-like word — even though moving
-    // the cursor usually does not change the word. Skip the rescan when
-    // the word is unchanged.
-    last_completion_word: Option<(usize, String)>,
 }
 
 impl App {
@@ -154,7 +145,7 @@ impl App {
             reasoning_buf: String::new(),
             reasoning_done: false,
             input_history: history::History::new(),
-            popup: path::CompletionPopup::default(),
+            completion: crate::tui::completion::CompletionController::new(),
             tracker: CostTracker::default(),
             interrupt: Arc::new(AtomicBool::new(false)),
             spin_i: 0,
@@ -174,7 +165,6 @@ impl App {
             cwd,
             home,
             scroll: 0,
-            last_completion_word: None,
         }
     }
 
@@ -196,7 +186,7 @@ impl App {
         KeyContext {
             editor_empty: self.editor.is_empty(),
             streaming: self.streaming_active,
-            popup_open: self.popup.is_open(),
+            popup_open: self.completion.is_open(),
             selector_open: self.resume_pick.is_some(),
             tree_open: self.tree_pick.is_some(),
             at_first_line: row == 0,
@@ -215,31 +205,6 @@ impl App {
     // `ArgKind`. `None` = the command has no argument candidates
     // (unknown commands included); `Some(empty)` = it does but nothing
     // matches right now.
-    fn command_args(&self, word: &str) -> Option<Vec<crate::tui::path::Completion>> {
-        let (cmd, arg_part) = word.split_once(' ')?;
-        let spec = crate::tui::path::lookup(cmd)?;
-        match spec.args {
-            crate::tui::path::ArgKind::None => return None,
-            // Path-argument commands (/cdp): no model list; the generic file path completion below handles them
-            crate::tui::path::ArgKind::Path => return None,
-            crate::tui::path::ArgKind::ModelId => {}
-        }
-        let cfg = self.cfg.as_ref()?;
-        let cfg = cfg.borrow();
-        let mut out: Vec<_> = cfg
-            .models()
-            .filter(|(_, m)| m.id.starts_with(arg_part))
-            .map(|(pname, m)| crate::tui::path::Completion {
-                name: m.id.clone(),
-                detail: crate::ai::config::Config::display_name(m).to_string(),
-                is_dir: false,
-                insert: format!("{cmd} {pname}:{}", m.id),
-            })
-            .collect();
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Some(out)
-    }
-
     // Reserved-area rows wanted this frame (a layout input).
     //
     // Completion popup open -> candidate rows (capped at MAX); idle ->
@@ -251,13 +216,10 @@ impl App {
             let cap = (term_h as usize * 2 / 3).max(6) as u16;
             let want = self.resume_pick.as_ref().map(|(v, _)| v.len() as u16 + 1).unwrap_or(1);
             want.min(cap).min(term_h)
-        } else if self.popup.is_open() {
+        } else if let Some(h) = self.completion.reserved_height() {
             // Row height locks when the popup opens (inside open()) and
             // stays fixed through filtering — no more per-row jitter.
-            self.popup
-                .locked_height()
-                .unwrap_or(self.popup.items().len())
-                .min(crate::tui::components::reserved::DEFAULT_MAX)
+            h.min(crate::tui::components::reserved::DEFAULT_MAX)
                 .min(term_h as usize) as u16
         } else {
             crate::tui::layout::RESERVED_IDLE
@@ -265,103 +227,9 @@ impl App {
     }
 
     // The path-like word before the cursor (for completion).
-    fn current_path_word(&self) -> Option<String> {
-        let text = self.editor.text();
-        let cursor = self.editor.cursor();
-        path::candidate(&text, cursor).map(|(_, word)| word)
-    }
-
     // Refresh completion candidates (called after input changes).
     //
     // No path-like word before the cursor -> close the popup. This is why the popup vanishes when the cursor moves.
-    fn refresh_completions(&mut self) {
-        let text = self.editor.text();
-        let cursor = self.editor.cursor();
-
-        // Command **argument** mode: line starts with `/` and the cursor
-        // is past the command name and a space ("/model ", "/model gl").
-        // candidate() stops at whitespace, so this branch must handle it
-        // or the popup would never open after a complete command.
-        if text.starts_with('/') {
-            // `cursor` is a byte offset; multibyte characters (CJK input)
-            // require slicing at a char boundary — slicing through a
-            // character panics (it has happened).
-            let mut end = cursor.min(text.len());
-            while end > 0 && !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            let prefix_text = &text[..end];
-            if !prefix_text.contains('\n') {
-            let prefix: String = prefix_text.to_string();
-            if prefix.contains(' ')
-                && let Some((cmd, _)) = prefix.split_once(' ')
-                && let Some(spec) = path::lookup(cmd)
-            {
-                match spec.args {
-                    path::ArgKind::ModelId => {
-                        if let Some(items) = self.command_args(&prefix) {
-                            // Leaf state (single candidate == whole line):
-                            // close so Tab/Enter stop re-confirming the same
-                            // completion and Enter submits again.
-                            if items.is_empty()
-                                || leaf::leaf_state(&items, prefix_text, true, &text).is_some()
-                            {
-                                self.popup.close();
-                                self.last_completion_word = None;
-                            } else {
-                                self.last_completion_word = None;
-                                self.popup.open(items, 0, cursor);
-                            }
-                            return;
-                        }
-                    }
-                    // Path argument (/cdp /tm...): falls through to the generic file path completion
-                    path::ArgKind::Path => {}
-                    // No-argument commands (/name x...): the argument is not a completion target; close the popup
-                    path::ArgKind::None => {
-                        self.popup.close();
-                        return;
-                    }
-                }
-            }
-            // Incomplete command names ("/mod") and path-argument commands: handled by the generic logic below.
-            }
-        }
-
-        match path::candidate(&text, cursor) {
-            Some((from, word)) => {
-                // Same word (pure cursor movement): skip the disk rescan.
-                // The comparison includes `from`: the same word at a
-                // different position needs a different replacement index.
-                if self.last_completion_word.as_ref() == Some(&(from, word.clone()))
-                    && self.popup.is_open()
-                {
-                    return;
-                }
-                self.last_completion_word = Some((from, word.clone()));
-                let at_start = from == 0;
-                let mut items = path::complete(&word, at_start, &self.cwd, &self.home);
-                // Complete command followed by a space ("/model ") -> candidates become that command's argument list
-                if at_start && items.is_empty() && let Some(arg) = self.command_args(&word) {
-                    items = arg;
-                }
-                // Final-stage detection: the single leaf rule lives in
-                // `leaf::leaf_state` (file leaf / exact command / argument
-                // line-leaf). Close there -> Enter submits directly.
-                if items.is_empty() || leaf::leaf_state(&items, &word, at_start, &text).is_some() {
-                    self.popup.close();
-                    self.last_completion_word = None;
-                } else {
-                    self.popup.open(items, from, cursor);
-                }
-            }
-            None => {
-                self.last_completion_word = None;
-                self.popup.close();
-            }
-        }
-    }
-
     // Tab: advance the completion.
     //
     // Semantics match bash and mainstream editors:
@@ -374,45 +242,6 @@ impl App {
     // matches: that would silently rewrite a path the user only wanted
     // to look at. Listing candidates and letting ↑↓ choose is
     // predictable.
-    fn complete(&mut self) {
-        if !self.popup.is_open() {
-            self.refresh_completions();
-            if !self.popup.is_open() {
-                return; // no candidates
-            }
-            // Single candidate: apply directly, saving a keystroke
-            if self.popup.items().len() == 1 {
-                let action = self.popup.accept();
-                self.apply_completion(action);
-                // When the completion ends with a space ("/model "), the
-                // next tier is **argument** candidates; rescan immediately
-                // or the argument popup waits for another keystroke.
-                self.refresh_completions();
-            }
-            return; // multiple candidates: popup is open, waiting for a choice
-        }
-
-        // Popup open: try the common prefix first (only meaningful with
-        // multiple candidates). In argument mode current_path_word()
-        // returns nothing (the word ends in a space); use the whole
-        // line-start text instead, replacing from 0 identically.
-        let current = self
-            .current_path_word()
-            .or_else(|| {
-                let t = self.editor.text();
-                if t.starts_with('/') { Some(t) } else { None }
-            })
-            .unwrap_or_default();
-        if let Some(action) = self.popup.accept_common_prefix(&current) {
-            self.apply_completion(action);
-            self.refresh_completions(); // re-list candidates for the new input
-            return;
-        }
-        // Cannot extend further -> confirm the highlighted entry
-        let action = self.popup.accept();
-        self.apply_completion(action);
-    }
-
     // Open the tree navigator (double-Esc). Builds the full-tree rows from
     // the store; a missing store degrades to an empty picker (never crashes).
     fn open_tree_picker(&mut self) {
@@ -590,13 +419,13 @@ impl App {
     // stores the **expanded** text, and pouring it in raw would blow up
     // the input box; this re-folds it into markers by the same rules.
     fn load_into_editor(&mut self, text: &str) {
-        self.last_completion_word = None;
         self.editor.clear();
         self.editor.insert_paste(text);
         self.goal_col = None;
-        self.popup.close();
+        self.completion.close();
     }
 
+    // Apply a completion action to the editor (replace the word segment).
     fn apply_completion(&mut self, action: path::CompletionAction) {
         if let path::CompletionAction::Replace { from, to, text } = action {
             self.editor.replace_range(from, to, &text);
@@ -608,6 +437,66 @@ impl App {
             self.refresh_completions();
         }
     }
+
+    // ---- completion wiring (thin: assemble the input context) ----
+
+    fn refresh_completions(&mut self) {
+        let models = crate::tui::completion::models_from_config(&self.cfg);
+        let cx = crate::tui::completion::InputCtx {
+            text: &self.editor.text().clone(),
+            cursor: self.editor.cursor(),
+            cwd: &self.cwd,
+            home: &self.home,
+            models,
+        };
+        self.completion.refresh(&cx);
+    }
+
+    // Tab: advance the completion. See `CompletionController::on_tab` for
+    // the state machine; this wrapper re-refreshes after applying so the
+    // argument tier ("/model " -> id list) opens immediately.
+    fn complete(&mut self) {
+        if !self.completion.is_open() {
+            self.refresh_completions();
+            if !self.completion.is_open() {
+                return; // no candidates
+            }
+            // Single candidate: apply directly, saving a keystroke
+            if self.completion.popup().items().len() == 1 {
+                let action = self.completion.accept();
+                self.apply_completion(action);
+                // When the completion ends with a space ("/model "), the
+                // next tier is **argument** candidates; rescan immediately
+                // or the argument popup waits for another keystroke.
+                self.refresh_completions();
+            }
+            return; // multiple candidates: popup is open, waiting for a choice
+        }
+
+        // Popup open: try the common prefix first (only meaningful with
+        // multiple candidates). In argument mode the word ends in a
+        // space; use the whole line-start text instead, replacing from 0.
+        let current = self
+            .editor
+            .text()
+            .split('\n')
+            .next()
+            .map(|l| {
+                let byte_end = self.editor.cursor().min(l.len());
+                l[..byte_end].to_string()
+            })
+            .unwrap_or_default();
+        if let Some(action) = self.completion.accept_common_prefix(&current) {
+            self.apply_completion(action);
+            self.refresh_completions(); // re-list candidates for the new input
+            return;
+        }
+        // Cannot extend further -> confirm the highlighted entry
+        let action = self.completion.accept();
+        self.apply_completion(action);
+    }
+
+    // ---- end completion wiring ----
 
     // Execute one semantic action. Returns false to exit.
     //
@@ -712,9 +601,9 @@ impl App {
             Action::Quit => return false,
 
             Action::Complete => self.complete(),
-            Action::CompleteUp => self.popup.move_selection(-1),
-            Action::CompleteDown => self.popup.move_selection(1),
-            Action::DismissCompletion => self.popup.close(),
+            Action::CompleteUp => self.completion.move_selection(-1),
+            Action::CompleteDown => self.completion.move_selection(1),
+            Action::DismissCompletion => self.completion.close(),
 
             Action::ClearInput => self.clear_input(),
 
@@ -1119,7 +1008,6 @@ impl App {
 
     // Submit the current input.
     fn submit(&mut self, cx: &Ctx) {
-        self.last_completion_word = None;
         // The model receives the **expanded** text: markers are only the on-screen folded view.
         let text = self.editor.expanded_text().trim().to_string();
         if text.is_empty() {
@@ -1134,7 +1022,7 @@ impl App {
         };
         if crate::tui::path::lookup(cmd_name).is_some() {
             self.editor.clear();
-            self.popup.close();
+            self.completion.close();
             self.goal_col = None;
             self.scroll = 0;
             self.run_command(cmd_name, cmd_arg, cx);
@@ -1145,7 +1033,7 @@ impl App {
         }
         self.editor.clear();
         self.input_history.push(text.clone()); // the expanded text
-        self.popup.close();
+        self.completion.close();
         self.goal_col = None;
         self.scroll = 0;
         if self.session.session_id().is_none()
@@ -1183,12 +1071,11 @@ impl App {
 
     // Clear the input box and reset related state (Ctrl+C).
     fn clear_input(&mut self) {
-        self.last_completion_word = None;
         self.editor.clear();
         self.input_history.exit();
         self.goal_col = None;
         self.scroll = 0;
-        self.popup.close();
+        self.completion.close();
     }
 
     // Drain messages from the background thread.
@@ -1576,7 +1463,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                     currency_symbol,
                     show_cost,
                     palette,
-                    popup: &app.popup,
+                    popup: app.completion.popup(),
                     resume_pick: app.resume_pick.as_ref().map(|(v, i)| (&v[..], *i)),
                 };
                 cursor_pos = view::draw(f, &vs, &l);
