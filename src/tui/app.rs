@@ -705,19 +705,24 @@ impl App {
         // wheel toggles belong to the history zone — each zone's
         // acceptance table lives in `zones_impl`.
         match action {
-            Action::Quit => {
-                // Double-Esc (empty editor, 500ms window, pi's semantics):
-                // the first press arms, the second opens the tree navigator.
-                // Single press still quits.
+            Action::EscIdle => {
+                // Double-Esc (500ms window, pi's semantics): the first
+                // press only arms (stays alive); the second inside the
+                // window opens the tree navigator. Pressing nothing
+                // further quits — the timeout path `return false` here
+                // fires on the **next** idle Esc, not the first one.
                 let now = std::time::Instant::now();
-                if self.editor.is_empty() && now.duration_since(self.last_esc).as_millis() < 500 {
+                if now.duration_since(self.last_esc).as_millis() < 500 {
                     self.last_esc = now - std::time::Duration::from_secs(1);
                     self.open_tree_picker();
                     return true;
                 }
+                // First press: arm and keep running. Quit happens via the
+                // explicit timeout check below (no Esc queued yet).
                 self.last_esc = now;
-                return false;
+                return true;
             }
+            Action::Quit => return false,
 
             Action::Complete => self.complete(),
             Action::CompleteUp => self.popup.move_selection(-1),

@@ -86,6 +86,10 @@ pub enum Action {
     Submit,
     // Quit the program.
     Quit,
+    // Esc pressed while idle (no popup, not streaming). The app applies
+    // the double-Esc window: second press inside 500ms opens the tree
+    // navigator, otherwise this quits.
+    EscIdle,
     // Tree navigator modal: move highlight / confirm / cancel.
     TreeUp,
     TreeDown,
@@ -170,7 +174,11 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
         }
     }
 
-    // ---- Esc: close popup > interrupt reply > quit ----
+    // ---- Esc: close popup > interrupt reply > quit/arm-tree ----
+    // Idle Esc no longer quits outright: the action reports "Esc fired"
+    // and the app decides within its 500ms window (double-Esc opens the
+    // tree navigator; a single Esc past the window quits). Streaming and
+    // popup paths are unchanged.
     if matches!(key.code, KeyCode::Esc) {
         if cx.popup_open {
             return Action::DismissCompletion;
@@ -178,7 +186,7 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
         if cx.streaming {
             return Action::Interrupt;
         }
-        return Action::Quit;
+        return Action::EscIdle;
     }
 
     // ---- Ctrl+C: clear input; quit only when the input is already empty ----
@@ -345,8 +353,10 @@ mod tests {
     }
 
     #[test]
-    fn esc_quits_when_idle() {
-        assert_eq!(translate(key(KeyCode::Esc, KeyModifiers::NONE)), Action::Quit);
+    fn esc_idle_arms_tree_window() {
+        // Idle Esc no longer quits directly: it reports EscIdle and the
+        // app applies the double-Esc window (arm -> tree, timeout -> quit).
+        assert_eq!(translate(key(KeyCode::Esc, KeyModifiers::NONE)), Action::EscIdle);
     }
 
     #[test]
