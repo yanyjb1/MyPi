@@ -478,6 +478,21 @@ impl BuiltinTools {
                     "required": ["intent", "path", "edits"]
                 }),
             ),
+            ToolDef::function(
+                "search",
+                "网页搜索，返回标题、链接与摘要。支持高级语法：\
+                 site:github.com（限定域名）、\"精确短语\"、-排除词、filetype:、inurl:、intitle:、before:/after:（YYYY-MM-DD）。\
+                 返回 5-10 条结果；查实时信息、文档定位、找源码仓库时用它。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
+                        "query": {"type": "string", "description": "搜索词，支持 site: \"短语\" -排除 filetype: inurl: intitle: before:/after:"},
+                        "limit": {"type": "integer", "description": "返回条数，默认 8，最大 20"}
+                    },
+                    "required": ["intent", "query"]
+                }),
+            ),
         ]
     }
 }
@@ -490,10 +505,14 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
             "bash" => bash(&self.cwd, &parse_bash_args(&call.function.arguments)?),
             "read" => read(&self.cwd, &parse_read_args(&call.function.arguments)?),
             "cd" => self.tool_cd(&parse_cd_args(&call.function.arguments)?),
+            "search" => {
+                let args = crate::web::parse_search_args(&call.function.arguments)?;
+                let hits = crate::web::search(&args)?;
+                Ok(crate::web::render(&hits))
+            }
             other => Err(anyhow!("unknown tool: {other}")),
         }
     }
-
 }
 
 #[cfg(test)]
@@ -508,6 +527,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn search_tool_is_registered_with_schema() {
+        let defs = BuiltinTools::definitions();
+        let s = defs
+            .iter()
+            .find(|d| d.function.name == "search")
+            .expect("search tool must be registered");
+        // The model needs the operator list in the description — it is the
+        // only docs for the syntax the engine honors.
+        assert!(
+            s.function.description.contains("site:"),
+            "schema must document site: ({})",
+            s.function.description
+        );
+        let props = &s.function.parameters["properties"];
+        assert!(props.get("query").is_some());
+        assert!(props.get("limit").is_some());
     }
 
     #[test]
@@ -705,7 +743,7 @@ mod tests {
     fn definitions_carry_both_tools() {
         let defs = BuiltinTools::definitions();
         let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
-        assert_eq!(names, vec!["read", "edit", "cd", "bash", "mass_edit"]);
+        assert_eq!(names, vec!["read", "edit", "cd", "bash", "mass_edit", "search"]);
         // The schema must declare required fields, or the model omits arguments
         for d in &defs {
             assert!(d.function.parameters.get("required").is_some());
@@ -721,7 +759,6 @@ mod tests {
 
     #[test]
     fn cwd_is_respected() {
-        // Tool-relative paths resolve against the session cwd, not the process cwd
         let d = tempdir("cwd");
         std::fs::write(d.join("a.txt"), "x\n").unwrap();
         let args = EditArgs {

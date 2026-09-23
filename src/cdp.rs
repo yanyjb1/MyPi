@@ -345,20 +345,30 @@ impl Cdp {
     /// `DOM.getDocument` + `DOM.getOuterHTML` — the bot-proof read path.
     /// Verified live: works where `Runtime.evaluate` hangs.
     pub fn dom_html(&mut self, timeout: Duration) -> anyhow::Result<String> {
-        let doc = self.call("DOM.getDocument", json!({}), timeout)?;
-        let root = doc
-            .pointer("/root/nodeId")
-            .and_then(Value::as_i64)
-            .ok_or_else(|| anyhow!("DOM.getDocument: no root"))?;
-        let html = self.call(
-            "DOM.getOuterHTML",
-            json!({"nodeId": root}),
-            timeout,
-        )?;
-        Ok(html
-            .get("outerHTML")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string())
+        // root → outerHTML must be atomic from the renderer's view; on a
+        // page mid-navigation the node can die between the two calls. One
+        // retry with a fresh getDocument covers that window — the poll
+        // loop in the caller tolerates the extra latency.
+        for attempt in 0..2 {
+            let doc = self.call("DOM.getDocument", json!({}), timeout)?;
+            let root = doc
+                .pointer("/root/nodeId")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow!("DOM.getDocument: no root"))?;
+            match self.call("DOM.getOuterHTML", json!({"nodeId": root}), timeout) {
+                Ok(html) => {
+                    return Ok(html
+                        .get("outerHTML")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string());
+                }
+                Err(e) if attempt == 0 && e.to_string().contains("Could not find node") => {
+                    continue; // stale root: re-fetch and try once more
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!("retry loop returns on both arms")
     }
 }
