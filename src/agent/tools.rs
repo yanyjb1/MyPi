@@ -479,6 +479,21 @@ impl BuiltinTools {
                 }),
             ),
             ToolDef::function(
+                "fetch",
+                "读取一个网页，返回干净的 Markdown 正文（自动去导航/广告/页脚）。\
+                 适合读文档、文章、搜到的结果页。JS 重渲染的页面会自动走浏览器兜底。\
+                 输出截断在 24K 字符；raw: true 时返回原始 HTML。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
+                        "url": {"type": "string", "description": "要读取的 URL（http/https，裸域名自动补 https://）"},
+                        "raw": {"type": "boolean", "description": "返回原始 HTML 而不是 markdown，默认 false"}
+                    },
+                    "required": ["intent", "url"]
+                }),
+            ),
+            ToolDef::function(
                 "search",
                 "网页搜索，返回标题、链接与摘要。支持高级语法：\
                  site:github.com（限定域名）、\"精确短语\"、-排除词、filetype:、inurl:、intitle:、before:/after:（YYYY-MM-DD）。\
@@ -505,6 +520,10 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
             "bash" => bash(&self.cwd, &parse_bash_args(&call.function.arguments)?),
             "read" => read(&self.cwd, &parse_read_args(&call.function.arguments)?),
             "cd" => self.tool_cd(&parse_cd_args(&call.function.arguments)?),
+            "fetch" => {
+                let args = crate::fetch::parse_fetch_args(&call.function.arguments)?;
+                crate::fetch::fetch(&args)
+            }
             "search" => {
                 let args = crate::web::parse_search_args(&call.function.arguments)?;
                 let hits = crate::web::search(&args)?;
@@ -743,7 +762,10 @@ mod tests {
     fn definitions_carry_both_tools() {
         let defs = BuiltinTools::definitions();
         let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
-        assert_eq!(names, vec!["read", "edit", "cd", "bash", "mass_edit", "search"]);
+        assert_eq!(
+            names,
+            vec!["read", "edit", "cd", "bash", "mass_edit", "fetch", "search"]
+        );
         // The schema must declare required fields, or the model omits arguments
         for d in &defs {
             assert!(d.function.parameters.get("required").is_some());

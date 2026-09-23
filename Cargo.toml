@@ -23,3 +23,7 @@ syntect = { version = "5.3.0", default-features = false, features = ["default-fa
 # WebSocket（CDP 用）：同步、无 tokio，与 ureq 的风格一致。只做帧协议，
 # CDP 的会话/配对逻辑在 src/cdp.rs 里手写
 tungstenite = "0.30"
+# HTML→Markdown：omp 同款 crate（纯 Rust，带 Aggressive 预处理去 nav/footer/form）
+html-to-markdown-rs = { version = "3.14", default-features = false }
+# URL 解析（fetch 的 scheme 校验）
+url = "2"

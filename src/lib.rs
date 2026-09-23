@@ -3,6 +3,7 @@ pub mod ai;
 pub mod cdp;
 pub mod cli;
 pub mod entry;
+pub mod fetch;
 pub mod git;
 pub mod server;
 pub mod store;
