@@ -1265,6 +1265,8 @@ pub fn run_tui(cfg: Config) -> Result<()> {
             max_tokens,
             cwd: cwd.clone(),
         };
+        // Last frame's layout, for mouse zone hit-testing.
+        let mut last_layout: Option<crate::tui::layout::Layout> = None;
         loop {
             // ---- terminal events ----
             if event::poll(POLL)? {
@@ -1294,22 +1296,22 @@ pub fn run_tui(cfg: Config) -> Result<()> {
                         }
                     }
                     Event::Mouse(m) => {
-                        // Wheel: up scrolls 3 rows and unpins from the
-                        // bottom (viewport held; new messages do not drag
-                        // it); scrolling back to the bottom (chat_scroll
-                        // zeroed) restores follow mode.
-                        match m.kind {
-                            MouseEventKind::ScrollUp => {
-                                app.history.scroll_pinned = false;
-                                app.history.chat_scroll = app.history.chat_scroll.saturating_add(3);
+                        // Hit-test the pointer row against the last frame's
+                        // layout: only the history area scrolls (input and
+                        // reserved ignore the wheel). Up unpin; back at 0
+                        // re-pins. A modal turns the wheel into list scroll.
+                        let chat_h = last_layout
+                            .as_ref()
+                            .map(|l: &crate::tui::layout::Layout| l.chat_height)
+                            .unwrap_or(0);
+                        if crate::tui::zones_impl::wheel_zone(m.row, chat_h, app.resume_pick.is_some())
+                            == Some(crate::tui::zones::ZoneId::History)
+                        {
+                            match m.kind {
+                                MouseEventKind::ScrollUp => crate::tui::zones_impl::wheel_step(&mut app.history, true, 3),
+                                MouseEventKind::ScrollDown => crate::tui::zones_impl::wheel_step(&mut app.history, false, 3),
+                                _ => {}
                             }
-                            MouseEventKind::ScrollDown => {
-                                app.history.chat_scroll = app.history.chat_scroll.saturating_sub(3);
-                                if app.history.chat_scroll == 0 {
-                                    app.history.scroll_pinned = true;
-                                }
-                            }
-                            _ => {}
                         }
                     }
                     Event::Resize(_, _) => {}
@@ -1352,6 +1354,8 @@ pub fn run_tui(cfg: Config) -> Result<()> {
                 app.reserved_height(size.height),
                 crate::tui::components::reserved::DEFAULT_MAX as u16,
             );
+            // Record for the next mouse event's zone hit-test.
+            last_layout = Some(l);
             let mut cursor_pos = (0u16, 0u16);
             let model_name = Config::display_name(&cx.current_model.borrow()).to_string();
             terminal.draw(|f| {
