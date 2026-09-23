@@ -171,6 +171,12 @@ fn on_bg(spans: Vec<Span<'static>>, bg: Style) -> Vec<Span<'static>> {
 }
 
 // Top edge: `+-` + dashes + `-+`.
+//
+// Exactly `width` cells — no more. An earlier version appended a trailing
+// space, making the row one cell too wide; the hard-wrap pass then split
+// that cell onto a line of its own, drawing a lone black square between the
+// border and the content (and, on a user message above it, looking like a
+// phantom gap inside the card).
 fn card_top(edge: Style, fill: Style, width: usize) -> Line<'static> {
     let dashes = width.saturating_sub(4);
     Line::from(on_bg(
@@ -178,7 +184,6 @@ fn card_top(edge: Style, fill: Style, width: usize) -> Line<'static> {
             Span::styled("+-", edge),
             Span::styled("-".repeat(dashes), edge),
             Span::styled("-+", edge),
-            Span::styled(" ".to_string(), fill),
         ],
         fill,
     ))
@@ -192,7 +197,6 @@ fn card_bottom(edge: Style, fill: Style, width: usize) -> Line<'static> {
             Span::styled("+-", edge),
             Span::styled("-".repeat(dashes), edge),
             Span::styled("-+", edge),
-            Span::styled(" ".to_string(), fill),
         ],
         fill,
     ))
@@ -661,10 +665,33 @@ mod tests {
         assert!(body.trim_end().ends_with("|"), "{body:?}");
         // Bottom edge
         assert!(text_of(&call[call.len() - 1..]).trim_end().starts_with("+-"), "卡片必须有底边");
-        // Every row is exactly `width` cells wide, so the black block is solid
+        // Every row is **exactly** `width` cells: wider and the hard-wrap pass
+        // would push the excess onto a line of its own (a stray black square).
         for l in &call {
             let w: usize = l.spans.iter().map(|s| s.content.as_ref().width()).sum();
-            assert!(w >= 30, "卡片行必须补满宽度: {w}");
+            assert_eq!(w, 30, "卡片行的宽度必须恰好等于目标宽度: {w}");
+        }
+    }
+
+    #[test]
+    fn no_card_row_exceeds_the_target_width() {
+        // Regression for the phantom black square: the edges used to emit one
+        // cell too many, which wrapped into a row of its own.
+        let p = Palette::default();
+        for width in [20usize, 40, 80, 121] {
+            let rows = tool_exchange(
+                "bash",
+                r#"{"command":"sleep 5"}"#,
+                true,
+                "done",
+                &p,
+                false,
+                width,
+            );
+            for l in &rows {
+                let w: usize = l.spans.iter().map(|s| s.content.as_ref().width()).sum();
+                assert_eq!(w, width, "({width}) 行宽必须恰好: {w} -> {:?}", text_of(std::slice::from_ref(l)));
+            }
         }
     }
 
@@ -741,6 +768,47 @@ mod tests {
                     "卡片 ({x},{y}) 的格子没有黑底: {:?}",
                     cell.symbol()
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn hard_wrap_adds_no_row_for_a_real_transcript() {
+        // The phantom-cell bug: an over-wide row was split by `hard_wrap` into
+        // an extra row holding only the overflow (a lone black cell). Prove
+        // the wrapped row count equals the input count for a realistic
+        // transcript, at several widths.
+        for width in [30usize, 40, 80, 120] {
+            let entries = vec![
+                Entry::User { content: "跑一下 sleep 5 看看".into() },
+                Entry::ToolRequest {
+                    call_id: "c1".into(),
+                    name: "bash".into(),
+                    args: r#"{"command":"sleep 5 && echo done"}"#.into(),
+                    intent: "等五秒".into(),
+                },
+                Entry::ToolResult {
+                    call_id: "c1".into(),
+                    name: "bash".into(),
+                    ok: true,
+                    result: "done".into(),
+                },
+            ];
+            let lines = render_with_live(&entries, &Palette::default(), false, false, width, &LiveActivity::Idle, None);
+            let before = lines.len();
+            let wrapped = crate::tui::view::hard_wrap_for_test(&lines, width);
+            assert_eq!(
+                wrapped.len(),
+                before,
+                "({width}) 不该有任何行被硬换行切出额外的行"
+            );
+            // And the blank separator rows must be genuinely blank (no stray
+            // black cell): no spans at all.
+            for l in &wrapped {
+                let text: String = l.spans.iter().map(|s| s.content.to_string()).collect();
+                if text.trim().is_empty() {
+                    assert!(l.spans.is_empty(), "({width}) 空行不该带任何样式格子: {text:?}");
+                }
             }
         }
     }

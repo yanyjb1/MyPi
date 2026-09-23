@@ -95,6 +95,13 @@ fn hard_wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
     out
 }
 
+// Test-only handle on the wrap pass (the phantom-row regression checks that
+// no transcript row overflows the width).
+#[cfg(test)]
+pub fn hard_wrap_for_test(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
+    hard_wrap(lines, width)
+}
+
 // Draw one frame and return where the cursor belongs (container-relative (row, col)) for the caller to place the hardware cursor.
 //
 // `l` is computed by the caller (`app.rs` needs the same sizes to place the hardware cursor),
