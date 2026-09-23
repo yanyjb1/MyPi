@@ -1,0 +1,21 @@
+[package]
+name = "mypi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# 同步 HTTP 客户端：极轻、无异步运行时依赖。rustls = 纯 Rust 的 TLS，不依赖系统 OpenSSL
+ureq = { version = "3", features = ["rustls", "json", "charset"] }
+# 序列化/反序列化：Rust 生态事实标准。derive = 自动为结构体生成 JSON 转换代码
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 错误处理：省掉手写几百行 Result 样板
+anyhow = "1"
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+serde_yaml = "0.9.34"
+unicode-width = "0.2.2"
+# SQLite：bundled = 自带 C 源码编译，不依赖系统 libsqlite3
+rusqlite = { version = "0.37", features = ["bundled"] }
+# Markdown → 事件流解析（pull 式迭代器，映射成 ratatui 的 Span/Line）
+pulldown-cmark = "0.13"
