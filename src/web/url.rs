@@ -84,6 +84,13 @@ pub fn normalize(raw: &str) -> anyhow::Result<String> {
     })
 }
 
+
+/// Percent-encode everything except RFC 3986 unreserved (for URL query
+/// embedding, e.g. /json/new?url=…).
+pub fn urlencode_component(s: &str) -> String {
+    urlencoded(s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

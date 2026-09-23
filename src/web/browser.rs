@@ -9,7 +9,8 @@
 //!
 //! Browser source: `MYPI_BROWSER_PORT` attaches to a long-lived instance
 //! (session warmth matters to anti-bot frontends); otherwise a headless
-//! Helium spawns on demand and is reaped when the call ends.
+//! Helium spawns and lives for the process. Calls run on the session's
+//! persistent *work tab* — see `session::with_work`.
 
 use anyhow::{Context as _, anyhow};
 use serde::Deserialize;
@@ -82,7 +83,7 @@ fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
                 &format!("(() => {{ const el = document.querySelector('{sel}'); if (!el) return 'NOT_FOUND'; el.click(); return 'clicked'; }})()"),
                 ACT_TIMEOUT,
             )?;
-            Ok(expect(&r, "clicked", "click")?)
+            Ok(expect(&r, "click")?)
         }
         "fill" => {
             let sel = js_escape(args.selector.as_deref().ok_or_else(|| anyhow!("fill requires selector"))?);
@@ -96,7 +97,7 @@ fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
                 &format!("(() => {{ const el = document.querySelector('{sel}'); if (!el) return 'NOT_FOUND'; el.focus(); el.value = '{escaped}'; el.dispatchEvent(new Event('input', {{bubbles: true}})); return 'filled'; }})()"),
                 ACT_TIMEOUT,
             )?;
-            Ok(expect(&r, "filled", "fill")?)
+            Ok(expect(&r, "fill")?)
         }
         "press" => {
             let key = args.selector.as_deref().ok_or_else(|| anyhow!("press requires selector=key name"))?;
@@ -104,7 +105,7 @@ fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
                 &format!("(() => {{ const el = document.activeElement; if (!el) return 'NOT_FOUND'; el.dispatchEvent(new KeyboardEvent('keydown', {{key: '{key}', bubbles: true}})); el.dispatchEvent(new KeyboardEvent('keyup', {{key: '{key}', bubbles: true}})); return 'pressed'; }})()"),
                 ACT_TIMEOUT,
             )?;
-            Ok(expect(&r, "pressed", "press")?)
+            Ok(expect(&r, "press")?)
         }
         "select" => {
             let sel = js_escape(args.selector.as_deref().ok_or_else(|| anyhow!("select requires selector"))?);
@@ -118,12 +119,12 @@ fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
                 &format!("(() => {{ const el = document.querySelector('{sel}'); if (!el) return 'NOT_FOUND'; el.value = '{escaped}'; el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'selected'; }})()"),
                 ACT_TIMEOUT,
             )?;
-            Ok(expect(&r, "selected", "select")?)
+            Ok(expect(&r, "select")?)
         }
         "scroll" => {
             let dy = args.value.as_ref().and_then(Value::as_i64).unwrap_or(600);
             let r = page.evaluate(&format!("window.scrollBy(0, {dy}); 'scrolled'"), ACT_TIMEOUT)?;
-            Ok(expect(&r, "scrolled", "scroll")?)
+            Ok(expect(&r, "scroll")?)
         }
         "eval" => {
             let expr = args
@@ -140,7 +141,7 @@ fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
     }
 }
 
-fn expect(raw: &str, _want: &str, what: &str) -> anyhow::Result<String> {
+fn expect(raw: &str, what: &str) -> anyhow::Result<String> {
     if raw.contains("NOT_FOUND") {
         Err(anyhow!("{what}: selector matched nothing"))
     } else {
@@ -150,14 +151,11 @@ fn expect(raw: &str, _want: &str, what: &str) -> anyhow::Result<String> {
 
 // --- Network capture ---------------------------------------------------------
 //
-// "Find the API this page calls": Network.enable before navigation, then
-// collect requestWillBeSent events. The pump already forwards every frame
-// into the session inbox; Network events are interleaved there, so capture
-// works by enabling the domain, re-navigating, and draining.
-
-// Events arrive through the Cdp inbox mixed with responses; rather than
-// reaching into Cdp's internals, we spawn a fresh CDP connection dedicated
-// to the recorder — a second WS per target is supported by Chromium.
+// "Find the API this page calls": ask the page for its own
+// performance-resource entries instead of tapping Network events. Zero
+// protocol surface, no event races, covers every request the page made
+// (XHR/fetch/script/img) with initiatorType labels — and `max`/`filter`
+// trim it to what the model asked for.
 fn capture_network(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
     let filter = args.filter.clone().unwrap_or_default();
     let max = args.max.unwrap_or(20).clamp(1, 100);
@@ -198,7 +196,15 @@ fn capture_network(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
 // --- read / screenshot -------------------------------------------------------
 
 fn cmd_read(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
-    let html = page.dom_html()?;
+    // The page may still be a JS shell when read arrives right after open;
+    // poll until the DOM converts to real markdown (best-effort on budget).
+    let html = page.wait(super::session::RENDER_WAIT, |h| {
+        match super::fetch::html_to_markdown(h) {
+            Ok(md) if super::fetch::is_js_shell(h.len(), &md) => None,
+            Ok(_) => Some(Ok(())),
+            Err(_) => None,
+        }
+    })?;
     let md = super::fetch::html_to_markdown(&html)?;
     if let Some(path) = &args.path {
         std::fs::write(path, &md).with_context(|| format!("writing {path}"))?;
@@ -222,7 +228,7 @@ fn cmd_screenshot(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
 // --- Tool entry --------------------------------------------------------------
 
 pub fn browser(args: &BrowserArgs) -> anyhow::Result<String> {
-    super::session::with_page(|page| match args.command.as_str() {
+    super::session::with_work(|page| match args.command.as_str() {
         "open" => cmd_open(page, args.url.as_deref()),
         "act" => cmd_act(page, args),
         "read" => cmd_read(page, args),

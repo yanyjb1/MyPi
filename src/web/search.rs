@@ -72,10 +72,11 @@ pub fn search(args: &SearchArgs) -> anyhow::Result<Vec<SearchHit>> {
     // Syntax-bearing queries bypass Bing entirely (CN egress drops every
     // operator — verified); plain keywords take the fast direct tier first.
     if !has_advanced_syntax(&args.query) {
-        match bing::direct(&args.query, limit) {
-            Ok(hits) if !hits.is_empty() => return Ok(hits),
-            Ok(_) => {}
-            Err(_) => {}
+        // Direct-tier failures (bot wall, network) fall through to DDG.
+        if let Ok(hits) = bing::direct(&args.query, limit)
+            && !hits.is_empty()
+        {
+            return Ok(hits);
         }
     }
     ddg::via_browser(&args.query, limit)

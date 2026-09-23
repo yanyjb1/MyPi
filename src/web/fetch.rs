@@ -93,7 +93,7 @@ fn looks_bot_blocked(status: u16, body: &str) -> bool {
     false
 }
 
-fn is_js_shell(raw_len: usize, converted: &str) -> bool {
+pub(super) fn is_js_shell(raw_len: usize, converted: &str) -> bool {
     // Two shells the first heuristic missed live:
     //  1. tiny text out of a big body (classic React root div)
     //  2. a big body whose markdown is mostly `meta-*` dump lines with no
@@ -139,13 +139,16 @@ fn fetch_direct(url: &str) -> anyhow::Result<(String, u16, usize)> {
 
 fn fetch_via_browser(url: &str) -> anyhow::Result<String> {
     let url_owned = url.to_string();
-    super::session::with_page(|p| {
+    // Readiness is conversion semantics, not raw size: a 3.5 KB meta shell
+    // (YouTube) passes any byte threshold instantly. The page counts as
+    // ready only when its DOM converts to non-shell markdown.
+    super::session::with_transient(url, |p| {
         p.navigate(&url_owned)?;
         p.wait(RENDER_WAIT, |html| {
-            if html.len() > 2_000 {
-                Some(Ok(()))
-            } else {
-                None
+            match html_to_markdown(html) {
+                Ok(md) if is_js_shell(html.len(), &md) => None,
+                Ok(_) => Some(Ok(())),
+                Err(_) => None, // conversion can't run mid-navigation
             }
         })
     })

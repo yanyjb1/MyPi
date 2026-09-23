@@ -77,10 +77,10 @@ fn unwrap_ddg_href(href: &str) -> String {
 
 pub(super) fn via_browser(query: &str, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
     let url = format!("{DDG_URL}?q={}", urlencoded(query));
-    // Session::wait polls the rendered DOM until `ready` says stop; the
-    // anomaly wall aborts early instead of burning the full budget.
-    let html = session::with_page(|p| {
-        p.navigate(&url)?;
+    // A transient tab is opened straight at the SERP (create_target does
+    // the navigation). `wait` polls the rendered DOM until `ready` says
+    // stop; the anomaly wall aborts early instead of burning the budget.
+    let html = session::with_transient(&url, |p| {
         p.wait(RENDER_WAIT, |html| {
             if html.contains("anomaly") {
                 Some(Err(anyhow!(

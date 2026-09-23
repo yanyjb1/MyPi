@@ -126,6 +126,31 @@ impl Browser {
         .is_ok()
     }
 
+    /// PUT /json/new?url=… — open a fresh tab, return its target.
+    /// (Chromium ≥ 111 requires PUT; GET returns 405.)
+    pub fn create_target(&self, url: &str) -> anyhow::Result<Target> {
+        let endpoint = format!("http://127.0.0.1:{}/json/new?{}", self.port, super::url::urlencode_component(url));
+        let mut resp = ureq::put(&endpoint)
+            .header("Host", &format!("127.0.0.1:{}", self.port))
+            .send_empty()
+            .map_err(|e| anyhow!("json/new failed: {e}"))?;
+        let body: Target = resp
+            .body_mut()
+            .read_json()
+            .context("parsing /json/new response")?;
+        Ok(body)
+    }
+
+    /// GET /json/close/<id> — close a tab by target id.
+    pub fn close_target(&self, id: &str) -> anyhow::Result<()> {
+        let endpoint = format!("http://127.0.0.1:{}/json/close/{}", self.port, id);
+        ureq::get(&endpoint)
+            .header("Host", &format!("127.0.0.1:{}", self.port))
+            .call()
+            .map_err(|e| anyhow!("json/close failed: {e}"))?;
+        Ok(())
+    }
+
     /// GET /json/list, parsed. Works against any Chromium.
     pub fn targets(&self) -> anyhow::Result<Vec<Target>> {
         let url = format!("http://127.0.0.1:{}/json/list", self.port);

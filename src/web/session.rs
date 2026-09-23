@@ -1,31 +1,42 @@
-//! Browser session — the one place that owns attach-or-launch, socket
-//! reconnection, and rendered-DOM polling for the whole web domain.
+//! Browser session — the one place that owns attach-or-launch, tab
+//! allocation, socket reconnection, and rendered-DOM polling for the whole
+//! web domain.
 //!
-//! Everything above this file (`ddg`, `fetch`, `browser` tool) talks to a
-//! `Page`; nothing else imports `cdp` directly. The session lives for the
-//! process: the first call attaches to `MYPI_BROWSER_PORT` (a browser
-//! someone keeps running — session warmth matters to anti-bot frontends)
-//! or spawns a headless Helium, and later calls reuse it after a cheap
-//! liveness probe.
+//! Everything above this file (`ddg`, `fetch`, the `browser` tool) talks to
+//! a `Page`; nothing else imports `cdp` directly.
+//!
+//! Two access patterns, both per-call and page-pinned:
+//!
+//! - [`with_transient`] — search/fetch: a throwaway tab, opened for the
+//!   call, closed after. Their navigations can never disturb anyone.
+//! - [`with_work`] — the browser tool: one persistent *work tab* for the
+//!   process, so `open` → `act` → `read` → `screenshot` all land on the
+//!   same page the user is watching.
+//!
+//! The browser process itself lives for the process (attach to
+//! `MYPI_BROWSER_PORT`, or spawn headless Helium and keep the child
+//! handle — dropping it would kill the browser mid-session).
 
 use anyhow::{Context as _, anyhow};
-use serde_json::json;
 use parking_lot::Mutex;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::cdp::{Browser, Cdp};
+use super::cdp::{Browser, Cdp, Target};
 use crate::xdg::browser_profile_dir;
 
 pub(super) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) const RENDER_WAIT: Duration = Duration::from_secs(15);
 pub(super) const POLL_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// One connected page. Clones share the same underlying socket behind a
-/// mutex; navigation resets that socket and the next call heals it.
+/// One connected page, pinned to a specific tab. Clones share the socket
+/// behind a mutex; navigation resets that socket and the next call heals
+/// it **on the same tab** (reconnection re-resolves by target id).
 #[derive(Clone)]
 pub struct Page {
     port: u16,
+    target_id: String,
     cdp: Arc<Mutex<Cdp>>,
 }
 
@@ -60,30 +71,32 @@ impl Page {
     /// - `Some(Ok(()))` → satisfied; returns the current HTML
     /// - `Some(Err(e))` → abort (anomaly wall etc.)
     ///
-    /// Socket resets inside the poll window are healed transparently —
-    /// the tab id survives cross-document navigation even when the WS
-    /// does not. The satisfied page HTML is the return value; callers
-    /// parse it themselves (parsers are pure functions).
+    /// On budget exhaustion this is *best-effort success*: the last HTML
+    /// snapshot is returned, not an error. Callers that need strict
+    /// failure (DDG's no-results case) express it through their predicate.
     pub fn wait(
         &self,
         budget: Duration,
         ready: impl Fn(&str) -> Option<anyhow::Result<()>>,
     ) -> anyhow::Result<String> {
         let deadline = Instant::now() + budget;
+        let mut last = String::new();
         loop {
             match self.dom_html() {
-                Ok(html) => match ready(&html) {
-                    Some(Ok(())) => return Ok(html),
-                    Some(Err(e)) => return Err(e),
-                    None => {}
-                },
+                Ok(html) => {
+                    match ready(&html) {
+                        Some(Ok(())) => return Ok(html),
+                        Some(Err(e)) => return Err(e),
+                        None => last = html,
+                    }
+                }
                 // Navigation reset the socket; keep polling — the next
-                // `resilient` call re-resolves the target transparently.
+                // `resilient` call re-resolves the same tab transparently.
                 Err(e) if is_reset(&e) => {}
                 Err(e) => return Err(e),
             }
             if Instant::now() > deadline {
-                anyhow::bail!("browser page never became ready within {budget:?}");
+                return Ok(last); // render what we have rather than fail
             }
             std::thread::sleep(Duration::from_millis(400));
         }
@@ -102,7 +115,7 @@ impl Page {
                 .map(str::to_string)
                 .ok_or_else(|| anyhow!("no screenshot data"))
         })?;
-        crate::web::url::base64_decode(&data)
+        super::url::base64_decode(&data)
     }
 
     /// Devtools HTTP port (for diagnostics output).
@@ -110,7 +123,10 @@ impl Page {
         self.port
     }
 
-    // One CDP command with a single reconnect-and-retry on a reset socket.
+    // One CDP command with reconnect-and-retry on a reset socket. The
+    // replacement socket is bound to the SAME target id — not "the first
+    // page in /json/list" — so a healed connection still points at this
+    // page even if other tabs were opened meanwhile.
     fn resilient<T>(&self, f: impl Fn(&mut Cdp) -> anyhow::Result<T>) -> anyhow::Result<T> {
         {
             let mut guard = self.cdp.lock();
@@ -128,7 +144,11 @@ impl Page {
     fn connect_fresh(&self) -> anyhow::Result<Cdp> {
         let browser = Browser::attach(&browser_profile_dir(), self.port)
             .context("re-attaching to browser")?;
-        let target = browser.page_target().context("no page target")?;
+        let target = browser
+            .targets()?
+            .into_iter()
+            .find(|t| t.id == self.target_id)
+            .ok_or_else(|| anyhow!("tab {} vanished", self.target_id))?;
         Cdp::connect(&target.ws_url)
     }
 }
@@ -137,25 +157,22 @@ fn is_reset(e: &anyhow::Error) -> bool {
     e.to_string().contains("connection reset")
 }
 
-// --- Process-wide session ----------------------------------------------------
-//
-// The Mutex<Option<..>> guards the agent loop's concurrent tool calls; the
-// Option stays None until the first call needs a browser. Tests inject via
-// `with_page_for` instead of touching this.
+// --- Process-wide browser ----------------------------------------------------
 
-struct Live {
-    port: u16,
-    cdp: Arc<Mutex<Cdp>>,
+struct Session {
+    browser: Browser, // owns the child when we spawned it; Drop kills
+    work_tab: Option<String>,
 }
 
-static SESSION: Mutex<Option<Live>> = Mutex::new(None);
+static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
-fn acquire() -> anyhow::Result<Page> {
+fn ensure_browser() -> anyhow::Result<(u16, ())> {
     let mut guard = SESSION.lock();
-    if let Some(live) = guard.as_ref() {
-        if Browser::port_alive(live.port) {
-            return Ok(Page { port: live.port, cdp: Arc::clone(&live.cdp) });
+    if let Some(s) = guard.as_ref() {
+        if Browser::port_alive(s.browser.port) {
+            return Ok((s.browser.port, ()));
         }
+        // Dead browser: drop it (kills our child if any) and respawn.
         *guard = None;
     }
     let profile = browser_profile_dir();
@@ -167,15 +184,76 @@ fn acquire() -> anyhow::Result<Page> {
         None => Browser::launch(&profile).context("launching browser")?,
     };
     let port = browser.port;
-    let target = browser.page_target().context("no page target")?;
-    let cdp = Arc::new(Mutex::new(Cdp::connect(&target.ws_url)?));
-    *guard = Some(Live { port, cdp: Arc::clone(&cdp) });
-    Ok(Page { port, cdp })
+    *guard = Some(Session { browser, work_tab: None });
+    Ok((port, ()))
 }
 
-/// Run `f` against the shared session's page.
-pub(super) fn with_page<T>(
+fn connect_to(port: u16, target: &Target) -> anyhow::Result<Page> {
+    let cdp = Cdp::connect(&target.ws_url)?;
+    Ok(Page {
+        port,
+        target_id: target.id.clone(),
+        cdp: Arc::new(Mutex::new(cdp)),
+    })
+}
+
+fn open_page(port: u16, url: &str) -> anyhow::Result<Page> {
+    let browser = Browser::attach(&browser_profile_dir(), port)?;
+    let target = browser.create_target(url)?;
+    connect_to(port, &target)
+}
+
+fn close_page(port: u16, target_id: &str) {
+    // Best-effort: a vanished tab is fine (the call is over anyway).
+    if let Ok(browser) = Browser::attach(&browser_profile_dir(), port) {
+        let _ = browser.close_target(target_id);
+    }
+}
+
+/// Run `f` on a throwaway tab; the tab is closed afterwards. For search /
+/// fetch — page-level state (cookies, uBlock) lives in the shared profile,
+/// so a fresh tab keeps all of it and costs only one createTarget round
+/// trip.
+pub(super) fn with_transient<T>(
+    url: &str,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    f(&acquire()?)
+    let (port, ()) = ensure_browser()?;
+    let page = open_page(port, url)?;
+    let result = f(&page);
+    close_page(port, &page.target_id);
+    result
+}
+
+/// Run `f` on the process-wide *work tab* (lazily created at about:blank).
+/// The browser tool uses this so consecutive `open`/`act`/`read` calls
+/// address the same page.
+pub(super) fn with_work<T>(f: impl FnOnce(&Page) -> anyhow::Result<T>) -> anyhow::Result<T> {
+    let (port, ()) = ensure_browser()?;
+    let (page, fresh) = {
+        let mut guard = SESSION.lock();
+        let Some(session) = guard.as_mut() else {
+            anyhow::bail!("session vanished");
+        };
+        match session.work_tab.clone() {
+            Some(id) => {
+                // Re-pin the existing work tab (survives tab list churn).
+                let browser = Browser::attach(&browser_profile_dir(), port)?;
+                let target = browser
+                    .targets()?
+                    .into_iter()
+                    .find(|t| t.id == id)
+                    .ok_or_else(|| anyhow!("work tab vanished"))?;
+                (connect_to(port, &target)?, false)
+            }
+            None => {
+                let browser = Browser::attach(&browser_profile_dir(), port)?;
+                let target = browser.create_target("about:blank")?;
+                session.work_tab = Some(target.id.clone());
+                (connect_to(port, &target)?, true)
+            }
+        }
+    };
+    let _ = fresh;
+    f(&page)
 }
