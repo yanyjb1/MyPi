@@ -17,6 +17,7 @@ pub mod layout;
 pub mod paste;
 pub mod path;
 pub mod text;
+pub mod signal;
 pub mod theme;
 pub mod undo;
 pub mod view;

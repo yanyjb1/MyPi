@@ -563,16 +563,20 @@ impl Session {
     /// Drain protocol events into the session state. `Change::TurnDone`
     /// is priced locally against `cost` here. Returns the observed
     /// changes so the surface reacts without touching internals.
+    pub fn ingest(&mut self, ev: SessionEvent) -> Change {
+        let change = self.state.handle(ev);
+        if change == Change::TurnDone
+            && let Some(u) = self.state.take_last_usage()
+        {
+            self.cost_tracker.record(&u, &self.cost);
+        }
+        change
+    }
+
     pub fn drain(&mut self, rx: &std::sync::mpsc::Receiver<SessionEvent>) -> Vec<Change> {
         let mut changes = Vec::new();
         while let Ok(ev) = rx.try_recv() {
-            let change = self.state.handle(ev);
-            if change == Change::TurnDone
-                && let Some(u) = self.state.take_last_usage()
-            {
-                self.cost_tracker.record(&u, &self.cost);
-            }
-            changes.push(change);
+            changes.push(self.ingest(ev));
         }
         changes
     }

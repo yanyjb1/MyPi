@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyEventKind, MouseEventKind,
+    Event, KeyboardEnhancementFlags, KeyEventKind, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 
@@ -48,13 +48,12 @@ use crate::tui::text;
 use crate::tui::theme::Palette;
 use crate::tui::view::{self, ViewState};
 
-// Spinner frames: `|` `/` `-` `\` cycling.
+// Spinner frames: `|` `/` `-` `\` cycling. Advances one frame **per
+// received delta** (signal-driven), not on a timer — a paused stream
+// pauses the spinner, which is honest.
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
-// Spinner frame interval.
-const SPIN_FRAME: Duration = Duration::from_millis(120);
-// Event poll interval.
-const POLL: Duration = Duration::from_millis(50);
-// git status refresh interval (spawns a subprocess; never per frame).
+// Git refresh *rate limit* (a subprocess spawn is expensive; signals can
+// burst). Only consulted right after an actual signal — not a poll.
 const GIT_REFRESH: Duration = Duration::from_secs(2);
 
 // `editor_action` return value: separates the "language action" from the epilogue.
@@ -110,9 +109,11 @@ struct App {
     // cwd note injected into the first turn after resume (written on resume, consumed on submit).
     pending_cwd_note: Option<String>,
     spin_i: usize,
-    spin_at: Instant,
     git: Option<crate::git::GitStatus>,
     git_at: Instant,
+    // The cwd the last git snapshot was taken at. A mismatch after any
+    // signal triggers an env refresh — event-driven, zero polling.
+    env_cwd: std::path::PathBuf,
     cwd: std::path::PathBuf,
     // Home directory, for `~` expansion in path completion.
     home: std::path::PathBuf,
@@ -137,9 +138,9 @@ impl App {
             completion: crate::tui::completion::CompletionController::new(),
             tracker: CostTracker::default(),
             spin_i: 0,
-            spin_at: Instant::now(),
             git: crate::git::snapshot(&cwd),
             git_at: Instant::now(),
+            env_cwd: cwd.clone(),
             cfg: None,
             quit_requested: false,
             resume_pick: None,
@@ -1030,31 +1031,31 @@ impl App {
         self.completion.close();
     }
 
-    /// Drain the protocol channel through the session facade. The App
-    /// never touches turn data — it only reacts to the `Change`s
-    /// reported back.
-    fn drain_events(&mut self, rx: &mpsc::Receiver<SessionEvent>) {
-        self.session.drain(rx);
+    // Environment checkpoint: a turn ended or the cwd moved — the two
+    // natural moments the git snapshot can be wrong. Event-driven (the
+    // caller checks after a signal), never polled; the rate limit only
+    // absorbs bursts of signals.
+    fn refresh_env(&mut self) {
+        if self.git_at.elapsed() < GIT_REFRESH {
+            return;
+        }
+        self.cwd = self.session.cwd();
+        self.env_cwd = self.cwd.clone();
+        self.git = crate::git::snapshot(&self.cwd);
+        self.git_at = Instant::now();
     }
 
-    // Advance the spinner by time.
-    fn tick_spinner(&mut self) {
-        if self.session.busy() && self.spin_at.elapsed() >= SPIN_FRAME {
+    // Advance the spinner one frame **per received delta** (signal-driven;
+    // called after each pumped signal batch). A paused stream pauses the
+    // spinner — honest about reality.
+    fn advance_spinner_on_activity(&mut self) {
+        if self.session.busy() {
             self.spin_i = (self.spin_i + 1) % SPINNER.len();
-            self.spin_at = Instant::now();
         }
     }
 
     fn spinner(&self) -> Option<char> {
         self.session.busy().then(|| SPINNER[self.spin_i])
-    }
-
-    // Refresh git status by time.
-    fn tick_git(&mut self) {
-        if self.git_at.elapsed() >= GIT_REFRESH {
-            self.git = crate::git::snapshot(&self.cwd);
-            self.git_at = Instant::now();
-        }
     }
 }
 
@@ -1132,6 +1133,100 @@ fn display_name(app: &App) -> String {
     }
 }
 
+
+// Render one frame: sizes, scroll correction, widget drawing, hardware
+// cursor placement. Shared by the pre-loop first paint and the signal
+// pump — a stale first frame (or none at all) is how "blank until a
+// keystroke" bugs happen.
+fn draw_frame(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    palette: &Palette,
+    ctx_limit: u64,
+    currency_symbol: &'static str,
+    show_cost: bool,
+) -> Result<crate::tui::layout::Layout> {
+    let size = terminal.size()?;
+    let wrapped = app.wrapped(size.width);
+    let cwd_str = app.session.cwd().display().to_string();
+    let cursor_char = app.editor.cursor();
+    let spinner = app.spinner();
+
+    // Viewport scrolling: minimal-displacement correction based on the
+    // previous frame's viewport start. The height must be the one
+    // **after subtracting the reserved area**, matching view's layout,
+    // or the two sides disagree and the scroll window misaligns.
+    let ch = tlayout::container_height(
+        size.height.saturating_sub(app.reserved_height(size.height)),
+        wrapped.len(),
+    );
+    let cursor_row = wrapped.locate(cursor_char).0;
+    app.scroll = tlayout::adjust_scroll(app.scroll, wrapped.len(), ch, cursor_row);
+
+    // Layout is computed once: `app` and `view` share the same sizes.
+    let l = tlayout::compute(
+        size.height,
+        &wrapped,
+        app.scroll,
+        app.reserved_height(size.height),
+        crate::tui::components::reserved::DEFAULT_MAX as u16,
+    );
+    let mut cursor_pos = (0u16, 0u16);
+    let model_name = Config::display_name(&app.current_model.borrow()).to_string();
+    terminal.draw(|f| {
+        // Modal takeover: the tree navigator draws over the whole
+        // screen; base zones and the hardware cursor are skipped.
+        if let Some(tp) = app.tree_pick.as_ref() {
+            let lines = crate::tui::components::tree_picker::render(tp, size.width, size.height, palette);
+            f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
+            return;
+        }
+        let vs = ViewState {
+            history: app.session.transcript(),
+            chat_scroll: app.history.chat_scroll,
+            scroll_pinned: app.history.scroll_pinned,
+            show_reasoning: !app.history.reasoning_folded,
+            tools_expanded: app.history.tools_expanded,
+            live_reasoning: {
+                let sv = app.session.stream_view();
+                if sv.reasoning.is_empty() { None } else { Some(sv.reasoning.as_str()) }
+            },
+            reasoning_done: app.session.stream_view().reasoning_done,
+            streaming: {
+                let sv = app.session.stream_view();
+                if sv.text.is_empty() { None } else { Some(sv.text.as_str()) }
+            },
+            wrapped: &wrapped,
+            cursor_char,
+            spinner,
+            model_name: &model_name,
+            session_name: &display_name(app),
+            cwd: &cwd_str,
+            git: app.git.as_ref(),
+            ctx_tokens: app.tracker.last_prompt_tokens,
+            ctx_limit,
+            cost: app.tracker.total,
+            currency_symbol,
+            show_cost,
+            palette: *palette,
+            popup: app.completion.popup(),
+            resume_pick: app.resume_pick.as_ref().map(|(v, i)| (&v[..], *i)),
+        };
+        cursor_pos = view::draw(f, &vs, &l);
+    })?;
+
+    // ---- hardware cursor ----
+    // `Layout::cursor_y` guarantees the cursor stays inside the input
+    // container and never tramples the reserved area; ratatui/crossterm
+    // do no boundary checks, so this is the only gate.
+    terminal.set_cursor_position(ratatui::layout::Position {
+        x: cursor_pos.1.min(size.width.saturating_sub(1)),
+        y: l.cursor_y(size.height, cursor_pos.0),
+    })?;
+    terminal.show_cursor()?;
+    Ok(l)
+}
+
 // Run the TUI (blocking; Esc / Ctrl+C exits).
 pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     // Session-scoped mutable config: /model and /switch both change the
@@ -1194,6 +1289,17 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let ctx_limit = model.context_window;
 
     let mut terminal = ratatui::init();
+    // Kitty keyboard protocol: ask the terminal to disambiguate escape
+    // sequences so **Shift+Enter** arrives as Enter+SHIFT (newline) and
+    // bare Enter as plain Enter (submit). Terminals without the
+    // protocol silently ignore the escape codes — the pre-existing
+    // fallbacks (Alt+Enter / Ctrl+J) keep working there.
+    let _ = execute!(
+        std::io::stdout(),
+        ratatui::crossterm::event::PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
+        )
+    );
     // Enable bracketed paste: the terminal wraps pasted content in
     // \x1b[200~ ... \x1b[201~, so we get Event::Paste instead of every
     // line arriving as keystrokes.
@@ -1203,158 +1309,155 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
 
     let result = (|| -> Result<()> {
-        // (the session facade owns the event channel; nothing to wire here)
-
         // Last frame's layout, for mouse zone hit-testing.
         let mut last_layout: Option<crate::tui::layout::Layout> = None;
-        loop {
-            // ---- terminal events ----
-            if event::poll(POLL)? {
-                match event::read()? {
+
+        // Paint the first frame **before** blocking: the loop below is
+        // signal-driven, and without an initial draw the user stares at
+        // a blank screen until the first keystroke arrives.
+        draw_frame(&mut terminal, &mut app, &palette, ctx_limit, currency_symbol, show_cost)?;
+
+        // ---- signal pump: input thread + session events ----
+        //
+        // The loop is **signal-driven, not polled**: it blocks on
+        // `sig_rx.recv()` and only wakes when something actually
+        // happened. Two producers feed the loop:
+        //   input thread  — forwards raw crossterm events as `Signal`s
+        //   session drain — SessionEvents drained below, between signals
+        // A burst of deltas marks the dirty bit repeatedly but repaints
+        // once — coalescing is free because dirty is idempotent.
+        let (sig_tx, sig_rx) = mpsc::channel::<crate::tui::signal::Signal>();
+        // A second Sender handle for the session-event forwarder below.
+        let sig_tx2 = sig_tx.clone();
+
+        // Producer 1: raw terminal input, forwarded as signals.
+        std::thread::spawn(move || {
+            while let Ok(ev) = event::read() {
+                let fwd = match ev {
                     Event::Key(k) if k.kind == KeyEventKind::Press => {
-                        let term_w = terminal.size()?.width;
-                        let action = translate_with(k, app.key_context(term_w));
-                        if !app.apply(action, term_w) {
-                            break;
+                        Some(crate::tui::signal::Signal::Key(k))
+                    }
+                    Event::Paste(s) => Some(crate::tui::signal::Signal::Paste(s)),
+                    Event::Mouse(m) => Some(crate::tui::signal::Signal::Mouse(m)),
+                    Event::Resize(_, _) => Some(crate::tui::signal::Signal::Resized),
+                    _ => None,
+                };
+                if let Some(s) = fwd
+                    && sig_tx.send(s).is_err()
+                {
+                    break; // main loop gone
+                }
+            }
+        });
+
+        // Producer 2: session events (deltas, tool calls, commits).
+        // Forwarding them through the SAME channel is what makes the
+        // loop truly signal-driven: a delta arriving wakes the loop and
+        // repaints the live slot. (An earlier draft kept a separate
+        // `rx` and drained it only after *keyboard* signals — the
+        // stream never reached the screen unless the user typed.)
+        std::thread::spawn(move || {
+            for ev in rx {
+                if sig_tx2.send(crate::tui::signal::Signal::Session(ev)).is_err() {
+                    break; // main loop gone
+                }
+            }
+        });
+
+        let mut quit = false;
+        while !quit {
+            // Block until *something* happens. During streaming the
+            // deltas themselves are the wake-ups; no POLL interval, no
+            // idle wake-ups. Everything already queued behind the first
+            // signal is folded into the same batch: N queued deltas =
+            // one repaint, not N (coalescing for free).
+            let first = sig_rx.recv()?;
+            let mut batch = vec![first];
+            while let Ok(more) = sig_rx.try_recv() {
+                batch.push(more);
+            }
+
+            // ---- route the batch ----
+            let mut turn_done = false;
+            for sig in batch {
+                match sig {
+                crate::tui::signal::Signal::Key(k) => {
+                    let term_w = terminal.size()?.width;
+                    let action = translate_with(k, app.key_context(term_w));
+                    quit = !app.apply(action, term_w);
+                }
+                crate::tui::signal::Signal::Paste(s) => {
+                    // Paste also goes through `apply`.
+                    //
+                    // This used to be a **second** path: a direct
+                    // `app.editor.insert_paste()` plus two lines of
+                    // hand-copied epilogue, bypassing `apply`. It
+                    // missed `input_history.on_edit()` — pasting
+                    // while browsing history stuck in browse mode,
+                    // and the next ↑ jumped to the entry before last
+                    // instead of saving a draft. The two paths
+                    // agreeing was pure luck; unified now, no drift
+                    // possible.
+                    let term_w = terminal.size()?.width;
+                    quit = !app.apply(Action::Paste(s), term_w);
+                }
+                crate::tui::signal::Signal::Mouse(m) => {
+                    // Hit-test the pointer row against the last frame's
+                    // layout: only the history area scrolls (input and
+                    // reserved ignore the wheel). Up unpin; back at 0
+                    // re-pins. A modal turns the wheel into list scroll.
+                    let chat_h = last_layout
+                        .as_ref()
+                        .map(|l: &crate::tui::layout::Layout| l.chat_height)
+                        .unwrap_or(0);
+                    if crate::tui::zones_impl::wheel_zone(m.row, chat_h, app.resume_pick.is_some())
+                        == Some(crate::tui::zones::ZoneId::History)
+                    {
+                        match m.kind {
+                            MouseEventKind::ScrollUp => crate::tui::zones_impl::wheel_step(&mut app.history, true, 3),
+                            MouseEventKind::ScrollDown => crate::tui::zones_impl::wheel_step(&mut app.history, false, 3),
+                            _ => {}
                         }
                     }
-                    Event::Paste(s) => {
-                        // Paste also goes through `apply`.
-                        //
-                        // This used to be a **second** path: a direct
-                        // `app.editor.insert_paste()` plus two lines of
-                        // hand-copied epilogue, bypassing `apply`. It
-                        // missed `input_history.on_edit()` — pasting
-                        // while browsing history stuck in browse mode,
-                        // and the next ↑ jumped to the entry before last
-                        // instead of saving a draft. The two paths
-                        // agreeing was pure luck; unified now, no drift
-                        // possible.
-                        let term_w = terminal.size()?.width;
-                        if !app.apply(Action::Paste(s), term_w) {
-                            break;
-                        }
+                }
+                crate::tui::signal::Signal::Resized => {
+                    // Widths changed: every cached wrap is invalid. The
+                    // recompute below always reads terminal.size(), so
+                    // nothing else to do — the repaint below is
+                    // unconditional after any signal.
+                }
+                crate::tui::signal::Signal::Session(ev) => {
+                    if app.session.ingest(ev) == crate::server::events::Change::TurnDone {
+                        turn_done = true;
                     }
-                    Event::Mouse(m) => {
-                        // Hit-test the pointer row against the last frame's
-                        // layout: only the history area scrolls (input and
-                        // reserved ignore the wheel). Up unpin; back at 0
-                        // re-pins. A modal turns the wheel into list scroll.
-                        let chat_h = last_layout
-                            .as_ref()
-                            .map(|l: &crate::tui::layout::Layout| l.chat_height)
-                            .unwrap_or(0);
-                        if crate::tui::zones_impl::wheel_zone(m.row, chat_h, app.resume_pick.is_some())
-                            == Some(crate::tui::zones::ZoneId::History)
-                        {
-                            match m.kind {
-                                MouseEventKind::ScrollUp => crate::tui::zones_impl::wheel_step(&mut app.history, true, 3),
-                                MouseEventKind::ScrollDown => crate::tui::zones_impl::wheel_step(&mut app.history, false, 3),
-                                _ => {}
-                            }
-                        }
-                    }
-                    Event::Resize(_, _) => {}
-                    _ => {}
+                }
                 }
             }
 
-            // ---- background messages ----
-            app.drain_events(&rx);
-            app.tick_spinner();
-            app.tick_git();
+            // Environment checkpoint (event-driven): a turn ended or the
+            // cwd moved => derived state (git snapshot) is stale. The
+            // rate limit inside `refresh_env` absorbs bursts.
+            if turn_done || app.env_cwd != app.session.cwd() {
+                app.refresh_env();
+            }
 
-            // ---- rendering ----
-            let size = terminal.size()?;
-            let wrapped = app.wrapped(size.width);
-            let cwd_str = app.session.cwd().display().to_string();
-            let cursor_char = app.editor.cursor();
-            let spinner = app.spinner();
+            // Spinner advances on stream activity, not on a timer: a
+            // delta arrived => advance one frame; no delta => the char
+            // just stays (a paused stream pauses the spinner, which is
+            // honest about what is happening).
+            app.advance_spinner_on_activity();
 
-            // Viewport scrolling: minimal-displacement correction based
-            // on the previous frame's viewport start. The view stays put
-            // while the cursor moves inside it and only follows at the
-            // edges — the "collapse beyond 1/4, move back up freely"
-            // behavior. The height must be the one **after subtracting
-            // the reserved area**, matching view's layout, or the two
-            // sides disagree on container height and the scroll window
-            // misaligns.
-            let ch = tlayout::container_height(
-                size.height.saturating_sub(app.reserved_height(size.height)),
-                wrapped.len(),
-            );
-            let cursor_row = wrapped.locate(cursor_char).0;
-            app.scroll = tlayout::adjust_scroll(app.scroll, wrapped.len(), ch, cursor_row);
-
-            // Layout is computed once: `app` and `view` share the same sizes.
-            let l = tlayout::compute(
-                size.height,
-                &wrapped,
-                app.scroll,
-                app.reserved_height(size.height),
-                crate::tui::components::reserved::DEFAULT_MAX as u16,
-            );
-            // Record for the next mouse event's zone hit-test.
+            // ---- render one frame (shared with the pre-loop first draw) ----
+            let l = draw_frame(&mut terminal, &mut app, &palette, ctx_limit, currency_symbol, show_cost)?;
             last_layout = Some(l);
-            let mut cursor_pos = (0u16, 0u16);
-            let model_name = Config::display_name(&app.current_model.borrow()).to_string();
-            terminal.draw(|f| {
-                // Modal takeover: the tree navigator draws over the whole
-                // screen; base zones and the hardware cursor are skipped.
-                if let Some(tp) = app.tree_pick.as_ref() {
-                    let lines = crate::tui::components::tree_picker::render(tp, size.width, size.height, &palette);
-                    f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
-                    return;
-                }
-                let vs = ViewState {
-                    history: app.session.transcript(),
-                    chat_scroll: app.history.chat_scroll,
-                    scroll_pinned: app.history.scroll_pinned,
-                    show_reasoning: !app.history.reasoning_folded,
-                    tools_expanded: app.history.tools_expanded,
-                    live_reasoning: {
-                        let sv = app.session.stream_view();
-                        if sv.reasoning.is_empty() { None } else { Some(sv.reasoning.as_str()) }
-                    },
-                    reasoning_done: app.session.stream_view().reasoning_done,
-                    streaming: {
-                        let sv = app.session.stream_view();
-                        if sv.text.is_empty() { None } else { Some(sv.text.as_str()) }
-                    },
-                    wrapped: &wrapped,
-                    cursor_char,
-                    spinner,
-                    model_name: &model_name,
-                    session_name: &display_name(&app),
-                    cwd: &cwd_str,
-                    git: app.git.as_ref(),
-                    ctx_tokens: app.tracker.last_prompt_tokens,
-                    ctx_limit,
-                    cost: app.tracker.total,
-                    currency_symbol,
-                    show_cost,
-                    palette,
-                    popup: app.completion.popup(),
-                    resume_pick: app.resume_pick.as_ref().map(|(v, i)| (&v[..], *i)),
-                };
-                cursor_pos = view::draw(f, &vs, &l);
-            })?;
-
-            // ---- hardware cursor ----
-            // Row comes from `Layout::cursor_y`: it guarantees the
-            // cursor stays inside the input container and never tramples
-            // the reserved area. ratatui/crossterm do no boundary checks
-            // (`MoveTo` goes to the terminal verbatim), so this is the
-            // only gate.
-            terminal.set_cursor_position(ratatui::layout::Position {
-                x: cursor_pos.1.min(size.width.saturating_sub(1)),
-                y: l.cursor_y(size.height, cursor_pos.0),
-            })?;
-            terminal.show_cursor()?;
         }
         Ok(())
     })();
 
+    let _ = execute!(
+        std::io::stdout(),
+        ratatui::crossterm::event::PopKeyboardEnhancementFlags
+    );
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     let _ = execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
