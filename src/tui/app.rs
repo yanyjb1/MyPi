@@ -88,8 +88,9 @@ struct App {
     // Remembers the target column across consecutive ↑↓ moves, so a
     // short line does not clamp the column and trap the cursor.
     goal_col: Option<usize>,
-    // Chat transcript (rendered entries). Distinct from `input_history`.
-    transcript: Vec<entry::Entry>,
+    // Session viscera (transcript/pending/store/session_id/name/cwd_seq).
+    // The TUI subscribes to it; mutations go through narrow mutators.
+    session: crate::session::SessionState,
     // Input history (what ↑ cycles through).
     input_history: history::History,
     // Path completion popup.
@@ -106,14 +107,10 @@ struct App {
     reasoning_buf: String,
     // Whether content has started (reasoning slot stops updating afterwards).
     reasoning_done: bool,
-    // Name set explicitly via /name; None = statusline synthesizes one.
-    session_name: Option<String>,
     // Config handle: command argument completion reads the model list.
     cfg: Option<std::rc::Rc<std::cell::RefCell<crate::ai::config::Config>>>,
     // Set by /exit /quit /q: the main loop exits after the current apply finishes.
     quit_requested: bool,
-    // Sequence number for persisted migrations (cwd_history.seq; 0 = origin).
-    cwd_seq: i64,
     // /resume picker: Some((candidates, highlighted index)). While Some, the reserved area shows the list.
     resume_pick: Option<(Vec<(i64, String)>, usize)>,
     // Tree navigator modal: Some = full-screen takeover (double-Esc opens it).
@@ -122,12 +119,6 @@ struct App {
     last_esc: std::time::Instant,
     // cwd note injected into the first turn after resume (written on resume, consumed on submit).
     pending_cwd_note: Option<String>,
-    // Storage. None = DB unavailable (degrades to an in-memory session; never blocks usage).
-    store: Option<crate::store::Store>,
-    // Current session id.
-    session_id: Option<i64>,
-    // Entries produced so far this round (verified/persisted at TurnDone via the Commit event).
-    pending: Vec<entry::Entry>,
     // Interrupt flag: once set, the background thread stops reading and disconnects.
     interrupt: Arc<AtomicBool>,
     spin_i: usize,
@@ -157,7 +148,6 @@ impl App {
         Self {
             editor: Editor::new(),
             goal_col: None,
-            transcript: Vec::new(),
             streaming: String::new(),
             streaming_active: false,
             history: crate::tui::zones_impl::HistoryState::default(),
@@ -171,20 +161,16 @@ impl App {
             spin_at: Instant::now(),
             git: crate::git::snapshot(&cwd),
             git_at: Instant::now(),
-            session_name: None,
             cfg: None,
             quit_requested: false,
-            cwd_seq: 0,
             resume_pick: None,
             tree_pick: None,
             last_esc: std::time::Instant::now() - std::time::Duration::from_secs(1),
             pending_cwd_note: None,
-            store: {
+            session: {
                 migrate_legacy_db(&xdg_data_base());
-                crate::store::Store::open(&db_path()).ok()
+                crate::session::SessionState::new(crate::store::Store::open(&db_path()).ok())
             },
-            session_id: None,
-            pending: Vec::new(),
             cwd,
             home,
             scroll: 0,
@@ -430,15 +416,15 @@ impl App {
     // Open the tree navigator (double-Esc). Builds the full-tree rows from
     // the store; a missing store degrades to an empty picker (never crashes).
     fn open_tree_picker(&mut self) {
-        let Some(st) = self.store.as_ref() else { return };
-        let Some(sid) = self.session_id else {
-            self.transcript.push(entry::Entry::Error { text: "还没有会话可回溯".into() });
+        let Some(st) = self.session.store() else { return };
+        let Some(sid) = self.session.session_id() else {
+            self.session.echo(entry::Entry::Error { text: "还没有会话可回溯".into() });
             return;
         };
         let tree = st.load_tree(sid).unwrap_or_default();
         let leaf = st.get_leaf(sid).unwrap_or(None);
         if tree.is_empty() {
-            self.transcript.push(entry::Entry::Error { text: "会话为空".into() });
+            self.session.echo(entry::Entry::Error { text: "会话为空".into() });
             return;
         }
         self.tree_pick = Some(crate::tui::components::tree_picker::TreePicker::from_tree(&tree, leaf));
@@ -450,37 +436,41 @@ impl App {
     // projection; the prefix cache is keyed on the rebuilt history, so a
     // cache hit survives navigation to a shared prefix.
     fn tree_navigate_to(&mut self, seq: i64, cx: &Ctx) {
-        let Some(st) = self.store.as_mut() else { return };
-        let Some(sid) = self.session_id else { return };
-        if let Err(e) = st.set_leaf(sid, Some(seq)) {
-            self.transcript.push(entry::Entry::Error { text: format!("回溯失败：{e:#}") });
-            return;
-        }
-        let entries = match st.load_entries(sid) {
-            Ok(e) => e,
-            Err(e) => {
-                self.transcript.push(entry::Entry::Error { text: format!("重投影失败：{e:#}") });
+        let Some(sid) = self.session.session_id() else { return };
+        // Store work (leaf move + re-projection + name lookup) inside a
+        // scoped borrow; the SessionState mutation happens after it ends.
+        let (entries, effective, draft) = {
+            let Some(st) = self.session.store_mut() else { return };
+            if let Err(e) = st.set_leaf(sid, Some(seq)) {
+                self.session.echo(entry::Entry::Error { text: format!("回溯失败：{e:#}") });
                 return;
             }
+            let entries = match st.load_entries(sid) {
+                Ok(e) => e,
+                Err(e) => {
+                    self.session.echo(entry::Entry::Error { text: format!("重投影失败：{e:#}") });
+                    return;
+                }
+            };
+            let effective = st.effective_name(sid).ok().flatten();
+            let draft = user_text_at(st, sid, seq);
+            (entries, effective, draft)
         };
 
-        // 1) Rendering layer: the new path is the conversation.
-        self.transcript = entries.clone();
-        self.pending = Vec::new();
+        // 1+3) Rendering layer + name: navigate_to replaces transcript,
+        // clears pending and merges the effective name (never clobbering).
+        self.session.navigate_to(entries.clone(), effective);
 
         // 2) Protocol rebuild: the shared routine — dangling tool tails
         // (leaf on a request without results) are repaired inside, so the
         // next run() always starts from a protocol-legal boundary.
         *cx.chat.lock().expect("chat 锁中毒") = entries_to_context(&entries);
 
-        // 3) Name: nearest marker on the new path.
-        self.session_name = st.effective_name(sid).ok().flatten().or(self.session_name.take());
-
         // 4) Echo + editor draft semantics: navigating to a user entry puts
         // that message back into the editor (pi behavior) — you usually
         // rewound in order to rewrite it.
-        self.transcript.push(entry::Entry::Error { text: format!("已回到节点 #{seq}（后续消息仍保留在树中）") });
-        if let Some(d) = user_text_at(st, sid, seq) {
+        self.session.echo(entry::Entry::Error { text: format!("已回到节点 #{seq}（后续消息仍保留在树中）") });
+        if let Some(d) = draft {
             self.load_into_editor(&d);
         }
     }
@@ -495,20 +485,29 @@ impl App {
     fn resume_confirm(&mut self, cx: &Ctx) {
         let Some((items, sel)) = self.resume_pick.take() else { return };
         let Some((id, name)) = items.get(sel).cloned() else { return };
-        let Some(st) = self.store.as_ref() else { return };
-
-        let entries = match st.load_entries(id) {
-            Ok(e) => e,
-            Err(e) => {
-                self.transcript.push(entry::Entry::Error { text: format!("读取会话失败：{e:#}") });
-                return;
-            }
+        // Store reads (projection + metadata) in a scoped borrow; state
+        // mutations happen after it ends.
+        let (entries, meta, effective, last_cwd_seq) = {
+            let Some(st) = self.session.store() else { return };
+            let entries = match st.load_entries(id) {
+                Ok(e) => e,
+                Err(e) => {
+                    self.session.echo(entry::Entry::Error { text: format!("读取会话失败：{e:#}") });
+                    return;
+                }
+            };
+            let meta = st.session(id).ok();
+            let effective = st.effective_name(id).ok().flatten().or_else(|| meta.as_ref().and_then(|m| m.name.clone()));
+            let last_cwd_seq = st
+                .cwd_history(id)
+                .ok()
+                .and_then(|h| h.last().map(|(seq, _)| *seq))
+                .unwrap_or(0);
+            (entries, meta, effective, last_cwd_seq)
         };
-        let meta = st.session(id).ok();
 
         // 1) Rendering layer
-        self.transcript = entries.clone();
-        self.pending = Vec::new();
+        self.session.commit_round(entries.clone());
 
         // 2) Chat context: rebuild the **full protocol messages** from
         // entries (the inverse of collect_turn). Tool call details
@@ -570,21 +569,17 @@ impl App {
         }
 
         // 4) Session identity and state
-        self.session_id = Some(id);
-        self.session_name = st.effective_name(id).ok().flatten().or_else(|| meta.and_then(|m| m.name));
-        self.cwd_seq = st
-            .cwd_history(id)
-            .ok()
-            .and_then(|h| h.last().map(|(seq, _)| *seq))
-            .unwrap_or(0);
+        let n_entries = entries.len();
+        self.session.adopt_session(id, entries, effective);
+        self.session.set_cwd_seq(last_cwd_seq);
         // Inject the cwd note into the first turn after resume (append only; history untouched)
         self.pending_cwd_note = Some(format!(
             "[工作目录已恢复为 {}，相对路径以此为基准]",
             cx.cwd.read().expect("cwd 锁中毒").display()
         ));
 
-        self.transcript.push(entry::Entry::Error {
-            text: format!("已恢复会话：{name}（{} 条记录）", entries.len()),
+        self.session.echo(entry::Entry::Error {
+            text: format!("已恢复会话：{name}（{n_entries} 条记录）"),
         });
     }
 
@@ -941,7 +936,7 @@ impl App {
     fn cmd_cdp(&mut self, arg: &str, cx: &Ctx) {
         if arg.is_empty() {
             let cur = cx.cwd.read().expect("cwd 锁中毒").display().to_string();
-            self.transcript.push(entry::Entry::Error {
+            self.session.echo(entry::Entry::Error {
                 text: format!("当前工作目录：{cur}\n用法：/cdp <目录>（永久迁移，落盘）"),
             });
             return;
@@ -959,22 +954,22 @@ impl App {
         match target.canonicalize() {
             Ok(real) if real.is_dir() => {
                 let old = cx.set_cwd(real.clone());
-                if let (Some(st), Some(sid)) = (self.store.as_mut(), self.session_id) {
-                    self.cwd_seq += 1;
-                    if let Err(e) = st.record_cwd(sid, self.cwd_seq, &real.display().to_string()) {
-                        self.transcript.push(entry::Entry::Error { text: format!("写库失败：{e:#}") });
-                        return;
-                    }
+                let seq = self.session.bump_cwd_seq();
+                if let Some((st, sid)) = self.session.persistence()
+                    && let Err(e) = st.record_cwd(sid, seq, &real.display().to_string())
+                {
+                    self.session.echo(entry::Entry::Error { text: format!("写库失败：{e:#}") });
+                    return;
                 }
-                self.transcript.push(entry::Entry::Error {
+                self.session.echo(entry::Entry::Error {
                     text: format!("工作目录：{} → {}（已落盘）", old.display(), real.display()),
                 });
             }
             Ok(_) => {
-                self.transcript.push(entry::Entry::Error { text: format!("不是目录：{arg}") });
+                self.session.echo(entry::Entry::Error { text: format!("不是目录：{arg}") });
             }
             Err(e) => {
-                self.transcript.push(entry::Entry::Error { text: format!("目录不存在：{arg}（{e}）") });
+                self.session.echo(entry::Entry::Error { text: format!("目录不存在：{arg}（{e}）") });
             }
         }
     }
@@ -986,24 +981,26 @@ impl App {
     // renaming on a branch never leaks to sibling branches.
     fn cmd_name(&mut self, arg: &str) {
         if arg.is_empty() {
-            let cur = self.session_name.clone().unwrap_or_else(|| "（未命名）".into());
-            self.transcript.push(entry::Entry::Error { text: format!("当前会话名：{cur}。用法：/name <名字>") });
+            let cur = self.session.session_name().unwrap_or("（未命名）");
+            self.session.echo(entry::Entry::Error { text: format!("当前会话名：{cur}。用法：/name <名字>") });
             return;
         }
-        self.session_name = Some(arg.to_string());
         // Persist as a name marker hanging off the current leaf; it also
         // lands in the in-memory transcript (skipped by the renderer).
         let marker = entry::Entry::Name { name: arg.to_string() };
-        self.pending.push(marker.clone());
-        self.transcript.push(marker.clone());
-        if let (Some(st), Some(sid)) = (self.store.as_mut(), self.session_id) {
-            if let Err(e) = st.append(sid, std::slice::from_ref(&marker)) {
-                self.transcript.push(entry::Entry::Error { text: format!("命名写入失败：{e:#}") });
-            }
-            // Also update the legacy column so old resume listings still show it.
-            let _ = st.set_session_name(sid, Some(arg));
+        self.session.name_session(arg, marker.clone());
+        let write_result = self
+            .session
+            .persistence()
+            .map(|(st, sid)| {
+                let r = st.append(sid, std::slice::from_ref(&marker));
+                let _ = st.set_session_name(sid, Some(arg)); // legacy column, best-effort
+                r
+            });
+        if let Some(Err(e)) = write_result {
+            self.session.echo(entry::Entry::Error { text: format!("命名写入失败：{e:#}") });
         }
-        self.transcript.push(entry::Entry::Error { text: format!("已命名：{arg}") });
+        self.session.echo(entry::Entry::Error { text: format!("已命名：{arg}") });
     }
 
     // Build the resume picker entries for sessions recorded under `root`.
@@ -1033,14 +1030,14 @@ impl App {
 
     // /resume: list this project's sessions, stretching the reserved area.
     fn cmd_resume(&mut self, cx: &Ctx) {
-        let Some(st) = self.store.as_ref() else {
-            self.transcript.push(entry::Entry::Error { text: "存储未打开，无法 resume".into() });
+        let Some(st) = self.session.store() else {
+            self.session.echo(entry::Entry::Error { text: "存储未打开，无法 resume".into() });
             return;
         };
         let root = cx.cwd.read().expect("cwd 锁中毒").clone();
         match Self::build_resume_items(st, &root) {
             Ok(items) if items.is_empty() => {
-                self.transcript.push(entry::Entry::Error {
+                self.session.echo(entry::Entry::Error {
                     text: format!("{} 下没有历史会话", root.display()),
                 });
             }
@@ -1048,7 +1045,7 @@ impl App {
                 self.resume_pick = Some((items, 0));
             }
             Err(e) => {
-                self.transcript.push(entry::Entry::Error { text: format!("读会话失败：{e:#}") });
+                self.session.echo(entry::Entry::Error { text: format!("读会话失败：{e:#}") });
             }
         }
     }
@@ -1063,25 +1060,25 @@ impl App {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
             }
             for l in lines {
-                self.transcript.push(entry::Entry::Error { text: l });
+                self.session.echo(entry::Entry::Error { text: l });
             }
             return;
         }
         match cx.cfg.borrow().model_by_id(arg).ok() {
             Some(_) => match cx.cfg.borrow().save_default(arg) {
                 Ok(()) => {
-                    self.transcript.push(entry::Entry::Error {
+                    self.session.echo(entry::Entry::Error {
                         text: format!("默认模型已设为 {arg}，已写入 config.yaml"),
                     });
                 }
                 Err(e) => {
-                    self.transcript.push(entry::Entry::Error {
+                    self.session.echo(entry::Entry::Error {
                         text: format!("写入 config.yaml 失败：{e:#}"),
                     });
                 }
             },
             None => {
-                self.transcript.push(entry::Entry::Error {
+                self.session.echo(entry::Entry::Error {
                     text: format!("未知模型 id：{arg}。/model 不带参数看列表"),
                 });
             }
@@ -1098,7 +1095,7 @@ impl App {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
             }
             for l in lines {
-                self.transcript.push(entry::Entry::Error { text: l });
+                self.session.echo(entry::Entry::Error { text: l });
             }
             return;
         }
@@ -1108,12 +1105,12 @@ impl App {
                 let api_key = cfg.resolve_key(p);
                 cx.client.borrow_mut().switch_model(&p.base_url, &api_key, &rm.entry.id);
                 *cx.current_model.borrow_mut() = rm.entry.clone();
-                self.transcript.push(entry::Entry::Error {
+                self.session.echo(entry::Entry::Error {
                     text: format!("已切换到 {} ({})，仅本会话生效", arg, Config::display_name(&rm.entry)),
                 });
             }
             Err(_) => {
-                self.transcript.push(entry::Entry::Error {
+                self.session.echo(entry::Entry::Error {
                     text: format!("未知模型 id：{arg}。/switch 不带参数看列表"),
                 });
             }
@@ -1151,18 +1148,22 @@ impl App {
         self.popup.close();
         self.goal_col = None;
         self.scroll = 0;
-        if self.session_id.is_none()
-            && let Some(st) = self.store.as_mut()
+        if self.session.session_id().is_none()
+            && let Some(st) = self.session.store_mut()
         {
             let now = crate::store::now_stamp();
             match st.create_session(&now, &self.cwd.display().to_string()) {
-                Ok(id) => self.session_id = Some(id),
-                Err(e) => self.transcript.push(entry::Entry::Error { text: format!("数据库不可用：{e:#}") }),
+                Ok(id) => {
+                    self.session.adopt_session(id, Vec::new(), None);
+                }
+                Err(e) => {
+                    self.session.echo(entry::Entry::Error { text: format!("数据库不可用：{e:#}") });
+                }
             }
         }
 
-        self.transcript.push(entry::Entry::User { content: text.clone() });
-        self.pending.push(entry::Entry::User { content: text.clone() });
+        self.session.echo(entry::Entry::User { content: text.clone() });
+        self.session.stage(entry::Entry::User { content: text.clone() });
         self.streaming.clear();
         self.reasoning_buf.clear();
         self.reasoning_done = false;
@@ -1211,13 +1212,13 @@ impl App {
                         usage: Some(entry::Entry::usage_summary(&u)),
                         reasoning: if self.reasoning_buf.is_empty() { None } else { Some(self.reasoning_buf.clone()) },
                     };
-                    self.pending.push(e.clone());
-                    self.transcript.push(e);
+                    self.session.stage(e.clone());
+                    self.session.echo(e);
                 }
                 AppEvent::ToolStart { call_id, name, args_summary } => {
                     let e = entry::Entry::ToolRequest { call_id, name, object: args_summary };
-                    self.pending.push(e.clone());
-                    self.transcript.push(e);
+                    self.session.stage(e.clone());
+                    self.session.echo(e);
                 }
                 AppEvent::ToolFinish { call_id, name, ok, result, .. } => {
                     let e = entry::Entry::ToolResult {
@@ -1227,20 +1228,21 @@ impl App {
                         // Store data only (the raw text); the view is synthesized at render time
                         result,
                     };
-                    self.pending.push(e.clone());
-                    self.transcript.push(e);
+                    self.session.stage(e.clone());
+                    self.session.echo(e);
                 }
                 AppEvent::Error(e) => {
                     // Session-level errors are not persisted (not one of the four message kinds); memory stream only
-                    self.transcript.push(entry::Entry::Error { text: e });
+                    self.session.echo(entry::Entry::Error { text: e });
                 }
                 AppEvent::Commit(entries) => {
-                    if let (Some(st), Some(sid)) = (self.store.as_mut(), self.session_id)
+                    if let Some((st, sid)) = self.session.persistence()
                         && let Err(e) = st.append(sid, &entries)
                     {
-                        self.transcript.push(entry::Entry::Error { text: format!("落盘失败：{e:#}") });
+                        let msg = format!("落盘失败：{e:#}");
+                        self.session.echo(entry::Entry::Error { text: msg });
                     }
-                    self.pending.clear();
+                    self.session.clear_pending();
                 }
                 AppEvent::Done => self.streaming_active = false,
             }
@@ -1368,10 +1370,11 @@ fn user_text_at(st: &crate::store::Store, sid: i64, seq: i64) -> Option<String> 
 }
 
 fn display_name(app: &App) -> String {
-    match &app.session_name {
-        Some(n) => n.clone(),
+    match app.session.session_name() {
+        Some(n) => n.to_string(),
         None => app
-            .transcript
+            .session
+            .transcript()
             .iter()
             .find_map(|e| match e {
                 entry::Entry::User { content } => Some(content.chars().take(7).collect::<String>()),
@@ -1415,7 +1418,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     // `--resume`: open the session picker before the first frame (the
     // same surface /resume shows; Esc here simply starts a fresh session).
     if cli.resume
-        && let Some(st) = app.store.as_ref()
+        && let Some(st) = app.session.store()
         && let Ok(items) = App::build_resume_items(st, &cwd.read().expect("cwd 锁中毒").clone())
         && !items.is_empty()
     {
@@ -1552,7 +1555,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                     return;
                 }
                 let vs = ViewState {
-                    history: &app.transcript,
+                    history: app.session.transcript(),
                     chat_scroll: app.history.chat_scroll,
                     scroll_pinned: app.history.scroll_pinned,
                     show_reasoning: !app.history.reasoning_folded,
