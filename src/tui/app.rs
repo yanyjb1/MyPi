@@ -179,7 +179,10 @@ impl App {
             tree_pick: None,
             last_esc: std::time::Instant::now() - std::time::Duration::from_secs(1),
             pending_cwd_note: None,
-            store: crate::store::Store::open(&data_dir()).ok(),
+            store: {
+                migrate_legacy_db(&xdg_data_base());
+                crate::store::Store::open(&db_path()).ok()
+            },
             session_id: None,
             pending: Vec::new(),
             cwd,
@@ -238,14 +241,13 @@ impl App {
         let cfg = self.cfg.as_ref()?;
         let cfg = cfg.borrow();
         let mut out: Vec<_> = cfg
-            .models
-            .iter()
-            .filter(|m| m.id.starts_with(arg_part))
-            .map(|m| crate::tui::path::Completion {
+            .models()
+            .filter(|(_, m)| m.id.starts_with(arg_part))
+            .map(|(pname, m)| crate::tui::path::Completion {
                 name: m.id.clone(),
                 detail: crate::ai::config::Config::display_name(m).to_string(),
                 is_dir: false,
-                insert: format!("{cmd} {}", m.id),
+                insert: format!("{cmd} {pname}:{}", m.id),
             })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1046,20 +1048,20 @@ impl App {
         if arg.is_empty() {
             let cfg = cx.cfg.borrow();
             let current = cfg.default.as_deref().unwrap_or("(第一个模型)");
-            let mut lines = vec![format!("当前默认：{current}（/model <id> 修改，写入 config.yaml）")];
-            for m in &cfg.models {
-                lines.push(format!("  {} ({})", m.id, Config::display_name(m)));
+            let mut lines = vec![format!("当前默认：{current}（/model <provider>:<id> 修改，写入 config.yaml）")];
+            for (pname, m) in cfg.models() {
+                lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
             }
             for l in lines {
                 self.transcript.push(chat::Entry::Error { text: l });
             }
             return;
         }
-        match cx.cfg.borrow().model_by_id(arg).ok().cloned() {
-            Some(m) => match cx.cfg.borrow().save_default(&m.id) {
+        match cx.cfg.borrow().model_by_id(arg).ok() {
+            Some(_) => match cx.cfg.borrow().save_default(arg) {
                 Ok(()) => {
                     self.transcript.push(chat::Entry::Error {
-                        text: format!("默认模型已设为 {}，已写入 config.yaml", m.id),
+                        text: format!("默认模型已设为 {arg}，已写入 config.yaml"),
                     });
                 }
                 Err(e) => {
@@ -1081,30 +1083,26 @@ impl App {
         let cfg = cx.cfg.borrow();
         if arg.is_empty() {
             let cur = cx.client.borrow().model().to_string();
-            let mut lines = vec![format!("当前会话模型：{cur}（/switch <id> 切换）")];
-            for m in &cfg.models {
-                lines.push(format!("  {} ({})", m.id, Config::display_name(m)));
+            let mut lines = vec![format!("当前会话模型：{cur}（/switch <provider>:<id> 切换）")];
+            for (pname, m) in cfg.models() {
+                lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
             }
             for l in lines {
                 self.transcript.push(chat::Entry::Error { text: l });
             }
             return;
         }
-        match cfg.model_by_id(arg).ok().cloned() {
-            Some(m) => match cfg.providers.get(&m.provider) {
-                Some(p) => {
-                    let api_key = cfg.resolve_key(p);
-                    cx.client.borrow_mut().switch_model(&p.base_url, &api_key, &m.id);
-                    *cx.current_model.borrow_mut() = m.clone();
-                    self.transcript.push(chat::Entry::Error {
-                        text: format!("已切换到 {} ({})，仅本会话生效", m.id, Config::display_name(&m)),
-                    });
-                }
-                None => {
-                    self.transcript.push(chat::Entry::Error { text: format!("provider {} 未定义", m.provider) });
-                }
-            },
-            None => {
+        match cfg.model_by_id(arg) {
+            Ok(rm) => {
+                let p = cfg.providers.get(&rm.provider_name).expect("validated provider");
+                let api_key = cfg.resolve_key(p);
+                cx.client.borrow_mut().switch_model(&p.base_url, &api_key, &rm.entry.id);
+                *cx.current_model.borrow_mut() = rm.entry.clone();
+                self.transcript.push(chat::Entry::Error {
+                    text: format!("已切换到 {} ({})，仅本会话生效", arg, Config::display_name(&rm.entry)),
+                });
+            }
+            Err(_) => {
                 self.transcript.push(chat::Entry::Error {
                     text: format!("未知模型 id：{arg}。/switch 不带参数看列表"),
                 });
@@ -1300,13 +1298,46 @@ impl Ctx {
     }
 }
 
-// Database location: ~/.local/share/mypi/sessions.db (XDG-aware).
-fn data_dir() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
+// Database location (XDG Data spec): $XDG_DATA_HOME/mypi/sessions.db,
+// i.e. ~/.local/share/mypi/sessions.db by default. Legacy layout support:
+// `~/.local/share/mypi` used to be the SQLite file itself — renamed to
+// sessions.db on first open of the new layout.
+fn xdg_data_base() -> std::path::PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    base.join("mypi")
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+fn db_path() -> std::path::PathBuf {
+    xdg_data_base().join("mypi").join("sessions.db")
+}
+
+/// Migrate the legacy database file (a bare `mypi` file under
+/// ~/.local/share) to the canonical `mypi/sessions.db` layout. No-op when
+/// the legacy file is absent or already migrated.
+fn migrate_legacy_db(base: &std::path::Path) {
+    let legacy = base.join("mypi");
+    if !legacy.is_file() {
+        return;
+    }
+    // The legacy file **occupies the directory's name**, so: move the db
+    // and its WAL/SHM companions out of the way, create the real
+    // directory, then move them in as `sessions.db*`.
+    let stash = base.join(".mypi-legacy-migrate");
+    let _ = std::fs::remove_dir_all(&stash);
+    std::fs::create_dir_all(&stash).ok();
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::rename(base.join(format!("mypi{suffix}")), stash.join(format!("db{suffix}")));
+    }
+    if let Err(e) = std::fs::create_dir_all(base.join("mypi")) {
+        eprintln!("mypi: cannot create data dir: {e}");
+        return;
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::rename(stash.join(format!("db{suffix}")), base.join(format!("mypi/sessions.db{suffix}")));
+    }
+    let _ = std::fs::remove_dir_all(&stash);
 }
 
 // Session name for the statusline: an explicit /name wins; otherwise
@@ -1346,13 +1377,14 @@ pub fn run_tui(cfg: Config) -> Result<()> {
     // current model, hence RefCell. Main thread only (Rc is not Send);
     // the background turn thread gets its own cloned Client.
     let cfg = std::rc::Rc::new(std::cell::RefCell::new(cfg));
-    let model = cfg.borrow().default_model()?.clone();
+    let rm = cfg.borrow().default_model()?;
     let provider = cfg
         .borrow()
         .providers
-        .get(&model.provider)
-        .ok_or_else(|| anyhow::anyhow!("provider {} 未定义", model.provider))?
+        .get(&rm.provider_name)
+        .ok_or_else(|| anyhow::anyhow!("provider {} 未定义", rm.provider_name))?
         .clone();
+    let model = rm.entry.clone();
     let api_key = cfg.borrow().resolve_key(&provider);
     let client = Client::new(&provider.base_url, &api_key, &model.id);
     let cost_cfg = model.cost;

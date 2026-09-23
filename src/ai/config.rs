@@ -3,8 +3,12 @@
 //! hardcoding in code.
 //!
 //! File lookup order (first existing wins):
-//!   1. $MYPI_CONFIG
-//!   2. ./models.yml (next to .env; the current directory)
+//!   1. $MYPI_CONFIG (explicit override; used by tests)
+//!   2. $XDG_CONFIG_HOME/mypi/config.yaml (canonical; default ~/.config/mypi/config.yaml)
+//!
+//! The repo ships `models_example.yml` as a template — copy it to the
+//! canonical location and fill in your keys. No CWD fallback: the repo
+//! never holds credentials.
 //!
 //! Structure example (**keep in sync with the models.yml in the repo**):
 //!
@@ -182,8 +186,6 @@ pub struct Config {
     #[serde(default)]
     pub default: Option<String>,
     #[serde(default)]
-    pub models: Vec<ModelEntry>,
-    #[serde(default)]
     pub theme: Theme,
 }
 
@@ -193,6 +195,51 @@ pub struct Provider {
     pub base_url: String,
     #[serde(default)]
     pub api_key: String,
+    /// Wire dialect. All providers speak an OpenAI-compatible protocol;
+    /// this field only selects **vendor-specific deltas** on top of it.
+    /// Values: `openai-compatible` (default) | `deepseek`.
+    /// The user opts into a vendor's quirks explicitly — the code ships
+    /// the capability, the config decides whether it is used.
+    #[serde(default, rename = "api")]
+    pub api: Option<String>,
+    /// Models this provider serves — **nested inside the provider**, never
+    /// a top-level flat list. The model id is provider-internal: the same
+    /// gateway can expose `gpt-x`, DeepSeek's API exposes
+    /// `deepseek-chat`; ids are written per provider by the user.
+    #[serde(default, rename = "models")]
+    pub models: Vec<ModelEntry>,
+}
+
+impl Provider {
+    /// Resolved dialect (config value or the default).
+    pub fn dialect(&self) -> Dialect {
+        match self.api.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(v) if v.eq_ignore_ascii_case("deepseek") => Dialect::DeepSeek,
+            _ => Dialect::OpenAiCompatible,
+        }
+    }
+}
+
+/// A model plus the provider it lives under (the config nests models
+/// inside providers; callers always need both).
+#[derive(Debug, Clone)]
+pub struct ResolvedModel {
+    pub provider_name: String,
+    pub entry: ModelEntry,
+}
+
+/// Vendor-specific deltas over the OpenAI-compatible wire protocol.
+/// Not a protocol family — all of these still speak openai-completions;
+/// the variant only enables vendor quirks (e.g. DeepSeek's separate
+/// reasoning stream that gates the visible content).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    /// Plain OpenAI protocol; reasoning arrives as `reasoning_content`-style
+    /// fields when the model offers it.
+    OpenAiCompatible,
+    /// DeepSeek: `reasoning_content` streams **before** `content`, and
+    /// content must not be rendered until the reasoning stream closes.
+    DeepSeek,
 }
 
 /// One callable model (a `- id: ...` entry in models.yml).
@@ -203,11 +250,14 @@ pub struct ModelEntry {
     /// Statusline display name (e.g. GLM5.3F(MS)).
     #[serde(default)]
     pub name: String,
-    /// Which provider entry this model belongs to.
-    pub provider: String,
     /// Context window (tokens); denominator of the statusline gauge.
     #[serde(default, rename = "contextWindow")]
     pub context_window: u64,
+    /// User-capped output per reply — the actual `max_tokens` sent in
+    /// every request. Optional because providers **reject requests that
+    /// exceed the model's real limit**: a 128k-capable model must not be
+    /// told 64000 unless you know your tier serves it. Omit for the
+    /// conservative default (4096).
     #[serde(default, rename = "maxOutputTokens")]
     pub max_output_tokens: Option<u64>,
     #[serde(default)]
@@ -221,8 +271,12 @@ impl Config {
     /// Load and parse the config file in lookup order.
     pub fn load() -> anyhow::Result<Self> {
         let path = Self::locate()?;
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config: {}", path.display()))?;
+        let text = std::fs::read_to_string(&path).with_context(|| {
+            format!(
+                "no config at {} — create it from models_example.yml (`mkdir -p ~/.config/mypi && cp models_example.yml ~/.config/mypi/config.yaml`), then fill in your providers and keys",
+                path.display()
+            )
+        })?;
         let cfg: Config = serde_yaml::from_str(&text)
             .with_context(|| format!("invalid config format: {}", path.display()))?;
         cfg.validate()?;
@@ -244,16 +298,10 @@ impl Config {
                 std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
             })
             .ok_or_else(|| anyhow!("neither HOME nor XDG_CONFIG_HOME is set; cannot locate config"))?;
-        let canonical = xdg.join("mypi").join("config.yaml");
-        let legacy = std::path::PathBuf::from("models.yml");
-        if canonical.exists() {
-            Ok(canonical)
-        } else if legacy.exists() {
-            Ok(legacy)
-        } else {
-            // Nothing exists: return the canonical path so the error message points at the expected location
-            Ok(canonical)
-        }
+        // XDG only — no CWD fallback. The repo never holds credentials;
+        // `models_example.yml` documents the format and users copy it to
+        // the canonical location.
+        Ok(xdg.join("mypi").join("config.yaml"))
     }
 
     /// Directory containing the config file ($XDG_CONFIG_HOME/mypi). Used by save.
@@ -291,33 +339,53 @@ impl Config {
         Ok(())
     }
 
-    /// Fail fast: every model must reference a declared provider.
+    /// Fail fast: model ids are **provider-scoped** (the same id may
+    /// appear under two providers), so uniqueness is checked per provider.
+    /// The globally-addressed form is `<provider>:<id>` — enforced where
+    /// models are looked up, not here.
     fn validate(&self) -> anyhow::Result<()> {
-        for m in &self.models {
-            if !self.providers.contains_key(&m.provider) {
-                return Err(anyhow!("model {} references undefined provider `{}`", m.id, m.provider));
+        for (pname, p) in &self.providers {
+            let mut seen = std::collections::HashSet::new();
+            for m in &p.models {
+                if !seen.insert(&m.id) {
+                    return Err(anyhow!("provider {pname}: duplicate model id `{}`", m.id));
+                }
             }
         }
         Ok(())
     }
 
-    /// Fetch the default model entry.
-    pub fn default_model(&self) -> anyhow::Result<&ModelEntry> {
-        match &self.default {
-            Some(id) => self.model_by_id(id),
-            None => self
-                .models
-                .first()
-                .ok_or_else(|| anyhow!("models list is empty")),
-        }
+    /// Every declared model with its owning provider name, in config
+    /// order (providers are a map, so sort names for a stable listing).
+    pub fn models(&self) -> impl Iterator<Item = (&str, &ModelEntry)> {
+        let mut names: Vec<&String> = self.providers.keys().collect();
+        names.sort();
+        names
+            .into_iter()
+            .flat_map(move |n| self.providers[n.as_str()].models.iter().map(move |m| (n.as_str(), m)))
     }
 
-    /// Find a model by id (used by model switching).
-    pub fn model_by_id(&self, id: &str) -> anyhow::Result<&ModelEntry> {
-        self.models
-            .iter()
-            .find(|m| m.id == id)
-            .ok_or_else(|| anyhow!("model not found: {id}"))
+    /// Fetch the default model entry. The `default:` key is **mandatory**
+    /// — declared by the user in the config, never inferred (no
+    /// first-model fallback, no implicit default).
+    pub fn default_model(&self) -> anyhow::Result<ResolvedModel> {
+        let id = self
+            .default
+            .as_deref()
+            .ok_or_else(|| anyhow!("config has no `default:` model — add e.g. `default: local:gpt-5.6-luna` to the config"))?;
+        self.model_by_id(id)
+    }
+
+    /// Find a model by its globally-addressed id `<provider>:<id>`
+    /// (the form used by `default`, /model, /switch and completion).
+    pub fn model_by_id(&self, id: &str) -> anyhow::Result<ResolvedModel> {
+        let (pname, mid) = id.split_once(':').ok_or_else(|| {
+            anyhow!("model id must be `<provider>:<id>`, got `{id}`")
+        })?;
+        let p = self.providers.get(pname).ok_or_else(|| anyhow!("unknown provider: {pname}"))?;
+        let m = p.models.iter().find(|m| m.id == mid)
+            .ok_or_else(|| anyhow!("provider {pname} has no model `{mid}`"))?;
+        Ok(ResolvedModel { provider_name: pname.to_string(), entry: m.clone() })
     }
 
     /// Resolve `${ENV_VAR}` references in api_key.
@@ -340,43 +408,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_new_format() {
+    fn parses_nested_provider_models() {
         let cfg: Config = serde_yaml::from_str(
             r#"
 providers:
   local:
     base_url: http://localhost:9999/v1
     api_key: ""
-default: vendor-a/model-x
-models:
-  - id: vendor-a/model-x
-    name: ModelX
-    provider: local
-    contextWindow: 1000000
-    maxOutputTokens: 128000
-    currency: Cny
-    cost:
-      input: 1
-      output: 4
-      cacheRead: 0.02
-      cacheWrite: 0.0
-  - id: vendor-b/model-y
-    provider: local
-    contextWindow: 1000000
-    cost: { input: 0.8, output: 2.7, cacheRead: 0.1, cacheWrite: 1.25 }
+    models:
+      - id: vendor-a/model-x
+        name: ModelX
+        contextWindow: 1000000
+        maxOutputTokens: 128000
+        currency: Cny
+        cost:
+          input: 1
+          output: 4
+          cacheRead: 0.02
+          cacheWrite: 0.0
+      - id: vendor-b/model-y
+        contextWindow: 1000000
+        cost: { input: 0.8, output: 2.7, cacheRead: 0.1, cacheWrite: 1.25 }
+default: local:vendor-a/model-x
 "#,
         )
         .unwrap();
+        // Addressing is <provider>:<id>; the model entry itself keeps the bare id.
         let m = cfg.default_model().unwrap();
-        assert_eq!(m.id, "vendor-a/model-x");
-        assert_eq!(Config::display_name(m), "ModelX");
-        assert_eq!(m.cost.input, 1.0);
-        assert_eq!(m.cost.cache_write, 0.0);
-        assert_eq!(m.currency, Currency::Cny);
+        assert_eq!(m.provider_name, "local");
+        assert_eq!(m.entry.id, "vendor-a/model-x");
+        assert_eq!(Config::display_name(&m.entry), "ModelX");
+        assert_eq!(m.entry.cost.input, 1.0);
+        assert_eq!(m.entry.cost.cache_write, 0.0);
+        assert_eq!(m.entry.currency, Currency::Cny);
         // Second model has no name/currency: display falls back to id, currency defaults to Cny
-        let q = cfg.model_by_id("vendor-b/model-y").unwrap();
-        assert_eq!(Config::display_name(q), "vendor-b/model-y");
-        assert_eq!(q.currency, Currency::Cny);
+        let q = cfg.model_by_id("local:vendor-b/model-y").unwrap();
+        assert_eq!(Config::display_name(&q.entry), "vendor-b/model-y");
+        assert_eq!(q.entry.currency, Currency::Cny);
+        // Bare id without provider prefix is rejected with guidance.
+        assert!(cfg.model_by_id("vendor-b/model-y").is_err());
+        // Cross-provider id does not leak into another provider's list.
+        assert!(cfg.model_by_id("nope:vendor-b/model-y").is_err());
+    }
+
+    /// `default:` is mandatory — no first-model fallback.
+    #[test]
+    fn default_is_mandatory() {
+        let cfg: Config = serde_yaml::from_str(
+            r#"
+providers:
+  local: { base_url: "http://x/v1", models: [{ id: m1 }] }
+"#,
+        )
+        .unwrap();
+        let err = cfg.default_model().unwrap_err().to_string();
+        assert!(err.contains("no `default:` model"), "{err}");
+    }
+
+    /// A missing config file is a hard error pointing at the template.
+    #[test]
+    fn load_errors_when_config_missing() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("mypi-missing-{}", std::process::id()));
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &dir);
+            std::env::remove_var("MYPI_CONFIG");
+        }
+        let err = Config::load().unwrap_err().to_string();
+        assert!(err.contains("create it from models_example.yml"), "{err}");
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The theme section parses named/hex/r,g,b colors; defaults green/yellow/true black.
@@ -414,7 +517,7 @@ models: []
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
-    fn locate_prefers_mypi_config_env_then_xdg_then_legacy() {
+    fn locate_prefers_mypi_config_env_then_xdg() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("MYPI_CONFIG", "/tmp/whatever.yaml");
@@ -442,18 +545,16 @@ models: []
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", &dir);
         }
-        std::env::set_current_dir(std::env::temp_dir()).unwrap(); // leave the repo, avoid models.yml
+        std::env::set_current_dir(std::env::temp_dir()).unwrap(); // XDG only: CWD is irrelevant now
         let p = Config::locate().unwrap();
         assert_eq!(p, mypi.join("config.yaml"));
 
-        // 3) canonical path missing, legacy path present -> legacy wins
+        // 3) canonical path missing -> still returns the canonical path
+        //    (no CWD fallback; the error message must point at the
+        //    expected location)
         std::fs::remove_file(mypi.join("config.yaml")).unwrap();
-        let legacy = dir.join("models.yml");
-        std::fs::write(&legacy, "x").unwrap();
-        std::env::set_current_dir(&dir).unwrap();
         let p = Config::locate().unwrap();
-        assert!(p.ends_with("models.yml"), "should fall back to the legacy path: {p:?}");
-        assert!(p.is_absolute() == legacy.is_absolute() || p == legacy || p.ends_with("models.yml"));
+        assert_eq!(p, mypi.join("config.yaml"));
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
         }
@@ -468,13 +569,13 @@ models: []
             std::env::set_var("XDG_CONFIG_HOME", &dir);
             std::env::remove_var("MYPI_CONFIG");
         }
-        let yaml = "providers:\n  local:\n    base_url: http://x/v1\nmodels:\n  - id: a\n    provider: local\n  - id: b\n    provider: local\ndefault: a\n";
+        let yaml = "providers:\n  local:\n    base_url: http://x/v1\n    models:\n      - id: a\n      - id: b\ndefault: local:a\n";
         let cfg: Config = serde_yaml::from_str(yaml).unwrap();
-        cfg.save_default("b").unwrap();
+        cfg.save_default("local:b").unwrap();
         let text = std::fs::read_to_string(dir.join("mypi").join("config.yaml")).unwrap();
         let back: Config = serde_yaml::from_str(&text).unwrap();
-        assert_eq!(back.default.as_deref(), Some("b"));
-        assert_eq!(back.models.len(), 2, "other config sections preserved verbatim");
+        assert_eq!(back.default.as_deref(), Some("local:b"));
+        assert_eq!(back.models().count(), 2, "other config sections preserved verbatim");
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
         }
