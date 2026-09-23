@@ -8,7 +8,7 @@
 
 use crate::ai::config::Config;
 use crate::tui::leaf;
-use crate::tui::path::{self, CompletionPopup};
+use super::engine::{self, CompletionPopup};
 
 /// One model candidate as the controller sees it (id for the wire,
 /// detail for the popup's gray text).
@@ -64,7 +64,7 @@ impl CompletionController {
 
     /// The word currently under the cursor, if it is a completion target.
     pub fn current_word(text: &str, cursor: usize) -> Option<String> {
-        path::candidate(text, cursor).map(|(_, word)| word)
+        engine::candidate(text, cursor).map(|(_, word)| word)
     }
 
     // ---- write side (state machine) ----
@@ -92,10 +92,10 @@ impl CompletionController {
                 let prefix: String = prefix_text.to_string();
                 if prefix.contains(' ')
                     && let Some((cmd, _)) = prefix.split_once(' ')
-                    && let Some(spec) = path::lookup(cmd)
+                    && let Some(spec) = engine::lookup(cmd)
                 {
                     match spec.args {
-                        path::ArgKind::ModelId => {
+                        engine::ArgKind::ModelId => {
                             if let Some(items) = Self::model_items(cmd, prefix.as_str(), cx) {
                                 // Leaf state (single candidate == whole
                                 // line): close so Tab/Enter stop
@@ -113,9 +113,9 @@ impl CompletionController {
                             }
                         }
                         // Path argument (/cdp /tm...): falls through to the generic file path completion
-                        path::ArgKind::Path => {}
+                        engine::ArgKind::Path => {}
                         // No-argument commands (/name x...): the argument is not a completion target; close the popup
-                        path::ArgKind::None => {
+                        engine::ArgKind::None => {
                             self.close();
                             return;
                         }
@@ -125,7 +125,7 @@ impl CompletionController {
             }
         }
 
-        match path::candidate(text, cursor) {
+        match engine::candidate(text, cursor) {
             Some((from, word)) => {
                 // Same word (pure cursor movement): skip the disk rescan.
                 // The comparison includes `from`: the same word at a
@@ -135,7 +135,7 @@ impl CompletionController {
                 }
                 self.last_word = Some((from, word.clone()));
                 let at_start = from == 0;
-                let mut items = path::complete(&word, at_start, cx.cwd, cx.home);
+                let mut items = engine::complete(&word, at_start, cx.cwd, cx.home);
                 // Complete command followed by a space ("/model ") -> candidates become that command's argument list
                 if at_start
                     && items.is_empty()
@@ -166,7 +166,7 @@ impl CompletionController {
     ///    advance, confirm the highlighted entry.
     ///
     /// Returns the completion action to apply (or None: nothing changed).
-    pub fn on_tab(&mut self, cx: &InputCtx, editor_text: &str) -> Option<path::CompletionAction> {
+    pub fn on_tab(&mut self, cx: &InputCtx, editor_text: &str) -> Option<engine::CompletionAction> {
         if !self.popup.is_open() {
             self.refresh(cx);
             if !self.popup.is_open() {
@@ -185,13 +185,13 @@ impl CompletionController {
     }
 
     /// Explicitly confirm the highlighted entry (Enter while open).
-    pub fn accept(&mut self) -> path::CompletionAction {
+    pub fn accept(&mut self) -> engine::CompletionAction {
         self.popup.accept()
     }
 
     /// Try extending to the candidates' common prefix first; falls back
     /// to None when the prefix cannot advance.
-    pub fn accept_common_prefix(&mut self, current: &str) -> Option<path::CompletionAction> {
+    pub fn accept_common_prefix(&mut self, current: &str) -> Option<engine::CompletionAction> {
         self.popup.accept_common_prefix(current)
     }
 
@@ -210,13 +210,13 @@ impl CompletionController {
     /// Candidates for the ModelId argument. `word` is the whole
     /// "command + typed argument" string ("/model gl"); `filter` is the
     /// argument part the typed text starts with.
-    fn model_items(cmd: &str, word: &str, cx: &InputCtx) -> Option<Vec<path::Completion>> {
+    fn model_items(cmd: &str, word: &str, cx: &InputCtx) -> Option<Vec<engine::Completion>> {
         let models = cx.models.as_ref()?;
         let arg_part = word.split_once(' ')?.1;
         let mut out: Vec<_> = models
             .iter()
             .filter(|m| m.id.starts_with(arg_part))
-            .map(|m| path::Completion {
+            .map(|m| engine::Completion {
                 name: m.id.clone(),
                 detail: m.detail.clone(),
                 is_dir: false,
@@ -227,10 +227,10 @@ impl CompletionController {
         Some(out)
     }
 
-    fn model_items_from_word(word: &str, cx: &InputCtx) -> Option<Vec<path::Completion>> {
+    fn model_items_from_word(word: &str, cx: &InputCtx) -> Option<Vec<engine::Completion>> {
         let (cmd, arg_part) = word.split_once(' ')?;
-        let spec = path::lookup(cmd)?;
-        if matches!(spec.args, path::ArgKind::ModelId) {
+        let spec = engine::lookup(cmd)?;
+        if matches!(spec.args, engine::ArgKind::ModelId) {
             Self::model_items(cmd, arg_part, cx)
         } else {
             None

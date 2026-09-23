@@ -5,7 +5,7 @@
 
 use ratatui::text::Line;
 
-use crate::tui::path::CompletionPopup;
+use super::engine::CompletionPopup;
 use crate::tui::theme::Palette;
 
 // The popup's rendering result.
@@ -80,7 +80,7 @@ pub fn render(popup: &CompletionPopup, term_w: u16, avail: usize, p: &Palette) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::path::{Completion, CompletionPopup};
+    use super::super::engine::{Completion, CompletionPopup};
 
     fn cand(name: &str, is_dir: bool) -> Completion {
         Completion {

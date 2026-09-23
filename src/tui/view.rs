@@ -9,7 +9,8 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::entry as entry;
-use crate::tui::components::{input, popup, statusline};
+use crate::tui::components::{input, statusline};
+use crate::tui::completion::popup;
 use crate::tui::layout as tlayout;
 use crate::tui::theme::Palette;
 
@@ -48,7 +49,7 @@ pub struct ViewState<'a> {
     pub show_cost: bool,
     pub palette: Palette,
     // The completion popup (empty when closed).
-    pub popup: &'a crate::tui::path::CompletionPopup,
+    pub popup: &'a crate::tui::completion::CompletionPopup,
     // The /resume picker: Some((candidates, highlighted index)). While Some, the reserved area draws it.
     pub resume_pick: Option<(&'a [(i64, String)], usize)>,
     // The block cache lives across frames (App owns it); each frame here

@@ -42,7 +42,7 @@ use crate::server::events::SessionEvent;
 
 use crate::tui::keys::{Action, KeyContext, translate_with};
 use crate::tui::zones::Zone as _;
-use crate::tui::path;
+use crate::tui::completion::engine;
 use crate::tui::layout as tlayout;
 use crate::tui::text;
 use crate::tui::theme::Palette;
@@ -422,8 +422,8 @@ impl App {
     }
 
     // Apply a completion action to the editor (replace the word segment).
-    fn apply_completion(&mut self, action: path::CompletionAction) {
-        if let path::CompletionAction::Replace { from, to, text } = action {
+    fn apply_completion(&mut self, action: engine::CompletionAction) {
+        if let engine::CompletionAction::Replace { from, to, text } = action {
             self.editor.replace_range(from, to, &text);
             self.goal_col = None;
             // Rescan right after applying: "/model"'s insert ends with a
@@ -437,7 +437,7 @@ impl App {
     // ---- completion wiring (thin: assemble the input context) ----
 
     fn refresh_completions(&mut self) {
-        let models = crate::tui::completion::models_from_config(&self.cfg);
+        let models = crate::tui::completion::controller::models_from_config(&self.cfg);
         let text = self.editor.text().to_string();
         let cx = crate::tui::completion::InputCtx {
             text: &text,
@@ -1008,7 +1008,7 @@ impl App {
             Some((c, a)) => (c, a.trim()),
             None => (text.as_str(), ""),
         };
-        if crate::tui::path::lookup(cmd_name).is_some() {
+        if crate::tui::completion::engine::lookup(cmd_name).is_some() {
             self.editor.clear();
             self.completion.close();
             self.goal_col = None;

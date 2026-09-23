@@ -15,7 +15,6 @@ pub mod highlight;
 pub mod keys;
 pub mod leaf;
 pub mod layout;
-pub mod path;
 pub mod text;
 pub mod signal;
 pub mod theme;

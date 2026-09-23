@@ -7,7 +7,6 @@
 
 pub mod markdown;
 pub mod input;
-pub mod popup;
 pub mod reserved;
 pub mod statusline;
 pub mod tree_picker;
