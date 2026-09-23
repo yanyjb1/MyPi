@@ -123,7 +123,7 @@ struct App {
     scroll: usize,
     // Rendered-block cache: bounded memory, per-frame work bounded to the
     // visible blocks. Survives frames; invalidated inside on width/roster change.
-    block_cache: crate::tui::block_cache::BlockCache,
+    block_cache: crate::tui::transcript::cache::BlockCache,
 }
 
 impl App {
@@ -136,7 +136,7 @@ impl App {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| cwd.clone());
         Self {
-            block_cache: crate::tui::block_cache::BlockCache::new(),
+            block_cache: crate::tui::transcript::cache::BlockCache::new(),
             editor: Editor::new(),
             goal_col: None,
             history: crate::tui::zones_impl::HistoryState::default(),

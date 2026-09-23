@@ -27,7 +27,7 @@
 
 use ratatui::text::Line;
 
-use super::components::chat;
+use super::components;
 use crate::entry::Entry;
 use crate::tui::theme::Palette;
 
@@ -92,7 +92,7 @@ pub(crate) fn render_block(
     width: usize,
 ) -> Block {
     let group = &entries[r.start..r.end];
-    let mut lines = chat::single_node(group, p, show_reasoning, tools_expanded, width);
+    let mut lines = components::chat::single_node(group, p, show_reasoning, tools_expanded, width);
     // Wrap now, once per cache fill — not once per frame.
     let rows = wrap_rows(lines.drain(..), width);
     Block { height: rows.len(), rows }

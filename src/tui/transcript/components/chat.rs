@@ -16,78 +16,48 @@
 //! - **system** — a notice the emitter aligns (left or centered), e.g. compaction
 //!   reports.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 #[cfg(test)]
 use ratatui::widgets::Paragraph;
-use ratatui::text::{Line, Span};
+#[cfg(test)]
 use unicode_width::UnicodeWidthStr;
+use ratatui::text::Line;
 
-use crate::entry::{Align, Entry, ToolView, UsageSummary};
-use crate::server::events::LiveActivity;
-use crate::tui::highlight;
+use super::assistant::assistant_block;
+use super::cards::{result_card_visible, tool_exchange, tool_request_card, tool_result_card};
+use super::system::system_block;
+use crate::entry::Entry;
 use crate::tui::theme::Palette;
+
+// Streaming tail: in-flight content at full weight (the final answer),
+// re-rendered per delta — the one live piece of the transcript.
+pub(crate) fn render_streaming(t: &str, p: &Palette) -> Vec<Line<'static>> {
+    crate::tui::components::markdown::render_markdown(t, p)
+}
 
 // Render entries into ratatui lines.
 //
 // The single render entry point: in-memory history and DB-resumed history
 // both go through it, guaranteeing "reopened after persistence" looks identical to "just typed".
+#[cfg(test)]
 pub fn render(entries: &[Entry], p: &Palette, show_reasoning: bool, tools_expanded: bool) -> Vec<Line<'static>> {
-    render_with_live(entries, p, show_reasoning, tools_expanded, 80, &LiveActivity::Idle, None)
+    render_at(entries, p, show_reasoning, tools_expanded, 80)
 }
 
-// Render plus the streaming tail (in-flight reasoning/content/tool intent).
-//
-// `width` is the target column count: cards pad to it so their backgrounds
-// form a solid block instead of stopping at the last glyph.
-#[allow(clippy::too_many_arguments)]
-pub fn render_with_live(
+#[cfg(test)]
+pub fn render_at(
     entries: &[Entry],
     p: &Palette,
     show_reasoning: bool,
     tools_expanded: bool,
     width: usize,
-    live: &LiveActivity,
-    streaming: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    // Grouping (pair-gluing) lives in `blocks`; this is the full-transcript
-    // convenience path (tests + narrow callers). `view.rs` goes through the
-    // block cache instead — same nodes, bounded work.
-    for r in crate::tui::blocks::blocks(entries) {
+    for r in super::super::blocks::blocks(entries) {
         if !out.is_empty() {
-            out.push(section_gap());
+            out.push(Line::from(""));
         }
         out.extend(single_node(&entries[r.start..r.end], p, show_reasoning, tools_expanded, width));
-    }
-    // ---- streaming tail: the one live row at the bottom ----
-    //
-    // It is a **system notice drawn last**, i.e. bottom-most in the history
-    // area. Three states, driven by the session (not guessed here):
-    //   Thinking      — the server has started emitting reasoning
-    //   Tool { intent } — a tool is running; the model's own explanation, or
-    //                   a bare label for tools that need none (read/edit)
-    //   Idle          — nothing pending (arriving content occupies the row)
-    match live {
-        LiveActivity::Thinking => {
-            out.push(Line::styled(
-                "thinking",
-                Style::new().fg(p.muted).add_modifier(Modifier::ITALIC),
-            ));
-        }
-        LiveActivity::Tool { intent } => {
-            let label = if intent.trim().is_empty() { "working" } else { intent.as_str() };
-            out.push(Line::styled(
-                label.to_string(),
-                Style::new().fg(p.muted).add_modifier(Modifier::ITALIC),
-            ));
-        }
-        LiveActivity::Idle => {}
-    }
-    // In-flight content: gray italic would be wrong (it is the final answer); default style, appended per delta
-    if let Some(t) = streaming
-        && !t.is_empty()
-    {
-        out.extend(super::markdown::render_markdown(t, p));
     }
     out
 }
@@ -105,7 +75,7 @@ pub(crate) fn single_node(
     debug_assert!(group.len() <= 2, "a node is one entry or one request+result pair");
     let e = &group[0];
     match e {
-        Entry::User { content } => user_card(content, p, width),
+        Entry::User { content } => super::cards::user_card(content, p, width),
         Entry::Assistant { content, usage, reasoning } => {
             assistant_block(content, reasoning.as_deref(), usage.as_ref(), p, show_reasoning)
         }
@@ -141,447 +111,12 @@ pub(crate) fn single_node(
     }
 }
 
-// The blank row between two transcript nodes.
+
+// Render entries into ratatui lines.
 //
-// Every node is separated from its neighbours by exactly one of these —
-// uniform rather than each kind remembering to pad itself, so two adjacent
-// nodes can never look like one.
-fn section_gap() -> Line<'static> {
-    Line::from("")
-}
-
-// ---------------------------------------------------------------------------
-// card scaffolding
-// ---------------------------------------------------------------------------
-
-// Pad `line` out to `width` display cells with `fill`.
-//
-// Every card body goes through this: a background only covers the cells it
-// actually paints, so an unpadded row would end mid-card.
-fn pad_to(mut line: Line<'static>, width: usize, fill: Style) -> Line<'static> {
-    let used: usize = line.spans.iter().map(|s| s.content.as_ref().width()).sum();
-    if used < width {
-        line.spans.push(Span::styled(" ".repeat(width - used), fill));
-    }
-    line
-}
-
-// Give every cell of a card row the card's background.
-//
-// A background only covers the cells it paints, and painting it on the
-// padding alone left the text sitting on the terminal default — so a card
-// looked black in the gaps and *not* black behind the words. Every span
-// (frame included) goes through here.
-fn on_bg(spans: Vec<Span<'static>>, bg: Style) -> Vec<Span<'static>> {
-    spans
-        .into_iter()
-        .map(|sp| Span::styled(sp.content, bg.patch(sp.style)))
-        .collect()
-}
-
-// A card's horizontal edge, exactly `width` cells:
-//
-//     +- - -------…------- -+
-//     └┬┘└┬┘        └┬┘└┬┘
-//      │  │          │  └── right break: one space, one dash, corner
-//      │  └──────────────  left break: one dash, one space
-//      └─────────────────── corner
-//
-// The two single-dash **breaks** exist for ligature-capable fonts: Sarasa and
-// friends fuse a consecutive run of dashes into one glyph and draw it narrower
-// than the cells we reserved, so the frame stopped short of the body. Breaking
-// the run at both ends keeps the corners from touching the middle, which is
-// enough to defeat the fusion — while the long middle stretch still reads as
-// one continuous rule (the earlier attempt to space *every* dash looked like a
-// dotted line and was rejected).
-//
-// Both ends give up one cell to a break. Degenerate widths fall back to a plain
-// run so the row can never exceed the budget.
-fn card_edge(edge: Style, fill: Style, width: usize) -> Line<'static> {
-    // `+-` + `-` + ` ` + mid + ` ` + `-` + `-+` = 7 cells of frame/scaffolding.
-    if width < 8 {
-        let dashes = width.saturating_sub(4);
-        return Line::from(on_bg(
-            vec![
-                Span::styled("+-", edge),
-                Span::styled("-".repeat(dashes), edge),
-                Span::styled("-+", edge),
-            ],
-            fill,
-        ));
-    }
-    let mid = width - 7;
-    Line::from(on_bg(
-        vec![
-            Span::styled("+-", edge),
-            Span::styled("- ", edge),
-            Span::styled("-".repeat(mid), edge),
-            Span::styled(" -+", edge),
-        ],
-        fill,
-    ))
-}
-
-// One body row: `| ` + content + padding + ` |`.
-fn card_row(content: Line<'static>, edge: Style, body_bg: Style, width: usize) -> Line<'static> {
-    let inner = width.saturating_sub(4);
-    // Defensive: never let stray escape bytes reach the terminal from inside a
-    // card. The tools strip their own output, but file contents and rows read
-    // back from an older DB can still carry them.
-    let clean_style = content.style;
-    let content = Line::from(
-        content
-            .spans
-            .into_iter()
-            .map(|sp| Span::styled(crate::tui::text::strip_ansi(&sp.content), sp.style))
-            .collect::<Vec<_>>(),
-    )
-    .style(clean_style);
-    let mut spans = vec![Span::styled("| ", edge)];
-    // `Line::styled(x, s)` puts `s` on the **line**, not on its spans, so a
-    // caller that styles a whole row (the diff's red/green) would otherwise
-    // lose that color the moment we take the spans apart. Fold it in first.
-    let line_style = content.style;
-    let content: Vec<Span<'static>> = content
-        .spans
-        .into_iter()
-        .map(|sp| Span::styled(sp.content, line_style.patch(sp.style)))
-        .collect();
-    // Reserve the right border before padding the content.
-    let used: usize = content.iter().map(|s| s.content.as_ref().width()).sum();
-    let clipped: Vec<Span<'static>> = if used > inner {
-        clip_spans(content, inner)
-    } else {
-        content
-    };
-    let used: usize = clipped.iter().map(|s| s.content.as_ref().width()).sum();
-    spans.extend(clipped);
-    if used < inner {
-        spans.push(Span::styled(" ".repeat(inner - used), body_bg));
-    }
-    spans.push(Span::styled(" |", edge));
-    // Frame, text and padding all sit on the card's black.
-    Line::from(on_bg(spans, body_bg))
-}
-
-// Cut spans at `max` display cells (keeps a card row inside its borders).
-fn clip_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
-    let mut out = Vec::new();
-    let mut used = 0usize;
-    for sp in spans {
-        let w = sp.content.as_ref().width();
-        if used + w <= max {
-            used += w;
-            out.push(sp);
-        } else {
-            let keep = max.saturating_sub(used);
-            if keep > 0 {
-                let (cut, _) = crate::tui::text::take_width(&sp.content, keep);
-                out.push(Span::styled(cut, sp.style));
-            }
-            break;
-        }
-    }
-    out
-}
-
-fn display_width(s: &str) -> usize {
-    s.width()
-}
-
-// ---------------------------------------------------------------------------
-// per-kind blocks
-// ---------------------------------------------------------------------------
-
-// User message: a card on the true-black background, white text.
-//
-// The black is the palette's truecolor black (`0,0,0`), never the ANSI
-// indexed black — indexed black is what terminals map to gray, which is
-// exactly the look we are avoiding here.
-fn user_card(content: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
-    let bg = Style::new().bg(p.black);
-    let mut out = Vec::new();
-    // Breathing room: a blank row above and below, still on the accent gutter
-    // and the true-black background, so the card reads as one solid block.
-    out.push(pad_to(Line::from(Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))), width, bg));
-    for line in super::markdown::render_markdown(content, p) {
-        // Force the card's own foreground/background: markdown may have
-        // decided on a color for a code span, but a user message is
-        // uniformly black-on-… white-on-black.
-        let mut spans = vec![Span::styled(
-            "▌ ",
-            Style::new().bg(p.black).fg(p.accent),
-        )];
-        for sp in line.spans {
-            spans.push(Span::styled(sp.content, Style::new().bg(p.black).fg(Color::White)));
-        }
-        out.push(pad_to(Line::from(spans), width, bg));
-    }
-    out.push(pad_to(Line::from(Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))), width, bg));
-    out
-}
-
-// (the trailing blank row between nodes is `section_gap`, added by the caller)
-
-// Model reply: plain foreground, no background. Reasoning (when shown) is muted.
-fn assistant_block(
-    content: &str,
-    reasoning: Option<&str>,
-    usage: Option<&UsageSummary>,
-    p: &Palette,
-    show_reasoning: bool,
-) -> Vec<Line<'static>> {
-    // usage is persisted with the entry (billing/stats) and never rendered as fine print in chat
-    let _ = usage;
-    let mut out = Vec::new();
-    // Reasoning: the thinking chain, shown by default. An earlier revision hid
-    // it unless Ctrl+T was pressed; the toggle now only suppresses it.
-    if show_reasoning && let Some(r) = reasoning.filter(|r| !r.trim().is_empty()) {
-        for mut line in super::markdown::render_markdown(r, p) {
-            for sp in &mut line.spans {
-                sp.style = sp.style.fg(p.muted).add_modifier(Modifier::ITALIC);
-            }
-            out.push(line);
-        }
-        // Reasoning and the answer are both "the AI's message" but they are
-        // two thoughts: the same blank-row separation every other node gets.
-        out.push(Line::from(""));
-    }
-    out.extend(super::markdown::render_markdown(content, p));
-    out
-}
-
-// System notice: the emitter chose the alignment, we only place it.
-fn system_block(text: &str, align: Align, p: &Palette, width: usize) -> Vec<Line<'static>> {
-    let style = Style::new().fg(p.muted);
-    let mut out = Vec::new();
-    for part in text.split('\n') {
-        let w = display_width(part);
-        match align {
-            Align::Left => out.push(Line::styled(part.to_string(), style)),
-            Align::Center => {
-                let pad = width.saturating_sub(w) / 2;
-                out.push(Line::from(vec![
-                    Span::styled(" ".repeat(pad), style),
-                    Span::styled(part.to_string(), style),
-                ]));
-            }
-        }
-    }
-    out
-}
-
-// ---------------------------------------------------------------------------
-// tool cards
-// ---------------------------------------------------------------------------
-
-// Whether a result deserves its own card.
-//
-// Reading is not a change: `read`'s result is the file it just showed, and
-// the request card already names the path, so a result card would repeat it.
-// Every other tool did something worth confirming.
-fn result_card_visible(name: &str) -> bool {
-    name != "read"
-}
-
-// Default fold threshold for tool output (lines). Per-tool overrides: [`collapse_limit`].
-const DEFAULT_COLLAPSE_LINES: usize = 5;
-
-// Per-tool thresholds: edit tools are lenient (a screenful of diff is worth showing directly).
-// Unregistered tools fall back to the default 5 lines.
-fn collapse_limit(tool: &str) -> usize {
-    match tool {
-        "edit" | "mass_edit" => 14,
-        _ => DEFAULT_COLLAPSE_LINES,
-    }
-}
-
-// Two cards glued into one: the call's content, the seam, the result's content.
-//
-// A tool call and its result are one exchange, not two messages — drawing
-// them as two separate boxes (each with its own top *and* bottom edge) made
-// a single `ls` cost six rows. Here the middle edge is shared, and the
-// result's edges take the success/failure color so the outcome still reads
-// at a glance. No type labels: the content says what it is.
-fn tool_exchange(
-    name: &str,
-    args: &str,
-    ok: bool,
-    result: &str,
-    p: &Palette,
-    expanded: bool,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let edge = Style::new().fg(p.accent);
-    let out_edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
-    let bg = Style::new().bg(p.black);
-
-    let mut out = vec![card_edge(edge, bg, width)];
-    for line in payload_lines(name, args, p) {
-        out.push(card_row(line, edge, bg, width));
-    }
-    // The seam: `+-` on the left and `-+` on the right, one shared edge.
-    out.push(card_edge(edge, bg, width));
-    for line in result_lines(name, ok, result, p, expanded) {
-        out.push(card_row(line, out_edge, bg, width));
-    }
-    out.push(card_edge(out_edge, bg, width));
-    out
-}
-
-// Tool call card: the arguments only, syntax-highlighted, on the black card.
-//
-// Used for a request that has no result yet (interrupt mid-call). The
-// labelable form is [`tool_exchange`].
-fn tool_request_card(name: &str, args: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
-    let edge = Style::new().fg(p.accent);
-    let bg = Style::new().bg(p.black);
-    let mut out = vec![card_edge(edge, bg, width)];
-    for line in payload_lines(name, args, p) {
-        out.push(card_row(line, edge, bg, width));
-    }
-    out.push(card_edge(edge, bg, width));
-    out
-}
-
-// Tool result card: `✓`/`✗` in the label, body drawn per the tool's view.
-// `expanded` is the global switch (Ctrl+O): true ignores thresholds and expands everything.
-fn tool_result_card(
-    name: &str,
-    ok: bool,
-    result: &str,
-    p: &Palette,
-    expanded: bool,
-    width: usize,
-) -> Vec<Line<'static>> {
-    // An unpaired result (interrupted call): colour tells the outcome, the
-    // content tells the rest. No labels, same as every other card.
-    let edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
-    let bg = Style::new().bg(p.black);
-    let mut out = vec![card_edge(edge, bg, width)];
-    for line in result_lines(name, ok, result, p, expanded) {
-        out.push(card_row(line, edge, bg, width));
-    }
-    out.push(card_edge(edge, bg, width));
-    out
-}
-
-// The body rows of a tool's result — shared by the standalone card and the
-// stacked exchange, so both fold/diff/placeholder identically.
-fn result_lines(
-    name: &str,
-    ok: bool,
-    result: &str,
-    p: &Palette,
-    expanded: bool,
-) -> Vec<Line<'static>> {
-    let view = ToolView::synthesize(name, ok, result);
-    let mut out = Vec::new();
-    match &view {
-        ToolView::Plain { text } => {
-            // A tool that ran and returned nothing still **happened**: it cost
-            // a round trip and may have changed the world (a silent `mkdir`,
-            // a `git commit` that prints on success only). Show a placeholder
-            // so the model — and the user — can see it was not skipped.
-            if text.trim().is_empty() {
-                // `read` has its own row even when the payload is the file.
-                out.push(Line::styled("(no output)", Style::new().fg(p.muted)));
-                return out;
-            }
-            let lines: Vec<&str> = text.lines().collect();
-            let limit = collapse_limit(name);
-            let fold = !expanded && lines.len() > limit;
-            let shown = if fold { &lines[..limit] } else { &lines[..] };
-            // Language comes from the tool itself (bash speaks shell); the
-            // generic case has no hint and degrades to plain text.
-            let lang = highlight::language_for_tool(name);
-            for l in shown {
-                for hl in highlight::highlight(l, lang) {
-                    out.push(hl);
-                }
-            }
-            if fold {
-                out.push(Line::styled(
-                    format!("… 共 {} 行", lines.len()),
-                    Style::new().fg(p.muted),
-                ));
-            }
-        }
-        ToolView::Diff { deletions, insertions } => {
-            // Deletions above, insertions below: red and green backgrounds
-            // (vscode style). Kept as row styles; `card_row` folds them into
-            // the spans so they survive the frame.
-            for d in deletions {
-                out.push(Line::styled(
-                    format!("- {d}"),
-                    Style::new().fg(Color::Black).bg(Color::Rgb(255, 128, 128)),
-                ));
-            }
-            for i in insertions {
-                out.push(Line::styled(
-                    format!("+ {i}"),
-                    Style::new().fg(Color::Black).bg(Color::Rgb(128, 200, 128)),
-                ));
-            }
-        }
-    }
-    out
-}
-
-// The call's arguments as highlighted code.
-//
-// `bash` payloads are shell; edit-family payloads are file content, so the
-// target path's extension picks the syntax. Anything unparsable still renders
-// verbatim — a card must never eat the model's actual arguments.
-fn payload_lines(name: &str, args: &str, p: &Palette) -> Vec<Line<'static>> {
-    let _ = p;
-    let v: Option<serde_json::Value> = serde_json::from_str(args).ok();
-    if let Some(v) = &v {
-        // bash: show the command itself, not a JSON blob.
-        if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
-            let mut out = Vec::new();
-            for l in cmd.lines() {
-                out.extend(highlight::highlight(l, Some("sh")));
-            }
-            return out;
-        }
-        // edit / mass_edit: highlight by the target file's language.
-        if let Some(path) = v.get("path").and_then(|c| c.as_str()) {
-            let lang = highlight::language_for_path(path);
-            let mut out = vec![Line::styled(
-                format!("path: {path}"),
-                Style::new().fg(Color::White),
-            )];
-            if let Some(old) = v.get("old").and_then(|c| c.as_str()) {
-                out.push(Line::styled("- old:", Style::new().fg(Color::Rgb(255, 128, 128))));
-                for l in old.lines() {
-                    out.extend(highlight::highlight(l, lang));
-                }
-            }
-            if let Some(new) = v.get("new").and_then(|c| c.as_str()) {
-                out.push(Line::styled("+ new:", Style::new().fg(Color::Rgb(128, 200, 128))));
-                for l in new.lines() {
-                    out.extend(highlight::highlight(l, lang));
-                }
-            }
-            return out;
-        }
-        // Fallback: pretty JSON, so the arguments stay readable.
-        let pretty = serde_json::to_string_pretty(v).unwrap_or_else(|_| args.to_string());
-        let mut out = Vec::new();
-        for l in pretty.lines() {
-            out.extend(highlight::highlight(l, Some("json")));
-        }
-        return out;
-    }
-    let mut out = Vec::new();
-    for l in args.lines() {
-        out.extend(highlight::highlight(l, highlight::language_for_tool(name)));
-    }
-    out
-}
-
-// Estimate the rendered visual line count (used to compute scrolling).
+// The single render entry point: in-memory history and DB-resumed history
+// both go through it, guaranteeing "reopened after persistence" looks identical to "just typed".
+#[cfg(test)]
 pub fn estimated_height(lines: &[Line], width: usize) -> usize {
     let w = width.max(1);
     lines
@@ -595,6 +130,10 @@ pub fn estimated_height(lines: &[Line], width: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Modifier;
+    use crate::entry::{Align, ToolView, UsageSummary};
+    use unicode_width::UnicodeWidthStr;
+    use super::super::{cards::*, system::*};
     use super::*;
 
     fn text_of(lines: &[Line]) -> String {
@@ -843,7 +382,7 @@ mod tests {
                     result: "done".into(),
                 },
             ];
-            let lines = render_with_live(&entries, &Palette::default(), false, false, width, &LiveActivity::Idle, None);
+            let lines = render_at(&entries, &Palette::default(), false, false, width);
             let before = lines.len();
             let wrapped = crate::tui::view::hard_wrap_for_test(&lines, width);
             assert_eq!(
@@ -1083,7 +622,7 @@ mod tests {
     #[test]
     fn inline_code_stays_on_one_line() {
         let p = Palette::default();
-        let lines = super::super::markdown::render_markdown(
+        let lines = crate::tui::components::markdown::render_markdown(
             "已用 `edit` 工具将 `main.rs` 中的 `hi` 改为 `hello`。",
             &p,
         );
@@ -1113,29 +652,6 @@ mod tests {
         assert!(open_text.contains("line8") && !open_text.contains("共"), "展开后无折叠: {open_text}");
     }
 
-    #[test]
-    fn live_row_shows_intent_then_thinking_then_content() {
-        let p = Palette::default();
-        let tool = LiveActivity::Tool { intent: "正在编译".into() };
-        let thinking_live = LiveActivity::Thinking;
-        // A tool is running: the model's own explanation takes the live row.
-        let during_tool = render_with_live(&[], &p, false, false, 40, &tool, None);
-        assert_eq!(during_tool.len(), 1);
-        assert_eq!(during_tool[0].spans[0].content, "正在编译");
-        // Reasoning streaming: the generic label.
-        let thinking = render_with_live(&[], &p, false, false, 40, &thinking_live, None);
-        assert_eq!(thinking[0].spans[0].content, "thinking");
-        // Idle (content streaming): no live row of its own.
-        let after = render_with_live(&[], &p, false, false, 40, &LiveActivity::Idle, Some("你好"));
-        assert_eq!(after.len(), 1, "只有正文: {after:?}");
-        assert_eq!(after[0].spans[0].content, "你好");
-        // The live row is the **bottom-most** history row.
-        let flowing = render_with_live(
-            &[Entry::Assistant { content: "答".into(), usage: None, reasoning: None }],
-            &p, false, false, 40, &tool, None,
-        );
-        assert_eq!(flowing.last().unwrap().spans[0].content, "正在编译", "live 行必须在最底部");
-    }
 
     #[test]
     fn read_has_no_result_card() {

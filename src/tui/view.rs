@@ -53,7 +53,7 @@ pub struct ViewState<'a> {
     pub resume_pick: Option<(&'a [(i64, String)], usize)>,
     // The block cache lives across frames (App owns it); each frame here
     // only renders the blocks the viewport actually shows.
-    pub block_cache: &'a mut crate::tui::block_cache::BlockCache,
+    pub block_cache: &'a mut crate::tui::transcript::cache::BlockCache,
 }
 
 // Test-only handle on the wrap pass (the phantom-row regression checks that
@@ -219,7 +219,7 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
     // Which blocks does [first_row, first_row+viewport) touch? Walk the
     // height roster — O(blocks), no rendering — then materialize that
     // slice (+1 block of slack above for smooth wheeling).
-    let n_blocks = crate::tui::blocks::blocks(s.history).len();
+    let n_blocks = crate::tui::transcript::blocks::blocks(s.history).len();
     let (b0, b1) = window_blocks(s.block_cache.heights_slice(), n_blocks, first_row, viewport);
     let (block_rows, rows_above) =
         s.block_cache.rows_for(s.history, p, s.show_reasoning, s.tools_expanded, b0..b1);
@@ -231,6 +231,33 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
         match it.next() {
             Some(l) => visible.push(l),
             None => break,
+        }
+    }
+    // ---- live tail (bottom-most history rows) ----
+    // Thinking / tool intent draw as a muted italic label; in-flight
+    // content streams in at full weight (it is the final answer).
+    // Appended below the newest block; the follow-bottom window keeps it
+    // on screen because it rides the same `total` bookkeeping… except it
+    // is not a block, so splice it when the window reaches the bottom.
+    if max_offset - offset == 0 || first_row + viewport > rows_above {
+        match s.live {
+            crate::server::events::LiveActivity::Thinking => visible.push(Line::styled(
+                "thinking",
+                ratatui::style::Style::new().fg(p.muted).add_modifier(ratatui::style::Modifier::ITALIC),
+            )),
+            crate::server::events::LiveActivity::Tool { intent } => {
+                let label = if intent.trim().is_empty() { "working" } else { intent.as_str() };
+                visible.push(Line::styled(
+                    label.to_string(),
+                    ratatui::style::Style::new().fg(p.muted).add_modifier(ratatui::style::Modifier::ITALIC),
+                ));
+            }
+            crate::server::events::LiveActivity::Idle => {}
+        }
+        if let Some(t) = s.streaming
+            && !t.is_empty()
+        {
+            visible.extend(crate::tui::transcript::components::chat::render_streaming(t, p));
         }
     }
     f.render_widget(Paragraph::new(visible), chat_area);

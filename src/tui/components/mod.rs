@@ -5,7 +5,6 @@
 //! in, Lines out); state lives in `app.rs`. That keeps components
 //! testable without spawning a terminal.
 
-pub mod chat;
 pub mod markdown;
 pub mod input;
 pub mod popup;

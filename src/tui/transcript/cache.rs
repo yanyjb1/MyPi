@@ -256,7 +256,7 @@ mod tests {
         // Materialize blocks 1..4 through the cache.
         let (rows, _) = c.rows_for(&es, &p(), true, false, 1..4);
         // The same slice straight from the convenience path.
-        let full = crate::tui::components::chat::render(&es, &p(), true, false);
+        let full = crate::tui::transcript::components::chat::render(&es, &p(), true, false);
         // Count only: exact styling is chat.rs's own test suite's job.
         assert!(!rows.is_empty());
         assert!(full.len() > rows.len(), "全量必须包含更多块");
