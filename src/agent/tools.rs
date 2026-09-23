@@ -133,7 +133,7 @@ fn run_shell(cwd: &std::path::Path, cmd: &str) -> Result<String> {
         .arg(cmd)
         .current_dir(cwd)
         .output()
-        .with_context(|| "failed to spawn bash")?;
+        .with_context(|| "spawn bash failed")?;
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
     let err = String::from_utf8_lossy(&out.stderr);
     if !err.trim().is_empty() {
@@ -173,7 +173,7 @@ impl BuiltinTools {
         };
         let real = target
             .canonicalize()
-            .with_context(|| format!("directory not found: {p}"))?;
+            .with_context(|| format!("no such dir: {p}"))?;
         anyhow::ensure!(real.is_dir(), "not a directory: {p}");
         self.cwd = real.clone();
         // Write back to the shared slot: the TUI statusline and the next

@@ -159,14 +159,20 @@ pub fn normalize(command: &str) -> String {
 /// trash my stuff" is not limited to directories).
 fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
-    let mut tokens = lower.split_ascii_whitespace();
-    if tokens.next() != Some("rm") {
-        return None;
-    }
-    // Targets: everything after the flag-looking arguments. Flags may
-    // also come after targets (`rm foo -rf`), so anything not starting
-    // with `-` and not `--` is a target.
-    let targets: Vec<&str> = tokens
+    // `sudo rm ...`, `env rm ...`, `nohup rm ...` — prefix wrappers must
+    // not launder the verb, so match rm anywhere in the token stream
+    // (not just as argv[0]).
+    let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
+    let pos = match tokens.iter().position(|t| *t == "rm") {
+        Some(p) => p,
+        None => return None,
+    };
+    // Targets: everything after the verb that is not flag-looking. Flags
+    // may also come after targets (`rm foo -rf`), so anything not
+    // starting with `-` and not `--` is a target.
+    let targets: Vec<&str> = tokens[pos + 1..]
+        .iter()
+        .copied()
         .filter(|t| *t != "--" && !t.starts_with('-'))
         .collect();
     if targets.is_empty() {
@@ -184,7 +190,7 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
                 rule_id: "bash:rm-out-of-zone",
                 tier: "critical",
                 reason: format!(
-                    "rm target `{t}` is outside the workspace ({}); deleting the user's files there is not allowed",
+                    "rm target `{t}` outside workspace ({}); denied",
                     zone.display()
                 ),
             });
@@ -197,11 +203,12 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
 /// zone to a scratch dir is still losing the user's file.
 fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
-    let mut tokens = lower.split_ascii_whitespace();
-    if tokens.next() != Some("mv") {
-        return None;
-    }
-    let rest: Vec<&str> = tokens.filter(|t| !t.starts_with('-')).collect();
+    let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
+    let pos = match tokens.iter().position(|t| *t == "mv") {
+        Some(p) => p,
+        None => return None,
+    };
+    let rest: Vec<&str> = tokens[pos + 1..].iter().copied().filter(|t| !t.starts_with('-')).collect();
     // `mv src... dest`: every src except the last is a source.
     if rest.len() < 2 {
         return None;
@@ -213,7 +220,7 @@ fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
                 rule_id: "bash:mv-out-of-zone",
                 tier: "critical",
                 reason: format!(
-                    "mv source `{s}` is outside the workspace; moving the user's files around out there is not allowed"
+                    "mv source `{s}` outside workspace; denied"
                 ),
             });
         }
@@ -226,13 +233,14 @@ fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
 /// told to prefer `fd` — same rules either way.
 fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
-    let mut tokens = lower.split_ascii_whitespace();
-    let head = tokens.next()?;
-    let is_find = head == "find" || head == "fd" || head == "fdfind";
-    if !is_find {
-        return None;
-    }
-    let rest: Vec<&str> = tokens.collect();
+    let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
+    // Same anti-laundering: find/fd may follow sudo/env/nohup.
+    let pos = match tokens.iter().position(|t| *t == "find" || *t == "fd" || *t == "fdfind") {
+        Some(p) => p,
+        None => return None,
+    };
+    let head = tokens[pos];
+    let rest: Vec<&str> = tokens[pos + 1..].to_vec();
     // fd takes the search root as a positional argument (defaults to
     // `.`); find takes start-point(s) right after the path list.
     let (roots, actions): (Vec<&str>, Vec<&str>) = if head == "find" {
@@ -264,7 +272,7 @@ fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
         return Some(RuleHit {
             rule_id: "bash:bulk-delete-out-of-zone",
             tier: "critical",
-            reason: "find/fd with -delete or -exec rm rooted outside the workspace; deleting the user's files there is not allowed".into(),
+            reason: "find/fd -delete/-exec rm rooted outside workspace; denied".into(),
         });
     }
     if !root_escapes && (delete_action || exec_rm) {
@@ -404,34 +412,34 @@ pub fn classify(command: &str, zone: &Path) -> Verdict {
     if classify_device_write(&lower) {
         hits.push(hit(
             "bash:device-write",
-            "device-level write (dd/mkfs/fdisk) refused".into(),
+            "device write (dd/mkfs/fdisk); denied".into(),
         ));
     }
     if classify_fork_bomb(&lower) {
-        hits.push(hit("bash:fork-bomb", "fork bomb pattern refused".into()));
+        hits.push(hit("bash:fork-bomb", "fork bomb; denied".into()));
     }
     if classify_disk_wipe(&lower) {
         hits.push(hit(
             "bash:disk-wipe",
-            "disk wipe (shred/wipefs/dd zero-fill) refused".into(),
+            "disk wipe (shred/wipefs/dd); denied".into(),
         ));
     }
     if classify_reverse_shell(&lower) {
         hits.push(hit(
             "bash:reverse-shell",
-            "reverse shell pattern refused".into(),
+            "reverse shell; denied".into(),
         ));
     }
     if classify_process_termination(&lower) {
         hits.push(hit(
             "bash:process-termination",
-            "killing PID 1 / init / systemd / sshd refused".into(),
+            "kill PID 1/init/systemd/sshd; denied".into(),
         ));
     }
     if classify_credential_write(&lower) {
         hits.push(hit(
             "bash:credential-write",
-            "writing to /etc/passwd|shadow|sudoers|sshd_config refused".into(),
+            "write /etc/passwd|shadow|sudoers; denied".into(),
         ));
     }
 
@@ -439,13 +447,13 @@ pub fn classify(command: &str, zone: &Path) -> Verdict {
     if classify_system_shutdown(&lower) {
         hits.push(hit(
             "bash:system-shutdown",
-            "system shutdown/reboot refused — the agent must never turn the machine off".into(),
+            "shutdown/reboot; denied".into(),
         ));
     }
     if classify_permission_escalation(&lower) {
         hits.push(hit(
             "bash:permission-escalation",
-            "broad permission change (chmod 777 / setuid) refused — make files world-writable or root-executable one deliberate call at a time, not by a sweep".into(),
+            "chmod 777/setuid; denied".into(),
         ));
     }
 
@@ -455,7 +463,7 @@ pub fn classify(command: &str, zone: &Path) -> Verdict {
         high.push(RuleHit {
             rule_id: "bash:pipe-to-shell",
             tier: "high",
-            reason: "download piped into a shell — check what it actually does".into(),
+            reason: "curl/wget | sh; review".into(),
         });
     }
 
@@ -590,6 +598,20 @@ mod tests {
             Verdict::Warn(h) => assert_eq!(h[0].rule_id, "bash:pipe-to-shell"),
             _ => panic!("expected warn"),
         }
+    }
+
+    #[test]
+    fn sudo_not_flagged_by_guard() {
+        // sudo itself passes through: the OS password prompt is the real
+        // gate. Guard rules fire on what the command DOES, not on sudo.
+        let z = zone();
+        for cmd in ["sudo ls", "sudo apt install -y fd-find", "sudo systemctl restart nginx"] {
+            assert_eq!(classify(cmd, &z), Verdict::Allow, "{cmd}");
+        }
+        // ...but sudo does not launder a disaster:
+        assert!(!classify("sudo rm -rf /", &z).allows());
+        assert!(!classify("sudo shutdown -h now", &z).allows());
+        assert!(!classify("sudo chmod 777 /", &z).allows());
     }
 
     #[test]
