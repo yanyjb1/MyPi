@@ -44,6 +44,10 @@ pub enum Entry {
     },
     // Session-level errors (HTTP failures, round-limit brakes...). Not persisted; memory stream only.
     Error { text: String },
+    // Session name marker on the conversation tree (pi's session_info). Persisted;
+    // the effective name is the nearest `name` entry looking back from the leaf,
+    // so branches inherit the name and renaming only affects the current branch.
+    Name { name: String },
 }
 
 // The tool result's view for the UI. **The model only ever receives plain text**;
@@ -129,6 +133,7 @@ impl Entry {
                 serde_json::json!({ "call_id": call_id, "name": name, "ok": ok, "result": result }).to_string(),
             ),
             Entry::Error { text } => ("error", serde_json::json!({ "text": text }).to_string()),
+            Entry::Name { name } => ("name", serde_json::json!({ "name": name }).to_string()),
         }
     }
 
@@ -178,6 +183,9 @@ impl Entry {
             "error" => Entry::Error {
                 text: v.get("text")?.as_str()?.to_string(),
             },
+            "name" => Entry::Name {
+                name: v.get("name")?.as_str()?.to_string(),
+            },
             _ => return None,
         })
     }
@@ -223,6 +231,8 @@ pub fn render_with_live(
                     out.push(Line::styled(part.to_string(), Style::new().fg(Color::Red)));
                 }
             }
+            // Name markers are metadata, not chat content: never a history row.
+            Entry::Name { .. } => {}
         }
     }
     // ---- streaming tail ----

@@ -491,7 +491,7 @@ impl App {
                         content: result.clone(),
                     });
                 }
-                chat::Entry::Error { .. } => {}
+                chat::Entry::Error { .. } | chat::Entry::Name { .. } => {}
             }
         }
         *cx.chat.lock().expect("chat 锁中毒") = rebuilt;
@@ -508,7 +508,7 @@ impl App {
 
         // 4) Session identity and state
         self.session_id = Some(id);
-        self.session_name = meta.and_then(|m| m.name);
+        self.session_name = st.effective_name(id).ok().flatten().or_else(|| meta.and_then(|m| m.name));
         self.cwd_seq = st
             .cwd_history(id)
             .ok()
@@ -871,6 +871,10 @@ impl App {
     }
 
     // /name [name]: name the session; no argument echoes the current name.
+    //
+    // The name is a tree marker (`Entry::Name`), not a session-column write:
+    // branches inherit the nearest name looking back from the leaf, and
+    // renaming on a branch never leaks to sibling branches.
     fn cmd_name(&mut self, arg: &str) {
         if arg.is_empty() {
             let cur = self.session_name.clone().unwrap_or_else(|| "（未命名）".into());
@@ -878,10 +882,17 @@ impl App {
             return;
         }
         self.session_name = Some(arg.to_string());
-        if let (Some(st), Some(sid)) = (self.store.as_mut(), self.session_id)
-            && let Err(e) = st.set_session_name(sid, Some(arg))
-        {
-            self.transcript.push(chat::Entry::Error { text: format!("命名写入失败：{e:#}") });
+        // Persist as a name marker hanging off the current leaf; it also
+        // lands in the in-memory transcript (skipped by the renderer).
+        let marker = chat::Entry::Name { name: arg.to_string() };
+        self.pending.push(marker.clone());
+        self.transcript.push(marker.clone());
+        if let (Some(st), Some(sid)) = (self.store.as_mut(), self.session_id) {
+            if let Err(e) = st.append(sid, std::slice::from_ref(&marker)) {
+                self.transcript.push(chat::Entry::Error { text: format!("命名写入失败：{e:#}") });
+            }
+            // Also update the legacy column so old resume listings still show it.
+            let _ = st.set_session_name(sid, Some(arg));
         }
         self.transcript.push(chat::Entry::Error { text: format!("已命名：{arg}") });
     }

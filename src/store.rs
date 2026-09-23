@@ -281,6 +281,21 @@ impl Store {
         Ok(out)
     }
 
+    // Effective session name: walk the projected path backwards and take
+    // the nearest `name` entry (pi's session_info semantic). Falls back to
+    // the legacy sessions.name column.
+    pub fn effective_name(&self, session_id: i64) -> Result<Option<String>> {
+        let entries = self.load_entries(session_id)?;
+        for e in entries.iter().rev() {
+            if let crate::tui::components::chat::Entry::Name { name } = e {
+                return Ok(Some(name.clone()));
+            }
+        }
+        self.conn
+            .query_row("SELECT name FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+            .map_err(Into::into)
+    }
+
     // Current tip row of a session.
     pub fn get_leaf(&self, session_id: i64) -> Result<Option<i64>> {
         self.conn
@@ -601,5 +616,27 @@ mod tree_tests {
         }).collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert_eq!(s.get_leaf(1).unwrap(), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+    use crate::tui::components::chat::Entry;
+
+    #[test]
+    fn name_marker_round_trips_and_resolves() {
+        let dir = std::env::temp_dir().join(format!("mypi-name-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Store::open(&dir.join("n.db")).unwrap();
+        let id = s.create_session("t", "/").unwrap();
+        s.append(id, &[Entry::User { content: "a".into() }]).unwrap();
+        s.append(id, &[Entry::Name { name: "我的分支".into() }]).unwrap();
+        s.append(id, &[Entry::Assistant { content: "b".into(), usage: None, reasoning: None }]).unwrap();
+        // Projection skips name in protocol; effective_name picks the nearest marker.
+        assert_eq!(s.effective_name(id).unwrap().as_deref(), Some("我的分支"));
+        // Round-trip through payload
+        let (kind, payload) = Entry::Name { name: "x".into() }.to_payload();
+        assert_eq!(Entry::from_payload(kind, &payload).unwrap(), Entry::Name { name: "x".into() });
     }
 }
