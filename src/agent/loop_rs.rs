@@ -117,7 +117,11 @@ pub struct TurnOutcome {
 #[derive(Debug, Clone)]
 pub enum ToolEvent {
     // A call is starting (the model named the tool).
-    Start { call_id: String, name: String, args_summary: String },
+    //
+    // `args` is the raw JSON argument string (the card renders it); `intent`
+    // is the model's own one-liner about what it is doing, surfaced while the
+    // tool blocks the conversation.
+    Start { call_id: String, name: String, args: String, intent: String },
     // Execution finished. `result` is the model-facing text; it is the only payload forwarded to the UI.
     Finish {
         call_id: String,
@@ -127,10 +131,14 @@ pub enum ToolEvent {
     },
 }
 
-// Condense arguments into a one-line UI summary. Full arguments can be
-// long; the UI only has room for the essentials.
-fn summarize_args(call: &ToolCall) -> String {
-    call.function.arguments_json().unwrap_or_default().to_string()
+// The model's stated intent for a call (`arguments.intent`). Empty when it
+// omitted the field — the UI then falls back to its generic label.
+fn extract_intent(call: &ToolCall) -> String {
+    call.function
+        .arguments_json()
+        .ok()
+        .and_then(|v| v.get("intent").and_then(|i| i.as_str()).map(String::from))
+        .unwrap_or_default()
 }
 // Run one full turn (see [`ToolEvent`] for the event contract).
 //
@@ -164,6 +172,15 @@ pub fn run(
         // the content received so far is usable; do not spend it on tool
         // requests.
         if !assistant.has_tool_calls() || assistant.stop_reason != StopReason::ToolCalls {
+            // Record the reply in the context **before** returning.
+            //
+            // The reply is a real conversation message: the next turn's
+            // request must contain it (the model has to see what it said
+            // itself, and the prefix cache keys on it), and `collect_turn`
+            // projects the persisted entries out of this very context — so
+            // without this push, model replies were never persisted at all
+            // (the DB held user/tool rows and nothing the model said).
+            ctx.messages.push(assistant.to_message());
             return Ok(TurnOutcome {
                 message: assistant,
                 tool_calls_made,
@@ -184,7 +201,8 @@ pub fn run(
             on_tool(ToolEvent::Start {
                 call_id: call.id.clone(),
                 name: call.name().to_string(),
-                args_summary: summarize_args(call),
+                args: call.function.arguments.clone(),
+                intent: extract_intent(call),
             });
             let (ok, content) = match tools.execute(call) {
                 Ok(text) => (true, text),
@@ -212,6 +230,7 @@ pub fn run(
             // otherwise the user just sees a reply that mysteriously
             // stops mid-thought.
             let last = client.stream(ctx, cfg.effective_max_tokens(ctx), &mut on_delta, &mut on_reasoning)?;
+            ctx.messages.push(last.to_message());
             return Ok(TurnOutcome {
                 message: last,
                 tool_calls_made,

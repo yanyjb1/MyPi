@@ -109,12 +109,18 @@ pub fn render_markdown(text: &str, p: &Palette) -> Vec<Line<'static>> {
                 }
             }
             Event::Code(t) => {
-                // Inline code: cyan. Kept simple as its own span appended to the row;
-                // mid-paragraph code splits the row in two — acceptable in a terminal chat.
-                out.push(Line::from(Span::styled(
-                    t.to_string(),
-                    Style::new().fg(Color::Cyan),
-                )));
+                // Inline code: cyan, **appended to the current row**.
+                //
+                // An earlier version pushed a fresh line here, so a sentence
+                // like "用 `edit` 改 `main.rs`" broke into one row per code
+                // span — the paragraph fell apart the moment it mentioned a
+                // filename. Inline code is inline; it belongs to its row.
+                if out.is_empty() {
+                    out.push(Line::from(Vec::new()));
+                }
+                if let Some(last) = out.last_mut() {
+                    last.spans.push(Span::styled(t.to_string(), Style::new().fg(Color::Cyan)));
+                }
             }
             Event::Html(_) | Event::InlineHtml(_) => {}
             Event::FootnoteReference(_) | Event::TaskListMarker(_) => {}

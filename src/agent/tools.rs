@@ -371,11 +371,12 @@ impl BuiltinTools {
                 json!({
                     "type": "object",
                     "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
                         "path": {"type": "string", "description": "文件路径，支持 ./ 与 ../"},
                         "old": {"type": "string", "description": "要被替换的原文，必须逐字符匹配且唯一"},
                         "new": {"type": "string", "description": "替换成的内容"}
                     },
-                    "required": ["path", "old", "new"]
+                    "required": ["intent", "path", "old", "new"]
                 }),
             ),
             ToolDef::function(
@@ -385,9 +386,10 @@ impl BuiltinTools {
                 json!({
                     "type": "object",
                     "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
                         "path": {"type": "string", "description": "目标目录，支持 ./ ../ ~/ 与绝对路径"}
                     },
-                    "required": ["path"]
+                    "required": ["intent", "path"]
                 }),
             ),
             ToolDef::function(
@@ -399,9 +401,10 @@ impl BuiltinTools {
                 json!({
                     "type": "object",
                     "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
                         "command": {"type": "string", "description": "单条 shell 命令"}
                     },
-                    "required": ["command"]
+                    "required": ["intent", "command"]
                 }),
             ),
             ToolDef::function(
@@ -411,6 +414,7 @@ impl BuiltinTools {
                 json!({
                     "type": "object",
                     "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
                         "path": {"type": "string", "description": "文件路径"},
                         "edits": {
                             "type": "array",
@@ -424,7 +428,7 @@ impl BuiltinTools {
                             }
                         }
                     },
-                    "required": ["path", "edits"]
+                    "required": ["intent", "path", "edits"]
                 }),
             ),
         ]

@@ -287,7 +287,10 @@ impl App {
         // 4) Echo + editor draft semantics: navigating to a user entry puts
         // that message back into the editor (pi behavior) — you usually
         // rewound in order to rewrite it.
-        self.session.echo(entry::Entry::Error { text: format!("已回到节点 #{seq}（后续消息仍保留在树中）") });
+        self.session.echo(entry::Entry::System {
+            text: format!("已回到节点 #{seq}（后续消息仍保留在树中）"),
+            align: entry::Align::Center,
+        });
         if let Some(d) = draft {
             self.load_into_editor(&d);
         }
@@ -347,14 +350,14 @@ impl App {
                         tool_calls: Vec::new(),
                     });
                 }
-                entry::Entry::ToolRequest { call_id, name, object } => {
-                    // object stores the full argument JSON; the Assistant(tool_calls) follows right after
+                entry::Entry::ToolRequest { call_id, name, args, .. } => {
+                    // args is the raw argument JSON; the Assistant(tool_calls) follows right after
                     let call = crate::ai::types::ToolCall {
                         id: call_id.clone(),
                         kind: "function".into(),
                         function: crate::ai::types::FunctionCall {
                             name: name.clone(),
-                            arguments: object.clone(),
+                            arguments: args.clone(),
                         },
                     };
                     rebuilt = rebuilt.push(Message::Assistant {
@@ -371,7 +374,7 @@ impl App {
                         content: result.clone(),
                     });
                 }
-                entry::Entry::Error { .. } | entry::Entry::Name { .. } => {}
+                entry::Entry::Error { .. } | entry::Entry::Name { .. } | entry::Entry::System { .. } => {}
             }
         }
         self.session.rebuild_chat(&entries);
@@ -835,8 +838,9 @@ impl App {
                 let old = self.session.set_cwd(real.clone());
                 let seq = self.session.bump_cwd_seq();
                 self.session.handle(SessionEvent::SetCwd { seq, path: real.display().to_string() });
-                self.session.echo(entry::Entry::Error {
+                self.session.echo(entry::Entry::System {
                     text: format!("工作目录：{} → {}（已落盘）", old.display(), real.display()),
+                    align: entry::Align::Center,
                 });
             }
             Ok(_) => {
@@ -862,7 +866,10 @@ impl App {
         // One protocol event: marker entry, persistence, legacy column —
         // all the session's business now.
         self.session.handle(SessionEvent::NameMarker(arg.to_string()));
-        self.session.echo(entry::Entry::Error { text: format!("已命名：{arg}") });
+        self.session.echo(entry::Entry::System {
+            text: format!("已命名：{arg}"),
+            align: entry::Align::Center,
+        });
     }
 
     // Build the resume picker entries for sessions recorded under `root`.
@@ -929,8 +936,9 @@ impl App {
         match self.cfg.as_ref().expect("cfg ready").borrow().model_by_id(arg).ok() {
             Some(_) => match self.cfg.as_ref().expect("cfg ready").borrow().save_default(arg) {
                 Ok(()) => {
-                    self.session.echo(entry::Entry::Error {
+                    self.session.echo(entry::Entry::System {
                         text: format!("默认模型已设为 {arg}，已写入 config.yaml"),
+                        align: entry::Align::Center,
                     });
                 }
                 Err(e) => {
@@ -969,8 +977,9 @@ impl App {
                     &rm,
                 );
                 *self.current_model.borrow_mut() = new_model;
-                self.session.echo(entry::Entry::Error {
+                self.session.echo(entry::Entry::System {
                     text: format!("已切换到 {} ({})，仅本会话生效", arg, Config::display_name(&rm.entry)),
+                    align: entry::Align::Center,
                 });
             }
             Err(_) => {
@@ -1191,6 +1200,15 @@ fn draw_frame(
             live_reasoning: {
                 let sv = app.session.stream_view();
                 if sv.reasoning.is_empty() { None } else { Some(sv.reasoning.as_str()) }
+            },
+            // A tool is running exactly while the newest entry is its request
+            // (the matching result has not landed yet): its own stated intent
+            // takes the live row — far more useful than a bare "thinking".
+            live_intent: match app.session.transcript().last() {
+                Some(entry::Entry::ToolRequest { intent, .. }) if !intent.is_empty() => {
+                    Some(intent.as_str())
+                }
+                _ => None,
             },
             reasoning_done: app.session.stream_view().reasoning_done,
             streaming: {

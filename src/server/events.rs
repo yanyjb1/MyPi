@@ -25,8 +25,9 @@ pub enum SessionEvent {
     Delta(String),
     /// Streaming reasoning delta.
     ReasoningDelta(String),
-    /// A tool started executing.
-    ToolStart { call_id: String, name: String, args_summary: String },
+    /// A tool started executing. `args` is the raw JSON argument string;
+    /// `intent` is the model's one-line statement of purpose.
+    ToolStart { call_id: String, name: String, args: String, intent: String },
     /// A tool finished executing.
     ToolFinish {
         call_id: String,

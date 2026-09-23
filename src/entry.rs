@@ -24,9 +24,15 @@ pub enum Entry {
         usage: Option<UsageSummary>,
         reasoning: Option<String>,
     },
-    // Tool call request: the model named a tool. Displays the object argument (e.g. a path).
-    // `call_id` is the protocol pairing key (persisted; resume rebuilds protocol messages from it).
-    ToolRequest { call_id: String, name: String, object: String },
+    // Tool call request: the model named a tool.
+    //
+    // `args` is the **raw JSON argument string** exactly as the model sent it —
+    // the card renders it (syntax-highlighted) and resume replays it verbatim
+    // into the protocol message, so a rebuilt history is byte-identical.
+    // `intent` is the model's own one-line "what am I about to do", shown in the
+    // live slot while the (blocking) tool runs.
+    // `call_id` is the protocol pairing key.
+    ToolRequest { call_id: String, name: String, args: String, intent: String },
     // Tool call result. `ok` decides the card color.
     // `result` is the **exact text sent to the model** — the only thing persisted;
     // the rendering (view) is **synthesized at render time** from (name, ok, result), never stored.
@@ -42,6 +48,21 @@ pub enum Entry {
     // the effective name is the nearest `name` entry looking back from the leaf,
     // so branches inherit the name and renaming only affects the current branch.
     Name { name: String },
+    // A system notice (`/model` switched, context compacted, `/resume` restored...).
+    //
+    // Unlike the fixed kinds above, the **emitter chooses the rendering**: it
+    // constructs this entry with the alignment it wants, so a future feature
+    // (context-compaction reports, model switches) can present itself without
+    // the chat renderer learning about it. Persisted like everything else.
+    System { text: String, align: Align },
+}
+
+// How a [`Entry::System`] notice lines itself up. The emitter picks; the
+// renderer only obeys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Align {
+    Left,
+    Center,
 }
 
 // The tool result's view for the UI. **The model only ever receives plain text**;
@@ -118,9 +139,12 @@ impl Entry {
                 serde_json::json!({ "content": content, "usage": usage, "reasoning": reasoning })
                     .to_string(),
             ),
-            Entry::ToolRequest { call_id, name, object } => (
+            Entry::ToolRequest { call_id, name, args, intent } => (
                 "tool_request",
-                serde_json::json!({ "call_id": call_id, "name": name, "object": object }).to_string(),
+                serde_json::json!({
+                    "call_id": call_id, "name": name, "args": args, "intent": intent
+                })
+                .to_string(),
             ),
             Entry::ToolResult { call_id, name, ok, result } => (
                 "tool_result",
@@ -128,6 +152,10 @@ impl Entry {
             ),
             Entry::Error { text } => ("error", serde_json::json!({ "text": text }).to_string()),
             Entry::Name { name } => ("name", serde_json::json!({ "name": name }).to_string()),
+            Entry::System { text, align } => (
+                "system",
+                serde_json::json!({ "text": text, "align": align }).to_string(),
+            ),
         }
     }
 
@@ -143,11 +171,24 @@ impl Entry {
                 usage: v.get("usage").and_then(|u| serde_json::from_value(u.clone()).ok()),
                 reasoning: v.get("reasoning").and_then(|r| r.as_str()).map(String::from),
             },
-            "tool_request" => Entry::ToolRequest {
-                call_id: v.get("call_id").and_then(|c| c.as_str()).unwrap_or_default().to_string(),
-                name: v.get("name")?.as_str()?.to_string(),
-                object: v.get("object")?.as_str()?.to_string(),
-            },
+            "tool_request" => {
+                // `args` is the current key; `object` is the pre-refactor one
+                // (it held a bare path, and resume mis-replayed it as JSON —
+                // reading it keeps old sessions loadable, empty args is the
+                // honest value for a card we cannot reconstruct).
+                let args = v
+                    .get("args")
+                    .and_then(|a| a.as_str())
+                    .or_else(|| v.get("object").and_then(|o| o.as_str()))
+                    .unwrap_or_default()
+                    .to_string();
+                Entry::ToolRequest {
+                    call_id: v.get("call_id").and_then(|c| c.as_str()).unwrap_or_default().to_string(),
+                    name: v.get("name")?.as_str()?.to_string(),
+                    args,
+                    intent: v.get("intent").and_then(|i| i.as_str()).unwrap_or_default().to_string(),
+                }
+            }
             "tool_result" => Entry::ToolResult {
                 call_id: v.get("call_id").and_then(|c| c.as_str()).unwrap_or_default().to_string(),
                 name: v.get("name")?.as_str()?.to_string(),
@@ -179,6 +220,13 @@ impl Entry {
             },
             "name" => Entry::Name {
                 name: v.get("name")?.as_str()?.to_string(),
+            },
+            "system" => Entry::System {
+                text: v.get("text")?.as_str()?.to_string(),
+                align: v
+                    .get("align")
+                    .and_then(|a| serde_json::from_value(a.clone()).ok())
+                    .unwrap_or(Align::Left),
             },
             _ => return None,
         })

@@ -11,6 +11,7 @@ pub mod completion;
 pub mod components;
 pub mod editor;
 pub mod history;
+pub mod highlight;
 pub mod keys;
 pub mod leaf;
 pub mod layout;

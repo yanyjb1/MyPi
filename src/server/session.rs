@@ -44,6 +44,9 @@ pub struct SessionState {
     stream: StreamView,
     // Last turn's usage (TurnDone), consumed by the caller's cost tracker.
     last_usage: Option<Usage>,
+    // Last turn's usage snapshot, parked for `Commit` to fold into the reply
+    // entry the runner assembles (which carries no usage of its own).
+    pending_usage: Option<Usage>,
 }
 
 impl SessionState {
@@ -57,6 +60,7 @@ impl SessionState {
             cwd_seq: 0,
             stream: StreamView::default(),
             last_usage: None,
+            pending_usage: None,
         }
     }
 
@@ -81,8 +85,8 @@ impl SessionState {
                 self.stream.reasoning.push_str(&r);
                 Change::Stream
             }
-            SessionEvent::ToolStart { call_id, name, args_summary } => {
-                let e = Entry::ToolRequest { call_id, name, object: args_summary };
+            SessionEvent::ToolStart { call_id, name, args, intent } => {
+                let e = Entry::ToolRequest { call_id, name, args, intent };
                 self.pending.push(e.clone());
                 self.transcript.push(e);
                 Change::Transcript
@@ -120,15 +124,36 @@ impl SessionState {
                 };
                 self.pending.push(e.clone());
                 self.transcript.push(e);
+                self.pending_usage = Some(u.clone());
                 self.last_usage = Some(u);
                 self.stream.active = false;
                 Change::TurnDone
             }
-            SessionEvent::Commit(entries) => {
-                // Persist the finalized round in one shot. `entries` is
-                // the runner's authoritative assembly (trusted over our
-                // incremental pending mirror, which also holds TurnDone's
-                // Assistant entry that the runner's list lacks).
+            SessionEvent::Commit(mut entries) => {
+                // Persist the finalized round in one shot. `entries` is the
+                // runner's authoritative assembly, so it wins over our
+                // incremental pending mirror.
+                //
+                // The one thing it **cannot** carry is the thinking chain:
+                // reasoning is absent from the wire `Message`, so it never
+                // enters the chat context the runner projects from. The
+                // session owns that buffer — fold it into the reply entry
+                // here, or it dies with the turn. (A turn with tool rounds
+                // accumulates each round's reasoning into this one entry.)
+                let reasoning = std::mem::take(&mut self.stream.reasoning);
+                let usage = self.pending_usage.take().map(|u| Entry::usage_summary(&u));
+                if let Some(Entry::Assistant { reasoning: r, usage: u, .. }) = entries
+                    .iter_mut()
+                    .rev()
+                    .find(|e| matches!(e, Entry::Assistant { .. }))
+                {
+                    if !reasoning.is_empty() {
+                        *r = Some(reasoning);
+                    }
+                    // Same reason as reasoning: the wire `Message` has no usage
+                    // field, so the runner cannot carry it here either.
+                    *u = usage;
+                }
                 if let Some((st, sid)) = self.persistence()
                     && let Err(e) = st.append(sid, &entries)
                 {
@@ -588,6 +613,21 @@ mod tests {
 
     fn st() -> SessionState {
         SessionState::new(None) // in-memory mode
+    }
+
+    #[test]
+    fn reasoning_survives_into_the_assistant_entry() {
+        let mut s = st();
+        let _ = s.handle(SessionEvent::ReasoningDelta("先想".into()));
+        let _ = s.handle(SessionEvent::ReasoningDelta("再想".into()));
+        let _ = s.handle(SessionEvent::Delta("答案".into()));
+        let _ = s.handle(SessionEvent::TurnDone(Usage::default(), crate::ai::types::StopReason::Stop));
+        let a = s.transcript().iter().find_map(|e| match e {
+            Entry::Assistant { content, reasoning, .. } => Some((content.clone(), reasoning.clone())),
+            _ => None,
+        }).expect("必须有一条 Assistant");
+        assert_eq!(a.0, "答案");
+        assert_eq!(a.1.as_deref(), Some("先想再想"), "reasoning 必须进入条目");
     }
 
     #[test]

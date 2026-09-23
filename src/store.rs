@@ -423,7 +423,7 @@ mod tests {
         let id = s.create_session("2026-09-22 14:30:05", "/tmp").unwrap();
         let entries = vec![
             Entry::User { content: "你好\n世界".into() },
-            Entry::ToolRequest { call_id: "c1".into(), name: "edit".into(), object: "./a.txt".into() },
+            Entry::ToolRequest { call_id: "c1".into(), name: "edit".into(), args: r#"{"path":"./a.txt"}"#.into(), intent: String::new() },
             Entry::ToolResult {
                 call_id: "c1".into(),
                 name: "edit".into(),

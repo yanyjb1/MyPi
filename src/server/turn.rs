@@ -53,8 +53,8 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             let _ = send(SessionEvent::ReasoningDelta(r.to_string()));
         }, |ev| {
             let _ = send(match ev {
-                crate::agent::loop_rs::ToolEvent::Start { call_id, name, args_summary } =>
-                    SessionEvent::ToolStart { call_id, name, args_summary },
+                crate::agent::loop_rs::ToolEvent::Start { call_id, name, args, intent } =>
+                    SessionEvent::ToolStart { call_id, name, args, intent },
                 crate::agent::loop_rs::ToolEvent::Finish { call_id, name, ok, result } =>
                     SessionEvent::ToolFinish { call_id, name, ok, result },
             });
@@ -122,13 +122,15 @@ pub fn entries_to_context(entries: &[Entry]) -> ChatContext {
                     tool_calls: Vec::new(),
                 });
             }
-            Entry::ToolRequest { call_id, name, object } => {
+            Entry::ToolRequest { call_id, name, args, .. } => {
+                // `args` is replayed verbatim: the model must see the call it
+                // actually made, not a reconstruction.
                 let call = crate::ai::types::ToolCall {
                     id: call_id.clone(),
                     kind: "function".into(),
                     function: crate::ai::types::FunctionCall {
                         name: name.clone(),
-                        arguments: object.clone(),
+                        arguments: args.clone(),
                     },
                 };
                 rebuilt = rebuilt.push(crate::ai::types::Message::Assistant {
@@ -145,7 +147,9 @@ pub fn entries_to_context(entries: &[Entry]) -> ChatContext {
                     content: result.clone(),
                 });
             }
-            Entry::Error { .. } | Entry::Name { .. } => {}
+            // System notices and Name markers are UI/persistence metadata:
+            // neither has a protocol role.
+            Entry::Error { .. } | Entry::Name { .. } | Entry::System { .. } => {}
         }
     }
     // Repair pass: drop trailing requests whose results never arrived
@@ -200,17 +204,21 @@ pub(crate) fn collect_turn(chat: &ChatContext, text: &str) -> Vec<Entry> {
                 let c = content.clone().unwrap_or_default();
                 if !tool_calls.is_empty() {
                     for tc in tool_calls {
-                        // Extract the path from the JSON arguments; empty when absent
-                        let object = tc
-                            .function
-                            .arguments_json()
-                            .ok()
-                            .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(String::from))
-                            .unwrap_or_default();
+                        // Keep the raw arguments **verbatim**: the card renders
+                        // them and resume replays them, so any extraction here
+                        // would lose information (an earlier version stored
+                        // only `path`, which blanked every bash card and
+                        // mis-replayed non-JSON paths as arguments).
                         out.push(Entry::ToolRequest {
                             call_id: tc.id.clone(),
                             name: tc.function.name.clone(),
-                            object,
+                            args: tc.function.arguments.clone(),
+                            intent: tc
+                                .function
+                                .arguments_json()
+                                .ok()
+                                .and_then(|v| v.get("intent").and_then(|i| i.as_str()).map(String::from))
+                                .unwrap_or_default(),
                         });
                     }
                     // The tool_calls assistant appears only as a request card;
@@ -258,7 +266,7 @@ mod tests {
         // Complete chain: request + result survive.
         let complete = vec![
             Entry::User { content: "q".into() },
-            Entry::ToolRequest { call_id: "c1".into(), name: "bash".into(), object: "{}".into() },
+            Entry::ToolRequest { call_id: "c1".into(), name: "bash".into(), args: "{}".into(), intent: String::new() },
             Entry::ToolResult { call_id: "c1".into(), name: "bash".into(), ok: true, result: "out".into() },
             Entry::Assistant { content: "done".into(), usage: None, reasoning: None },
         ];
@@ -270,7 +278,7 @@ mod tests {
         // Dangling request tail: dropped (never a half-open tool_calls).
         let dangling = vec![
             Entry::User { content: "q".into() },
-            Entry::ToolRequest { call_id: "c2".into(), name: "bash".into(), object: "{}".into() },
+            Entry::ToolRequest { call_id: "c2".into(), name: "bash".into(), args: "{}".into(), intent: String::new() },
         ];
         let ctx = entries_to_context(&dangling);
         assert_eq!(ctx.messages.len(), 2); // system + user

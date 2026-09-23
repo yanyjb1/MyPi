@@ -19,3 +19,4 @@ unicode-width = "0.2.2"
 rusqlite = { version = "0.37", features = ["bundled"] }
 # Markdown → 事件流解析（pull 式迭代器，映射成 ratatui 的 Span/Line）
 pulldown-cmark = "0.13"
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
