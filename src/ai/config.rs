@@ -459,6 +459,30 @@ default: local:vendor-a/model-x
         assert!(cfg.model_by_id("nope:vendor-b/model-y").is_err());
     }
 
+    /// A model id may itself contain colons (`global:x` — legacy vendor
+    /// prefixes live inside the id). Addressing splits on the **first**
+    /// colon only.
+    #[test]
+    fn model_id_may_contain_colons() {
+        let cfg: Config = serde_yaml::from_str(
+            r#"
+providers:
+  local:
+    base_url: http://x/v1
+    models:
+      - id: global:gpt-5.6-luna
+        name: GPT5.6L
+default: local:global:gpt-5.6-luna
+"#,
+        )
+        .unwrap();
+        let rm = cfg.default_model().unwrap();
+        assert_eq!(rm.provider_name, "local");
+        assert_eq!(rm.entry.id, "global:gpt-5.6-luna");
+        // The wire id sent to the server keeps the colon.
+        assert_eq!(rm.entry.id.split(':').count(), 2);
+    }
+
     /// `default:` is mandatory — no first-model fallback.
     #[test]
     fn default_is_mandatory() {
