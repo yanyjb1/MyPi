@@ -1073,15 +1073,8 @@ impl App {
 // i.e. ~/.local/share/mypi/sessions.db by default. Legacy layout support:
 // `~/.local/share/mypi` used to be the SQLite file itself — renamed to
 // sessions.db on first open of the new layout.
-fn xdg_data_base() -> std::path::PathBuf {
-    std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-}
-
 fn db_path() -> std::path::PathBuf {
-    xdg_data_base().join("mypi").join("sessions.db")
+    crate::xdg::data_dir().join("sessions.db")
 }
 
 /// Migrate the legacy database file (a bare `mypi` file under
@@ -1281,7 +1274,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let max_tokens = model.max_output_tokens.unwrap_or(4096) as u32;
     let (session, rx) = crate::server::Session::new(
         {
-            migrate_legacy_db(&xdg_data_base());
+            migrate_legacy_db(&crate::xdg::data_dir());
             crate::server::SessionState::new(crate::store::Store::open(&db_path()).ok())
         },
         client,
