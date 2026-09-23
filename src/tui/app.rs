@@ -1382,7 +1382,7 @@ fn display_name(app: &App) -> String {
 }
 
 // Run the TUI (blocking; Esc / Ctrl+C exits).
-pub fn run_tui(cfg: Config) -> Result<()> {
+pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     // Session-scoped mutable config: /model and /switch both change the
     // current model, hence RefCell. Main thread only (Rc is not Send);
     // the background turn thread gets its own cloned Client.
@@ -1412,6 +1412,16 @@ pub fn run_tui(cfg: Config) -> Result<()> {
     ));
     let mut app = App::new(cwd.read().expect("cwd 锁中毒").clone());
     app.cfg = Some(cfg.clone());
+    // `--resume`: open the session picker before the first frame (the
+    // same surface /resume shows; Esc here simply starts a fresh session).
+    if cli.resume
+        && let Some(st) = app.store.as_ref()
+        && let Ok(items) = App::build_resume_items(st, &cwd.read().expect("cwd 锁中毒").clone())
+        && !items.is_empty()
+    {
+        // No store / no sessions: fall through to a fresh session.
+        app.resume_pick = Some((items, 0));
+    }
     let ctx_limit = model.context_window;
     let max_tokens = model.max_output_tokens.unwrap_or(4096) as u32;
 
