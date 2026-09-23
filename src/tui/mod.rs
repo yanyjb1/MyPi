@@ -19,3 +19,5 @@ pub mod text;
 pub mod theme;
 pub mod undo;
 pub mod view;
+pub mod zones;
+pub mod zones_impl;

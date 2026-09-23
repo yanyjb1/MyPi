@@ -44,6 +44,7 @@ use crate::tui::editor::{Editor, Effect};
 use crate::tui::events::AppEvent;
 use crate::tui::history;
 use crate::tui::keys::{Action, KeyContext, translate_with};
+use crate::tui::zones::Zone as _;
 use crate::tui::path;
 use crate::tui::layout as tlayout;
 use crate::tui::text;
@@ -97,18 +98,13 @@ struct App {
     // Reply currently streaming (the in-progress slot). Swapped for an
     // Assistant entry once final; never touches the DB meanwhile.
     streaming: String,
-    // Scroll-follow: false once scrolled off the bottom, true when back at it.
-    scroll_pinned: bool,
-    // History viewport offset (when unpinned; 0 = bottom).
-    chat_scroll: usize,
+    // History-zone state (scroll follow, folds). Owned by the zone; the
+    // app reads through it when rendering.
+    history: crate::tui::zones_impl::HistoryState,
     // Reasoning buffer currently streaming (in-progress slot; enters an entry when final).
     reasoning_buf: String,
     // Whether content has started (reasoning slot stops updating afterwards).
     reasoning_done: bool,
-    // Global reasoning fold (Ctrl+T toggles). false = expanded by default.
-    reasoning_folded: bool,
-    // Global tool-output expansion (Ctrl+O toggles). false = folded per-tool thresholds.
-    tools_expanded: bool,
     // Name set explicitly via /name; None = statusline synthesizes one.
     session_name: Option<String>,
     // Config handle: command argument completion reads the model list.
@@ -159,12 +155,9 @@ impl App {
             transcript: Vec::new(),
             streaming: String::new(),
             streaming_active: false,
-            scroll_pinned: true,
-            chat_scroll: 0,
+            history: crate::tui::zones_impl::HistoryState::default(),
             reasoning_buf: String::new(),
             reasoning_done: false,
-            reasoning_folded: false,
-            tools_expanded: false,
             input_history: history::History::new(),
             popup: path::CompletionPopup::default(),
             tracker: CostTracker::default(),
@@ -629,11 +622,11 @@ impl App {
                 // Global reasoning fold. History render height is
                 // recomputed per frame by estimated_height, so the next
                 // frame picks the change up automatically.
-                self.reasoning_folded = !self.reasoning_folded;
+                self.history.handle(Action::ToggleReasoning);
             }
             Action::ToggleTools => {
                 // Global tool-output expansion. Same mechanism; next frame applies it.
-                self.tools_expanded = !self.tools_expanded;
+                self.history.handle(Action::ToggleTools);
             }
 
             // Unrecognized key (the default variant): legitimately ignored.
@@ -1048,8 +1041,8 @@ impl App {
         self.reasoning_buf.clear();
         self.reasoning_done = false;
         self.streaming_active = true;
-        self.scroll_pinned = true;
-        self.chat_scroll = 0;
+        self.history.scroll_pinned = true;
+        self.history.chat_scroll = 0;
         self.interrupt.store(false, Ordering::Relaxed);
         // First turn after resume: **append** the restored working
         // directory to the user message (history untouched, prefix cache
@@ -1307,13 +1300,13 @@ pub fn run_tui(cfg: Config) -> Result<()> {
                         // zeroed) restores follow mode.
                         match m.kind {
                             MouseEventKind::ScrollUp => {
-                                app.scroll_pinned = false;
-                                app.chat_scroll = app.chat_scroll.saturating_add(3);
+                                app.history.scroll_pinned = false;
+                                app.history.chat_scroll = app.history.chat_scroll.saturating_add(3);
                             }
                             MouseEventKind::ScrollDown => {
-                                app.chat_scroll = app.chat_scroll.saturating_sub(3);
-                                if app.chat_scroll == 0 {
-                                    app.scroll_pinned = true;
+                                app.history.chat_scroll = app.history.chat_scroll.saturating_sub(3);
+                                if app.history.chat_scroll == 0 {
+                                    app.history.scroll_pinned = true;
                                 }
                             }
                             _ => {}
@@ -1364,10 +1357,10 @@ pub fn run_tui(cfg: Config) -> Result<()> {
             terminal.draw(|f| {
                 let vs = ViewState {
                     history: &app.transcript,
-                    chat_scroll: app.chat_scroll,
-                    scroll_pinned: app.scroll_pinned,
-                    show_reasoning: !app.reasoning_folded,
-                    tools_expanded: app.tools_expanded,
+                    chat_scroll: app.history.chat_scroll,
+                    scroll_pinned: app.history.scroll_pinned,
+                    show_reasoning: !app.history.reasoning_folded,
+                    tools_expanded: app.history.tools_expanded,
                     live_reasoning: if app.reasoning_buf.is_empty() { None } else { Some(app.reasoning_buf.as_str()) },
                     reasoning_done: app.reasoning_done,
                     streaming: if app.streaming.is_empty() { None } else { Some(app.streaming.as_str()) },
