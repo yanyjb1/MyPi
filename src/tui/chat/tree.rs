@@ -6,8 +6,6 @@
 //! entries, so the render layer and the protocol agree on "current
 //! branch" without duplicating the projection logic.
 
-use crate::ai::config::Config;
-use crate::server::events::SessionEvent;
 use crate::ai::types::{Context as ChatContext, Message};
 use crate::tui::app::App;
 use crate::entry;
