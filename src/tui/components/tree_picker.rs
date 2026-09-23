@@ -5,7 +5,7 @@
 //! pointer (append-only tree — nothing is deleted) and the app reprojects.
 
 use crate::store::TreeNode;
-use crate::tui::components::chat::Entry;
+use crate::entry::Entry;
 use crate::tui::text::display_width;
 use crate::tui::theme::Palette;
 use ratatui::style::{Color, Modifier, Style};

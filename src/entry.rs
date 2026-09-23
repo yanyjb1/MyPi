@@ -1,0 +1,186 @@
+//! Conversation entries — the **data model**, shared by the store and the
+//! TUI. Deliberately free of rendering dependencies (no ratatui, no
+//! Palette): both the SQLite persistence layer and the view layer consume
+//! this enum, so it must live below both (this reverses the old
+//! store→tui reverse dependency, flaw A in ARCHITECTURE.md).
+//!
+//! Rendering (`crate::tui::components::chat`) dispatches on these kinds;
+//! persistence (`crate::store`) serializes them via to/from_payload.
+
+
+// One history entry: the four message kinds plus a session-level error.
+//
+// Persisted to the SQLite `entries` table: `seq` monotonically increasing from 1,
+// `kind` stored as text, `payload` as JSON. The render layer only knows this enum —
+// no string-prefix contracts anymore.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Entry {
+    // A user message.
+    User { content: String },
+    // Model reply (final). `usage` feeds the stats line; optional.
+    // `reasoning` is the thinking chain (display + persistence only; never sent back in requests).
+    Assistant {
+        content: String,
+        usage: Option<UsageSummary>,
+        reasoning: Option<String>,
+    },
+    // Tool call request: the model named a tool. Displays the object argument (e.g. a path).
+    // `call_id` is the protocol pairing key (persisted; resume rebuilds protocol messages from it).
+    ToolRequest { call_id: String, name: String, object: String },
+    // Tool call result. `ok` decides the card color.
+    // `result` is the **exact text sent to the model** — the only thing persisted;
+    // the rendering (view) is **synthesized at render time** from (name, ok, result), never stored.
+    ToolResult {
+        call_id: String,
+        name: String,
+        ok: bool,
+        result: String,
+    },
+    // Session-level errors (HTTP failures, round-limit brakes...). Not persisted; memory stream only.
+    Error { text: String },
+    // Session name marker on the conversation tree (pi's session_info). Persisted;
+    // the effective name is the nearest `name` entry looking back from the leaf,
+    // so branches inherit the name and renaming only affects the current branch.
+    Name { name: String },
+}
+
+// The tool result's view for the UI. **The model only ever receives plain text**;
+// this enum only declares how the UI draws it — no protocol role, **never persisted** —
+// synthesized at render time by `synthesize` from (tool name, ok, result text).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ToolView {
+    // Plain text, no markdown rendering, auto-folded beyond 5 lines.
+    Plain { text: String },
+    // Line diff: deletions on red, insertions on green (edit tool).
+    Diff { deletions: Vec<String>, insertions: Vec<String> },
+}
+
+impl ToolView {
+    // Synthesize the UI presentation from data (tool name / ok / model-facing text).
+    //
+    // The single source of the synthesis rules. Only the result text is persisted;
+    // the view is a derived UI concept and takes no part in persistence.
+    pub fn synthesize(name: &str, ok: bool, result: &str) -> ToolView {
+        if !ok {
+            return ToolView::Plain { text: result.to_string() };
+        }
+        match name {
+            "edit" | "mass_edit" => {
+                // Diff-shaped text (- / + lines) splits into a Diff; otherwise plain text
+                let mut deletions = Vec::new();
+                let mut insertions = Vec::new();
+                for line in result.lines() {
+                    if let Some(rest) = line.strip_prefix("- ") {
+                        deletions.push(rest.to_string());
+                    } else if let Some(rest) = line.strip_prefix("+ ") {
+                        insertions.push(rest.to_string());
+                    }
+                }
+                if deletions.is_empty() && insertions.is_empty() {
+                    ToolView::Plain { text: result.to_string() }
+                } else {
+                    ToolView::Diff { deletions, insertions }
+                }
+            }
+            _ => ToolView::Plain { text: result.to_string() },
+        }
+    }
+}
+
+// Fields the stats line needs (the minimal set extracted from usage).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UsageSummary {
+    pub total_tokens: u64,
+    pub prompt_tokens: u64,
+    pub cached_tokens: u64,
+    pub completion_tokens: u64,
+    pub reasoning_tokens: u64,
+}
+
+impl Entry {
+    // Build a stats summary from the ai layer's usage.
+    pub fn usage_summary(u: &crate::ai::types::Usage) -> UsageSummary {
+        UsageSummary {
+            total_tokens: u.total_tokens,
+            prompt_tokens: u.prompt_tokens,
+            cached_tokens: u.cached_tokens.unwrap_or(0),
+            completion_tokens: u.completion_tokens,
+            reasoning_tokens: u.reasoning_tokens.unwrap_or(0),
+        }
+    }
+
+    // Serialize to (kind, payload_json). Used for DB writes.
+    pub fn to_payload(&self) -> (&'static str, String) {
+        match self {
+            Entry::User { content } => ("user", serde_json::json!({ "content": content }).to_string()),
+            Entry::Assistant { content, usage, reasoning } => (
+                "assistant",
+                serde_json::json!({ "content": content, "usage": usage, "reasoning": reasoning })
+                    .to_string(),
+            ),
+            Entry::ToolRequest { call_id, name, object } => (
+                "tool_request",
+                serde_json::json!({ "call_id": call_id, "name": name, "object": object }).to_string(),
+            ),
+            Entry::ToolResult { call_id, name, ok, result } => (
+                "tool_result",
+                serde_json::json!({ "call_id": call_id, "name": name, "ok": ok, "result": result }).to_string(),
+            ),
+            Entry::Error { text } => ("error", serde_json::json!({ "text": text }).to_string()),
+            Entry::Name { name } => ("name", serde_json::json!({ "name": name }).to_string()),
+        }
+    }
+
+    // Restore from (kind, payload_json). Used for DB reads.
+    pub fn from_payload(kind: &str, payload: &str) -> Option<Entry> {
+        let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+        Some(match kind {
+            "user" => Entry::User {
+                content: v.get("content")?.as_str()?.to_string(),
+            },
+            "assistant" => Entry::Assistant {
+                content: v.get("content")?.as_str()?.to_string(),
+                usage: v.get("usage").and_then(|u| serde_json::from_value(u.clone()).ok()),
+                reasoning: v.get("reasoning").and_then(|r| r.as_str()).map(String::from),
+            },
+            "tool_request" => Entry::ToolRequest {
+                call_id: v.get("call_id").and_then(|c| c.as_str()).unwrap_or_default().to_string(),
+                name: v.get("name")?.as_str()?.to_string(),
+                object: v.get("object")?.as_str()?.to_string(),
+            },
+            "tool_result" => Entry::ToolResult {
+                call_id: v.get("call_id").and_then(|c| c.as_str()).unwrap_or_default().to_string(),
+                name: v.get("name")?.as_str()?.to_string(),
+                ok: v.get("ok")?.as_bool()?,
+                // Legacy DBs store view without result: recover from view once (migration path)
+                result: v.get("result").and_then(|r| r.as_str()).map(String::from).unwrap_or_else(|| {
+                    let view = v.get("view").cloned();
+                    match view.and_then(|view| serde_json::from_value::<ToolView>(view).ok()) {
+                        Some(ToolView::Plain { text }) => text,
+                        Some(ToolView::Diff { deletions, insertions }) => {
+                            let mut t = String::new();
+                            for d in &deletions {
+                                t.push_str("- ");
+                                t.push_str(d);
+                                t.push('\n');
+                            }
+                            for i in &insertions {
+                                t.push_str("+ ");
+                                t.push_str(i);
+                            }
+                            t
+                        }
+                        None => String::new(),
+                    }
+                }),
+            },
+            "error" => Entry::Error {
+                text: v.get("text")?.as_str()?.to_string(),
+            },
+            "name" => Entry::Name {
+                name: v.get("name")?.as_str()?.to_string(),
+            },
+            _ => return None,
+        })
+    }
+}

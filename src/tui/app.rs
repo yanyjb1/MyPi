@@ -39,7 +39,7 @@ use crate::ai::client::Client;
 use crate::ai::config::Config;
 use crate::ai::pricing::CostTracker;
 use crate::ai::types::{Context as ChatContext, Message};
-use crate::tui::components::chat;
+use crate::entry as entry;
 use crate::tui::editor::{Editor, Effect};
 use crate::tui::events::AppEvent;
 use crate::tui::history;
@@ -89,7 +89,7 @@ struct App {
     // short line does not clamp the column and trap the cursor.
     goal_col: Option<usize>,
     // Chat transcript (rendered entries). Distinct from `input_history`.
-    transcript: Vec<chat::Entry>,
+    transcript: Vec<entry::Entry>,
     // Input history (what ↑ cycles through).
     input_history: history::History,
     // Path completion popup.
@@ -127,7 +127,7 @@ struct App {
     // Current session id.
     session_id: Option<i64>,
     // Entries produced so far this round (verified/persisted at TurnDone via the Commit event).
-    pending: Vec<chat::Entry>,
+    pending: Vec<entry::Entry>,
     // Interrupt flag: once set, the background thread stops reading and disconnects.
     interrupt: Arc<AtomicBool>,
     spin_i: usize,
@@ -432,13 +432,13 @@ impl App {
     fn open_tree_picker(&mut self) {
         let Some(st) = self.store.as_ref() else { return };
         let Some(sid) = self.session_id else {
-            self.transcript.push(chat::Entry::Error { text: "还没有会话可回溯".into() });
+            self.transcript.push(entry::Entry::Error { text: "还没有会话可回溯".into() });
             return;
         };
         let tree = st.load_tree(sid).unwrap_or_default();
         let leaf = st.get_leaf(sid).unwrap_or(None);
         if tree.is_empty() {
-            self.transcript.push(chat::Entry::Error { text: "会话为空".into() });
+            self.transcript.push(entry::Entry::Error { text: "会话为空".into() });
             return;
         }
         self.tree_pick = Some(crate::tui::components::tree_picker::TreePicker::from_tree(&tree, leaf));
@@ -453,13 +453,13 @@ impl App {
         let Some(st) = self.store.as_mut() else { return };
         let Some(sid) = self.session_id else { return };
         if let Err(e) = st.set_leaf(sid, Some(seq)) {
-            self.transcript.push(chat::Entry::Error { text: format!("回溯失败：{e:#}") });
+            self.transcript.push(entry::Entry::Error { text: format!("回溯失败：{e:#}") });
             return;
         }
         let entries = match st.load_entries(sid) {
             Ok(e) => e,
             Err(e) => {
-                self.transcript.push(chat::Entry::Error { text: format!("重投影失败：{e:#}") });
+                self.transcript.push(entry::Entry::Error { text: format!("重投影失败：{e:#}") });
                 return;
             }
         };
@@ -479,7 +479,7 @@ impl App {
         // 4) Echo + editor draft semantics: navigating to a user entry puts
         // that message back into the editor (pi behavior) — you usually
         // rewound in order to rewrite it.
-        self.transcript.push(chat::Entry::Error { text: format!("已回到节点 #{seq}（后续消息仍保留在树中）") });
+        self.transcript.push(entry::Entry::Error { text: format!("已回到节点 #{seq}（后续消息仍保留在树中）") });
         if let Some(d) = user_text_at(st, sid, seq) {
             self.load_into_editor(&d);
         }
@@ -500,7 +500,7 @@ impl App {
         let entries = match st.load_entries(id) {
             Ok(e) => e,
             Err(e) => {
-                self.transcript.push(chat::Entry::Error { text: format!("读取会话失败：{e:#}") });
+                self.transcript.push(entry::Entry::Error { text: format!("读取会话失败：{e:#}") });
                 return;
             }
         };
@@ -521,16 +521,16 @@ impl App {
         // pending: accumulating the tool_calls Assistant (one call may fan out to several results)
         for e in &entries {
             match e {
-                chat::Entry::User { content } => {
+                entry::Entry::User { content } => {
                     rebuilt = rebuilt.push(Message::User { content: content.clone() });
                 }
-                chat::Entry::Assistant { content, .. } => {
+                entry::Entry::Assistant { content, .. } => {
                     rebuilt = rebuilt.push(Message::Assistant {
                         content: Some(content.clone()),
                         tool_calls: Vec::new(),
                     });
                 }
-                chat::Entry::ToolRequest { call_id, name, object } => {
+                entry::Entry::ToolRequest { call_id, name, object } => {
                     // object stores the full argument JSON; the Assistant(tool_calls) follows right after
                     let call = crate::ai::types::ToolCall {
                         id: call_id.clone(),
@@ -545,7 +545,7 @@ impl App {
                         tool_calls: vec![call],
                     });
                 }
-                chat::Entry::ToolResult { call_id, result, .. } => {
+                entry::Entry::ToolResult { call_id, result, .. } => {
                     // The stored result is exactly what the model
                     // received back then — use it verbatim; the view
                     // (Plain/Diff) is only a rendering choice.
@@ -554,7 +554,7 @@ impl App {
                         content: result.clone(),
                     });
                 }
-                chat::Entry::Error { .. } | chat::Entry::Name { .. } => {}
+                entry::Entry::Error { .. } | entry::Entry::Name { .. } => {}
             }
         }
         *cx.chat.lock().expect("chat 锁中毒") = rebuilt;
@@ -583,7 +583,7 @@ impl App {
             cx.cwd.read().expect("cwd 锁中毒").display()
         ));
 
-        self.transcript.push(chat::Entry::Error {
+        self.transcript.push(entry::Entry::Error {
             text: format!("已恢复会话：{name}（{} 条记录）", entries.len()),
         });
     }
@@ -941,7 +941,7 @@ impl App {
     fn cmd_cdp(&mut self, arg: &str, cx: &Ctx) {
         if arg.is_empty() {
             let cur = cx.cwd.read().expect("cwd 锁中毒").display().to_string();
-            self.transcript.push(chat::Entry::Error {
+            self.transcript.push(entry::Entry::Error {
                 text: format!("当前工作目录：{cur}\n用法：/cdp <目录>（永久迁移，落盘）"),
             });
             return;
@@ -962,19 +962,19 @@ impl App {
                 if let (Some(st), Some(sid)) = (self.store.as_mut(), self.session_id) {
                     self.cwd_seq += 1;
                     if let Err(e) = st.record_cwd(sid, self.cwd_seq, &real.display().to_string()) {
-                        self.transcript.push(chat::Entry::Error { text: format!("写库失败：{e:#}") });
+                        self.transcript.push(entry::Entry::Error { text: format!("写库失败：{e:#}") });
                         return;
                     }
                 }
-                self.transcript.push(chat::Entry::Error {
+                self.transcript.push(entry::Entry::Error {
                     text: format!("工作目录：{} → {}（已落盘）", old.display(), real.display()),
                 });
             }
             Ok(_) => {
-                self.transcript.push(chat::Entry::Error { text: format!("不是目录：{arg}") });
+                self.transcript.push(entry::Entry::Error { text: format!("不是目录：{arg}") });
             }
             Err(e) => {
-                self.transcript.push(chat::Entry::Error { text: format!("目录不存在：{arg}（{e}）") });
+                self.transcript.push(entry::Entry::Error { text: format!("目录不存在：{arg}（{e}）") });
             }
         }
     }
@@ -987,23 +987,23 @@ impl App {
     fn cmd_name(&mut self, arg: &str) {
         if arg.is_empty() {
             let cur = self.session_name.clone().unwrap_or_else(|| "（未命名）".into());
-            self.transcript.push(chat::Entry::Error { text: format!("当前会话名：{cur}。用法：/name <名字>") });
+            self.transcript.push(entry::Entry::Error { text: format!("当前会话名：{cur}。用法：/name <名字>") });
             return;
         }
         self.session_name = Some(arg.to_string());
         // Persist as a name marker hanging off the current leaf; it also
         // lands in the in-memory transcript (skipped by the renderer).
-        let marker = chat::Entry::Name { name: arg.to_string() };
+        let marker = entry::Entry::Name { name: arg.to_string() };
         self.pending.push(marker.clone());
         self.transcript.push(marker.clone());
         if let (Some(st), Some(sid)) = (self.store.as_mut(), self.session_id) {
             if let Err(e) = st.append(sid, std::slice::from_ref(&marker)) {
-                self.transcript.push(chat::Entry::Error { text: format!("命名写入失败：{e:#}") });
+                self.transcript.push(entry::Entry::Error { text: format!("命名写入失败：{e:#}") });
             }
             // Also update the legacy column so old resume listings still show it.
             let _ = st.set_session_name(sid, Some(arg));
         }
-        self.transcript.push(chat::Entry::Error { text: format!("已命名：{arg}") });
+        self.transcript.push(entry::Entry::Error { text: format!("已命名：{arg}") });
     }
 
     // Build the resume picker entries for sessions recorded under `root`.
@@ -1021,7 +1021,7 @@ impl App {
                     .ok()
                     .and_then(|es| {
                         es.iter().find_map(|e| match e {
-                            chat::Entry::User { content } => Some(content.clone()),
+                            entry::Entry::User { content } => Some(content.clone()),
                             _ => None,
                         })
                     });
@@ -1034,13 +1034,13 @@ impl App {
     // /resume: list this project's sessions, stretching the reserved area.
     fn cmd_resume(&mut self, cx: &Ctx) {
         let Some(st) = self.store.as_ref() else {
-            self.transcript.push(chat::Entry::Error { text: "存储未打开，无法 resume".into() });
+            self.transcript.push(entry::Entry::Error { text: "存储未打开，无法 resume".into() });
             return;
         };
         let root = cx.cwd.read().expect("cwd 锁中毒").clone();
         match Self::build_resume_items(st, &root) {
             Ok(items) if items.is_empty() => {
-                self.transcript.push(chat::Entry::Error {
+                self.transcript.push(entry::Entry::Error {
                     text: format!("{} 下没有历史会话", root.display()),
                 });
             }
@@ -1048,7 +1048,7 @@ impl App {
                 self.resume_pick = Some((items, 0));
             }
             Err(e) => {
-                self.transcript.push(chat::Entry::Error { text: format!("读会话失败：{e:#}") });
+                self.transcript.push(entry::Entry::Error { text: format!("读会话失败：{e:#}") });
             }
         }
     }
@@ -1063,25 +1063,25 @@ impl App {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
             }
             for l in lines {
-                self.transcript.push(chat::Entry::Error { text: l });
+                self.transcript.push(entry::Entry::Error { text: l });
             }
             return;
         }
         match cx.cfg.borrow().model_by_id(arg).ok() {
             Some(_) => match cx.cfg.borrow().save_default(arg) {
                 Ok(()) => {
-                    self.transcript.push(chat::Entry::Error {
+                    self.transcript.push(entry::Entry::Error {
                         text: format!("默认模型已设为 {arg}，已写入 config.yaml"),
                     });
                 }
                 Err(e) => {
-                    self.transcript.push(chat::Entry::Error {
+                    self.transcript.push(entry::Entry::Error {
                         text: format!("写入 config.yaml 失败：{e:#}"),
                     });
                 }
             },
             None => {
-                self.transcript.push(chat::Entry::Error {
+                self.transcript.push(entry::Entry::Error {
                     text: format!("未知模型 id：{arg}。/model 不带参数看列表"),
                 });
             }
@@ -1098,7 +1098,7 @@ impl App {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
             }
             for l in lines {
-                self.transcript.push(chat::Entry::Error { text: l });
+                self.transcript.push(entry::Entry::Error { text: l });
             }
             return;
         }
@@ -1108,12 +1108,12 @@ impl App {
                 let api_key = cfg.resolve_key(p);
                 cx.client.borrow_mut().switch_model(&p.base_url, &api_key, &rm.entry.id);
                 *cx.current_model.borrow_mut() = rm.entry.clone();
-                self.transcript.push(chat::Entry::Error {
+                self.transcript.push(entry::Entry::Error {
                     text: format!("已切换到 {} ({})，仅本会话生效", arg, Config::display_name(&rm.entry)),
                 });
             }
             Err(_) => {
-                self.transcript.push(chat::Entry::Error {
+                self.transcript.push(entry::Entry::Error {
                     text: format!("未知模型 id：{arg}。/switch 不带参数看列表"),
                 });
             }
@@ -1157,12 +1157,12 @@ impl App {
             let now = crate::store::now_stamp();
             match st.create_session(&now, &self.cwd.display().to_string()) {
                 Ok(id) => self.session_id = Some(id),
-                Err(e) => self.transcript.push(chat::Entry::Error { text: format!("数据库不可用：{e:#}") }),
+                Err(e) => self.transcript.push(entry::Entry::Error { text: format!("数据库不可用：{e:#}") }),
             }
         }
 
-        self.transcript.push(chat::Entry::User { content: text.clone() });
-        self.pending.push(chat::Entry::User { content: text.clone() });
+        self.transcript.push(entry::Entry::User { content: text.clone() });
+        self.pending.push(entry::Entry::User { content: text.clone() });
         self.streaming.clear();
         self.reasoning_buf.clear();
         self.reasoning_done = false;
@@ -1206,21 +1206,21 @@ impl App {
                     // the model trailed off mid-answer.
                     let content = std::mem::take(&mut self.streaming);
                     let content = if content.is_empty() { "(无输出)".into() } else { content };
-                    let e = chat::Entry::Assistant {
+                    let e = entry::Entry::Assistant {
                         content,
-                        usage: Some(chat::Entry::usage_summary(&u)),
+                        usage: Some(entry::Entry::usage_summary(&u)),
                         reasoning: if self.reasoning_buf.is_empty() { None } else { Some(self.reasoning_buf.clone()) },
                     };
                     self.pending.push(e.clone());
                     self.transcript.push(e);
                 }
                 AppEvent::ToolStart { call_id, name, args_summary } => {
-                    let e = chat::Entry::ToolRequest { call_id, name, object: args_summary };
+                    let e = entry::Entry::ToolRequest { call_id, name, object: args_summary };
                     self.pending.push(e.clone());
                     self.transcript.push(e);
                 }
                 AppEvent::ToolFinish { call_id, name, ok, result, .. } => {
-                    let e = chat::Entry::ToolResult {
+                    let e = entry::Entry::ToolResult {
                         call_id,
                         name,
                         ok,
@@ -1232,13 +1232,13 @@ impl App {
                 }
                 AppEvent::Error(e) => {
                     // Session-level errors are not persisted (not one of the four message kinds); memory stream only
-                    self.transcript.push(chat::Entry::Error { text: e });
+                    self.transcript.push(entry::Entry::Error { text: e });
                 }
                 AppEvent::Commit(entries) => {
                     if let (Some(st), Some(sid)) = (self.store.as_mut(), self.session_id)
                         && let Err(e) = st.append(sid, &entries)
                     {
-                        self.transcript.push(chat::Entry::Error { text: format!("落盘失败：{e:#}") });
+                        self.transcript.push(entry::Entry::Error { text: format!("落盘失败：{e:#}") });
                     }
                     self.pending.clear();
                 }
@@ -1361,8 +1361,8 @@ fn user_text_at(st: &crate::store::Store, sid: i64, seq: i64) -> Option<String> 
     if row.kind != "user" {
         return None;
     }
-    match chat::Entry::from_payload(&row.kind, &row.payload) {
-        Some(chat::Entry::User { content }) => Some(content),
+    match entry::Entry::from_payload(&row.kind, &row.payload) {
+        Some(entry::Entry::User { content }) => Some(content),
         _ => None,
     }
 }
@@ -1374,7 +1374,7 @@ fn display_name(app: &App) -> String {
             .transcript
             .iter()
             .find_map(|e| match e {
-                chat::Entry::User { content } => Some(content.chars().take(7).collect::<String>()),
+                entry::Entry::User { content } => Some(content.chars().take(7).collect::<String>()),
                 _ => None,
             })
             .unwrap_or_else(|| "新会话".into()),
@@ -1612,7 +1612,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
 // is repaired — a request without results is dropped together with its
 // pending calls (never a half-open tool_calls message), so the next
 // `run()` always starts from a protocol-legal boundary.
-fn entries_to_context(entries: &[chat::Entry]) -> ChatContext {
+fn entries_to_context(entries: &[entry::Entry]) -> ChatContext {
     let mut rebuilt = ChatContext::new().push(Message::System {
         content: "你是一个简洁的编程助手。用中文回答。".into(),
     });
@@ -1620,23 +1620,23 @@ fn entries_to_context(entries: &[chat::Entry]) -> ChatContext {
     use std::collections::BTreeMap;
     let mut results: BTreeMap<String, (bool, String)> = BTreeMap::new();
     for e in entries {
-        if let chat::Entry::ToolResult { call_id, ok, result, .. } = e {
+        if let entry::Entry::ToolResult { call_id, ok, result, .. } = e {
             results.insert(call_id.clone(), (*ok, result.clone()));
         }
     }
     let mut served: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for e in entries {
         match e {
-            chat::Entry::User { content } => {
+            entry::Entry::User { content } => {
                 rebuilt = rebuilt.push(Message::User { content: content.clone() });
             }
-            chat::Entry::Assistant { content, .. } => {
+            entry::Entry::Assistant { content, .. } => {
                 rebuilt = rebuilt.push(Message::Assistant {
                     content: Some(content.clone()),
                     tool_calls: Vec::new(),
                 });
             }
-            chat::Entry::ToolRequest { call_id, name, object } => {
+            entry::Entry::ToolRequest { call_id, name, object } => {
                 let call = crate::ai::types::ToolCall {
                     id: call_id.clone(),
                     kind: "function".into(),
@@ -1650,7 +1650,7 @@ fn entries_to_context(entries: &[chat::Entry]) -> ChatContext {
                     tool_calls: vec![call],
                 });
             }
-            chat::Entry::ToolResult { call_id, result, .. } => {
+            entry::Entry::ToolResult { call_id, result, .. } => {
                 // The stored result is exactly what the model received
                 // back then — use it verbatim.
                 served.insert(call_id.clone());
@@ -1659,7 +1659,7 @@ fn entries_to_context(entries: &[chat::Entry]) -> ChatContext {
                     content: result.clone(),
                 });
             }
-            chat::Entry::Error { .. } | chat::Entry::Name { .. } => {}
+            entry::Entry::Error { .. } | entry::Entry::Name { .. } => {}
         }
     }
     // Repair pass: drop trailing requests whose results never arrived
@@ -1697,7 +1697,7 @@ fn entries_to_context(entries: &[chat::Entry]) -> ChatContext {
 // Precondition: the last message in chat.messages before run() is this turn's user
 // message (the spawn_turn caller just pushed it), so scanning back to the previous
 // finalized assistant is enough.
-fn collect_turn(chat: &crate::ai::types::Context, text: &str) -> Vec<chat::Entry> {
+fn collect_turn(chat: &crate::ai::types::Context, text: &str) -> Vec<entry::Entry> {
     // Note: this function assembles only the tool-chain entries; the final Assistant
     // entry with reasoning is built separately by drain_events' TurnDone branch (reasoning_buf lives on App).
     use crate::ai::types::Message;
@@ -1713,7 +1713,7 @@ fn collect_turn(chat: &crate::ai::types::Context, text: &str) -> Vec<chat::Entry
     for m in &chat.messages[start..] {
         match m {
             Message::User { content } => {
-                out.push(chat::Entry::User { content: content.clone() });
+                out.push(entry::Entry::User { content: content.clone() });
             }
             Message::Assistant { content, tool_calls } => {
                 let c = content.clone().unwrap_or_default();
@@ -1723,7 +1723,7 @@ fn collect_turn(chat: &crate::ai::types::Context, text: &str) -> Vec<chat::Entry
                         let object = tc.function.arguments_json().ok()
                             .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(String::from))
                             .unwrap_or_default();
-                        out.push(chat::Entry::ToolRequest {
+                        out.push(entry::Entry::ToolRequest {
                             call_id: tc.id.clone(),
                             name: tc.function.name.clone(),
                             object,
@@ -1732,7 +1732,7 @@ fn collect_turn(chat: &crate::ai::types::Context, text: &str) -> Vec<chat::Entry
                     // The tool_calls assistant appears only as a request card;
                     // no duplicate Assistant entry (its content is usually empty)
                 } else {
-                    out.push(chat::Entry::Assistant { content: c, usage: None, reasoning: None });
+                    out.push(entry::Entry::Assistant { content: c, usage: None, reasoning: None });
                 }
             }
             Message::Tool { tool_call_id, content } => {
@@ -1742,13 +1742,13 @@ fn collect_turn(chat: &crate::ai::types::Context, text: &str) -> Vec<chat::Entry
                     .iter()
                     .rev()
                     .find_map(|e| match e {
-                        chat::Entry::ToolRequest { call_id, name, .. } if call_id == tool_call_id => {
+                        entry::Entry::ToolRequest { call_id, name, .. } if call_id == tool_call_id => {
                             Some(name.clone())
                         }
                         _ => None,
                     })
                     .unwrap_or_default();
-                out.push(chat::Entry::ToolResult {
+                out.push(entry::Entry::ToolResult {
                     call_id: tool_call_id.clone(),
                     name,
                     ok: true,
@@ -1761,7 +1761,7 @@ fn collect_turn(chat: &crate::ai::types::Context, text: &str) -> Vec<chat::Entry
     // Sanity: the first extracted entry must be User (guards against misalignment).
     // text is not compared — it is trimmed input and may differ in whitespace from chat.
     let _ = text;
-    debug_assert!(out.first().is_some_and(|e| matches!(e, chat::Entry::User { .. })));
+    debug_assert!(out.first().is_some_and(|e| matches!(e, entry::Entry::User { .. })));
     out
 }
 
@@ -1830,7 +1830,7 @@ fn spawn_turn(
 mod app_tests {
     use super::*;
     use crate::ai::types::Message;
-    use crate::tui::components::chat::Entry;
+    use crate::entry::Entry;
 
     #[test]
     fn rebuild_handles_complete_and_dangling_tool_tails() {

@@ -20,7 +20,7 @@ pub enum AppEvent {
     /// An error occurred.
     Error(String),
     /// Turn finalized: the whole round's entries ship to the main thread for one-shot persistence.
-    Commit(Vec<crate::tui::components::chat::Entry>),
+    Commit(Vec<crate::entry::Entry>),
     /// The background thread is exiting.
     Done,
 }

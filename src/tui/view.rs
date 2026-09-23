@@ -8,6 +8,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
+use crate::entry as entry;
 use crate::tui::components::{chat, input, popup, statusline};
 use crate::tui::layout as tlayout;
 use crate::tui::theme::Palette;
@@ -15,7 +16,7 @@ use crate::tui::theme::Palette;
 // Everything one frame needs (borrowed, never owned).
 pub struct ViewState<'a> {
     // The rendered history entries.
-    pub history: &'a [chat::Entry],
+    pub history: &'a [entry::Entry],
     // History scroll offset (rows counted up from the bottom; 0 = follow).
     pub chat_scroll: usize,
     // Whether following the bottom (the user is not browsing elsewhere).

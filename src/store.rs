@@ -170,7 +170,7 @@ impl Store {
     // Append a whole round of entries in one transaction, with seq
     // allocated contiguously from the current max + 1. All-or-nothing:
     // the round is either fully stored or not at all.
-    pub fn append(&mut self, session_id: i64, entries: &[crate::tui::components::chat::Entry]) -> Result<()> {
+    pub fn append(&mut self, session_id: i64, entries: &[crate::entry::Entry]) -> Result<()> {
         let tx = self.conn.transaction()?;
         // The whole round hangs off the current leaf, and the leaf
         // advances to the last appended row — one transaction makes
@@ -207,7 +207,7 @@ impl Store {
     pub fn load_entries(
         &self,
         session_id: i64,
-    ) -> Result<Vec<crate::tui::components::chat::Entry>> {
+    ) -> Result<Vec<crate::entry::Entry>> {
         let mut stmt = self.conn.prepare(
             "WITH RECURSIVE path(seq) AS (
                  SELECT leaf FROM sessions WHERE id = ?1
@@ -228,7 +228,7 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (kind, payload) = row?;
-            match crate::tui::components::chat::Entry::from_payload(&kind, &payload) {
+            match crate::entry::Entry::from_payload(&kind, &payload) {
                 Some(e) => out.push(e),
                 // Unknown kind: skip rather than fail the whole session —
                 // forward compatibility
@@ -287,7 +287,7 @@ impl Store {
     pub fn effective_name(&self, session_id: i64) -> Result<Option<String>> {
         let entries = self.load_entries(session_id)?;
         for e in entries.iter().rev() {
-            if let crate::tui::components::chat::Entry::Name { name } = e {
+            if let crate::entry::Entry::Name { name } = e {
                 return Ok(Some(name.clone()));
             }
         }
@@ -410,7 +410,7 @@ pub fn display_name(meta: &SessionMeta, first_user: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::components::chat::Entry;
+    use crate::entry::Entry;
 
     fn mem_store() -> Store {
         // rusqlite in-memory database: path ":memory:"
@@ -518,7 +518,7 @@ mod tests {
 #[cfg(test)]
 mod tree_tests {
     use super::*;
-    use crate::tui::components::chat::Entry;
+    use crate::entry::Entry;
 
     fn mem() -> Store {
         let dir = std::env::temp_dir().join(format!("mypi-tree-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
@@ -622,7 +622,7 @@ mod tree_tests {
 #[cfg(test)]
 mod name_tests {
     use super::*;
-    use crate::tui::components::chat::Entry;
+    use crate::entry::Entry;
 
     #[test]
     fn name_marker_round_trips_and_resolves() {
