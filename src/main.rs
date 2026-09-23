@@ -1,8 +1,10 @@
 //! Entry point — the TUI build (the role pi's packages/coding-agent/src/main.ts plays).
 //!
-//! Configuration lives in ~/.config/mypi/config.yaml (XDG): providers /
-//! models / pricing are all external, zero hardcoding in code. The repo
-//! ships `models_example.yml` as the template.
+//! Two XDG config files under ~/.config/mypi/:
+//!   models.yml   — hand-maintained: providers / keys / models / pricing
+//!                  (the program never writes it)
+//!   config.yaml  — program-managed: default model, theme
+//! The repo ships `models_example.yml` as the models.yml template.
 
 use mypi::ai::config::Config;
 use mypi::cli::Cli;
