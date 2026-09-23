@@ -17,6 +17,7 @@ pub mod keys;
 pub mod leaf;
 pub mod layout;
 pub mod text;
+pub mod session;
 pub mod signal;
 pub mod theme;
 pub mod view;
