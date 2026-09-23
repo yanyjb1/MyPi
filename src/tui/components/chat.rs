@@ -17,6 +17,8 @@
 //!   reports.
 
 use ratatui::style::{Color, Modifier, Style};
+#[cfg(test)]
+use ratatui::widgets::Paragraph;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -52,6 +54,11 @@ pub fn render_with_live(
     // render them as one stacked card instead of two separate ones.
     let mut i = 0;
     while i < entries.len() {
+        // One blank row before every node but the first: uniform separation,
+        // so a user message and the reply under it never fuse into one block.
+        if !out.is_empty() {
+            out.push(section_gap());
+        }
         let e = &entries[i];
         if let (Entry::ToolRequest { call_id, name, args, .. }, Some(Entry::ToolResult { call_id: rid, name: rname, ok, result, .. })) =
             (e, entries.get(i + 1))
@@ -125,6 +132,15 @@ pub fn render_with_live(
     out
 }
 
+// The blank row between two transcript nodes.
+//
+// Every node is separated from its neighbours by exactly one of these —
+// uniform rather than each kind remembering to pad itself, so two adjacent
+// nodes can never look like one.
+fn section_gap() -> Line<'static> {
+    Line::from("")
+}
+
 // ---------------------------------------------------------------------------
 // card scaffolding
 // ---------------------------------------------------------------------------
@@ -141,33 +157,62 @@ fn pad_to(mut line: Line<'static>, width: usize, fill: Style) -> Line<'static> {
     line
 }
 
-// Top edge: `+- <label> ` + dashes + `-+`. `edge` colors the frame.
-fn card_top(left: &str, label: &str, edge: Style, fill: Style, width: usize) -> Line<'static> {
-    let head = format!("{left} {label} ");
-    let used = display_width(&head) + 2; // trailing `-+`
-    let dashes = width.saturating_sub(used);
-    Line::from(vec![
-        Span::styled(head, edge),
-        Span::styled("-".repeat(dashes), edge),
-        Span::styled("-+", edge),
-        Span::styled(" ".to_string(), fill),
-    ])
+// Give every cell of a card row the card's background.
+//
+// A background only covers the cells it paints, and painting it on the
+// padding alone left the text sitting on the terminal default — so a card
+// looked black in the gaps and *not* black behind the words. Every span
+// (frame included) goes through here.
+fn on_bg(spans: Vec<Span<'static>>, bg: Style) -> Vec<Span<'static>> {
+    spans
+        .into_iter()
+        .map(|sp| Span::styled(sp.content, bg.patch(sp.style)))
+        .collect()
 }
 
-// Bottom edge: `+-` + dashes + `-+`.
+// Top edge: `+-` + dashes + `-+`.
+fn card_top(edge: Style, fill: Style, width: usize) -> Line<'static> {
+    let dashes = width.saturating_sub(4);
+    Line::from(on_bg(
+        vec![
+            Span::styled("+-", edge),
+            Span::styled("-".repeat(dashes), edge),
+            Span::styled("-+", edge),
+            Span::styled(" ".to_string(), fill),
+        ],
+        fill,
+    ))
+}
+
+// Bottom edge: `+-` + dashes + `-+`. Also the shared seam of a stacked pair.
 fn card_bottom(edge: Style, fill: Style, width: usize) -> Line<'static> {
     let dashes = width.saturating_sub(4);
-    Line::from(vec![
-        Span::styled("+-", edge),
-        Span::styled("-".repeat(dashes), edge),
-        Span::styled("-+", edge),
-        Span::styled(" ".to_string(), fill),
-    ])
+    Line::from(on_bg(
+        vec![
+            Span::styled("+-", edge),
+            Span::styled("-".repeat(dashes), edge),
+            Span::styled("-+", edge),
+            Span::styled(" ".to_string(), fill),
+        ],
+        fill,
+    ))
 }
 
 // One body row: `| ` + content + padding + ` |`.
 fn card_row(content: Line<'static>, edge: Style, body_bg: Style, width: usize) -> Line<'static> {
     let inner = width.saturating_sub(4);
+    // Defensive: never let stray escape bytes reach the terminal from inside a
+    // card. The tools strip their own output, but file contents and rows read
+    // back from an older DB can still carry them.
+    let clean_style = content.style;
+    let content = Line::from(
+        content
+            .spans
+            .into_iter()
+            .map(|sp| Span::styled(crate::tui::text::strip_ansi(&sp.content), sp.style))
+            .collect::<Vec<_>>(),
+    )
+    .style(clean_style);
     let mut spans = vec![Span::styled("| ", edge)];
     // `Line::styled(x, s)` puts `s` on the **line**, not on its spans, so a
     // caller that styles a whole row (the diff's red/green) would otherwise
@@ -191,7 +236,8 @@ fn card_row(content: Line<'static>, edge: Style, body_bg: Style, width: usize) -
         spans.push(Span::styled(" ".repeat(inner - used), body_bg));
     }
     spans.push(Span::styled(" |", edge));
-    Line::from(spans)
+    // Frame, text and padding all sit on the card's black.
+    Line::from(on_bg(spans, body_bg))
 }
 
 // Cut spans at `max` display cells (keeps a card row inside its borders).
@@ -251,6 +297,8 @@ fn user_card(content: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
     out
 }
 
+// (the trailing blank row between nodes is `section_gap`, added by the caller)
+
 // Model reply: plain foreground, no background. Reasoning (when shown) is muted.
 fn assistant_block(
     content: &str,
@@ -271,10 +319,8 @@ fn assistant_block(
             }
             out.push(line);
         }
-        out.push(Line::from(""));
     }
     out.extend(super::markdown::render_markdown(content, p));
-    out.push(Line::from(""));
     out
 }
 
@@ -295,7 +341,6 @@ fn system_block(text: &str, align: Align, p: &Palette, width: usize) -> Vec<Line
             }
         }
     }
-    out.push(Line::from(""));
     out
 }
 
@@ -344,7 +389,7 @@ fn tool_exchange(
     let out_edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
     let bg = Style::new().bg(p.black);
 
-    let mut out = vec![card_top("+-", "", edge, bg, width)];
+    let mut out = vec![card_top(edge, bg, width)];
     for line in payload_lines(name, args, p) {
         out.push(card_row(line, edge, bg, width));
     }
@@ -364,7 +409,7 @@ fn tool_exchange(
 fn tool_request_card(name: &str, args: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
     let edge = Style::new().fg(p.accent);
     let bg = Style::new().bg(p.black);
-    let mut out = vec![card_top("+-", "", edge, bg, width)];
+    let mut out = vec![card_top(edge, bg, width)];
     for line in payload_lines(name, args, p) {
         out.push(card_row(line, edge, bg, width));
     }
@@ -382,12 +427,11 @@ fn tool_result_card(
     expanded: bool,
     width: usize,
 ) -> Vec<Line<'static>> {
-    // An unpaired result (interrupted call). Colour it, but there is no
-    // matching request to stack with, so it keeps its own label.
-    let mark = if ok { "✓" } else { "✗" };
+    // An unpaired result (interrupted call): colour tells the outcome, the
+    // content tells the rest. No labels, same as every other card.
     let edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
     let bg = Style::new().bg(p.black);
-    let mut out = vec![card_top("+-", &format!("{mark} {name} (out)"), edge, bg, width)];
+    let mut out = vec![card_top(edge, bg, width)];
     for line in result_lines(name, ok, result, p, expanded) {
         out.push(card_row(line, edge, bg, width));
     }
@@ -625,6 +669,83 @@ mod tests {
     }
 
     #[test]
+    fn every_cell_of_a_card_carries_the_black_background() {
+        // The reported bug: the card looked black only in the gaps, because
+        // the text spans carried a foreground but no background, and stray
+        // ANSI from the command reset it. Every span of every card row —
+        // frame, text, padding — must paint the truecolor black.
+        let p = Palette::default();
+        let entries = vec![
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: r#"{"command":"ls --color=always"}"#.into(),
+                intent: "列目录".into(),
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                // A result that (from an older DB, say) still holds ANSI.
+                result: "\u{1b}[01;34mdir\u{1b}[0m\nplain\n".into(),
+            },
+        ];
+        let lines = render(&entries, &p, false, false);
+        let black = Some(Color::Rgb(0, 0, 0));
+        for l in &lines {
+            // Only card rows (those with a frame) are checked; gaps have no spans.
+            if l.spans.iter().any(|s| s.content.contains('|') || s.content.contains('+')) {
+                for sp in &l.spans {
+                    assert_eq!(sp.style.bg, black, "卡片每一格都必须是真彩黑底: {:?}", sp.content);
+                }
+            }
+        }
+        // Escape bytes must not survive into the drawn text.
+        let all = text_of(&lines);
+        assert!(!all.contains('\u{1b}'), "结果里的 ANSI 必须被剥离: {all:?}");
+        assert!(all.contains("dir") && all.contains("plain"), "{all}");
+    }
+
+    #[test]
+    fn backend_paints_black_across_the_whole_card_row() {
+        // End-to-end through ratatui's own renderer: draw a card into a
+        // TestBackend and read back the **composed cell styles**. This is the
+        // check that actually proves no hole in the background, because it
+        // goes through the same path the terminal does.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let p = Palette::default();
+        let rows = tool_exchange(
+            "bash",
+            r#"{"command":"ls --color=always"}"#,
+            true,
+            "\u{1b}[01;34mdir\u{1b}[0m\nplain",
+            &p,
+            false,
+            40,
+        );
+        let mut term = Terminal::new(TestBackend::new(40, rows.len() as u16)).unwrap();
+        term.draw(|f| {
+            f.render_widget(Paragraph::new(rows.clone()), f.area());
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        // Every cell of the card's body rows must be black-backed.
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                let cell = &buf[(x, y)];
+                assert_eq!(
+                    cell.bg,
+                    ratatui::style::Color::Rgb(0, 0, 0),
+                    "卡片 ({x},{y}) 的格子没有黑底: {:?}",
+                    cell.symbol()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn matched_call_and_result_stack_into_one_card() {
         let p = Palette::default();
         let entries = vec![
@@ -769,8 +890,27 @@ mod tests {
     #[test]
     fn estimated_height_counts_wrapped_rows() {
         let lines = render(&[Entry::Assistant { content: "x".repeat(20), usage: None, reasoning: None }], &Palette::default(), false, false);
-        // 20 cells wide, container 10 -> 2 rows; plus 1 blank row -> 3
-        assert_eq!(estimated_height(&lines, 10), 3);
+        // 20 cells wide, container 10 -> 2 wrapped rows, no padding rows of its own
+        assert_eq!(estimated_height(&lines, 10), 2);
+    }
+
+    #[test]
+    fn every_node_is_separated_by_one_blank_row() {
+        let p = Palette::default();
+        let entries = vec![
+            Entry::User { content: "问".into() },
+            Entry::Assistant { content: "答".into(), usage: None, reasoning: Some("想".into()) },
+            Entry::System { text: "切模型".into(), align: Align::Center },
+        ];
+        let lines = render(&entries, &p, true, false);
+        // Two gaps for three nodes, and never a doubled blank row.
+        let blanks = lines
+            .iter()
+            .filter(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
+            .count();
+        assert_eq!(blanks, 2, "三个节点之间恰好两条空行: {:?}", text_of(&lines));
+        let text = text_of(&lines);
+        assert!(!text.contains("\n\n\n"), "不该出现连续两条空行: {text:?}");
     }
 
     #[test]
@@ -806,9 +946,9 @@ mod tests {
         }];
         let lines = render(&entries, &p, true, false);
         let text = text_of(&lines);
-        // Content and blank row only, nothing extra
+        // Just the content: the inter-node blank row belongs to the caller.
         assert!(text.contains("答案"));
-        assert_eq!(lines.len(), 2, "正文 + 尾部空行: {text:?}");
+        assert_eq!(lines.len(), 1, "不该有多余的空思考行: {text:?}");
     }
 
     #[test]

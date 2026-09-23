@@ -53,6 +53,48 @@ pub struct ViewState<'a> {
     pub resume_pick: Option<(&'a [(i64, String)], usize)>,
 }
 
+// Hard-wrap pre-chunked rows to `width` cells.
+//
+// Every row already exists (a card edge, a card body, a blank separator);
+// this only splits the ones too wide, keeping the whole set on one coordinate
+// system so scrolling math and drawing cannot disagree.
+fn hard_wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
+    let w = width.max(1);
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        let total: usize = line.spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
+        if total <= w {
+            out.push(line.clone());
+            continue;
+        }
+        let mut cur: Vec<ratatui::text::Span<'static>> = Vec::new();
+        let mut cur_w = 0usize;
+        for sp in &line.spans {
+            let text = sp.content.to_string();
+            let mut buf = String::new();
+            for ch in text.chars() {
+                let cw = crate::tui::text::display_width(&ch.to_string());
+                if cur_w + cw > w {
+                    if !buf.is_empty() {
+                        cur.push(ratatui::text::Span::styled(std::mem::take(&mut buf), sp.style));
+                    }
+                    out.push(Line::from(std::mem::take(&mut cur)));
+                    cur_w = 0;
+                }
+                buf.push(ch);
+                cur_w += cw;
+            }
+            if !buf.is_empty() {
+                cur.push(ratatui::text::Span::styled(buf, sp.style));
+            }
+        }
+        if !cur.is_empty() {
+            out.push(Line::from(cur));
+        }
+    }
+    out
+}
+
 // Draw one frame and return where the cursor belongs (container-relative (row, col)) for the caller to place the hardware cursor.
 //
 // `l` is computed by the caller (`app.rs` needs the same sizes to place the hardware cursor),
@@ -60,7 +102,6 @@ pub struct ViewState<'a> {
 pub fn draw(f: &mut Frame, s: &ViewState, l: &tlayout::Layout) -> (u16, u16) {
     let area = f.area();
     let p = &s.palette;
-    let inner_w = tlayout::inner_width(area.width);
 
     // ---- layout: history on top, input container at the bottom, reserved area below (dynamic height) ----
     // The candidate popup no longer overlays: it claims rows from the reserved area,
@@ -116,28 +157,46 @@ pub fn draw(f: &mut Frame, s: &ViewState, l: &tlayout::Layout) -> (u16, u16) {
     // Streaming content renders appended to the history: reasoning shows "thinking" (withdrawn
     // once content starts, content takes its place); content appends per delta. All in memory,
     // never touching the DB.
+    // Cards span the **full terminal width**: the history area has no
+    // borders of its own, so sizing them to `inner_width` (which subtracts
+    // the input box's 4 border columns) left a strip of bare terminal
+    // background down the right edge of every card.
+    let chat_w = area.width as usize;
     let chat_lines = chat::render_with_live(
         s.history,
         p,
         s.show_reasoning,
         s.tools_expanded,
-        inner_w,
+        chat_w,
         s.live,
         s.streaming,
     );
-    let total = chat::estimated_height(&chat_lines, inner_w);
-    let follow = total.saturating_sub(chat_area.height as usize);
-    let scroll = if s.scroll_pinned {
-        follow
+    // Bottom-anchored window, hard-wrapped by us.
+    //
+    // The history's lower edge is **pinned to the row above the status bar**:
+    // the newest content always sits there, and older content scrolls up out
+    // of view. Two deliberate departures from `Paragraph::scroll(vec)`:
+    //
+    //  * the window is computed here, so it can never run off the top (the
+    //    old path let a scroll offset push the tail past the viewport and go
+    //    blank);
+    //  * wrapping is ours and pre-applied, so `estimated_height` and the
+    //    drawn geometry agree — with `Paragraph`'s internal wrapping the two
+    //    disagreed whenever a row wrapped, which is what made the wheel land
+    //    somewhere unrelated to the movement.
+    let rows = hard_wrap(&chat_lines, chat_w);
+    let viewport = chat_area.height as usize;
+    let total = rows.len();
+    let max_offset = total.saturating_sub(viewport);
+    // `scroll` counts rows up from the bottom (0 = newest visible).
+    let offset = if s.scroll_pinned {
+        0
     } else {
-        s.chat_scroll.min(follow)
+        s.chat_scroll.min(max_offset)
     };
-    f.render_widget(
-        Paragraph::new(chat_lines)
-            .wrap(ratatui::widgets::Wrap { trim: false })
-            .scroll((scroll as u16, 0)),
-        chat_area,
-    );
+    let first = max_offset - offset;
+    let visible: Vec<Line<'static>> = rows.into_iter().skip(first).take(viewport).collect();
+    f.render_widget(Paragraph::new(visible), chat_area);
 
     // ---- bottom reserved area: the popup float zone (height already in layout; history/input gave way) ----
     // The resume picker wins (its stretched mode); then completion candidates; neither -> one blank row.
@@ -162,4 +221,42 @@ pub fn draw(f: &mut Frame, s: &ViewState, l: &tlayout::Layout) -> (u16, u16) {
     let row = (iv.cursor_row).min(viewport_h.saturating_sub(1)) as u16;
     let col = (iv.cursor_col).min(container_area.width.saturating_sub(1) as usize) as u16;
     (row, col)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::text::Span;
+
+    fn row(text: &str) -> Line<'static> {
+        Line::from(Span::raw(text.to_string()))
+    }
+
+    #[test]
+    fn hard_wrap_splits_only_overwide_rows() {
+        let lines = vec![row("abc"), row("0123456789")];
+        let wrapped = hard_wrap(&lines, 4);
+        // The short row is untouched; the long one becomes three rows.
+        let texts: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        assert_eq!(texts, vec!["abc", "0123", "4567", "89"]);
+    }
+
+    #[test]
+    fn hard_wrap_never_changes_the_total_character_count() {
+        let lines = vec![row("一二三四五六七八九十"), row("ab")];
+        let wrapped = hard_wrap(&lines, 4);
+        let joined: String = wrapped
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect::<String>())
+            .collect();
+        assert_eq!(joined, "一二三四五六七八九十ab", "换行不得丢字");
+        // Every produced row fits the width (CJK counts as 2 cells).
+        for l in &wrapped {
+            let w: usize = l.spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
+            assert!(w <= 4, "行宽超限: {w}");
+        }
+    }
 }

@@ -159,8 +159,14 @@ fn run_shell(cwd: &std::path::Path, cmd: &str) -> Result<String> {
         .current_dir(cwd)
         .output()
         .with_context(|| "spawn bash failed")?;
-    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-    let err = String::from_utf8_lossy(&out.stderr);
+    // Strip the command's own ANSI escapes before the text goes anywhere.
+    //
+    // Programs colourise when they think they are on a terminal, and those
+    // bytes would otherwise travel two ways: to the model (which does not
+    // need escape codes) and into the card (where the terminal re-interprets
+    // them, resetting our background mid-row).
+    let mut text = crate::tui::text::strip_ansi(&String::from_utf8_lossy(&out.stdout));
+    let err = crate::tui::text::strip_ansi(&String::from_utf8_lossy(&out.stderr));
     if !err.trim().is_empty() {
         text.push_str("\n[stderr] ");
         text.push_str(err.trim_end());
