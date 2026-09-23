@@ -170,27 +170,14 @@ fn on_bg(spans: Vec<Span<'static>>, bg: Style) -> Vec<Span<'static>> {
         .collect()
 }
 
-// Top edge: `+-` + dashes + `-+`.
+// A card's horizontal edge: `+-` + dashes + `-+`, exactly `width` cells.
 //
-// Exactly `width` cells — no more. An earlier version appended a trailing
-// space, making the row one cell too wide; the hard-wrap pass then split
-// that cell onto a line of its own, drawing a lone black square between the
-// border and the content (and, on a user message above it, looking like a
-// phantom gap inside the card).
-fn card_top(edge: Style, fill: Style, width: usize) -> Line<'static> {
-    let dashes = width.saturating_sub(4);
-    Line::from(on_bg(
-        vec![
-            Span::styled("+-", edge),
-            Span::styled("-".repeat(dashes), edge),
-            Span::styled("-+", edge),
-        ],
-        fill,
-    ))
-}
-
-// Bottom edge: `+-` + dashes + `-+`. Also the shared seam of a stacked pair.
-fn card_bottom(edge: Style, fill: Style, width: usize) -> Line<'static> {
+// A continuous run, deliberately: spaced dashes (`- - -`) were tried to dodge
+// font ligatures, but they read as a dotted line and looked worse than the
+// ligature they avoided. Kept whole, and sized exactly — an earlier version
+// emitted one cell too many, which the wrap pass split into a line of its own
+// (a lone black square between the border and the content).
+fn card_edge(edge: Style, fill: Style, width: usize) -> Line<'static> {
     let dashes = width.saturating_sub(4);
     Line::from(on_bg(
         vec![
@@ -393,16 +380,16 @@ fn tool_exchange(
     let out_edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
     let bg = Style::new().bg(p.black);
 
-    let mut out = vec![card_top(edge, bg, width)];
+    let mut out = vec![card_edge(edge, bg, width)];
     for line in payload_lines(name, args, p) {
         out.push(card_row(line, edge, bg, width));
     }
     // The seam: `+-` on the left and `-+` on the right, one shared edge.
-    out.push(card_bottom(edge, bg, width));
+    out.push(card_edge(edge, bg, width));
     for line in result_lines(name, ok, result, p, expanded) {
         out.push(card_row(line, out_edge, bg, width));
     }
-    out.push(card_bottom(out_edge, bg, width));
+    out.push(card_edge(out_edge, bg, width));
     out
 }
 
@@ -413,11 +400,11 @@ fn tool_exchange(
 fn tool_request_card(name: &str, args: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
     let edge = Style::new().fg(p.accent);
     let bg = Style::new().bg(p.black);
-    let mut out = vec![card_top(edge, bg, width)];
+    let mut out = vec![card_edge(edge, bg, width)];
     for line in payload_lines(name, args, p) {
         out.push(card_row(line, edge, bg, width));
     }
-    out.push(card_bottom(edge, bg, width));
+    out.push(card_edge(edge, bg, width));
     out
 }
 
@@ -435,11 +422,11 @@ fn tool_result_card(
     // content tells the rest. No labels, same as every other card.
     let edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
     let bg = Style::new().bg(p.black);
-    let mut out = vec![card_top(edge, bg, width)];
+    let mut out = vec![card_edge(edge, bg, width)];
     for line in result_lines(name, ok, result, p, expanded) {
         out.push(card_row(line, edge, bg, width));
     }
-    out.push(card_bottom(edge, bg, width));
+    out.push(card_edge(edge, bg, width));
     out
 }
 
