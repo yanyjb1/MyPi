@@ -470,46 +470,10 @@ impl App {
         self.transcript = entries.clone();
         self.pending = Vec::new();
 
-        // 2) Protocol rebuild: same routine as resume (the projection is the
-        // single source of "what the model must see").
-        let mut rebuilt = ChatContext::new().push(Message::System {
-            content: "你是一个简洁的编程助手。用中文回答。".into(),
-        });
-        for e in &entries {
-            match e {
-                chat::Entry::User { content } => {
-                    rebuilt = rebuilt.push(Message::User { content: content.clone() });
-                }
-                chat::Entry::Assistant { content, .. } => {
-                    rebuilt = rebuilt.push(Message::Assistant {
-                        content: Some(content.clone()),
-                        tool_calls: Vec::new(),
-                    });
-                }
-                chat::Entry::ToolRequest { call_id, name, object } => {
-                    let call = crate::ai::types::ToolCall {
-                        id: call_id.clone(),
-                        kind: "function".into(),
-                        function: crate::ai::types::FunctionCall {
-                            name: name.clone(),
-                            arguments: object.clone(),
-                        },
-                    };
-                    rebuilt = rebuilt.push(Message::Assistant {
-                        content: None,
-                        tool_calls: vec![call],
-                    });
-                }
-                chat::Entry::ToolResult { call_id, result, .. } => {
-                    rebuilt = rebuilt.push(Message::Tool {
-                        tool_call_id: call_id.clone(),
-                        content: result.clone(),
-                    });
-                }
-                chat::Entry::Error { .. } | chat::Entry::Name { .. } => {}
-            }
-        }
-        *cx.chat.lock().expect("chat 锁中毒") = rebuilt;
+        // 2) Protocol rebuild: the shared routine — dangling tool tails
+        // (leaf on a request without results) are repaired inside, so the
+        // next run() always starts from a protocol-legal boundary.
+        *cx.chat.lock().expect("chat 锁中毒") = entries_to_context(&entries);
 
         // 3) Name: nearest marker on the new path.
         self.session_name = st.effective_name(sid).ok().flatten().or(self.session_name.take());
@@ -1583,6 +1547,98 @@ pub fn run_tui(cfg: Config) -> Result<()> {
     result
 }
 
+
+// Rebuild the **full protocol messages** from projected entries (the
+// inverse of `collect_turn`). Tool call details (call_id / arguments /
+// results) are all in the DB — the live build, resume, and tree
+// navigation all read the same source, so the model sees the history
+// exactly as it did the first time.
+//
+// Dangling safety: if the projection ends inside a tool chain (leaf on
+// a ToolRequest with no matching ToolResult, or vice versa), the tail
+// is repaired — a request without results is dropped together with its
+// pending calls (never a half-open tool_calls message), so the next
+// `run()` always starts from a protocol-legal boundary.
+fn entries_to_context(entries: &[chat::Entry]) -> ChatContext {
+    let mut rebuilt = ChatContext::new().push(Message::System {
+        content: "你是一个简洁的编程助手。用中文回答。".into(),
+    });
+    // Pair requests with their results first: call_id -> (name, object, result)
+    use std::collections::BTreeMap;
+    let mut results: BTreeMap<String, (bool, String)> = BTreeMap::new();
+    for e in entries {
+        if let chat::Entry::ToolResult { call_id, ok, result, .. } = e {
+            results.insert(call_id.clone(), (*ok, result.clone()));
+        }
+    }
+    let mut served: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for e in entries {
+        match e {
+            chat::Entry::User { content } => {
+                rebuilt = rebuilt.push(Message::User { content: content.clone() });
+            }
+            chat::Entry::Assistant { content, .. } => {
+                rebuilt = rebuilt.push(Message::Assistant {
+                    content: Some(content.clone()),
+                    tool_calls: Vec::new(),
+                });
+            }
+            chat::Entry::ToolRequest { call_id, name, object } => {
+                let call = crate::ai::types::ToolCall {
+                    id: call_id.clone(),
+                    kind: "function".into(),
+                    function: crate::ai::types::FunctionCall {
+                        name: name.clone(),
+                        arguments: object.clone(),
+                    },
+                };
+                rebuilt = rebuilt.push(Message::Assistant {
+                    content: None,
+                    tool_calls: vec![call],
+                });
+            }
+            chat::Entry::ToolResult { call_id, result, .. } => {
+                // The stored result is exactly what the model received
+                // back then — use it verbatim.
+                served.insert(call_id.clone());
+                rebuilt = rebuilt.push(Message::Tool {
+                    tool_call_id: call_id.clone(),
+                    content: result.clone(),
+                });
+            }
+            chat::Entry::Error { .. } | chat::Entry::Name { .. } => {}
+        }
+    }
+    // Repair pass: drop trailing requests whose results never arrived
+    // (dangling leaf). Walk backwards while the tail is ToolRequest-
+    // without-result or a Tool message whose request was dropped.
+    loop {
+        match rebuilt.messages.last() {
+            Some(Message::Tool { tool_call_id, .. }) if !served.is_empty() => {
+                // A Tool result always pairs with the preceding request;
+                // by construction requests come before results, so this
+                // cannot dangle. Stop when we hit anything else.
+                let id = tool_call_id.clone();
+                // Remove this Tool message and its (already emitted) request
+                // stays — a result with request is protocol-legal. Nothing
+                // to repair.
+                let _ = id;
+                break;
+            }
+            Some(Message::Assistant { content: None, tool_calls }) if !tool_calls.is_empty() => {
+                // Pure tool-call round with no results yet: dangling.
+                // Rewind to before this message.
+                rebuilt.messages.pop();
+                // Also remove the matching result markers (none here by
+                // construction) and continue checking the new tail.
+                continue;
+            }
+            _ => break,
+        }
+    }
+    rebuilt
+}
+
 // Extract this turn's entries from the finished chat replica (for persistence).
 //
 // Precondition: the last message in chat.messages before run() is this turn's user
@@ -1715,4 +1771,48 @@ fn spawn_turn(
         }
         let _ = send(AppEvent::Done);
     });
+}
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+    use crate::ai::types::Message;
+    use crate::tui::components::chat::Entry;
+
+    #[test]
+    fn rebuild_handles_complete_and_dangling_tool_tails() {
+        // Complete chain: request + result survive.
+        let complete = vec![
+            Entry::User { content: "q".into() },
+            Entry::ToolRequest { call_id: "c1".into(), name: "bash".into(), object: "{}".into() },
+            Entry::ToolResult { call_id: "c1".into(), name: "bash".into(), ok: true, result: "out".into() },
+            Entry::Assistant { content: "done".into(), usage: None, reasoning: None },
+        ];
+        let ctx = entries_to_context(&complete);
+        let non_system = ctx.messages.iter().filter(|m| !matches!(m, Message::System { .. })).count();
+        assert_eq!(non_system, 4); // user, assistant(tool_calls), tool, assistant(done)
+        assert!(ctx.messages.iter().any(|m| matches!(m, Message::Assistant { tool_calls, .. } if !tool_calls.is_empty())));
+        assert!(ctx.messages.iter().any(|m| matches!(m, Message::Tool { .. })));
+
+        // Dangling: request without result (leaf stopped mid-chain) — the
+        // request is dropped, protocol stays legal.
+        let dangling = vec![
+            Entry::User { content: "q".into() },
+            Entry::ToolRequest { call_id: "c2".into(), name: "bash".into(), object: "{}".into() },
+        ];
+        let ctx = entries_to_context(&dangling);
+        let non_system = ctx.messages.iter().filter(|m| !matches!(m, Message::System { .. })).count();
+        assert_eq!(non_system, 1); // user only — the dangling request was dropped
+        assert!(matches!(ctx.messages.last(), Some(Message::User { .. })));
+
+        // Name markers pass through harmlessly.
+        let named = vec![
+            Entry::User { content: "q".into() },
+            Entry::Name { name: "分支".into() },
+            Entry::Assistant { content: "a".into(), usage: None, reasoning: None },
+        ];
+        let ctx = entries_to_context(&named);
+        let non_system = ctx.messages.iter().filter(|m| !matches!(m, Message::System { .. })).count();
+        assert_eq!(non_system, 2);
+    }
 }
