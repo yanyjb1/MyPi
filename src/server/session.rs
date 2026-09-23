@@ -9,7 +9,10 @@
 //! tree navigation, /name markers — all go through here, so the same
 //! rules apply no matter which surface triggered them.
 
-use crate::ai::types::Usage;
+use crate::ai::client::Client;
+use crate::ai::config::{Config, ModelEntry};
+use crate::ai::types::{Context as ChatContext, Usage};
+use std::sync::{Arc, Mutex};
 use crate::entry::Entry;
 use crate::server::events::{Change, SessionEvent, StreamView};
 use crate::store::Store;
@@ -145,6 +148,31 @@ impl SessionState {
                 // resulting entries. Nothing to consume here.
                 Change::None
             }
+            SessionEvent::NameMarker(name) => {
+                // Marker entry (tree semantics) + best-effort legacy column.
+                self.session_name = Some(name.clone());
+                let marker = Entry::Name { name: name.clone() };
+                self.transcript.push(marker.clone());
+                // Borrow discipline: store writes in scoped blocks; error
+                // echoes go into the transcript only after the borrow ends.
+                let write_err = self.persistence().and_then(|(st, sid)| {
+                    st.append(sid, std::slice::from_ref(&marker)).err()
+                });
+                if let Some(e) = write_err {
+                    self.transcript.push(Entry::Error { text: format!("命名写入失败：{e:#}") });
+                }
+                if let Some((st, sid)) = self.persistence() {
+                    let _ = st.set_session_name(sid, Some(&name));
+                }
+                Change::Transcript
+            }
+            SessionEvent::SetCwd { seq, path } => {
+                // Bookkeeping only: nothing to draw.
+                if let Some((st, sid)) = self.persistence() {
+                    let _ = st.record_cwd(sid, seq, &path);
+                }
+                Change::None
+            }
         }
     }
 
@@ -269,14 +297,6 @@ impl SessionState {
         self.session_name = name;
     }
 
-    /// /name: remember the name, stage the marker entry (persisted with
-    /// the turn) and echo it to the transcript.
-    pub fn name_session(&mut self, arg: &str, marker: Entry) -> Change {
-        self.session_name = Some(arg.to_string());
-        self.pending.push(marker.clone());
-        self.transcript.push(marker);
-        Change::Transcript
-    }
 
     /// Tree navigation landed: replace transcript + pending wholesale
     /// and merge the effective name (never clobbers an explicit /name).
@@ -325,6 +345,239 @@ impl SessionState {
     }
 }
 
+
+// ---- facade ------------------------------------------------------------
+
+/// High-level session handle — the object a surface *holds*.
+///
+/// Owns everything a turn needs (client, shared chat replica, cwd slot,
+/// interrupt flag, price sheet) and exposes protocol-level operations:
+/// `submit` spawns the turn runner and routes its events into the
+/// [`SessionState`]. A surface (TUI or a headless driver) never touches
+/// turn viscera — it calls methods here and drains `Change`s.
+pub struct Session {
+    pub state: SessionState,
+    // Turn resources (shared with the spawned runner thread).
+    client: std::cell::RefCell<Client>,
+    chat: Arc<Mutex<ChatContext>>,
+    pub max_tokens: u32,
+    pub interrupt: Arc<std::sync::atomic::AtomicBool>,
+    // Working directory (shared; /cd migrates it): the turn thread
+    // snapshots at start, the surface writes; the RwLock keeps reads and
+    // writes from trampling each other.
+    pub cwd: Arc<std::sync::RwLock<std::path::PathBuf>>,
+    // Price sheet of the current model (local cost computation).
+    pub cost: crate::ai::config::Cost,
+    cost_tracker: crate::ai::pricing::CostTracker,
+    tx: std::sync::mpsc::Sender<SessionEvent>,
+}
+
+impl Session {
+    /// Assemble a session service + its event channel. `chat` starts as
+    /// the system-prompt-only replica.
+    pub fn new(
+        state: SessionState,
+        client: Client,
+        chat: ChatContext,
+        max_tokens: u32,
+        cost: crate::ai::config::Cost,
+        cwd: std::path::PathBuf,
+    ) -> (Self, std::sync::mpsc::Receiver<SessionEvent>) {
+        let (tx, rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let s = Self {
+            state,
+            client: std::cell::RefCell::new(client),
+            chat: Arc::new(Mutex::new(chat)),
+            max_tokens,
+            interrupt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cwd: Arc::new(std::sync::RwLock::new(cwd)),
+            cost,
+            cost_tracker: crate::ai::pricing::CostTracker::default(),
+            tx,
+        };
+        (s, rx)
+    }
+
+    /// Submit user text: lazily create the session (in-memory mode
+    /// degrades gracefully), echo + stage + reset streaming slots, then
+    /// spawn the turn runner. Returns false when a turn is already
+    /// streaming.
+    pub fn submit(&mut self, text: &str) -> bool {
+        if self.state.busy() {
+            return false;
+        }
+        if self.state.session_id().is_none() {
+            let cwd = self.cwd().display().to_string();
+            let Some(st) = self.state.store_mut() else {
+                return self.finish_submit(text);
+            };
+            {
+            let now = crate::store::now_stamp();
+            match st.create_session(&now, &cwd) {
+                Ok(id) => {
+                    self.state.adopt_session(id, Vec::new(), None);
+                }
+                Err(e) => {
+                    self.state
+                        .echo(crate::entry::Entry::Error { text: format!("数据库不可用：{e:#}") });
+                }
+            }
+            }
+        }
+        self.finish_submit(text)
+    }
+
+    fn finish_submit(&mut self, text: &str) -> bool {
+        self.state.start_turn(text);
+        self.interrupt
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        crate::server::turn::spawn_turn(
+            self.tx.clone(),
+            crate::server::turn::TurnRequest {
+                client: self.client.borrow().clone(),
+                chat: self.chat.clone(),
+                text: text.to_string(),
+                cfg: crate::agent::loop_rs::LoopConfig::new(self.max_tokens),
+                interrupt: self.interrupt.clone(),
+                cwd: self.cwd.read().expect("cwd 锁中毒").clone(),
+                cwd_slot: self.cwd.clone(),
+            },
+        );
+        true
+    }
+
+    /// Point the client at another model (the /switch path). Returns the
+    /// new current model entry.
+    pub fn switch_model(&self, cfg: &Config, rm: &crate::ai::config::ResolvedModel) -> ModelEntry {
+        let provider = cfg
+            .models
+            .providers
+            .get(&rm.provider_name)
+            .expect("validated provider");
+        let api_key = cfg.resolve_key(provider);
+        self.client
+            .borrow_mut()
+            .switch_model(&provider.base_url, &api_key, &rm.entry.id);
+        rm.entry.clone()
+    }
+
+    /// Rebuild the shared chat replica from projected entries (tree
+    /// navigation / resume). Dangling tool tails are repaired inside.
+    pub fn rebuild_chat(&self, entries: &[Entry]) {
+        *self.chat.lock().expect("chat 锁中毒") =
+            crate::server::turn::entries_to_context(entries);
+    }
+
+    /// Migrate the working directory; returns the previous value.
+    pub fn set_cwd(&self, next: std::path::PathBuf) -> std::path::PathBuf {
+        let mut w = self.cwd.write().expect("cwd 锁中毒");
+        std::mem::replace(&mut *w, next)
+    }
+
+    pub fn cwd(&self) -> std::path::PathBuf {
+        self.cwd.read().expect("cwd 锁中毒").clone()
+    }
+
+    /// Current model's display price: total spent + latest prompt tokens.
+    pub fn spend(&self) -> (f64, u64) {
+        (self.cost_tracker.total, self.cost_tracker.last_prompt_tokens)
+    }
+
+    // ---- read-side passthrough (the surface renders through these) ----
+
+    pub fn busy(&self) -> bool {
+        self.state.busy()
+    }
+    pub fn stream_view(&self) -> &StreamView {
+        self.state.stream_view()
+    }
+    pub fn transcript(&self) -> &[Entry] {
+        self.state.transcript()
+    }
+    pub fn snapshot(&self) -> Snapshot {
+        self.state.snapshot()
+    }
+    pub fn session_name(&self) -> Option<&str> {
+        self.state.session_name()
+    }
+    pub fn session_id(&self) -> Option<i64> {
+        self.state.session_id()
+    }
+    pub fn cwd_seq(&self) -> i64 {
+        self.state.cwd_seq()
+    }
+    pub fn store(&self) -> Option<&Store> {
+        self.state.store()
+    }
+    pub fn store_mut(&mut self) -> Option<&mut Store> {
+        self.state.store_mut()
+    }
+    pub fn pending_snapshot(&self) -> &[Entry] {
+        self.state.pending_snapshot()
+    }
+
+    // ---- write-side passthrough (UI-flow mutators that predate the
+    // protocol: echoes, navigation, resume adoption). The turn's data
+    // path itself goes through `handle` only. ----
+
+    pub fn echo(&mut self, e: Entry) -> Change {
+        self.state.echo(e)
+    }
+    pub fn stage(&mut self, e: Entry) {
+        self.state.stage(e)
+    }
+    pub fn commit_round(&mut self, entries: Vec<Entry>) {
+        self.state.commit_round(entries)
+    }
+    pub fn adopt_session(&mut self, id: i64, entries: Vec<Entry>, name: Option<String>) -> Change {
+        self.state.adopt_session(id, entries, name)
+    }
+    pub fn set_session_name(&mut self, name: Option<String>) {
+        self.state.set_session_name(name)
+    }
+    pub fn navigate_to(&mut self, entries: Vec<Entry>, effective_name: Option<String>) -> Change {
+        self.state.navigate_to(entries, effective_name)
+    }
+    pub fn bump_cwd_seq(&mut self) -> i64 {
+        self.state.bump_cwd_seq()
+    }
+    pub fn set_cwd_seq(&mut self, seq: i64) {
+        self.state.set_cwd_seq(seq)
+    }
+    pub fn ensure_session(&mut self, root: &std::path::Path) -> Option<i64> {
+        self.state.ensure_session(root)
+    }
+    pub fn persistence(&mut self) -> Option<(&mut Store, i64)> {
+        self.state.persistence()
+    }
+    pub fn handle(&mut self, ev: SessionEvent) -> Change {
+        self.state.handle(ev)
+    }
+
+    /// Esc during a turn: the runner stops reading and disconnects.
+    pub fn interrupt_turn(&self) {
+        self.interrupt
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Drain protocol events into the session state. `Change::TurnDone`
+    /// is priced locally against `cost` here. Returns the observed
+    /// changes so the surface reacts without touching internals.
+    pub fn drain(&mut self, rx: &std::sync::mpsc::Receiver<SessionEvent>) -> Vec<Change> {
+        let mut changes = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            let change = self.state.handle(ev);
+            if change == Change::TurnDone
+                && let Some(u) = self.state.take_last_usage()
+            {
+                self.cost_tracker.record(&u, &self.cost);
+            }
+            changes.push(change);
+        }
+        changes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,14 +604,13 @@ mod tests {
     }
 
     #[test]
-    fn name_session_updates_statusline_and_stages_marker() {
+    fn name_marker_updates_statusline_and_appends_marker() {
         let mut s = st();
-        let marker = Entry::Name { name: "test".into() };
-        s.name_session("test", marker);
+        s.handle(SessionEvent::NameMarker("test".into()));
         assert_eq!(s.session_name(), Some("test"));
-        assert_eq!(s.pending_snapshot().len(), 1);
+        // Marker echoes into the transcript (renderer skips it).
+        assert!(matches!(s.transcript().last(), Some(Entry::Name { name }) if name == "test"));
     }
-
     #[test]
     fn navigate_merges_name_without_clobbering() {
         let mut s = st();

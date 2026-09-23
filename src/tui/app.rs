@@ -22,8 +22,6 @@
 //! The two threads communicate over `mpsc::channel` (std) — data races
 //! are ruled out by the compiler.
 
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -34,14 +32,13 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 
-use crate::agent::loop_rs::LoopConfig;
 use crate::ai::client::Client;
 use crate::ai::config::Config;
 use crate::ai::pricing::CostTracker;
 use crate::ai::types::{Context as ChatContext, Message};
 use crate::entry as entry;
 use crate::tui::editor::{Editor, Effect};
-use crate::server::events::{Change, SessionEvent};
+use crate::server::events::SessionEvent;
 use crate::tui::history;
 use crate::tui::keys::{Action, KeyContext, translate_with};
 use crate::tui::zones::Zone as _;
@@ -87,21 +84,21 @@ struct App {
     // Remembers the target column across consecutive ↑↓ moves, so a
     // short line does not clamp the column and trap the cursor.
     goal_col: Option<usize>,
-    // Session viscera (transcript/pending/store/session_id/name/cwd_seq).
-    // The TUI subscribes to it; mutations go through narrow mutators.
-    session: crate::server::SessionState,
+    // Session service facade: owns turn resources (client/chat/cwd/
+    // interrupt) + the SessionState. The TUI only calls protocol methods.
+    session: crate::server::Session,
     // Input history (what ↑ cycles through).
     input_history: history::History,
     // Completion surface (popup state machine + word memo + model args).
     completion: crate::tui::completion::CompletionController,
     tracker: CostTracker,
-    // Current model's price sheet (for local cost computation on TurnDone).
-    cost_cfg: crate::ai::config::Cost,
     // History-zone state (scroll follow, folds). Owned by the zone; the
     // app reads through it when rendering.
     history: crate::tui::zones_impl::HistoryState,
     // Config handle: command argument completion reads the model list.
     cfg: Option<std::rc::Rc<std::cell::RefCell<crate::ai::config::Config>>>,
+    // The session's current model entry (statusline display name and /switch follow it).
+    current_model: std::rc::Rc<std::cell::RefCell<crate::ai::config::ModelEntry>>,
     // Set by /exit /quit /q: the main loop exits after the current apply finishes.
     quit_requested: bool,
     // /resume picker: Some((candidates, highlighted index)). While Some, the reserved area shows the list.
@@ -112,8 +109,6 @@ struct App {
     last_esc: std::time::Instant,
     // cwd note injected into the first turn after resume (written on resume, consumed on submit).
     pending_cwd_note: Option<String>,
-    // Interrupt flag: once set, the background thread stops reading and disconnects.
-    interrupt: Arc<AtomicBool>,
     spin_i: usize,
     spin_at: Instant,
     git: Option<crate::git::GitStatus>,
@@ -126,19 +121,21 @@ struct App {
 }
 
 impl App {
-    fn new(cwd: std::path::PathBuf) -> Self {
+    fn new(
+        session: crate::server::Session,
+        current_model: std::rc::Rc<std::cell::RefCell<crate::ai::config::ModelEntry>>,
+    ) -> Self {
+        let cwd = session.cwd();
         let home = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| cwd.clone());
         Self {
-            cost_cfg: crate::ai::config::Cost::default(),
             editor: Editor::new(),
             goal_col: None,
             history: crate::tui::zones_impl::HistoryState::default(),
             input_history: history::History::new(),
             completion: crate::tui::completion::CompletionController::new(),
             tracker: CostTracker::default(),
-            interrupt: Arc::new(AtomicBool::new(false)),
             spin_i: 0,
             spin_at: Instant::now(),
             git: crate::git::snapshot(&cwd),
@@ -149,10 +146,8 @@ impl App {
             tree_pick: None,
             last_esc: std::time::Instant::now() - std::time::Duration::from_secs(1),
             pending_cwd_note: None,
-            session: {
-                migrate_legacy_db(&xdg_data_base());
-                crate::server::SessionState::new(crate::store::Store::open(&db_path()).ok())
-            },
+            session,
+            current_model,
             cwd,
             home,
             scroll: 0,
@@ -255,7 +250,7 @@ impl App {
     // append forks from there. Rebuilds transcript + protocol from the new
     // projection; the prefix cache is keyed on the rebuilt history, so a
     // cache hit survives navigation to a shared prefix.
-    fn tree_navigate_to(&mut self, seq: i64, cx: &Ctx) {
+    fn tree_navigate_to(&mut self, seq: i64) {
         let Some(sid) = self.session.session_id() else { return };
         // Store work (leaf move + re-projection + name lookup) inside a
         // scoped borrow; the SessionState mutation happens after it ends.
@@ -284,8 +279,7 @@ impl App {
         // 2) Protocol rebuild: the shared routine — dangling tool tails
         // (leaf on a request without results) are repaired inside, so the
         // next run() always starts from a protocol-legal boundary.
-        *cx.chat.lock().expect("chat 锁中毒") =
-            crate::server::turn::entries_to_context(&entries);
+        self.session.rebuild_chat(&entries);
 
         // 4) Echo + editor draft semantics: navigating to a user entry puts
         // that message back into the editor (pi behavior) — you usually
@@ -303,7 +297,7 @@ impl App {
     // session's last persisted migration), and the session name.
     // The first turn after resume appends a cwd note (pending_cwd_note)
     // — appended only, history untouched, cache prefix intact.
-    fn resume_confirm(&mut self, cx: &Ctx) {
+    fn resume_confirm(&mut self) {
         let Some((items, sel)) = self.resume_pick.take() else { return };
         let Some((id, name)) = items.get(sel).cloned() else { return };
         // Store reads (projection + metadata) in a scoped borrow; state
@@ -377,7 +371,7 @@ impl App {
                 entry::Entry::Error { .. } | entry::Entry::Name { .. } => {}
             }
         }
-        *cx.chat.lock().expect("chat 锁中毒") = rebuilt;
+        self.session.rebuild_chat(&entries);
 
         // 3) Working directory: the session's last persisted migration (falls back to the initial cwd on record)
         if let Some(m) = &meta
@@ -385,7 +379,7 @@ impl App {
         {
             let p = std::path::PathBuf::from(cwd_str);
             if p.is_dir() {
-                cx.set_cwd(p);
+                self.session.set_cwd(p);
             }
         }
 
@@ -396,7 +390,7 @@ impl App {
         // Inject the cwd note into the first turn after resume (append only; history untouched)
         self.pending_cwd_note = Some(format!(
             "[工作目录已恢复为 {}，相对路径以此为基准]",
-            cx.cwd.read().expect("cwd 锁中毒").display()
+            self.session.cwd().display()
         ));
 
         self.session.echo(entry::Entry::Error {
@@ -496,7 +490,7 @@ impl App {
     // Structure: every "editor-only" action is translated into a
     // language action inside `editor_action`, and the epilogue runs
     // **once, here**. See the `editor_action` docs.
-    fn apply(&mut self, action: Action, term_w: u16, cx: &Ctx) -> bool {
+    fn apply(&mut self, action: Action, term_w: u16) -> bool {
         // ---- routing: modal > input (editor) > app-level. One chain,
         // one place. A new overlay only adds a `modal.is_some()` branch
         // here; zones declare their own acceptance in `zones_impl`.
@@ -518,7 +512,7 @@ impl App {
                     let target = self.tree_pick.as_ref().and_then(|t| t.confirm());
                     self.tree_pick = None;
                     if let Some(seq) = target {
-                        self.tree_navigate_to(seq, cx);
+                        self.tree_navigate_to(seq);
                     }
                     return true;
                 }
@@ -542,7 +536,7 @@ impl App {
                     return true;
                 }
                 Action::SelectorConfirm => {
-                    self.resume_confirm(cx);
+                    self.resume_confirm();
                     return true;
                 }
                 Action::SelectorCancel => {
@@ -563,7 +557,7 @@ impl App {
                 EditAction::None => {}
                 EditAction::Finish(effect) => self.finish_edit(effect),
                 EditAction::LoadText(text) => self.load_into_editor(&text),
-                EditAction::Submit => self.submit(cx),
+                EditAction::Submit => self.submit(),
             }
             return !self.quit_requested;
         }
@@ -605,7 +599,7 @@ impl App {
                 // reading and disconnects on the next delta. Killing the
                 // thread outright would lose received content and the
                 // usage block with it.
-                self.interrupt.store(true, Ordering::Relaxed);
+                self.session.interrupt_turn();
             }
             Action::ToggleReasoning => {
                 // History-zone fold; the next frame recomputes heights.
@@ -794,17 +788,17 @@ impl App {
     // Input cleanup (editor/popup/scroll) is done by the caller
     // `submit` for every command; this only performs each command's
     // business action and echo.
-    fn run_command(&mut self, cmd_name: &str, arg: &str, cx: &Ctx) {
+    fn run_command(&mut self, cmd_name: &str, arg: &str) {
         match cmd_name {
             "/q" | "/quit" | "/exit" => {
                 // Session data is persisted at every Commit; setting the flag is enough — apply closes the main loop afterwards.
                 self.quit_requested = true;
             }
-            "/cdp" => self.cmd_cdp(arg, cx),
+            "/cdp" => self.cmd_cdp(arg),
             "/name" => self.cmd_name(arg),
-            "/resume" => self.cmd_resume(cx),
-            "/model" => self.cmd_model(arg, cx),
-            "/switch" => self.cmd_switch(arg, cx),
+            "/resume" => self.cmd_resume(),
+            "/model" => self.cmd_model(arg),
+            "/switch" => self.cmd_switch(arg),
             other => {
                 // Any name passing lookup() must have an arm; reaching here is a programming error.
                 debug_assert!(false, "未实现命令: {other}");
@@ -815,9 +809,9 @@ impl App {
     // /cdp <dir>: permanently migrate the working directory (persisted;
     // resume can restore it). Temporary migration is the AI's cd tool,
     // which never goes through here.
-    fn cmd_cdp(&mut self, arg: &str, cx: &Ctx) {
+    fn cmd_cdp(&mut self, arg: &str) {
         if arg.is_empty() {
-            let cur = cx.cwd.read().expect("cwd 锁中毒").display().to_string();
+            let cur = self.session.cwd().display().to_string();
             self.session.echo(entry::Entry::Error {
                 text: format!("当前工作目录：{cur}\n用法：/cdp <目录>（永久迁移，落盘）"),
             });
@@ -831,18 +825,13 @@ impl App {
         let target = if target.is_absolute() {
             target
         } else {
-            cx.cwd.read().expect("cwd 锁中毒").join(target)
+            self.session.cwd().join(target)
         };
         match target.canonicalize() {
             Ok(real) if real.is_dir() => {
-                let old = cx.set_cwd(real.clone());
+                let old = self.session.set_cwd(real.clone());
                 let seq = self.session.bump_cwd_seq();
-                if let Some((st, sid)) = self.session.persistence()
-                    && let Err(e) = st.record_cwd(sid, seq, &real.display().to_string())
-                {
-                    self.session.echo(entry::Entry::Error { text: format!("写库失败：{e:#}") });
-                    return;
-                }
+                self.session.handle(SessionEvent::SetCwd { seq, path: real.display().to_string() });
                 self.session.echo(entry::Entry::Error {
                     text: format!("工作目录：{} → {}（已落盘）", old.display(), real.display()),
                 });
@@ -867,21 +856,9 @@ impl App {
             self.session.echo(entry::Entry::Error { text: format!("当前会话名：{cur}。用法：/name <名字>") });
             return;
         }
-        // Persist as a name marker hanging off the current leaf; it also
-        // lands in the in-memory transcript (skipped by the renderer).
-        let marker = entry::Entry::Name { name: arg.to_string() };
-        self.session.name_session(arg, marker.clone());
-        let write_result = self
-            .session
-            .persistence()
-            .map(|(st, sid)| {
-                let r = st.append(sid, std::slice::from_ref(&marker));
-                let _ = st.set_session_name(sid, Some(arg)); // legacy column, best-effort
-                r
-            });
-        if let Some(Err(e)) = write_result {
-            self.session.echo(entry::Entry::Error { text: format!("命名写入失败：{e:#}") });
-        }
+        // One protocol event: marker entry, persistence, legacy column —
+        // all the session's business now.
+        self.session.handle(SessionEvent::NameMarker(arg.to_string()));
         self.session.echo(entry::Entry::Error { text: format!("已命名：{arg}") });
     }
 
@@ -911,12 +888,12 @@ impl App {
     }
 
     // /resume: list this project's sessions, stretching the reserved area.
-    fn cmd_resume(&mut self, cx: &Ctx) {
+    fn cmd_resume(&mut self) {
         let Some(st) = self.session.store() else {
             self.session.echo(entry::Entry::Error { text: "存储未打开，无法 resume".into() });
             return;
         };
-        let root = cx.cwd.read().expect("cwd 锁中毒").clone();
+        let root = self.session.cwd();
         match Self::build_resume_items(st, &root) {
             Ok(items) if items.is_empty() => {
                 self.session.echo(entry::Entry::Error {
@@ -933,9 +910,9 @@ impl App {
     }
 
     // /model [id]: list models or set the default (writes config.yaml; effective after restart).
-    fn cmd_model(&mut self, arg: &str, cx: &Ctx) {
+    fn cmd_model(&mut self, arg: &str) {
         if arg.is_empty() {
-            let cfg = cx.cfg.borrow();
+            let cfg = self.cfg.as_ref().expect("cfg ready").borrow();
             let current = cfg.app.default.as_deref().unwrap_or("(未设置)");
             let mut lines = vec![format!("当前默认：{current}（/model <provider>:<id> 修改，写入 config.yaml）")];
             for (pname, m) in cfg.models() {
@@ -946,8 +923,8 @@ impl App {
             }
             return;
         }
-        match cx.cfg.borrow().model_by_id(arg).ok() {
-            Some(_) => match cx.cfg.borrow().save_default(arg) {
+        match self.cfg.as_ref().expect("cfg ready").borrow().model_by_id(arg).ok() {
+            Some(_) => match self.cfg.as_ref().expect("cfg ready").borrow().save_default(arg) {
                 Ok(()) => {
                     self.session.echo(entry::Entry::Error {
                         text: format!("默认模型已设为 {arg}，已写入 config.yaml"),
@@ -968,10 +945,10 @@ impl App {
     }
 
     // /switch [id]: switch this session's model (not persisted; restart returns to the default).
-    fn cmd_switch(&mut self, arg: &str, cx: &Ctx) {
-        let cfg = cx.cfg.borrow();
+    fn cmd_switch(&mut self, arg: &str) {
+        let cfg = self.cfg.as_ref().expect("cfg ready").borrow();
         if arg.is_empty() {
-            let cur = cx.current_model.borrow().display_name().to_string();
+            let cur = self.current_model.borrow().display_name().to_string();
             let mut lines = vec![format!("当前会话模型：{cur}（/switch <provider>:<id> 切换）")];
             for (pname, m) in cfg.models() {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
@@ -983,10 +960,12 @@ impl App {
         }
         match cfg.model_by_id(arg) {
             Ok(rm) => {
-                let p = cfg.models.providers.get(&rm.provider_name).expect("validated provider");
-                let api_key = cfg.resolve_key(p);
-                cx.client.borrow_mut().switch_model(&p.base_url, &api_key, &rm.entry.id);
-                *cx.current_model.borrow_mut() = rm.entry.clone();
+                drop(cfg);
+                let new_model = self.session.switch_model(
+                    &self.cfg.as_ref().expect("cfg ready").borrow(),
+                    &rm,
+                );
+                *self.current_model.borrow_mut() = new_model;
                 self.session.echo(entry::Entry::Error {
                     text: format!("已切换到 {} ({})，仅本会话生效", arg, Config::display_name(&rm.entry)),
                 });
@@ -1000,7 +979,7 @@ impl App {
     }
 
     // Submit the current input.
-    fn submit(&mut self, cx: &Ctx) {
+    fn submit(&mut self) {
         // The model receives the **expanded** text: markers are only the on-screen folded view.
         let text = self.editor.expanded_text().trim().to_string();
         if text.is_empty() {
@@ -1018,7 +997,7 @@ impl App {
             self.completion.close();
             self.goal_col = None;
             self.scroll = 0;
-            self.run_command(cmd_name, cmd_arg, cx);
+            self.run_command(cmd_name, cmd_arg);
             return;
         }
         if self.session.busy() {
@@ -1029,24 +1008,8 @@ impl App {
         self.completion.close();
         self.goal_col = None;
         self.scroll = 0;
-        if self.session.session_id().is_none()
-            && let Some(st) = self.session.store_mut()
-        {
-            let now = crate::store::now_stamp();
-            match st.create_session(&now, &self.cwd.display().to_string()) {
-                Ok(id) => {
-                    self.session.adopt_session(id, Vec::new(), None);
-                }
-                Err(e) => {
-                    self.session.echo(entry::Entry::Error { text: format!("数据库不可用：{e:#}") });
-                }
-            }
-        }
-
-        self.session.start_turn(&text);
         self.history.scroll_pinned = true;
         self.history.chat_scroll = 0;
-        self.interrupt.store(false, Ordering::Relaxed);
         // First turn after resume: **append** the restored working
         // directory to the user message (history untouched, prefix cache
         // unaffected; older messages stay verbatim).
@@ -1054,7 +1017,8 @@ impl App {
             Some(note) => format!("{text}\n\n{note}"),
             None => text,
         };
-        cx.spawn_turn(text, self.interrupt.clone());
+        // One call: echo + stage + streaming reset + runner spawn.
+        self.session.submit(&text);
     }
 
     // Clear the input box and reset related state (Ctrl+C).
@@ -1066,19 +1030,11 @@ impl App {
         self.completion.close();
     }
 
-    // Drain messages from the background thread.
-    /// Drain the protocol channel into the session service, then fold
-    /// the usage into the local cost tracker. The App never touches turn
-    /// data — it only reacts to the `Change`s the session reports.
+    /// Drain the protocol channel through the session facade. The App
+    /// never touches turn data — it only reacts to the `Change`s
+    /// reported back.
     fn drain_events(&mut self, rx: &mpsc::Receiver<SessionEvent>) {
-        while let Ok(ev) = rx.try_recv() {
-            let change = self.session.handle(ev);
-            if change == Change::TurnDone
-                && let Some(u) = self.session.take_last_usage()
-            {
-                self.tracker.record(&u, &self.cost_cfg);
-            }
-        }
+        self.session.drain(rx);
     }
 
     // Advance the spinner by time.
@@ -1099,48 +1055,6 @@ impl App {
             self.git = crate::git::snapshot(&self.cwd);
             self.git_at = Instant::now();
         }
-    }
-}
-
-// Handles for interacting with the environment (send channel + model params), passed to `App::apply`.
-struct Ctx {
-    tx: mpsc::Sender<SessionEvent>,
-    client: std::cell::RefCell<Client>,
-    // Config replica: /model lists, /model sets default, /switch reads entries.
-    cfg: std::rc::Rc<std::cell::RefCell<crate::ai::config::Config>>,
-    // The session's current model entry (statusline display name and pricing follow it).
-    current_model: std::rc::Rc<std::cell::RefCell<crate::ai::config::ModelEntry>>,
-    // Shared chat history: the turn thread **writes back** the finalized
-    // history when done, so the model remembers the previous turn (also
-    // the precondition for prefix-cache hits).
-    chat: Arc<Mutex<ChatContext>>,
-    max_tokens: u32,
-    // Working directory (shared; /cd and /cdp migrate it): the turn
-    // thread snapshots at start, the TUI main thread writes; the RwLock
-    // keeps reads and writes from trampling each other.
-    cwd: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
-}
-
-impl Ctx {
-    fn spawn_turn(&self, text: String, interrupt: Arc<AtomicBool>) {
-        crate::server::turn::spawn_turn(
-            self.tx.clone(),
-            crate::server::turn::TurnRequest {
-                client: self.client.borrow().clone(),
-                chat: self.chat.clone(),
-                text,
-                cfg: LoopConfig::new(self.max_tokens),
-                interrupt,
-                cwd: self.cwd.read().expect("cwd 锁中毒").clone(),
-                cwd_slot: self.cwd.clone(),
-            },
-        );
-    }
-
-    // Migrate the working directory. Returns the old value (for /cdp to persist).
-    fn set_cwd(&self, next: std::path::PathBuf) -> std::path::PathBuf {
-        let mut w = self.cwd.write().expect("cwd 锁中毒");
-        std::mem::replace(&mut *w, next)
     }
 }
 
@@ -1250,24 +1164,34 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let chat = ChatContext::new().push(Message::System {
         content: "你是一个简洁的编程助手。用中文回答。".into(),
     });
-    let cwd = std::sync::Arc::new(std::sync::RwLock::new(
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-    ));
-    let mut app = App::new(cwd.read().expect("cwd 锁中毒").clone());
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // Session service facade: owns turn resources + SessionState + the
+    // event channel. The TUI holds it and the rx.
+    let max_tokens = model.max_output_tokens.unwrap_or(4096) as u32;
+    let (session, rx) = crate::server::Session::new(
+        {
+            migrate_legacy_db(&xdg_data_base());
+            crate::server::SessionState::new(crate::store::Store::open(&db_path()).ok())
+        },
+        client,
+        chat,
+        max_tokens,
+        cost_cfg,
+        cwd.clone(),
+    );
+    let mut app = App::new(session, current_model);
     app.cfg = Some(cfg.clone());
-    app.cost_cfg = cost_cfg;
     // `--resume`: open the session picker before the first frame (the
     // same surface /resume shows; Esc here simply starts a fresh session).
     if cli.resume
         && let Some(st) = app.session.store()
-        && let Ok(items) = App::build_resume_items(st, &cwd.read().expect("cwd 锁中毒").clone())
+        && let Ok(items) = App::build_resume_items(st, &app.session.cwd())
         && !items.is_empty()
     {
         // No store / no sessions: fall through to a fresh session.
         app.resume_pick = Some((items, 0));
     }
     let ctx_limit = model.context_window;
-    let max_tokens = model.max_output_tokens.unwrap_or(4096) as u32;
 
     let mut terminal = ratatui::init();
     // Enable bracketed paste: the terminal wraps pasted content in
@@ -1279,21 +1203,8 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
 
     let result = (|| -> Result<()> {
-        let (tx, rx) = mpsc::channel::<SessionEvent>();
-        // Environment handles are built once.
-        // It used to be rebuilt inside the event loop, cloning client +
-        // chat on every keystroke even though neither changes for the
-        // whole session — a free copy, and it buried the `apply` call
-        // site under noise.
-        let cx = Ctx {
-            tx: tx.clone(),
-            client: std::cell::RefCell::new(client),
-            cfg: cfg.clone(),
-            current_model: current_model.clone(),
-            chat: Arc::new(Mutex::new(chat)),
-            max_tokens,
-            cwd: cwd.clone(),
-        };
+        // (the session facade owns the event channel; nothing to wire here)
+
         // Last frame's layout, for mouse zone hit-testing.
         let mut last_layout: Option<crate::tui::layout::Layout> = None;
         loop {
@@ -1303,7 +1214,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                     Event::Key(k) if k.kind == KeyEventKind::Press => {
                         let term_w = terminal.size()?.width;
                         let action = translate_with(k, app.key_context(term_w));
-                        if !app.apply(action, term_w, &cx) {
+                        if !app.apply(action, term_w) {
                             break;
                         }
                     }
@@ -1320,7 +1231,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                         // agreeing was pure luck; unified now, no drift
                         // possible.
                         let term_w = terminal.size()?.width;
-                        if !app.apply(Action::Paste(s), term_w, &cx) {
+                        if !app.apply(Action::Paste(s), term_w) {
                             break;
                         }
                     }
@@ -1356,7 +1267,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             // ---- rendering ----
             let size = terminal.size()?;
             let wrapped = app.wrapped(size.width);
-            let cwd_str = cx.cwd.read().expect("cwd 锁中毒").display().to_string();
+            let cwd_str = app.session.cwd().display().to_string();
             let cursor_char = app.editor.cursor();
             let spinner = app.spinner();
 
@@ -1386,7 +1297,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             // Record for the next mouse event's zone hit-test.
             last_layout = Some(l);
             let mut cursor_pos = (0u16, 0u16);
-            let model_name = Config::display_name(&cx.current_model.borrow()).to_string();
+            let model_name = Config::display_name(&app.current_model.borrow()).to_string();
             terminal.draw(|f| {
                 // Modal takeover: the tree navigator draws over the whole
                 // screen; base zones and the hardware cursor are skipped.

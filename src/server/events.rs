@@ -49,6 +49,12 @@ pub enum SessionEvent {
     /// The user submitted a message; starts a turn (or is rejected while
     /// one streams — the emitter checks `busy()` first, not the session).
     Submit(String),
+    /// /name: rename the session. Persists a Name marker under the
+    /// current leaf (branches inherit names, siblings never see them).
+    NameMarker(String),
+    /// /cd landed: persist the migrated working directory under `seq`.
+    /// Pure bookkeeping — no transcript change.
+    SetCwd { seq: i64, path: String },
 }
 
 /// What happened after a mutation — enough for a renderer to react

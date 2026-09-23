@@ -21,4 +21,4 @@ pub mod session;
 pub mod turn;
 
 pub use events::{Change, SessionEvent, StreamView};
-pub use session::SessionState;
+pub use session::{Session, SessionState};

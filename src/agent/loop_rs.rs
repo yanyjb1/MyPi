@@ -42,6 +42,25 @@ impl LoopConfig {
             max_rounds: 16,
         }
     }
+
+    /// The `max_tokens` value to **send** for this request: the user's
+    /// ceiling minus the context already occupied (4 chars ≈ 1 token, a
+    /// deliberately cheap estimate — real usage comes back in the
+    /// response and drives billing/ctx display).
+    ///
+    /// Rationale: `max_tokens` is a reply *budget*, not a constant to
+    /// echo verbatim. Requesting a top-of-model number for a short chat
+    /// makes strict gateways (observed: local vLLM-style returns 503)
+    /// reject requests that would never come close to the limit.
+    pub fn effective_max_tokens(&self, ctx: &Context) -> u32 {
+        let used: usize = ctx
+            .messages
+            .iter()
+            .map(|m| m.approx_chars())
+            .sum();
+        let used_tokens = (used / 4) as u32;
+        self.max_tokens.saturating_sub(used_tokens).max(256)
+    }
 }
 
 // Tool executor: the loop hands model-requested calls over to it.
@@ -137,7 +156,7 @@ pub fn run(
     let mut rounds = 0usize;
 
     loop {
-        let assistant = client.stream(ctx, cfg.max_tokens, &mut on_delta, &mut on_reasoning)?;
+        let assistant = client.stream(ctx, cfg.effective_max_tokens(ctx), &mut on_delta, &mut on_reasoning)?;
 
         // No tools requested, or interrupted/aborted — turn over.
         //
@@ -192,7 +211,7 @@ pub fn run(
             // ceiling was hit. The UI must surface this explicitly —
             // otherwise the user just sees a reply that mysteriously
             // stops mid-thought.
-            let last = client.stream(ctx, cfg.max_tokens, &mut on_delta, &mut on_reasoning)?;
+            let last = client.stream(ctx, cfg.effective_max_tokens(ctx), &mut on_delta, &mut on_reasoning)?;
             return Ok(TurnOutcome {
                 message: last,
                 tool_calls_made,

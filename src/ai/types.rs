@@ -75,6 +75,24 @@ pub enum Message {
     },
 }
 
+impl Message {
+    /// Rough character count of the message content — feeds the cheap
+    /// context estimate used to shrink the requested `max_tokens`. NOT a
+    /// tokenizer: billing and the ctx gauge always use the real usage
+    /// the gateway reports back.
+    pub fn approx_chars(&self) -> usize {
+        match self {
+            Message::User { content } => content.len(),
+            Message::Assistant { content, tool_calls } => {
+                content.as_deref().unwrap_or("").len()
+                    + tool_calls.iter().map(|c| c.function.arguments.len() + c.function.name.len()).sum::<usize>()
+            }
+            Message::Tool { content, .. } => content.len(),
+            Message::System { content } => content.len(),
+        }
+    }
+}
+
 // Content serialization for `Option<String>`: `None` becomes JSON
 // `null` rather than an omitted field (which serde default behavior
 // would choose depends on attributes; we need the explicit null).
