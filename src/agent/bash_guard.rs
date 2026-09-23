@@ -163,10 +163,7 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
     // not launder the verb, so match rm anywhere in the token stream
     // (not just as argv[0]).
     let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
-    let pos = match tokens.iter().position(|t| *t == "rm") {
-        Some(p) => p,
-        None => return None,
-    };
+    let pos = tokens.iter().position(|t| *t == "rm")?;
     // Targets: everything after the verb that is not flag-looking. Flags
     // may also come after targets (`rm foo -rf`), so anything not
     // starting with `-` and not `--` is a target.
@@ -204,10 +201,7 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
 fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
     let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
-    let pos = match tokens.iter().position(|t| *t == "mv") {
-        Some(p) => p,
-        None => return None,
-    };
+    let pos = tokens.iter().position(|t| *t == "mv")?;
     let rest: Vec<&str> = tokens[pos + 1..].iter().copied().filter(|t| !t.starts_with('-')).collect();
     // `mv src... dest`: every src except the last is a source.
     if rest.len() < 2 {
@@ -235,10 +229,9 @@ fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
     let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
     // Same anti-laundering: find/fd may follow sudo/env/nohup.
-    let pos = match tokens.iter().position(|t| *t == "find" || *t == "fd" || *t == "fdfind") {
-        Some(p) => p,
-        None => return None,
-    };
+    let pos = tokens
+        .iter()
+        .position(|t| *t == "find" || *t == "fd" || *t == "fdfind")?;
     let head = tokens[pos];
     let rest: Vec<&str> = tokens[pos + 1..].to_vec();
     // fd takes the search root as a positional argument (defaults to
