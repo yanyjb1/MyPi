@@ -11,7 +11,7 @@
 #
 # How to get this file onto your machine (the program will not create it):
 #   curl -o ~/.config/mypi/models.yml \
-#     https://raw.githubusercontent.com/Arisha/MyPi/main/models_example.yml
+#     https://raw.githubusercontent.com/yanyjb1/MyPi/main/models_example.yml
 #
 # Pricing is **computed locally**: the gateway only reports how many
 # tokens each request used (input / output / cache hits); mypi multiplies

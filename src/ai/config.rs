@@ -330,7 +330,7 @@ impl Config {
         let models_path = Self::models_path()?;
         let app_path = Self::app_path()?;
 
-        const TEMPLATE_URL: &str = "https://raw.githubusercontent.com/Arisha/MyPi/main/models_example.yml";
+        const TEMPLATE_URL: &str = "https://raw.githubusercontent.com/yanyjb1/MyPi/main/models_example.yml";
         let models_text = std::fs::read_to_string(&models_path).with_context(|| {
             format!(
                 "no models.yml at {} — create it yourself (the program never writes this file):\n  1. get the template: {}\n  2. put it at {}, fill in your providers and keys",
