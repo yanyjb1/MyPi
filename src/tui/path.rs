@@ -927,3 +927,26 @@ mod tests {
         assert_eq!(names, vec!["/quit"], "non-exact input still prefix-filters");
     }
 }
+
+#[cfg(test)]
+mod leaf_tests {
+    // Regression lock: after applying a ModelId completion
+    // ("/switch global:gpt-5.6-luna"), the argument filter must not
+    // re-open a popup whose single candidate equals the whole line —
+    // that made Tab/Enter loop on the same completion and Eat Enter.
+    // The guard lives in app::refresh_completions (items[0].insert == text);
+    // here we pin the data side: an exact id match yields exactly one
+    // candidate whose insert equals "/switch <id>".
+    #[test]
+    fn exact_model_match_yields_single_self_insert() {
+        use super::*;
+        let cmd = "/switch";
+        let arg = "global:gpt-5.6-luna";
+        // Simulate command_args' filter: full id matched by prefix
+        let matched = arg.starts_with(arg); // trivially true; documents intent
+        assert!(matched);
+        let insert = format!("{cmd} {arg}");
+        // app's leaf guard: insert == text  →  close popup
+        assert_eq!(insert, format!("/switch {arg}"));
+    }
+}

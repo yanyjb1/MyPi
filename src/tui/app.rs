@@ -311,8 +311,14 @@ impl App {
                 match spec.args {
                     path::ArgKind::ModelId => {
                         if let Some(items) = self.command_args(&prefix) {
-                            if items.is_empty() {
+                            // Leaf state: the single candidate reproduces the
+                            // current line verbatim (nothing left to extend).
+                            // Close so Tab/Enter stop re-confirming the same
+                            // completion and Enter submits again.
+                            let is_leaf = items.len() == 1 && items[0].insert == text;
+                            if items.is_empty() || is_leaf {
                                 self.popup.close();
+                                self.last_completion_word = None;
                             } else {
                                 self.last_completion_word = None;
                                 self.popup.open(items, 0, cursor);
