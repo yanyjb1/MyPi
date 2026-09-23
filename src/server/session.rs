@@ -14,7 +14,7 @@ use crate::ai::config::{Config, ModelEntry};
 use crate::ai::types::{Context as ChatContext, Usage};
 use std::sync::{Arc, Mutex};
 use crate::entry::Entry;
-use crate::server::events::{Change, SessionEvent, StreamView};
+use crate::server::events::{Change, LiveActivity, SessionEvent, StreamView};
 use crate::store::Store;
 
 /// Everything the renderer needs from the session, in one read-only
@@ -79,19 +79,31 @@ impl SessionState {
             SessionEvent::Delta(d) => {
                 self.stream.reasoning_done = true; // content started; reasoning frozen
                 self.stream.text.push_str(&d);
+                // Content is arriving: it occupies the live row itself.
+                self.stream.live = LiveActivity::Idle;
                 Change::Stream
             }
             SessionEvent::ReasoningDelta(r) => {
+                // First reasoning chunk of this turn means the server has
+                // started talking — and it is talking about its own thoughts
+                // rather than answering. That is exactly "thinking".
+                if self.stream.reasoning.is_empty() {
+                    self.stream.live = LiveActivity::Thinking;
+                }
                 self.stream.reasoning.push_str(&r);
                 Change::Stream
             }
             SessionEvent::ToolStart { call_id, name, args, intent } => {
+                self.stream.live = LiveActivity::Tool { intent: intent.clone() };
                 let e = Entry::ToolRequest { call_id, name, args, intent };
                 self.pending.push(e.clone());
                 self.transcript.push(e);
                 Change::Transcript
             }
             SessionEvent::ToolFinish { call_id, name, ok, result } => {
+                // The call this row described has landed; the next event
+                // (another tool, or the reply) decides what replaces it.
+                self.stream.live = LiveActivity::Idle;
                 let e = Entry::ToolResult {
                     call_id,
                     name,

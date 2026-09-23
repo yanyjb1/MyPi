@@ -1197,20 +1197,9 @@ fn draw_frame(
             scroll_pinned: app.history.scroll_pinned,
             show_reasoning: !app.history.reasoning_folded,
             tools_expanded: app.history.tools_expanded,
-            live_reasoning: {
-                let sv = app.session.stream_view();
-                if sv.reasoning.is_empty() { None } else { Some(sv.reasoning.as_str()) }
-            },
-            // A tool is running exactly while the newest entry is its request
-            // (the matching result has not landed yet): its own stated intent
-            // takes the live row — far more useful than a bare "thinking".
-            live_intent: match app.session.transcript().last() {
-                Some(entry::Entry::ToolRequest { intent, .. }) if !intent.is_empty() => {
-                    Some(intent.as_str())
-                }
-                _ => None,
-            },
-            reasoning_done: app.session.stream_view().reasoning_done,
+            // The live row is driven by the session, the only party that knows
+            // whether the server is thinking or a tool is running.
+            live: &app.session.stream_view().live,
             streaming: {
                 let sv = app.session.stream_view();
                 if sv.text.is_empty() { None } else { Some(sv.text.as_str()) }

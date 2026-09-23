@@ -86,6 +86,34 @@ pub struct EditArgs {
 }
 
 // ---------------------------------------------------------------------------
+// Parse read arguments.
+fn parse_read_args(raw: &str) -> Result<String> {
+    let v: serde_json::Value = serde_json::from_str(raw)?;
+    Ok(v.get("path")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| anyhow!("missing `path` argument"))?
+        .to_string())
+}
+
+// read: show a file's contents (with line numbers, so the model can talk
+// about specific lines and feed `mass_edit` later).
+//
+// Deliberately no output card in the UI: `edit`'s counterpart. The command
+// (the path) is the whole story, and reading is side-effect-free — the
+// transcript shows the upper card so the user sees what was read.
+pub fn read(cwd: &std::path::Path, path: &str) -> Result<String> {
+    let p = resolve_file(cwd, path)?;
+    let text = std::fs::read_to_string(&p).context("failed to read file")?;
+    let mut out = String::new();
+    for (i, line) in text.lines().enumerate() {
+        out.push_str(&format!("{:>5}\t{line}\n", i + 1));
+    }
+    if out.is_empty() {
+        return Ok("(empty file)".into());
+    }
+    Ok(out)
+}
+
 // Parse bash arguments.
 fn parse_bash_args(raw: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(raw)?;
@@ -365,6 +393,19 @@ impl BuiltinTools {
         use serde_json::json;
         vec![
             ToolDef::function(
+                "read",
+                "读一个文件的完整内容（带行号）。改文件前先读，避免瞎猜原文。\
+                 只读文件，不读目录。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
+                        "path": {"type": "string", "description": "文件路径，支持 ./ 与 ../"}
+                    },
+                    "required": ["intent", "path"]
+                }),
+            ),
+            ToolDef::function(
                 "edit",
                 "在文件里把一段文本替换成另一段。old 必须在文件里恰好出现一次。\
                  适合改一个有唯一上下文的位置。",
@@ -441,6 +482,7 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
             "edit" => edit(&self.cwd, &parse_edit_args(&call.function.arguments)?),
             "mass_edit" => mass_edit(&self.cwd, &parse_mass_edit_args(&call.function.arguments)?),
             "bash" => bash(&self.cwd, &parse_bash_args(&call.function.arguments)?),
+            "read" => read(&self.cwd, &parse_read_args(&call.function.arguments)?),
             "cd" => self.tool_cd(&parse_cd_args(&call.function.arguments)?),
             other => Err(anyhow!("unknown tool: {other}")),
         }
@@ -657,7 +699,7 @@ mod tests {
     fn definitions_carry_both_tools() {
         let defs = BuiltinTools::definitions();
         let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
-        assert_eq!(names, vec!["edit", "cd", "bash", "mass_edit"]);
+        assert_eq!(names, vec!["read", "edit", "cd", "bash", "mass_edit"]);
         // The schema must declare required fields, or the model omits arguments
         for d in &defs {
             assert!(d.function.parameters.get("required").is_some());

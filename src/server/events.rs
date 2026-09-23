@@ -82,6 +82,25 @@ pub enum Change {
     None,
 }
 
+/// What the user is waiting on right now — the one live row at the bottom
+/// of the transcript.
+///
+/// A dedicated type (rather than a bare string) so the renderer can style
+/// each state differently — and so future ones can be added without the
+/// transcript learning a new special case.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum LiveActivity {
+    /// Nothing in flight (or the reply's text has already started, which
+    /// needs no placeholder — the text itself occupies the row).
+    #[default]
+    Idle,
+    /// The server has begun emitting reasoning: it is thinking.
+    Thinking,
+    /// A tool is executing. Carries the model's own one-line explanation of
+    /// what the call is for; empty when the model offered none.
+    Tool { intent: String },
+}
+
 /// The in-flight streaming slots, read-only. The renderer snapshots
 /// these each frame; the session owns the buffers.
 #[derive(Debug, Default, Clone)]
@@ -96,6 +115,8 @@ pub struct StreamView {
     pub reasoning: String,
     /// Whether content has started (reasoning slot stops updating after).
     pub reasoning_done: bool,
+    /// What the user is waiting on (drives the live row).
+    pub live: LiveActivity,
 }
 
 impl StreamView {

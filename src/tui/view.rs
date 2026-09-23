@@ -25,13 +25,9 @@ pub struct ViewState<'a> {
     pub show_reasoning: bool,
     // Global tool-output expansion (Ctrl+O toggles).
     pub tools_expanded: bool,
-    // Reasoning currently streaming. Shows "thinking"; disappears once content starts.
-    pub live_reasoning: Option<&'a str>,
-    // The running tool's stated intent (the model's one-liner). Takes the live
-    // row while a tool blocks the turn — more informative than "thinking".
-    pub live_intent: Option<&'a str>,
-    // Whether content has started (when the thinking row withdraws).
-    pub reasoning_done: bool,
+    // What the user is waiting on: thinking, a tool's intent, or nothing.
+    // Drawn as the bottom-most row of the history area.
+    pub live: &'a crate::server::events::LiveActivity,
     // Content currently streaming (in-progress slot), rendered with the history area.
     pub streaming: Option<&'a str>,
     // The input's wrap result.
@@ -126,9 +122,7 @@ pub fn draw(f: &mut Frame, s: &ViewState, l: &tlayout::Layout) -> (u16, u16) {
         s.show_reasoning,
         s.tools_expanded,
         inner_w,
-        s.live_reasoning,
-        s.live_intent,
-        s.reasoning_done,
+        s.live,
         s.streaming,
     );
     let total = chat::estimated_height(&chat_lines, inner_w);

@@ -21,6 +21,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::entry::{Align, Entry, ToolView, UsageSummary};
+use crate::server::events::LiveActivity;
 use crate::tui::highlight;
 use crate::tui::theme::Palette;
 
@@ -29,7 +30,7 @@ use crate::tui::theme::Palette;
 // The single render entry point: in-memory history and DB-resumed history
 // both go through it, guaranteeing "reopened after persistence" looks identical to "just typed".
 pub fn render(entries: &[Entry], p: &Palette, show_reasoning: bool, tools_expanded: bool) -> Vec<Line<'static>> {
-    render_with_live(entries, p, show_reasoning, tools_expanded, 80, None, None, false, None)
+    render_with_live(entries, p, show_reasoning, tools_expanded, 80, &LiveActivity::Idle, None)
 }
 
 // Render plus the streaming tail (in-flight reasoning/content/tool intent).
@@ -43,25 +44,41 @@ pub fn render_with_live(
     show_reasoning: bool,
     tools_expanded: bool,
     width: usize,
-    live_reasoning: Option<&str>,
-    live_intent: Option<&str>,
-    reasoning_done: bool,
+    live: &LiveActivity,
     streaming: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    for e in entries {
+    // A tool result immediately following its request is the same exchange:
+    // render them as one stacked card instead of two separate ones.
+    let mut i = 0;
+    while i < entries.len() {
+        let e = &entries[i];
+        if let (Entry::ToolRequest { call_id, name, args, .. }, Some(Entry::ToolResult { call_id: rid, name: rname, ok, result, .. })) =
+            (e, entries.get(i + 1))
+            && call_id == rid
+            && name == rname
+        {
+            // `read` has no result card: it is side-effect-free and the
+            // request card (the path) already tells the whole story, so the
+            // file contents would just be the same thing twice.
+            if result_card_visible(name) {
+                out.extend(tool_exchange(name, args, *ok, result, p, tools_expanded, width));
+            } else {
+                out.extend(tool_request_card(name, args, p, width));
+            }
+            i += 2;
+            continue;
+        }
         match e {
             Entry::User { content } => out.extend(user_card(content, p, width)),
             Entry::Assistant { content, usage, reasoning } => {
                 out.extend(assistant_block(content, reasoning.as_deref(), usage.as_ref(), p, show_reasoning))
             }
-            Entry::ToolRequest { name, args, intent, .. } => {
-                out.extend(tool_request_card(name, args, intent, p, width))
+            Entry::ToolRequest { name, args, .. } => {
+                out.extend(tool_request_card(name, args, p, width))
             }
             Entry::ToolResult { name, ok, result, .. } => {
-                // The view is not persisted: synthesized from data at render time
-                let view = ToolView::synthesize(name, *ok, result);
-                out.extend(tool_result_card(name, *ok, &view, p, tools_expanded, width))
+                out.extend(tool_result_card(name, *ok, result, p, tools_expanded, width))
             }
             Entry::Error { text } => {
                 for part in text.split('\n') {
@@ -73,24 +90,31 @@ pub fn render_with_live(
             // Name markers are metadata, not chat content: never a history row.
             Entry::Name { .. } => {}
         }
+        i += 1;
     }
-    // ---- streaming tail ----
-    // One live row, in priority order:
-    //   1. a tool is running  -> the model's own intent line (what it is doing)
-    //   2. reasoning only      -> "thinking"
-    //   3. content has started -> withdrawn, the content itself takes the row
-    if !reasoning_done
-        && let Some(it) = live_intent.filter(|s| !s.trim().is_empty())
-    {
-        out.push(Line::styled(
-            it.to_string(),
-            Style::new().fg(p.muted).add_modifier(Modifier::ITALIC),
-        ));
-    } else if let Some(r) = live_reasoning
-        && !reasoning_done
-        && !r.trim().is_empty()
-    {
-        out.push(Line::styled("thinking", Style::new().fg(p.muted).add_modifier(Modifier::ITALIC)));
+    // ---- streaming tail: the one live row at the bottom ----
+    //
+    // It is a **system notice drawn last**, i.e. bottom-most in the history
+    // area. Three states, driven by the session (not guessed here):
+    //   Thinking      — the server has started emitting reasoning
+    //   Tool { intent } — a tool is running; the model's own explanation, or
+    //                   a bare label for tools that need none (read/edit)
+    //   Idle          — nothing pending (arriving content occupies the row)
+    match live {
+        LiveActivity::Thinking => {
+            out.push(Line::styled(
+                "thinking",
+                Style::new().fg(p.muted).add_modifier(Modifier::ITALIC),
+            ));
+        }
+        LiveActivity::Tool { intent } => {
+            let label = if intent.trim().is_empty() { "working" } else { intent.as_str() };
+            out.push(Line::styled(
+                label.to_string(),
+                Style::new().fg(p.muted).add_modifier(Modifier::ITALIC),
+            ));
+        }
+        LiveActivity::Idle => {}
     }
     // In-flight content: gray italic would be wrong (it is the final answer); default style, appended per delta
     if let Some(t) = streaming
@@ -207,6 +231,9 @@ fn display_width(s: &str) -> usize {
 fn user_card(content: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
     let bg = Style::new().bg(p.black);
     let mut out = Vec::new();
+    // Breathing room: a blank row above and below, still on the accent gutter
+    // and the true-black background, so the card reads as one solid block.
+    out.push(pad_to(Line::from(Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))), width, bg));
     for line in super::markdown::render_markdown(content, p) {
         // Force the card's own foreground/background: markdown may have
         // decided on a color for a code span, but a user message is
@@ -220,9 +247,7 @@ fn user_card(content: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
         }
         out.push(pad_to(Line::from(spans), width, bg));
     }
-    if !out.is_empty() {
-        out.push(Line::from(""));
-    }
+    out.push(pad_to(Line::from(Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))), width, bg));
     out
 }
 
@@ -278,6 +303,15 @@ fn system_block(text: &str, align: Align, p: &Palette, width: usize) -> Vec<Line
 // tool cards
 // ---------------------------------------------------------------------------
 
+// Whether a result deserves its own card.
+//
+// Reading is not a change: `read`'s result is the file it just showed, and
+// the request card already names the path, so a result card would repeat it.
+// Every other tool did something worth confirming.
+fn result_card_visible(name: &str) -> bool {
+    name != "read"
+}
+
 // Default fold threshold for tool output (lines). Per-tool overrides: [`collapse_limit`].
 const DEFAULT_COLLAPSE_LINES: usize = 5;
 
@@ -290,22 +324,47 @@ fn collapse_limit(tool: &str) -> usize {
     }
 }
 
-// Tool call card: the arguments, syntax-highlighted, on the black card.
+// Two cards glued into one: the call's content, the seam, the result's content.
 //
-// The model's `intent` heads the card: it is the one-line "what I am about
-// to do" written for a human, and it is also what the live slot shows while
-// the tool blocks the turn.
-fn tool_request_card(name: &str, args: &str, intent: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
+// A tool call and its result are one exchange, not two messages — drawing
+// them as two separate boxes (each with its own top *and* bottom edge) made
+// a single `ls` cost six rows. Here the middle edge is shared, and the
+// result's edges take the success/failure color so the outcome still reads
+// at a glance. No type labels: the content says what it is.
+fn tool_exchange(
+    name: &str,
+    args: &str,
+    ok: bool,
+    result: &str,
+    p: &Palette,
+    expanded: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let edge = Style::new().fg(p.accent);
+    let out_edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
+    let bg = Style::new().bg(p.black);
+
+    let mut out = vec![card_top("+-", "", edge, bg, width)];
+    for line in payload_lines(name, args, p) {
+        out.push(card_row(line, edge, bg, width));
+    }
+    // The seam: `+-` on the left and `-+` on the right, one shared edge.
+    out.push(card_bottom(edge, bg, width));
+    for line in result_lines(name, ok, result, p, expanded) {
+        out.push(card_row(line, out_edge, bg, width));
+    }
+    out.push(card_bottom(out_edge, bg, width));
+    out
+}
+
+// Tool call card: the arguments only, syntax-highlighted, on the black card.
+//
+// Used for a request that has no result yet (interrupt mid-call). The
+// labelable form is [`tool_exchange`].
+fn tool_request_card(name: &str, args: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
     let edge = Style::new().fg(p.accent);
     let bg = Style::new().bg(p.black);
-    let label = if intent.trim().is_empty() {
-        // Older entries (and models that skip the field) have no intent; a
-        // neutral label beats an empty parenthesis.
-        format!("{name} (in)")
-    } else {
-        format!("{name} (in) · {intent}")
-    };
-    let mut out = vec![card_top("+-", &label, edge, bg, width)];
+    let mut out = vec![card_top("+-", "", edge, bg, width)];
     for line in payload_lines(name, args, p) {
         out.push(card_row(line, edge, bg, width));
     }
@@ -318,18 +377,46 @@ fn tool_request_card(name: &str, args: &str, intent: &str, p: &Palette, width: u
 fn tool_result_card(
     name: &str,
     ok: bool,
-    view: &ToolView,
+    result: &str,
     p: &Palette,
     expanded: bool,
     width: usize,
 ) -> Vec<Line<'static>> {
+    // An unpaired result (interrupted call). Colour it, but there is no
+    // matching request to stack with, so it keeps its own label.
     let mark = if ok { "✓" } else { "✗" };
     let edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
     let bg = Style::new().bg(p.black);
     let mut out = vec![card_top("+-", &format!("{mark} {name} (out)"), edge, bg, width)];
+    for line in result_lines(name, ok, result, p, expanded) {
+        out.push(card_row(line, edge, bg, width));
+    }
+    out.push(card_bottom(edge, bg, width));
+    out
+}
 
-    match view {
+// The body rows of a tool's result — shared by the standalone card and the
+// stacked exchange, so both fold/diff/placeholder identically.
+fn result_lines(
+    name: &str,
+    ok: bool,
+    result: &str,
+    p: &Palette,
+    expanded: bool,
+) -> Vec<Line<'static>> {
+    let view = ToolView::synthesize(name, ok, result);
+    let mut out = Vec::new();
+    match &view {
         ToolView::Plain { text } => {
+            // A tool that ran and returned nothing still **happened**: it cost
+            // a round trip and may have changed the world (a silent `mkdir`,
+            // a `git commit` that prints on success only). Show a placeholder
+            // so the model — and the user — can see it was not skipped.
+            if text.trim().is_empty() {
+                // `read` has its own row even when the payload is the file.
+                out.push(Line::styled("(no output)", Style::new().fg(p.muted)));
+                return out;
+            }
             let lines: Vec<&str> = text.lines().collect();
             let limit = collapse_limit(name);
             let fold = !expanded && lines.len() > limit;
@@ -339,47 +426,34 @@ fn tool_result_card(
             let lang = highlight::language_for_tool(name);
             for l in shown {
                 for hl in highlight::highlight(l, lang) {
-                    out.push(card_row(hl, edge, bg, width));
+                    out.push(hl);
                 }
             }
             if fold {
-                out.push(card_row(
-                    Line::styled(format!("… 共 {} 行", lines.len()), Style::new().fg(p.muted)),
-                    edge,
-                    bg,
-                    width,
+                out.push(Line::styled(
+                    format!("… 共 {} 行", lines.len()),
+                    Style::new().fg(p.muted),
                 ));
             }
         }
         ToolView::Diff { deletions, insertions } => {
             // Deletions above, insertions below: red and green backgrounds
-            // (vscode style). Still routed through `card_row`, so the diff sits
-            // inside the same `| … |` frame as every other card body.
+            // (vscode style). Kept as row styles; `card_row` folds them into
+            // the spans so they survive the frame.
             for d in deletions {
-                out.push(card_row(
-                    Line::styled(
-                        format!("- {d}"),
-                        Style::new().fg(Color::Black).bg(Color::Rgb(255, 128, 128)),
-                    ),
-                    edge,
-                    bg,
-                    width,
+                out.push(Line::styled(
+                    format!("- {d}"),
+                    Style::new().fg(Color::Black).bg(Color::Rgb(255, 128, 128)),
                 ));
             }
             for i in insertions {
-                out.push(card_row(
-                    Line::styled(
-                        format!("+ {i}"),
-                        Style::new().fg(Color::Black).bg(Color::Rgb(128, 200, 128)),
-                    ),
-                    edge,
-                    bg,
-                    width,
+                out.push(Line::styled(
+                    format!("+ {i}"),
+                    Style::new().fg(Color::Black).bg(Color::Rgb(128, 200, 128)),
                 ));
             }
         }
     }
-    out.push(card_bottom(edge, bg, width));
     out
 }
 
@@ -482,13 +556,12 @@ mod tests {
         ];
         let lines = render(&entries, &p, false, false);
         let all = text_of(&lines);
-        // User card: accent gutter on a true-black background
+        // User card opens with a blank accent row on a true-black background
         assert_eq!(lines[0].spans[0].content, "▌ ");
         assert_eq!(lines[0].spans[0].style.fg, Some(p.accent));
         assert_eq!(lines[0].spans[0].style.bg, Some(Color::Rgb(0, 0, 0)));
-        // Both tool cards exist, labelled in/out
-        assert!(all.contains("(in)"), "{all}");
-        assert!(all.contains("(out)"), "{all}");
+        // The matched pair renders as one stacked card: no in/out labels
+        assert!(!all.contains("(in)") && !all.contains("(out)"), "{all}");
         // The call card carries the path…
         assert!(all.contains("./a.txt"), "{all}");
         // …and the diff body keeps its red/green rows (inside the card frame,
@@ -501,11 +574,26 @@ mod tests {
     }
 
     #[test]
+    fn user_card_has_blank_rows_above_and_below() {
+        let p = Palette::default();
+        let lines = user_card("你好", &p, 20);
+        assert_eq!(lines.len(), 3, "空行 + 正文 + 空行");
+        for i in [0, 2] {
+            let t = text_of(std::slice::from_ref(&lines[i]));
+            assert_eq!(t.trim(), "▌", "空行只有 accent 竖线: {t:?}");
+            // …and the black background still covers the whole row
+            for sp in &lines[i].spans {
+                assert_eq!(sp.style.bg, Some(Color::Rgb(0, 0, 0)), "空行也必须带真彩黑底");
+            }
+        }
+    }
+
+    #[test]
     fn user_card_is_white_on_true_black() {
         let p = Palette::default();
         let lines = user_card("你好", &p, 20);
         // Every body span: white on truecolor black (never the indexed black)
-        for l in lines.iter().take(1) {
+        for l in lines.iter().take(2).skip(1) {
             for (i, sp) in l.spans.iter().enumerate() {
                 assert_eq!(sp.style.bg, Some(Color::Rgb(0, 0, 0)), "用户消息必须是真彩黑底");
                 // span 0 is the accent gutter, not message text
@@ -519,9 +607,10 @@ mod tests {
     #[test]
     fn tool_cards_are_bordered() {
         let p = Palette::default();
-        let call = tool_request_card("bash", r#"{"command":"ls -la"}"#, "看目录", &p, 30);
-        // Top edge: `+- bash (in) · 看目录 ----`
-        assert!(text_of(&call[..1]).starts_with("+- bash (in)"), "{}", text_of(&call[..1]));
+        let call = tool_request_card("bash", r#"{"command":"ls -la"}"#, &p, 30);
+        // Top edge: bare frame, no tool name / in-out labels
+        assert!(text_of(&call[..1]).starts_with("+-"), "{}", text_of(&call[..1]));
+        assert!(!text_of(&call).contains("(in)"), "不该再声明卡片类型");
         // Body row: pipes with a space inside both ends
         let body = text_of(&call[1..2]);
         assert!(body.starts_with("| "), "{body:?}");
@@ -533,6 +622,36 @@ mod tests {
             let w: usize = l.spans.iter().map(|s| s.content.as_ref().width()).sum();
             assert!(w >= 30, "卡片行必须补满宽度: {w}");
         }
+    }
+
+    #[test]
+    fn matched_call_and_result_stack_into_one_card() {
+        let p = Palette::default();
+        let entries = vec![
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: r#"{"command":"ls"}"#.into(),
+                intent: "看目录".into(),
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "a.rs".into(),
+            },
+        ];
+        let lines = render(&entries, &p, false, false);
+        // Exactly one top edge, one shared middle seam, one bottom edge:
+        // two separate cards would produce two of each.
+        let edges = lines
+            .iter()
+            .filter(|l| text_of(std::slice::from_ref(*l)).trim_end().starts_with("+-"))
+            .count();
+        assert_eq!(edges, 3, "合并后共 3 条横边（上/中/下）: {:?}", text_of(&lines));
+        // No type labels anywhere
+        let all = text_of(&lines);
+        assert!(!all.contains("(in)") && !all.contains("(out)"), "{all}");
     }
 
     #[test]
@@ -739,17 +858,65 @@ mod tests {
     #[test]
     fn live_row_shows_intent_then_thinking_then_content() {
         let p = Palette::default();
-        // A tool is running: the model's intent takes the live row.
-        let during_tool = render_with_live(&[], &p, false, false, 40, Some("想"), Some("正在编译"), false, None);
+        let tool = LiveActivity::Tool { intent: "正在编译".into() };
+        let thinking_live = LiveActivity::Thinking;
+        // A tool is running: the model's own explanation takes the live row.
+        let during_tool = render_with_live(&[], &p, false, false, 40, &tool, None);
         assert_eq!(during_tool.len(), 1);
         assert_eq!(during_tool[0].spans[0].content, "正在编译");
-        // No tool, but reasoning: the generic label.
-        let thinking = render_with_live(&[], &p, false, false, 40, Some("想"), None, false, None);
+        // Reasoning streaming: the generic label.
+        let thinking = render_with_live(&[], &p, false, false, 40, &thinking_live, None);
         assert_eq!(thinking[0].spans[0].content, "thinking");
-        // Content started: the live row is withdrawn, content takes its place.
-        let after = render_with_live(&[], &p, false, false, 40, Some("想"), Some("正在编译"), true, Some("你好"));
+        // Idle (content streaming): no live row of its own.
+        let after = render_with_live(&[], &p, false, false, 40, &LiveActivity::Idle, Some("你好"));
         assert_eq!(after.len(), 1, "只有正文: {after:?}");
         assert_eq!(after[0].spans[0].content, "你好");
+        // The live row is the **bottom-most** history row.
+        let flowing = render_with_live(
+            &[Entry::Assistant { content: "答".into(), usage: None, reasoning: None }],
+            &p, false, false, 40, &tool, None,
+        );
+        assert_eq!(flowing.last().unwrap().spans[0].content, "正在编译", "live 行必须在最底部");
+    }
+
+    #[test]
+    fn read_has_no_result_card() {
+        let p = Palette::default();
+        let entries = vec![
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "read".into(),
+                args: r#"{"path":"main.rs"}"#.into(),
+                intent: "读文件".into(),
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "read".into(),
+                ok: true,
+                result: "1\tfn main() {}".into(),
+            },
+        ];
+        let lines = render(&entries, &p, false, false);
+        // Upper card only: one top edge, one bottom edge, no seam.
+        let edges = lines
+            .iter()
+            .filter(|l| text_of(std::slice::from_ref(*l)).trim_end().starts_with("+-"))
+            .count();
+        assert_eq!(edges, 2, "read 只该有一张卡片: {:?}", text_of(&lines));
+        assert!(!text_of(&lines).contains("fn main"), "读到的内容不该重复出现");
+    }
+
+    #[test]
+    fn empty_tool_result_shows_a_placeholder() {
+        let p = Palette::default();
+        let e = Entry::ToolResult {
+            call_id: "c".into(),
+            name: "bash".into(),
+            ok: true,
+            result: "".into(),
+        };
+        let all = text_of(&render(&[e], &p, false, false));
+        assert!(all.contains("(no output)"), "空结果必须有占位符: {all}");
     }
 
     #[test]
