@@ -266,6 +266,14 @@ pub struct ModelEntry {
     pub cost: Cost,
 }
 
+impl ModelEntry {
+    /// Human-facing name: the user-chosen `name` field, falling back to
+    /// the wire id. Display only — the id is what the server sees.
+    pub fn display_name(&self) -> &str {
+        if self.name.is_empty() { &self.id } else { &self.name }
+    }
+}
+
 
 impl Config {
     /// Load and parse the config file in lookup order.

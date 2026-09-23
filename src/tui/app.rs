@@ -1006,6 +1006,31 @@ impl App {
         self.transcript.push(chat::Entry::Error { text: format!("已命名：{arg}") });
     }
 
+    // Build the resume picker entries for sessions recorded under `root`.
+    // Shared by /resume and the `--resume` CLI flag (which opens the
+    // picker before the first frame).
+    fn build_resume_items(st: &crate::store::Store, root: &std::path::Path)
+        -> anyhow::Result<Vec<(i64, String)>>
+    {
+        let metas = st.list_sessions_under(root)?;
+        let items = metas
+            .iter()
+            .map(|m| {
+                let first = st
+                    .load_entries(m.id)
+                    .ok()
+                    .and_then(|es| {
+                        es.iter().find_map(|e| match e {
+                            chat::Entry::User { content } => Some(content.clone()),
+                            _ => None,
+                        })
+                    });
+                (m.id, crate::store::display_name(m, first.as_deref()))
+            })
+            .collect();
+        Ok(items)
+    }
+
     // /resume: list this project's sessions, stretching the reserved area.
     fn cmd_resume(&mut self, cx: &Ctx) {
         let Some(st) = self.store.as_ref() else {
@@ -1013,28 +1038,13 @@ impl App {
             return;
         };
         let root = cx.cwd.read().expect("cwd 锁中毒").clone();
-        match st.list_sessions_under(&root) {
-            Ok(metas) if metas.is_empty() => {
+        match Self::build_resume_items(st, &root) {
+            Ok(items) if items.is_empty() => {
                 self.transcript.push(chat::Entry::Error {
                     text: format!("{} 下没有历史会话", root.display()),
                 });
             }
-            Ok(metas) => {
-                let items = metas
-                    .iter()
-                    .map(|m| {
-                        let first = st
-                            .load_entries(m.id)
-                            .ok()
-                            .and_then(|es| {
-                                es.iter().find_map(|e| match e {
-                                    chat::Entry::User { content } => Some(content.clone()),
-                                    _ => None,
-                                })
-                            });
-                        (m.id, crate::store::display_name(m, first.as_deref()))
-                    })
-                    .collect();
+            Ok(items) => {
                 self.resume_pick = Some((items, 0));
             }
             Err(e) => {
@@ -1082,7 +1092,7 @@ impl App {
     fn cmd_switch(&mut self, arg: &str, cx: &Ctx) {
         let cfg = cx.cfg.borrow();
         if arg.is_empty() {
-            let cur = cx.client.borrow().model().to_string();
+            let cur = cx.current_model.borrow().display_name().to_string();
             let mut lines = vec![format!("当前会话模型：{cur}（/switch <provider>:<id> 切换）")];
             for (pname, m) in cfg.models() {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
