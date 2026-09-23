@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod ai;
 pub mod cdp;
+pub mod browser;
 pub mod cli;
 pub mod entry;
 pub mod fetch;

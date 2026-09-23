@@ -494,6 +494,30 @@ impl BuiltinTools {
                 }),
             ),
             ToolDef::function(
+                "browser",
+                "操控真实浏览器（Chromium 内核，如 Helium）。四个命令：\
+                 open（打开 URL）、act（交互：navigate/click/fill/press/select/scroll/eval/net）、\
+                 read（把当前页面读成 markdown）、screenshot（截图存文件）。\
+                 适合 JS 重渲染的 SPA、需要登录的站、需要点击/滚动/抓网络请求的场合。\
+                 net 操作可列出页面发出的网络请求（找评论区的数据包接口就用它）。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
+                        "command": {"type": "string", "enum": ["open", "act", "read", "screenshot"], "description": "操作类型"},
+                        "url": {"type": "string", "description": "open/act=navigate: 要打开的 URL"},
+                        "op": {"type": "string", "enum": ["navigate", "click", "fill", "press", "select", "scroll", "eval", "net"], "description": "act 的具体操作"},
+                        "selector": {"type": "string", "description": "CSS 选择器（click/fill/select/scroll）或按键名（press，如 Enter）"},
+                        "value": {"description": "fill: 文本；select: 选项值；scroll: 像素；eval: JS 表达式"},
+                        "filter": {"type": "string", "description": "act=net: 只保留 URL 含此子串的请求"},
+                        "max": {"type": "integer", "description": "act=net: 最多返回几条请求，默认 20"},
+                        "path": {"type": "string", "description": "screenshot: PNG 保存路径；read: markdown 保存路径"},
+                        "full_page": {"type": "boolean", "description": "screenshot: 整页截图，默认只截视口"}
+                    },
+                    "required": ["intent", "command"]
+                }),
+            ),
+            ToolDef::function(
                 "search",
                 "网页搜索，返回标题、链接与摘要。支持高级语法：\
                  site:github.com（限定域名）、\"精确短语\"、-排除词、filetype:、inurl:、intitle:、before:/after:（YYYY-MM-DD）。\
@@ -523,6 +547,10 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
             "fetch" => {
                 let args = crate::fetch::parse_fetch_args(&call.function.arguments)?;
                 crate::fetch::fetch(&args)
+            }
+            "browser" => {
+                let args = crate::browser::parse_browser_args(&call.function.arguments)?;
+                crate::browser::browser(&args)
             }
             "search" => {
                 let args = crate::web::parse_search_args(&call.function.arguments)?;
@@ -764,7 +792,9 @@ mod tests {
         let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
         assert_eq!(
             names,
-            vec!["read", "edit", "cd", "bash", "mass_edit", "fetch", "search"]
+            vec![
+                "read", "edit", "cd", "bash", "mass_edit", "fetch", "browser", "search"
+            ]
         );
         // The schema must declare required fields, or the model omits arguments
         for d in &defs {

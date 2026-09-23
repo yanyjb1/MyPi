@@ -50,12 +50,19 @@ pub fn browser_profile_dir() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// All env-mutating tests take this lock: `set_var`/`remove_var` are
+    /// process-global, and cargo runs this module's tests on several threads.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn with_env<F: FnOnce()>(vars: &[(&str, Option<&str>)], f: F) {
-        // Rust 2024 marks env mutation unsafe (process-global state). Test
-        // code here is single-threaded per binary and no other thread reads
-        // these vars inside the closure window, so the block is sound.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Rust 2024 marks env mutation unsafe (process-global state).
         //
-        // SAFETY: see above; restoration always runs (no early return).
+        // SAFETY: env vars are process-global, so concurrent tests touching
+        // them race. ENV_LOCK serializes every env-mutating test in this
+        // binary; restoration always runs (no early return between save and
+        // restore), so even a panicking test leaves the env as it found it.
         unsafe {
             let saved: Vec<(String, Option<std::ffi::OsString>)> = vars
                 .iter()

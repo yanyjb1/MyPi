@@ -118,7 +118,7 @@ impl Browser {
     }
 
     /// True when something accepts TCP on 127.0.0.1:port.
-    fn port_alive(port: u16) -> bool {
+    pub fn port_alive(port: u16) -> bool {
         std::net::TcpStream::connect_timeout(
             &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
             Duration::from_millis(500),
