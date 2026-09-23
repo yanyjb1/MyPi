@@ -38,7 +38,6 @@ use crate::ai::pricing::CostTracker;
 use crate::ai::types::{Context as ChatContext, Message};
 use crate::entry as entry;
 use crate::tui::editor::{Editor, Effect, History};
-use crate::server::events::SessionEvent;
 
 use crate::tui::keys::{Action, KeyContext, translate_with};
 use crate::tui::zones::Zone as _;
@@ -80,50 +79,50 @@ enum EditAction {
 }
 
 // All mutable application state.
-struct App {
-    editor: Editor,
+pub(crate) struct App {
+    pub(crate) editor: Editor,
     // Remembers the target column across consecutive ↑↓ moves, so a
     // short line does not clamp the column and trap the cursor.
-    goal_col: Option<usize>,
+    pub(crate) goal_col: Option<usize>,
     // Session service facade: owns turn resources (client/chat/cwd/
     // interrupt) + the SessionState. The TUI only calls protocol methods.
-    session: crate::server::Session,
+    pub(crate) session: crate::server::Session,
     // Input history (what ↑ cycles through).
-    input_history: History,
+    pub(crate) input_history: History,
     // Completion surface (popup state machine + word memo + model args).
-    completion: crate::tui::completion::CompletionController,
-    tracker: CostTracker,
+    pub(crate) completion: crate::tui::completion::CompletionController,
+    pub(crate) tracker: CostTracker,
     // History-zone state (scroll follow, folds). Owned by the zone; the
     // app reads through it when rendering.
-    history: crate::tui::zones_impl::HistoryState,
+    pub(crate) history: crate::tui::zones_impl::HistoryState,
     // Config handle: command argument completion reads the model list.
-    cfg: Option<std::rc::Rc<std::cell::RefCell<crate::ai::config::Config>>>,
+    pub(crate) cfg: Option<std::rc::Rc<std::cell::RefCell<crate::ai::config::Config>>>,
     // The session's current model entry (statusline display name and /switch follow it).
-    current_model: std::rc::Rc<std::cell::RefCell<crate::ai::config::ModelEntry>>,
+    pub(crate) current_model: std::rc::Rc<std::cell::RefCell<crate::ai::config::ModelEntry>>,
     // Set by /exit /quit /q: the main loop exits after the current apply finishes.
-    quit_requested: bool,
+    pub(crate) quit_requested: bool,
     // /resume picker: Some((candidates, highlighted index)). While Some, the reserved area shows the list.
-    resume_pick: Option<(Vec<(i64, String)>, usize)>,
+    pub(crate) resume_pick: Option<(Vec<(i64, String)>, usize)>,
     // Tree navigator modal: Some = full-screen takeover (double-Esc opens it).
-    tree_pick: Option<crate::tui::components::tree_picker::TreePicker>,
+    pub(crate) tree_pick: Option<crate::tui::components::tree_picker::TreePicker>,
     // Last Esc press instant, for double-Esc detection.
-    last_esc: std::time::Instant,
+    pub(crate) last_esc: std::time::Instant,
     // cwd note injected into the first turn after resume (written on resume, consumed on submit).
-    pending_cwd_note: Option<String>,
-    spin_i: usize,
-    git: Option<crate::git::GitStatus>,
-    git_at: Instant,
+    pub(crate) pending_cwd_note: Option<String>,
+    pub(crate) spin_i: usize,
+    pub(crate) git: Option<crate::git::GitStatus>,
+    pub(crate) git_at: Instant,
     // The cwd the last git snapshot was taken at. A mismatch after any
     // signal triggers an env refresh — event-driven, zero polling.
-    env_cwd: std::path::PathBuf,
-    cwd: std::path::PathBuf,
+    pub(crate) env_cwd: std::path::PathBuf,
+    pub(crate) cwd: std::path::PathBuf,
     // Home directory, for `~` expansion in path completion.
-    home: std::path::PathBuf,
+    pub(crate) home: std::path::PathBuf,
     // Input viewport start (wrapped row). Independent of the cursor — see `layout::adjust_scroll`.
-    scroll: usize,
+    pub(crate) scroll: usize,
     // Rendered-block cache: bounded memory, per-frame work bounded to the
     // visible blocks. Survives frames; invalidated inside on width/roster change.
-    block_cache: crate::tui::transcript::cache::BlockCache,
+    pub(crate) block_cache: crate::tui::transcript::cache::BlockCache,
 }
 
 impl App {
@@ -252,169 +251,7 @@ impl App {
         self.tree_pick = Some(crate::tui::components::tree_picker::TreePicker::from_tree(&tree, leaf));
     }
 
-    // Navigate the conversation tree to an arbitrary stored row (pi's
-    // branch() semantic: move the leaf pointer, delete nothing). The next
-    // append forks from there. Rebuilds transcript + protocol from the new
-    // projection; the prefix cache is keyed on the rebuilt history, so a
-    // cache hit survives navigation to a shared prefix.
-    fn tree_navigate_to(&mut self, seq: i64) {
-        let Some(sid) = self.session.session_id() else { return };
-        // Store work (leaf move + re-projection + name lookup) inside a
-        // scoped borrow; the SessionState mutation happens after it ends.
-        let (entries, effective, draft) = {
-            let Some(st) = self.session.store_mut() else { return };
-            if let Err(e) = st.set_leaf(sid, Some(seq)) {
-                self.session.echo(entry::Entry::Error { text: format!("回溯失败：{e:#}") });
-                return;
-            }
-            let entries = match st.load_entries(sid) {
-                Ok(e) => e,
-                Err(e) => {
-                    self.session.echo(entry::Entry::Error { text: format!("重投影失败：{e:#}") });
-                    return;
-                }
-            };
-            let effective = st.effective_name(sid).ok().flatten();
-            let draft = user_text_at(st, sid, seq);
-            (entries, effective, draft)
-        };
-
-        // 1+3) Rendering layer + name: navigate_to replaces transcript,
-        // clears pending and merges the effective name (never clobbering).
-        self.session.navigate_to(entries.clone(), effective);
-
-        // 2) Protocol rebuild: the shared routine — dangling tool tails
-        // (leaf on a request without results) are repaired inside, so the
-        // next run() always starts from a protocol-legal boundary.
-        self.session.rebuild_chat(&entries);
-
-        // 4) Echo + editor draft semantics: navigating to a user entry puts
-        // that message back into the editor (pi behavior) — you usually
-        // rewound in order to rewrite it.
-        self.session.echo(entry::Entry::System {
-            text: format!("已回到节点 #{seq}（后续消息仍保留在树中）"),
-            align: entry::Align::Center,
-        });
-        if let Some(d) = draft {
-            self.load_into_editor(&d);
-        }
-    }
-
-    // Confirm restoring the highlighted session.
-    //
-    // Restore four things: the transcript (rendering), the chat context
-    // (cross-turn memory + cache prefix), the working directory (the
-    // session's last persisted migration), and the session name.
-    // The first turn after resume appends a cwd note (pending_cwd_note)
-    // — appended only, history untouched, cache prefix intact.
-    fn resume_confirm(&mut self) {
-        let Some((items, sel)) = self.resume_pick.take() else { return };
-        let Some((id, name)) = items.get(sel).cloned() else { return };
-        // Store reads (projection + metadata) in a scoped borrow; state
-        // mutations happen after it ends.
-        let (entries, meta, effective, last_cwd_seq) = {
-            let Some(st) = self.session.store() else { return };
-            let entries = match st.load_entries(id) {
-                Ok(e) => e,
-                Err(e) => {
-                    self.session.echo(entry::Entry::Error { text: format!("读取会话失败：{e:#}") });
-                    return;
-                }
-            };
-            let meta = st.session(id).ok();
-            let effective = st.effective_name(id).ok().flatten().or_else(|| meta.as_ref().and_then(|m| m.name.clone()));
-            let last_cwd_seq = st
-                .cwd_history(id)
-                .ok()
-                .and_then(|h| h.last().map(|(seq, _)| *seq))
-                .unwrap_or(0);
-            (entries, meta, effective, last_cwd_seq)
-        };
-
-        // 1) Rendering layer
-        self.session.commit_round(entries.clone());
-
-        // 2) Chat context: rebuild the **full protocol messages** from
-        // entries (the inverse of collect_turn). Tool call details
-        // (call_id / arguments / results) are all in the DB — the live
-        // build and resume read the same source, so the model sees the
-        // history exactly as it did the first time.
-        let mut rebuilt = ChatContext::new().push(Message::System {
-            content: "你是一个简洁的编程助手。用中文回答。".into(),
-        });
-        // pending: accumulating the tool_calls Assistant (one call may fan out to several results)
-        for e in &entries {
-            match e {
-                entry::Entry::User { content } => {
-                    rebuilt = rebuilt.push(Message::User { content: content.clone() });
-                }
-                entry::Entry::Assistant { content, .. } => {
-                    rebuilt = rebuilt.push(Message::Assistant {
-                        content: Some(content.clone()),
-                        tool_calls: Vec::new(),
-                    });
-                }
-                entry::Entry::ToolRequest { call_id, name, args, .. } => {
-                    // args is the raw argument JSON; the Assistant(tool_calls) follows right after
-                    let call = crate::ai::types::ToolCall {
-                        id: call_id.clone(),
-                        kind: "function".into(),
-                        function: crate::ai::types::FunctionCall {
-                            name: name.clone(),
-                            arguments: args.clone(),
-                        },
-                    };
-                    rebuilt = rebuilt.push(Message::Assistant {
-                        content: None,
-                        tool_calls: vec![call],
-                    });
-                }
-                entry::Entry::ToolResult { call_id, result, .. } => {
-                    // The stored result is exactly what the model
-                    // received back then — use it verbatim; the view
-                    // (Plain/Diff) is only a rendering choice.
-                    rebuilt = rebuilt.push(Message::Tool {
-                        tool_call_id: call_id.clone(),
-                        content: result.clone(),
-                    });
-                }
-                entry::Entry::Error { .. } | entry::Entry::Name { .. } | entry::Entry::System { .. } => {}
-            }
-        }
-        self.session.rebuild_chat(&entries);
-
-        // 3) Working directory: the session's last persisted migration (falls back to the initial cwd on record)
-        if let Some(m) = &meta
-            && let Some(cwd_str) = &m.cwd
-        {
-            let p = std::path::PathBuf::from(cwd_str);
-            if p.is_dir() {
-                self.session.set_cwd(p);
-            }
-        }
-
-        // 4) Session identity and state
-        let n_entries = entries.len();
-        self.session.adopt_session(id, entries, effective);
-        self.session.set_cwd_seq(last_cwd_seq);
-        // Inject the cwd note into the first turn after resume (append only; history untouched)
-        self.pending_cwd_note = Some(format!(
-            "[工作目录已恢复为 {}，相对路径以此为基准]",
-            self.session.cwd().display()
-        ));
-
-        self.session.echo(entry::Entry::Error {
-            text: format!("已恢复会话：{name}（{n_entries} 条记录）"),
-        });
-    }
-
-    // Load a text into the editor (history recall and programmatic
-    // fill both use this).
-    //
-    // Routed through `insert_paste` instead of a direct insert: history
-    // stores the **expanded** text, and pouring it in raw would blow up
-    // the input box; this re-folds it into markers by the same rules.
-    fn load_into_editor(&mut self, text: &str) {
+    pub(crate) fn load_into_editor(&mut self, text: &str) {
         self.editor.clear();
         self.editor.insert_paste(text);
         self.goal_col = None;
@@ -793,208 +630,6 @@ impl App {
         }
     }
 
-    // Run a slash command (`cmd_name` is registered in the command table).
-    //
-    // Input cleanup (editor/popup/scroll) is done by the caller
-    // `submit` for every command; this only performs each command's
-    // business action and echo.
-    fn run_command(&mut self, cmd_name: &str, arg: &str) {
-        match cmd_name {
-            "/q" | "/quit" | "/exit" => {
-                // Session data is persisted at every Commit; setting the flag is enough — apply closes the main loop afterwards.
-                self.quit_requested = true;
-            }
-            "/cdp" => self.cmd_cdp(arg),
-            "/name" => self.cmd_name(arg),
-            "/resume" => self.cmd_resume(),
-            "/model" => self.cmd_model(arg),
-            "/switch" => self.cmd_switch(arg),
-            other => {
-                // Any name passing lookup() must have an arm; reaching here is a programming error.
-                debug_assert!(false, "未实现命令: {other}");
-            }
-        }
-    }
-
-    // /cdp <dir>: permanently migrate the working directory (persisted;
-    // resume can restore it). Temporary migration is the AI's cd tool,
-    // which never goes through here.
-    fn cmd_cdp(&mut self, arg: &str) {
-        if arg.is_empty() {
-            let cur = self.session.cwd().display().to_string();
-            self.session.echo(entry::Entry::Error {
-                text: format!("当前工作目录：{cur}\n用法：/cdp <目录>（永久迁移，落盘）"),
-            });
-            return;
-        }
-        let target = if let Some(stripped) = arg.strip_prefix("~") {
-            std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(stripped)
-        } else {
-            std::path::PathBuf::from(arg)
-        };
-        let target = if target.is_absolute() {
-            target
-        } else {
-            self.session.cwd().join(target)
-        };
-        match target.canonicalize() {
-            Ok(real) if real.is_dir() => {
-                let old = self.session.set_cwd(real.clone());
-                let seq = self.session.bump_cwd_seq();
-                self.session.handle(SessionEvent::SetCwd { seq, path: real.display().to_string() });
-                self.session.echo(entry::Entry::System {
-                    text: format!("工作目录：{} → {}（已落盘）", old.display(), real.display()),
-                    align: entry::Align::Center,
-                });
-            }
-            Ok(_) => {
-                self.session.echo(entry::Entry::Error { text: format!("不是目录：{arg}") });
-            }
-            Err(e) => {
-                self.session.echo(entry::Entry::Error { text: format!("目录不存在：{arg}（{e}）") });
-            }
-        }
-    }
-
-    // /name [name]: name the session; no argument echoes the current name.
-    //
-    // The name is a tree marker (`Entry::Name`), not a session-column write:
-    // branches inherit the nearest name looking back from the leaf, and
-    // renaming on a branch never leaks to sibling branches.
-    fn cmd_name(&mut self, arg: &str) {
-        if arg.is_empty() {
-            let cur = self.session.session_name().unwrap_or("（未命名）");
-            self.session.echo(entry::Entry::Error { text: format!("当前会话名：{cur}。用法：/name <名字>") });
-            return;
-        }
-        // One protocol event: marker entry, persistence, legacy column —
-        // all the session's business now.
-        self.session.handle(SessionEvent::NameMarker(arg.to_string()));
-        self.session.echo(entry::Entry::System {
-            text: format!("已命名：{arg}"),
-            align: entry::Align::Center,
-        });
-    }
-
-    // Build the resume picker entries for sessions recorded under `root`.
-    // Shared by /resume and the `--resume` CLI flag (which opens the
-    // picker before the first frame).
-    fn build_resume_items(st: &crate::store::Store, root: &std::path::Path)
-        -> anyhow::Result<Vec<(i64, String)>>
-    {
-        let metas = st.list_sessions_under(root)?;
-        let items = metas
-            .iter()
-            .map(|m| {
-                let first = st
-                    .load_entries(m.id)
-                    .ok()
-                    .and_then(|es| {
-                        es.iter().find_map(|e| match e {
-                            entry::Entry::User { content } => Some(content.clone()),
-                            _ => None,
-                        })
-                    });
-                (m.id, crate::store::display_name(m, first.as_deref()))
-            })
-            .collect();
-        Ok(items)
-    }
-
-    // /resume: list this project's sessions, stretching the reserved area.
-    fn cmd_resume(&mut self) {
-        let Some(st) = self.session.store() else {
-            self.session.echo(entry::Entry::Error { text: "存储未打开，无法 resume".into() });
-            return;
-        };
-        let root = self.session.cwd();
-        match Self::build_resume_items(st, &root) {
-            Ok(items) if items.is_empty() => {
-                self.session.echo(entry::Entry::Error {
-                    text: format!("{} 下没有历史会话", root.display()),
-                });
-            }
-            Ok(items) => {
-                self.resume_pick = Some((items, 0));
-            }
-            Err(e) => {
-                self.session.echo(entry::Entry::Error { text: format!("读会话失败：{e:#}") });
-            }
-        }
-    }
-
-    // /model [id]: list models or set the default (writes config.yaml; effective after restart).
-    fn cmd_model(&mut self, arg: &str) {
-        if arg.is_empty() {
-            let cfg = self.cfg.as_ref().expect("cfg ready").borrow();
-            let current = cfg.app.default.as_deref().unwrap_or("(未设置)");
-            let mut lines = vec![format!("当前默认：{current}（/model <provider>:<id> 修改，写入 config.yaml）")];
-            for (pname, m) in cfg.models() {
-                lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
-            }
-            for l in lines {
-                self.session.echo(entry::Entry::Error { text: l });
-            }
-            return;
-        }
-        match self.cfg.as_ref().expect("cfg ready").borrow().model_by_id(arg).ok() {
-            Some(_) => match self.cfg.as_ref().expect("cfg ready").borrow().save_default(arg) {
-                Ok(()) => {
-                    self.session.echo(entry::Entry::System {
-                        text: format!("默认模型已设为 {arg}，已写入 config.yaml"),
-                        align: entry::Align::Center,
-                    });
-                }
-                Err(e) => {
-                    self.session.echo(entry::Entry::Error {
-                        text: format!("写入 config.yaml 失败：{e:#}"),
-                    });
-                }
-            },
-            None => {
-                self.session.echo(entry::Entry::Error {
-                    text: format!("未知模型 id：{arg}。/model 不带参数看列表"),
-                });
-            }
-        }
-    }
-
-    // /switch [id]: switch this session's model (not persisted; restart returns to the default).
-    fn cmd_switch(&mut self, arg: &str) {
-        let cfg = self.cfg.as_ref().expect("cfg ready").borrow();
-        if arg.is_empty() {
-            let cur = self.current_model.borrow().display_name().to_string();
-            let mut lines = vec![format!("当前会话模型：{cur}（/switch <provider>:<id> 切换）")];
-            for (pname, m) in cfg.models() {
-                lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
-            }
-            for l in lines {
-                self.session.echo(entry::Entry::Error { text: l });
-            }
-            return;
-        }
-        match cfg.model_by_id(arg) {
-            Ok(rm) => {
-                drop(cfg);
-                let new_model = self.session.switch_model(
-                    &self.cfg.as_ref().expect("cfg ready").borrow(),
-                    &rm,
-                );
-                *self.current_model.borrow_mut() = new_model;
-                self.session.echo(entry::Entry::System {
-                    text: format!("已切换到 {} ({})，仅本会话生效", arg, Config::display_name(&rm.entry)),
-                    align: entry::Align::Center,
-                });
-            }
-            Err(_) => {
-                self.session.echo(entry::Entry::Error {
-                    text: format!("未知模型 id：{arg}。/switch 不带参数看列表"),
-                });
-            }
-        }
-    }
-
-    // Submit the current input.
     fn submit(&mut self) {
         // The model receives the **expanded** text: markers are only the on-screen folded view.
         let text = self.editor.expanded_text().trim().to_string();
@@ -1111,19 +746,6 @@ fn migrate_legacy_db(base: &std::path::Path) {
 // Session name for the statusline: an explicit /name wins; otherwise
 // one is synthesized — first 7 chars of the first user message within the session.
 
-// The user message text stored at `seq`, if that row is a user entry.
-// Used for the navigate-to-user-node draft refill (pi's editorText).
-fn user_text_at(st: &crate::store::Store, sid: i64, seq: i64) -> Option<String> {
-    let tree = st.load_tree(sid).ok()?;
-    let row = tree.iter().find(|n| n.seq == seq)?;
-    if row.kind != "user" {
-        return None;
-    }
-    match entry::Entry::from_payload(&row.kind, &row.payload) {
-        Some(entry::Entry::User { content }) => Some(content),
-        _ => None,
-    }
-}
 
 fn display_name(app: &App) -> String {
     match app.session.session_name() {

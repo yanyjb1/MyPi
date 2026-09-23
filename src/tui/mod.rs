@@ -9,6 +9,7 @@
 pub mod app;
 mod transcript;
 pub mod completion;
+pub mod chat;
 pub mod editor;
 pub mod components;
 pub mod highlight;
