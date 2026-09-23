@@ -164,14 +164,6 @@ impl Browser {
         Ok(body)
     }
 
-    /// The single `page` target — the tools only ever need one tab; multiple
-    /// tabs are a later concern.
-    pub fn page_target(&self) -> anyhow::Result<Target> {
-        self.targets()?
-            .into_iter()
-            .find(|t| t.r#type == "page")
-            .ok_or_else(|| anyhow!("no page target"))
-    }
 }
 
 impl Drop for Browser {
@@ -187,13 +179,7 @@ impl Drop for Browser {
 
 #[derive(Debug, Deserialize)]
 pub struct Target {
-    #[serde(rename = "type")]
-    pub r#type: String,
     pub id: String,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub url: String,
     #[serde(rename = "webSocketDebuggerUrl", default)]
     pub ws_url: String,
 }

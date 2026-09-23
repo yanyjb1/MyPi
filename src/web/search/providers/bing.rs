@@ -8,9 +8,9 @@
 use anyhow::{anyhow, Context as _};
 use std::time::Duration;
 
-use super::html::{extract_attr, extract_between, strip_tags, unescape_entities};
-use super::search::SearchHit;
-use super::url::{urlencoded};
+use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
+use super::super::engine::SearchHit;
+use crate::web::utils::url::{urlencoded};
 
 pub(super) const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 const SEARCH_URL: &str = "https://www.bing.com/search";
@@ -163,7 +163,7 @@ pub fn parse_bing_html(html: &str) -> Vec<SearchHit> {
 
 // --- Tier 1: direct HTTPS ----------------------------------------------------
 
-pub(super) fn direct(query: &str, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
+pub(crate) fn direct(query: &str, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
     let url = search_url(query, limit);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))

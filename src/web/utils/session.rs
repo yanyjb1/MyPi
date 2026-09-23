@@ -2,7 +2,7 @@
 //! allocation, socket reconnection, and rendered-DOM polling for the whole
 //! web domain.
 //!
-//! Everything above this file (`ddg`, `fetch`, the `browser` tool) talks to
+//! Everything above this file (search/fetch/browser `engine.rs` and their
 //! a `Page`; nothing else imports `cdp` directly.
 //!
 //! Two access patterns, both per-call and page-pinned:
@@ -26,9 +26,9 @@ use std::time::{Duration, Instant};
 use super::cdp::{Browser, Cdp, Target};
 use crate::xdg::browser_profile_dir;
 
-pub(super) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
-pub(super) const RENDER_WAIT: Duration = Duration::from_secs(15);
-pub(super) const POLL_TIMEOUT: Duration = Duration::from_secs(8);
+pub(crate) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const RENDER_WAIT: Duration = Duration::from_secs(15);
+pub(crate) const POLL_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// One connected page, pinned to a specific tab. Clones share the socket
 /// behind a mutex; navigation resets that socket and the next call heals
@@ -232,7 +232,7 @@ fn close_page(port: u16, target_id: &str) {
 /// fetch — page-level state (cookies, uBlock) lives in the shared profile,
 /// so a fresh tab keeps all of it and costs only one createTarget round
 /// trip.
-pub(super) fn with_transient<T>(
+pub(crate) fn with_transient<T>(
     url: &str,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
@@ -249,7 +249,7 @@ pub(super) fn with_transient<T>(
 /// pooled tab survives between calls so consecutive tool invocations see
 /// the same page. Stale entries (tab closed externally) are evicted and
 /// re-created on the next call.
-pub(super) fn with_tab<T>(
+pub(crate) fn with_tab<T>(
     name: &str,
     url: Option<&str>,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
@@ -291,6 +291,6 @@ fn recreate_tab(
 }
 
 /// The browser tool's persistent page: same tab across open/act/read.
-pub(super) fn with_work<T>(f: impl FnOnce(&Page) -> anyhow::Result<T>) -> anyhow::Result<T> {
+pub(crate) fn with_work<T>(f: impl FnOnce(&Page) -> anyhow::Result<T>) -> anyhow::Result<T> {
     with_tab("work", None, f)
 }

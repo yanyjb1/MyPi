@@ -17,11 +17,7 @@ use anyhow::{Context as _, anyhow};
 use html_to_markdown_rs::convert;
 use html_to_markdown_rs::options::{ConversionOptions, PreprocessingOptions, PreprocessingPreset};
 use serde::Deserialize;
-use std::time::Duration;
 
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
-const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
-const RENDER_WAIT: Duration = Duration::from_secs(12);
 
 // Context-window guard. ~4 pages of text; omp caps at 500k which is far
 // beyond what a model can use in one tool result.
@@ -44,7 +40,7 @@ pub fn parse_fetch_args(arguments: &str) -> anyhow::Result<FetchArgs> {
 // Strict form of `url::normalize`: scheme guard + real URL parse, so a
 // malformed host fails here instead of inside the HTTP client.
 fn normalize_url(raw: &str) -> anyhow::Result<String> {
-    let with_scheme = super::url::normalize(raw)?;
+    let with_scheme = super::super::utils::url::normalize(raw)?;
     let parsed = url::Url::parse(&with_scheme).map_err(|e| anyhow!("bad url: {e}"))?;
     match parsed.scheme() {
         "http" | "https" => Ok(with_scheme),
@@ -82,18 +78,8 @@ fn truncate(content: &str) -> (String, bool) {
 //  • non-2xx from bot gates (403/503 + cloudflare/captcha markers)
 //  • 200 but the body is a JS shell — the extraction yields almost no text
 //    relative to the raw size (say, under 200 chars out of 20 KB)
-fn looks_bot_blocked(status: u16, body: &str) -> bool {
-    if status == 403 || status == 503 || status == 429 {
-        let lower = body.to_lowercase();
-        return lower.contains("cloudflare")
-            || lower.contains("captcha")
-            || lower.contains("challenge")
-            || lower.contains("access denied");
-    }
-    false
-}
 
-pub(super) fn is_js_shell(raw_len: usize, converted: &str) -> bool {
+pub(crate) fn is_js_shell(raw_len: usize, converted: &str) -> bool {
     // Two shells the first heuristic missed live:
     //  1. tiny text out of a big body (classic React root div)
     //  2. a big body whose markdown is mostly `meta-*` dump lines with no
@@ -113,48 +99,6 @@ pub(super) fn is_js_shell(raw_len: usize, converted: &str) -> bool {
     meta_lines >= 10 && body_lines < 15
 }
 
-fn fetch_direct(url: &str) -> anyhow::Result<(String, u16, usize)> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        .build()
-        .into();
-    let mut response = agent
-        .get(url)
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", "text/html,application/xhtml+xml")
-        .header("Accept-Language", "en-US,en;q=0.9")
-        .call()
-        .map_err(|e| anyhow!("request failed: {e}"))?;
-    let status = response.status().as_u16();
-    let body = response.body_mut().read_to_string().context("reading body")?;
-    let len = body.len();
-    Ok((body, status, len))
-}
-
-// --- Tier 2: browser ---------------------------------------------------------
-//
-// One line over the shared session: navigate, wait for real content, hand
-// back the rendered DOM. Readiness = the converted markdown stops looking
-// like a JS shell (or the budget expires and we take what we have).
-
-fn fetch_via_browser(url: &str) -> anyhow::Result<String> {
-    let url_owned = url.to_string();
-    // Readiness is conversion semantics, not raw size: a 3.5 KB meta shell
-    // (YouTube) passes any byte threshold instantly. The page counts as
-    // ready only when its DOM converts to non-shell markdown.
-    super::session::with_transient(url, |p| {
-        p.navigate(&url_owned)?;
-        p.wait(RENDER_WAIT, |html| {
-            match html_to_markdown(html) {
-                Ok(md) if is_js_shell(html.len(), &md) => None,
-                Ok(_) => Some(Ok(())),
-                Err(_) => None, // conversion can't run mid-navigation
-            }
-        })
-    })
-}
-
-/// Fetch a URL and return model-facing markdown. Public entry for the tool
 /// layer and tests.
 pub fn fetch(args: &FetchArgs) -> anyhow::Result<String> {
     let url = normalize_url(&args.url)?;
@@ -170,10 +114,12 @@ pub fn fetch(args: &FetchArgs) -> anyhow::Result<String> {
     }
 
     // Tier 1 — direct GET.
-    let tier = match fetch_direct(&url) {
-        Ok((body, status, len)) if !looks_bot_blocked(status, &body) => {
+    let tier = match super::providers::fetch_direct(&url) {
+        Ok((body, status, len)) if !super::providers::looks_bot_blocked(status, &body) => {
             if raw {
                 Tier::Raw(body)
+            } else if let Some(md) = super::providers::site::parse(&url, &body) {
+                Tier::Direct(md?)
             } else {
                 match html_to_markdown(&body) {
                     Ok(md) if !is_js_shell(len, &md) => Tier::Direct(md),
@@ -198,7 +144,7 @@ pub fn fetch(args: &FetchArgs) -> anyhow::Result<String> {
             Ok(format_output(&url, "raw", &out, cut))
         }
         Tier::Fallback => {
-            let html = fetch_via_browser(&url)?;
+            let html = super::providers::fetch_via_browser(&url)?;
             let converted = if raw { html } else { html_to_markdown(&html)? };
             let (out, cut) = truncate(&converted);
             Ok(format_output(&url, "browser", &out, cut))
@@ -221,6 +167,7 @@ fn format_output(url: &str, method: &str, content: &str, truncated: bool) -> Str
 
 #[cfg(test)]
 mod tests {
+    use super::super::providers::looks_bot_blocked;
     use super::*;
 
     #[test]

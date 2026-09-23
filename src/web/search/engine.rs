@@ -4,7 +4,7 @@
 use anyhow::anyhow;
 use serde::Deserialize;
 
-use super::{bing, ddg};
+use super::providers::{self};
 
 pub(super) const DEFAULT_LIMIT: usize = 8;
 pub(super) const MAX_LIMIT: usize = 20;
@@ -73,13 +73,13 @@ pub fn search(args: &SearchArgs) -> anyhow::Result<Vec<SearchHit>> {
     // operator — verified); plain keywords take the fast direct tier first.
     if !has_advanced_syntax(&args.query) {
         // Direct-tier failures (bot wall, network) fall through to DDG.
-        if let Ok(hits) = bing::direct(&args.query, limit)
+        if let Ok(hits) = providers::direct(&args.query, limit)
             && !hits.is_empty()
         {
             return Ok(hits);
         }
     }
-    ddg::via_browser(&args.query, limit)
+    providers::via_browser(&args.query, limit)
 }
 
 /// Tool-facing text rendering: numbered rows, snippet on its own line. The

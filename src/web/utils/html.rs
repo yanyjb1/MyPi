@@ -2,7 +2,7 @@
 //! both engine parsers (Bing `li.b_algo`, DDG `result__a`). Flat, stable
 //! markup only; a DOM parser would be heavier than this crate needs.
 
-pub(super) fn strip_tags(s: &str) -> String {
+pub(crate) fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut depth = 0usize;
     for ch in s.chars() {
@@ -17,7 +17,7 @@ pub(super) fn strip_tags(s: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub(super) fn unescape_entities(s: &str) -> String {
+pub(crate) fn unescape_entities(s: &str) -> String {
     s.replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -30,12 +30,12 @@ pub(super) fn unescape_entities(s: &str) -> String {
 // Decode Bing's click-tracking wrapper: /ck/a?…&u=a1<base64url-target>
 // (and the older &u={target} shape). Returns the input unchanged when the
 // href is a plain link.
-pub(super) struct Tag {
-    pub(super) open_tag: String,
-    pub(super) inner: String,
+pub(crate) struct Tag {
+    pub(crate) open_tag: String,
+    pub(crate) inner: String,
 }
 
-pub(super) fn extract_between(hay: &str, open_prefix: &str, close: &str) -> Option<Tag> {
+pub(crate) fn extract_between(hay: &str, open_prefix: &str, close: &str) -> Option<Tag> {
     let start = hay.find(open_prefix)?;
     let gt = hay[start..].find('>')? + start;
     let open_tag = hay[start..=gt].to_string();
@@ -44,7 +44,7 @@ pub(super) fn extract_between(hay: &str, open_prefix: &str, close: &str) -> Opti
     Some(Tag { open_tag, inner: hay[inner_start..end].to_string() })
 }
 
-pub(super) fn extract_attr(tag: &str, attr: &str) -> Option<String> {
+pub(crate) fn extract_attr(tag: &str, attr: &str) -> Option<String> {
     // href="…" or href='…'
     for q in ['"', '\''] {
         let pat = format!("{attr}={q}");

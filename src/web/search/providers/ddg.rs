@@ -7,10 +7,10 @@
 
 use anyhow::anyhow;
 
-use super::html::{extract_attr, extract_between, strip_tags, unescape_entities};
-use super::search::SearchHit;
-use super::url::{percent_decode, urlencoded};
-use super::session::{self, RENDER_WAIT};
+use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
+use super::super::engine::SearchHit;
+use crate::web::utils::url::{percent_decode, urlencoded};
+use crate::web::utils::session::{self, RENDER_WAIT};
 
 const DDG_URL: &str = "https://html.duckduckgo.com/html/";
 
@@ -75,7 +75,7 @@ fn unwrap_ddg_href(href: &str) -> String {
     href
 }
 
-pub(super) fn via_browser(query: &str, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
+pub(crate) fn via_browser(query: &str, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
     let url = format!("{DDG_URL}?q={}", urlencoded(query));
     // A transient tab is opened straight at the SERP (create_target does
     // the navigation). `wait` polls the rendered DOM until `ready` says

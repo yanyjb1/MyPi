@@ -1,21 +1,18 @@
-//! Web domain — search / fetch / browser tools and the CDP plumbing they
-//! share. Directory layout mirrors pi's harness/tools pattern: one file per
-//! tool or engine, `mod.rs` as the only import surface for the outside.
+//! Web domain — search / fetch / browser tools over shared browser
+//! infrastructure. Layout: one directory per tool, `engine.rs` routes and
+//! falls back between `providers/` (one file per site/transport), shared
+//! state and helpers live in `utils/`.
 //!
-//! Dependency direction (enforced by visibility, `pub(super)` below):
-//!   tools.rs → web::{search, fetch, browser} → web::session → web::cdp
-//! `bing.rs` is pure HTTP (no browser); `session.rs` is the single owner of
-//! attach-or-launch, socket reconnection, and readiness polling.
+//! Dependency direction (one way, enforced by visibility):
+//!   tools.rs → web::{search, fetch, browser} (this facade)
+//!     → */engine.rs (routing, fallback, output shaping)
+//!       → */providers/* (per-site / per-transport implementations)
+//!         → utils::{session, cdp, html, url}
 
 pub mod browser;
-pub mod cdp;
-pub mod ddg;
 pub mod fetch;
-mod html;
-pub mod bing;
-mod search;
-mod session;
-pub mod url;
+pub mod search;
+mod utils;
 
 // Tool-layer facade: everything `crate::agent::tools` may touch.
 pub use browser::{browser, parse_browser_args};
