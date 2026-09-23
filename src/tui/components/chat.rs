@@ -50,54 +50,14 @@ pub fn render_with_live(
     streaming: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    // A tool result immediately following its request is the same exchange:
-    // render them as one stacked card instead of two separate ones.
-    let mut i = 0;
-    while i < entries.len() {
-        // One blank row before every node but the first: uniform separation,
-        // so a user message and the reply under it never fuse into one block.
+    // Grouping (pair-gluing) lives in `blocks`; this is the full-transcript
+    // convenience path (tests + narrow callers). `view.rs` goes through the
+    // block cache instead — same nodes, bounded work.
+    for r in crate::tui::blocks::blocks(entries) {
         if !out.is_empty() {
             out.push(section_gap());
         }
-        let e = &entries[i];
-        if let (Entry::ToolRequest { call_id, name, args, .. }, Some(Entry::ToolResult { call_id: rid, name: rname, ok, result, .. })) =
-            (e, entries.get(i + 1))
-            && call_id == rid
-            && name == rname
-        {
-            // `read` has no result card: it is side-effect-free and the
-            // request card (the path) already tells the whole story, so the
-            // file contents would just be the same thing twice.
-            if result_card_visible(name) {
-                out.extend(tool_exchange(name, args, *ok, result, p, tools_expanded, width));
-            } else {
-                out.extend(tool_request_card(name, args, p, width));
-            }
-            i += 2;
-            continue;
-        }
-        match e {
-            Entry::User { content } => out.extend(user_card(content, p, width)),
-            Entry::Assistant { content, usage, reasoning } => {
-                out.extend(assistant_block(content, reasoning.as_deref(), usage.as_ref(), p, show_reasoning))
-            }
-            Entry::ToolRequest { name, args, .. } => {
-                out.extend(tool_request_card(name, args, p, width))
-            }
-            Entry::ToolResult { name, ok, result, .. } => {
-                out.extend(tool_result_card(name, *ok, result, p, tools_expanded, width))
-            }
-            Entry::Error { text } => {
-                for part in text.split('\n') {
-                    out.push(Line::styled(part.to_string(), Style::new().fg(Color::Red)));
-                }
-            }
-            // Emitter-aligned notice (model switches, compaction reports).
-            Entry::System { text, align } => out.extend(system_block(text, *align, p, width)),
-            // Name markers are metadata, not chat content: never a history row.
-            Entry::Name { .. } => {}
-        }
-        i += 1;
+        out.extend(single_node(&entries[r.start..r.end], p, show_reasoning, tools_expanded, width));
     }
     // ---- streaming tail: the one live row at the bottom ----
     //
@@ -130,6 +90,55 @@ pub fn render_with_live(
         out.extend(super::markdown::render_markdown(t, p));
     }
     out
+}
+
+// Render exactly one transcript node (no gap, no pairing): the kind
+// dispatch `render_with_live` used to inline. Grouping decisions live in
+// `blocks::blocks`; this only paints.
+pub(crate) fn single_node(
+    group: &[Entry],
+    p: &Palette,
+    show_reasoning: bool,
+    tools_expanded: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    debug_assert!(group.len() <= 2, "a node is one entry or one request+result pair");
+    let e = &group[0];
+    match e {
+        Entry::User { content } => user_card(content, p, width),
+        Entry::Assistant { content, usage, reasoning } => {
+            assistant_block(content, reasoning.as_deref(), usage.as_ref(), p, show_reasoning)
+        }
+        Entry::ToolRequest { name, args, .. } => {
+            if group.len() == 2 {
+                let Entry::ToolResult { name: rname, ok, result, .. } = &group[1] else {
+                    unreachable!("group of 2 is always request+result (blocks guarantees)");
+                };
+                let _ = rname;
+                if result_card_visible(name) {
+                    tool_exchange(name, args, *ok, result, p, tools_expanded, width)
+                } else {
+                    tool_request_card(name, args, p, width)
+                }
+            } else {
+                tool_request_card(name, args, p, width)
+            }
+        }
+        Entry::ToolResult { name, ok, result, .. } => {
+            tool_result_card(name, *ok, result, p, tools_expanded, width)
+        }
+        Entry::Error { text } => {
+            let mut out = Vec::new();
+            for part in text.split('\n') {
+                out.push(Line::styled(part.to_string(), Style::new().fg(Color::Red)));
+            }
+            out
+        }
+        // Emitter-aligned notice (model switches, compaction reports).
+        Entry::System { text, align } => system_block(text, *align, p, width),
+        // Name markers are metadata, not chat content: never a history row.
+        Entry::Name { .. } => Vec::new(),
+    }
 }
 
 // The blank row between two transcript nodes.
@@ -334,6 +343,9 @@ fn assistant_block(
             }
             out.push(line);
         }
+        // Reasoning and the answer are both "the AI's message" but they are
+        // two thoughts: the same blank-row separation every other node gets.
+        out.push(Line::from(""));
     }
     out.extend(super::markdown::render_markdown(content, p));
     out
@@ -1008,12 +1020,13 @@ mod tests {
             Entry::System { text: "切模型".into(), align: Align::Center },
         ];
         let lines = render(&entries, &p, true, false);
-        // Two gaps for three nodes, and never a doubled blank row.
+        // Gaps: node boundaries (2) plus the reasoning/answer seam inside
+        // the assistant block (1). Never a doubled blank row anywhere.
         let blanks = lines
             .iter()
             .filter(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
             .count();
-        assert_eq!(blanks, 2, "三个节点之间恰好两条空行: {:?}", text_of(&lines));
+        assert_eq!(blanks, 3, "节点间2条 + 思考与回复间1条: {:?}", text_of(&lines));
         let text = text_of(&lines);
         assert!(!text.contains("\n\n\n"), "不该出现连续两条空行: {text:?}");
     }

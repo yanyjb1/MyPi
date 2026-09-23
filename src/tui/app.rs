@@ -121,6 +121,9 @@ struct App {
     home: std::path::PathBuf,
     // Input viewport start (wrapped row). Independent of the cursor — see `layout::adjust_scroll`.
     scroll: usize,
+    // Rendered-block cache: bounded memory, per-frame work bounded to the
+    // visible blocks. Survives frames; invalidated inside on width/roster change.
+    block_cache: crate::tui::block_cache::BlockCache,
 }
 
 impl App {
@@ -133,6 +136,7 @@ impl App {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| cwd.clone());
         Self {
+            block_cache: crate::tui::block_cache::BlockCache::new(),
             editor: Editor::new(),
             goal_col: None,
             history: crate::tui::zones_impl::HistoryState::default(),
@@ -1176,6 +1180,7 @@ fn draw_frame(
     );
     let mut cursor_pos = (0u16, 0u16);
     let model_name = Config::display_name(&app.current_model.borrow()).to_string();
+    let session_name = display_name(app);
     terminal.draw(|f| {
         // Modal takeover: the tree navigator draws over the whole
         // screen; base zones and the hardware cursor are skipped.
@@ -1184,8 +1189,9 @@ fn draw_frame(
             f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
             return;
         }
-        let vs = ViewState {
+        let mut vs = ViewState {
             history: app.session.transcript(),
+            block_cache: &mut app.block_cache,
             chat_scroll: app.history.chat_scroll,
             scroll_pinned: app.history.scroll_pinned,
             show_reasoning: !app.history.reasoning_folded,
@@ -1201,7 +1207,7 @@ fn draw_frame(
             cursor_char,
             spinner,
             model_name: &model_name,
-            session_name: &display_name(app),
+            session_name: &session_name,
             cwd: &cwd_str,
             git: app.git.as_ref(),
             ctx_tokens: app.tracker.last_prompt_tokens,
@@ -1213,7 +1219,7 @@ fn draw_frame(
             popup: app.completion.popup(),
             resume_pick: app.resume_pick.as_ref().map(|(v, i)| (&v[..], *i)),
         };
-        cursor_pos = view::draw(f, &vs, &l);
+        cursor_pos = view::draw(f, &mut vs, &l);
     })?;
 
     // ---- hardware cursor ----

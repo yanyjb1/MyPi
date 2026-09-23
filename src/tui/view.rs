@@ -9,7 +9,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::entry as entry;
-use crate::tui::components::{chat, input, popup, statusline};
+use crate::tui::components::{input, popup, statusline};
 use crate::tui::layout as tlayout;
 use crate::tui::theme::Palette;
 
@@ -51,16 +51,22 @@ pub struct ViewState<'a> {
     pub popup: &'a crate::tui::path::CompletionPopup,
     // The /resume picker: Some((candidates, highlighted index)). While Some, the reserved area draws it.
     pub resume_pick: Option<(&'a [(i64, String)], usize)>,
+    // The block cache lives across frames (App owns it); each frame here
+    // only renders the blocks the viewport actually shows.
+    pub block_cache: &'a mut crate::tui::block_cache::BlockCache,
 }
 
-// Hard-wrap pre-chunked rows to `width` cells.
-//
-// Every row already exists (a card edge, a card body, a blank separator);
-// this only splits the ones too wide, keeping the whole set on one coordinate
-// system so scrolling math and drawing cannot disagree.
+// Test-only handle on the wrap pass (the phantom-row regression checks that
+// no transcript row overflows the width).
+#[cfg(test)]
+pub fn hard_wrap_for_test(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
+    hard_wrap(lines, width)
+}
+
+#[cfg(test)]
 fn hard_wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
     let w = width.max(1);
-    let mut out = Vec::with_capacity(lines.len());
+    let mut out = Vec::new();
     for line in lines {
         let total: usize = line.spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
         if total <= w {
@@ -95,18 +101,39 @@ fn hard_wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
     out
 }
 
-// Test-only handle on the wrap pass (the phantom-row regression checks that
-// no transcript row overflows the width).
-#[cfg(test)]
-pub fn hard_wrap_for_test(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
-    hard_wrap(lines, width)
+// Map the visible row window to a block range (with one block of slack
+// above). `heights` may contain `usize::MAX` sentinels for not-yet-measured
+// blocks — they count as their gap+1 until `rows_for` measures them, which
+// is fine: the window edge can only overshoot by a block, and the splice
+// below clamps.
+fn window_blocks(heights: &[usize], n: usize, first_row: usize, viewport: usize) -> (usize, usize) {
+    let mut acc = 0usize;
+    let (mut b0, mut b1) = (n, n);
+    for (i, h) in heights.iter().enumerate() {
+        let size = if *h == usize::MAX { 1 } else { *h + 1 }; // + gap
+        if b0 == n && acc + size > first_row {
+            b0 = i;
+        }
+        acc += size;
+        if b0 != n && acc > first_row + viewport {
+            b1 = (i + 1).min(n);
+            break;
+        }
+    }
+    if b0 == n {
+        b0 = n.saturating_sub(1); // window past the end (empty roster edge)
+    }
+    if b1 <= b0 {
+        b1 = (b0 + 1).min(n);
+    }
+    (b0.saturating_sub(1), b1) // one block of slack above
 }
 
 // Draw one frame and return where the cursor belongs (container-relative (row, col)) for the caller to place the hardware cursor.
 //
 // `l` is computed by the caller (`app.rs` needs the same sizes to place the hardware cursor),
 // not recomputed here — computing it twice was redundant risk.
-pub fn draw(f: &mut Frame, s: &ViewState, l: &tlayout::Layout) -> (u16, u16) {
+pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16) {
     let area = f.area();
     let p = &s.palette;
 
@@ -172,40 +199,40 @@ pub fn draw(f: &mut Frame, s: &ViewState, l: &tlayout::Layout) -> (u16, u16) {
     // the input box's 4 border columns) left a strip of bare terminal
     // background down the right edge of every card.
     let chat_w = area.width as usize;
-    let chat_lines = chat::render_with_live(
+    // Block path: sync heights, then render **only** the blocks the
+    // viewport touches. Total height comes from the roster (prefix sums),
+    // so scrolling never needs the far-away rows at all.
+    s.block_cache.sync(
         s.history,
         p,
         s.show_reasoning,
         s.tools_expanded,
         chat_w,
-        s.live,
-        s.streaming,
     );
-    // Bottom-anchored window, hard-wrapped by us.
-    //
-    // The history's lower edge is **pinned to the row above the status bar**:
-    // the newest content always sits there, and older content scrolls up out
-    // of view. Two deliberate departures from `Paragraph::scroll(vec)`:
-    //
-    //  * the window is computed here, so it can never run off the top (the
-    //    old path let a scroll offset push the tail past the viewport and go
-    //    blank);
-    //  * wrapping is ours and pre-applied, so `estimated_height` and the
-    //    drawn geometry agree — with `Paragraph`'s internal wrapping the two
-    //    disagreed whenever a row wrapped, which is what made the wheel land
-    //    somewhere unrelated to the movement.
-    let rows = hard_wrap(&chat_lines, chat_w);
+    let total = s.block_cache.total_height();
     let viewport = chat_area.height as usize;
-    let total = rows.len();
     let max_offset = total.saturating_sub(viewport);
     // `scroll` counts rows up from the bottom (0 = newest visible).
-    let offset = if s.scroll_pinned {
-        0
-    } else {
-        s.chat_scroll.min(max_offset)
-    };
-    let first = max_offset - offset;
-    let visible: Vec<Line<'static>> = rows.into_iter().skip(first).take(viewport).collect();
+    let offset = if s.scroll_pinned { 0 } else { s.chat_scroll.min(max_offset) };
+    let first_row = max_offset - offset; // absolute top row of the window
+
+    // Which blocks does [first_row, first_row+viewport) touch? Walk the
+    // height roster — O(blocks), no rendering — then materialize that
+    // slice (+1 block of slack above for smooth wheeling).
+    let n_blocks = crate::tui::blocks::blocks(s.history).len();
+    let (b0, b1) = window_blocks(s.block_cache.heights_slice(), n_blocks, first_row, viewport);
+    let (block_rows, rows_above) =
+        s.block_cache.rows_for(s.history, p, s.show_reasoning, s.tools_expanded, b0..b1);
+    // Splice: rows above the window are dropped; what remains paints.
+    let skip = first_row.saturating_sub(rows_above);
+    let mut visible: Vec<Line<'static>> = Vec::with_capacity(viewport);
+    let mut it = block_rows.into_iter().skip(skip);
+    for _ in 0..viewport {
+        match it.next() {
+            Some(l) => visible.push(l),
+            None => break,
+        }
+    }
     f.render_widget(Paragraph::new(visible), chat_area);
 
     // ---- bottom reserved area: the popup float zone (height already in layout; history/input gave way) ----
