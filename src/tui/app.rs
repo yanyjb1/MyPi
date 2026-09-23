@@ -1291,6 +1291,11 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let cost_cfg = model.cost;
     let currency_symbol = model.currency.symbol();
     let palette = Palette::from_config(&cfg.borrow());
+    // Cost is computed **locally**: the gateway only reports token counts
+    // (prompt/completion/cached), the program multiplies by the unit
+    // prices the user wrote in models.yml. All-zero prices = "no price
+    // sheet for this model" -> hide the spend column (there is nothing
+    // meaningful to compute, not "the gateway didn't quote").
     let show_cost =
         (cost_cfg.input + cost_cfg.output + cost_cfg.cache_read + cost_cfg.cache_write) > 0.0;
     let current_model = std::rc::Rc::new(std::cell::RefCell::new(model.clone()));

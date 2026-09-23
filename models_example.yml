@@ -9,12 +9,18 @@
 #   2. $XDG_CONFIG_HOME/mypi/models.yml  <- put your keys here
 #                                             (~/.config/mypi/models.yml)
 #
-# Copy this file there to start:
-#   mkdir -p ~/.config/mypi && cp models_example.yml ~/.config/mypi/models.yml
+# How to get this file onto your machine (the program will not create it):
+#   curl -o ~/.config/mypi/models.yml \
+#     https://raw.githubusercontent.com/Arisha/MyPi/main/models_example.yml
 #
-# Pricing: unit prices are per 1M tokens, in each vendor's native currency
-# (`currency` only picks the display symbol ¥/$ — no conversion).
-# All-zero cost = the statusline hides spend for that model.
+# Pricing is **computed locally**: the gateway only reports how many
+# tokens each request used (input / output / cache hits); mypi multiplies
+# those counts by the unit prices YOU write here. Fill in your vendor's
+# price sheet:
+#   - unit prices are per 1M tokens, in the vendor's native currency
+#     (`currency` only picks the display symbol ¥/$ — no conversion);
+#   - all-zero cost = no price sheet for this model = the statusline
+#     hides the spend column entirely.
 
 # ---- Providers -----------------------------------------------------------
 # api is REQUIRED. All providers speak an OpenAI-compatible wire protocol;
@@ -61,7 +67,9 @@ providers:
         name: ModelX(GW)
         contextWindow: 131072
         # maxOutputTokens omitted -> conservative 4096
-        currency: Cny                # gateway reports no pricing -> all 0
+        # No price sheet for this vendor -> leave all zeros: the
+        # statusline hides the spend column for this model.
+        currency: Cny
         cost:
           input: 0.0
           output: 0.0

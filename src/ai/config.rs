@@ -330,9 +330,12 @@ impl Config {
         let models_path = Self::models_path()?;
         let app_path = Self::app_path()?;
 
+        const TEMPLATE_URL: &str = "https://raw.githubusercontent.com/Arisha/MyPi/main/models_example.yml";
         let models_text = std::fs::read_to_string(&models_path).with_context(|| {
             format!(
-                "no models.yml at {} — create it from models_example.yml (`mkdir -p ~/.config/mypi && cp models_example.yml ~/.config/mypi/models.yml`), then fill in your providers and keys",
+                "no models.yml at {} — create it yourself (the program never writes this file):\n  1. get the template: {}\n  2. put it at {}, fill in your providers and keys",
+                models_path.display(),
+                TEMPLATE_URL,
                 models_path.display()
             )
         })?;
@@ -676,7 +679,8 @@ providers:
             std::env::set_var("MYPI_MODELS", dir.join("models.yml"));
         }
         let err = Config::load().unwrap_err().to_string();
-        assert!(err.contains("create it from models_example.yml"), "{err}");
+        assert!(err.contains("create it yourself"), "{err}");
+        assert!(err.contains("raw.githubusercontent.com"), "{err}");
         unsafe {
             std::env::remove_var("MYPI_CONFIG");
             std::env::remove_var("MYPI_MODELS");
