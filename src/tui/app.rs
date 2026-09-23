@@ -48,10 +48,12 @@ use crate::tui::text;
 use crate::tui::theme::Palette;
 use crate::tui::view::{self, ViewState};
 
-// Spinner frames: `|` `/` `-` `\` cycling. Advances one frame **per
-// received delta** (signal-driven), not on a timer — a paused stream
-// pauses the spinner, which is honest.
+// Spinner frames: `|` `/` `-` `\` cycling. While a turn is in flight
+// the loop wakes once per SPIN_INTERVAL to advance it (thinking phases
+// produce NO deltas — the spinner must keep spinning on its own). When
+// idle the loop sleeps with no timeout at all: zero wake-ups.
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+const SPIN_INTERVAL: Duration = Duration::from_millis(120);
 // Git refresh *rate limit* (a subprocess spawn is expensive; signals can
 // burst). Only consulted right after an actual signal — not a poll.
 const GIT_REFRESH: Duration = Duration::from_secs(2);
@@ -1045,10 +1047,9 @@ impl App {
         self.git_at = Instant::now();
     }
 
-    // Advance the spinner one frame **per received delta** (signal-driven;
-    // called after each pumped signal batch). A paused stream pauses the
-    // spinner — honest about reality.
-    fn advance_spinner_on_activity(&mut self) {
+    // Advance the spinner one frame. Called once per loop iteration;
+    // during a turn the loop's wake cadence IS the spinner cadence.
+    fn advance_spinner(&mut self) {
         if self.session.busy() {
             self.spin_i = (self.spin_i + 1) % SPINNER.len();
         }
@@ -1371,10 +1372,27 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             // idle wake-ups. Everything already queued behind the first
             // signal is folded into the same batch: N queued deltas =
             // one repaint, not N (coalescing for free).
-            let first = sig_rx.recv()?;
-            let mut batch = vec![first];
-            while let Ok(more) = sig_rx.try_recv() {
-                batch.push(more);
+            // The wait doubles as the spinner's heartbeat: while a turn
+            // is streaming (including silent thinking phases, which
+            // produce no deltas) wake at SPIN_INTERVAL to keep it
+            // spinning; when idle block forever — no timers, no CPU.
+            let first = if app.session.busy() {
+                match sig_rx.recv_timeout(SPIN_INTERVAL) {
+                    Ok(s) => Some(s),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                }
+            } else {
+                Some(sig_rx.recv()?)
+            };
+            let mut batch = Vec::new();
+            if let Some(s) = first {
+                batch.push(s);
+                // Fold everything already queued behind the first signal:
+                // N queued deltas = one repaint, not N (coalescing free).
+                while let Ok(more) = sig_rx.try_recv() {
+                    batch.push(more);
+                }
             }
 
             // ---- route the batch ----
@@ -1441,11 +1459,10 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                 app.refresh_env();
             }
 
-            // Spinner advances on stream activity, not on a timer: a
-            // delta arrived => advance one frame; no delta => the char
-            // just stays (a paused stream pauses the spinner, which is
-            // honest about what is happening).
-            app.advance_spinner_on_activity();
+            // One spinner frame per loop pass: delta batches repaint
+            // anyway, and SPIN_INTERVAL timeouts keep it alive through
+            // silent thinking phases.
+            app.advance_spinner();
 
             // ---- render one frame (shared with the pre-loop first draw) ----
             let l = draw_frame(&mut terminal, &mut app, &palette, ctx_limit, currency_symbol, show_cost)?;
