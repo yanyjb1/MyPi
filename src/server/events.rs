@@ -69,6 +69,12 @@ pub enum Change {
     /// A turn completed (TurnDone): usage landed on the tracker; the
     /// live streaming slot folded into a final entry.
     TurnDone,
+    /// A tool finished locally (ToolFinish): the result exists in the
+    /// transcript but has NOT been sent back to the model yet. Surfaces
+    /// use this as the git-refresh checkpoint — tools are the only
+    /// things that can move the working tree, and this is the earliest
+    /// moment new state is observable.
+    ToolActivity,
     /// The current session changed (new session created, resumed...).
     Session,
     /// Nothing observable happened (e.g. store unavailable, no-op).

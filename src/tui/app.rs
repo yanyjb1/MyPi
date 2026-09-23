@@ -1396,7 +1396,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             }
 
             // ---- route the batch ----
-            let mut turn_done = false;
+            let mut batch_tools_ran = false;
             for sig in batch {
                 match sig {
                 crate::tui::signal::Signal::Key(k) => {
@@ -1445,17 +1445,19 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
                     // unconditional after any signal.
                 }
                 crate::tui::signal::Signal::Session(ev) => {
-                    if app.session.ingest(ev) == crate::server::events::Change::TurnDone {
-                        turn_done = true;
+                    if app.session.ingest(ev) == crate::server::events::Change::ToolActivity {
+                        batch_tools_ran = true;
                     }
                 }
                 }
             }
 
-            // Environment checkpoint (event-driven): a turn ended or the
-            // cwd moved => derived state (git snapshot) is stale. The
-            // rate limit inside `refresh_env` absorbs bursts.
-            if turn_done || app.env_cwd != app.session.cwd() {
+            // Environment checkpoint (event-driven): a tool result just
+            // landed (tools are the only things that can move the working
+            // tree — plain speech never triggers a refresh) or the cwd
+            // moved. The 2s rate limit inside `refresh_env` absorbs
+            // multi-tool bursts in a single round.
+            if batch_tools_ran || app.env_cwd != app.session.cwd() {
                 app.refresh_env();
             }
 

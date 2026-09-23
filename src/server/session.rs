@@ -98,7 +98,7 @@ impl SessionState {
                 };
                 self.pending.push(e.clone());
                 self.transcript.push(e);
-                Change::Transcript
+                Change::ToolActivity
             }
             SessionEvent::Error(e) => {
                 // Session-level errors are not persisted (not one of the
@@ -588,6 +588,22 @@ mod tests {
 
     fn st() -> SessionState {
         SessionState::new(None) // in-memory mode
+    }
+
+    #[test]
+    fn tool_finish_signals_tool_activity() {
+        // The git-refresh contract: ToolFinish is the checkpoint surfaces
+        // refresh the environment on — NOT plain transcript changes.
+        let mut s = st();
+        let ch = s.handle(SessionEvent::ToolFinish {
+            call_id: "c1".into(),
+            name: "bash".into(),
+            ok: true,
+            result: "ok".into(),
+        });
+        assert_eq!(ch, Change::ToolActivity);
+        // Speech-side changes stay Transcript.
+        assert_eq!(s.handle(SessionEvent::Error("x".into())), Change::Transcript);
     }
 
     #[test]
