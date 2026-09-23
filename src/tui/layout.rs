@@ -33,6 +33,14 @@ pub fn inner_width(term_w: u16) -> usize {
     (term_w as usize).saturating_sub(BORDER_COLS).max(1)
 }
 
+/// Blank rows between the history area and the input container.
+///
+/// The container's top row is the status bar, so without this the transcript
+/// sits directly on the model/cwd readout and the two read as one block.
+/// Reserved before the container is placed, so the history area simply ends
+/// one row higher.
+pub const HISTORY_GAP: u16 = 1;
+
 /// Height cap for the input container: 1/4 of the terminal height, and at least 2 rows (status bar + bottom edge).
 pub fn max_container_height(term_height: u16) -> usize {
     let quarter = (term_height as usize / 4).max(2);
@@ -44,6 +52,8 @@ pub fn max_container_height(term_height: u16) -> usize {
 pub struct Layout {
     /// Height of the history (chat) area.
     pub chat_height: u16,
+    /// Blank rows between the history area and the input container.
+    pub gap_height: u16,
     /// Input container height (includes 1 status-bar row and 1 bottom-edge row).
     pub container_height: u16,
     /// Number of `| ... |` rows inside the container (= container height - 2).
@@ -151,8 +161,14 @@ pub fn compute(
     let ch = container_height(avail as u16, total_lines);
     let body_rows = ch.saturating_sub(2);
 
+    // The gap sits above everything below it: history shrinks by it, the
+    // container and reserved strip keep their sizes.
+    let gap = HISTORY_GAP.min((avail.saturating_sub(ch)) as u16);
+    let chat_height = (avail.saturating_sub(ch) as u16).saturating_sub(gap);
+
     Layout {
-        chat_height: avail.saturating_sub(ch) as u16,
+        chat_height,
+        gap_height: gap,
         container_height: ch as u16,
         body_rows,
         first_visible: scroll.min(max_first(total_lines, ch)),
@@ -310,7 +326,36 @@ mod tests {
         assert_eq!(l.container_height, 2); // status bar + bottom edge
         assert_eq!(l.body_rows, 0);
         assert_eq!(l.visible_rows(), 1);
-        assert_eq!(l.chat_height, 21, "24 - 容器2 - 保留区1");
+        assert_eq!(l.chat_height, 20, "24 - 容器2 - 保留区1 - 间隔1");
+    }
+
+    #[test]
+    fn history_is_separated_from_the_container_by_a_blank_row() {
+        let w = text::wrap("hi", 40);
+        for term_h in [12u16, 24, 40, 60] {
+            let l = compute(term_h, &w, 0, RESERVED_IDLE, RESERVED_IDLE);
+            assert_eq!(l.gap_height, 1, "({term_h}) 历史区与状态栏之间必须恰好一条空行");
+            assert!(
+                l.chat_height + l.gap_height + l.container_height + l.reserved_height == term_h,
+                "({term_h}) 分区必须铺满终端: {} + {} + {} + {}",
+                l.chat_height, l.gap_height, l.container_height, l.reserved_height
+            );
+            assert!(l.chat_height > 0, "({term_h}) 历史区不该被挤没");
+        }
+    }
+
+    #[test]
+    fn tiny_terminal_drops_the_gap_before_the_history() {
+        // With the container's minimum 2 rows and the reserved row, a 3-row
+        // terminal has nothing left: the gap must yield, not the history.
+        let w = text::wrap("hi", 40);
+        let l = compute(3, &w, 0, RESERVED_IDLE, RESERVED_IDLE);
+        assert_eq!(l.gap_height, 0, "空间不足时先牺牲间隔");
+        assert_eq!(
+            l.chat_height as usize + l.gap_height as usize + l.container_height as usize + l.reserved_height as usize,
+            3,
+            "紧凑终端也必须铺满"
+        );
     }
 
     #[test]
@@ -338,7 +383,7 @@ mod tests {
             w.len() - 1,
             "视口最后一行应正好落在文本末行"
         );
-        assert_eq!(l.chat_height, 18);
+        assert_eq!(l.chat_height, 17);
     }
 
     #[test]
@@ -455,15 +500,16 @@ mod tests {
     fn reserved_row_is_carved_out_of_total_height() {
         let w = text::wrap("hi", 40);
         let l = compute(24, &w, 0, RESERVED_IDLE, RESERVED_IDLE);
-        // Of the 24 rows, 1 goes to the reserved area: container 2 + chat 21 = 23
+        // Of the 24 rows: reserved 1, container 2, gap 1, history 20
         assert_eq!(l.container_height, 2);
-        assert_eq!(l.chat_height, 21);
+        assert_eq!(l.chat_height, 20);
         assert_eq!(
             l.chat_height as usize
+                + l.gap_height as usize
                 + l.container_height as usize
                 + l.reserved_height as usize,
             24,
-            "三段高度必须正好铺满终端"
+            "四段高度必须正好铺满终端"
         );
     }
 

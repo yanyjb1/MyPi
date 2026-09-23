@@ -113,8 +113,11 @@ pub fn draw(f: &mut Frame, s: &ViewState, l: &tlayout::Layout) -> (u16, u16) {
     // ---- layout: history on top, input container at the bottom, reserved area below (dynamic height) ----
     // The candidate popup no longer overlays: it claims rows from the reserved area,
     // and the history and input container shift up — nothing overlaps anything.
-    let [chat_area, container_area, reserved_area] = Layout::vertical([
-        Constraint::Min(0),
+    // History, then the separator gap, then the container (whose first row
+    // *is* the status bar), then the reserved strip.
+    let [chat_area, _gap_area, container_area, reserved_area] = Layout::vertical([
+        Constraint::Length(l.chat_height),
+        Constraint::Length(l.gap_height),
         Constraint::Length(l.container_height),
         Constraint::Length(l.reserved_height),
     ])
