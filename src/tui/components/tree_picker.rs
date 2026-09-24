@@ -4,8 +4,8 @@
 //! the three base zones receive nothing. Confirming moves the store's leaf
 //! pointer (append-only tree — nothing is deleted) and the app reprojects.
 
-use crate::store::TreeNode;
 use crate::entry::Entry;
+use crate::store::TreeNode;
 use crate::tui::text::display_width;
 use crate::tui::theme::Palette;
 use ratatui::style::{Color, Modifier, Style};
@@ -49,7 +49,11 @@ impl TreePicker {
             });
         }
         let selected = rows.iter().position(|r| r.is_leaf).unwrap_or(0);
-        Self { rows, selected, leaf }
+        Self {
+            rows,
+            selected,
+            leaf,
+        }
     }
 
     pub fn move_selection(&mut self, delta: i32) {
@@ -73,6 +77,10 @@ fn summarize(kind: &str, e: Option<&Entry>) -> (String, &'static str) {
         (_, Some(Entry::User { content })) => {
             let first = content.lines().next().unwrap_or("");
             (truncate(first, 60), "user")
+        }
+        (_, Some(Entry::Reasoning { content })) => {
+            let first = content.lines().next().unwrap_or("");
+            (format!("💭 {}", truncate(first, 60)), "reasoning")
         }
         (_, Some(Entry::Assistant { content, .. })) => {
             let first = content.lines().next().unwrap_or("");
@@ -113,12 +121,24 @@ pub fn render(picker: &TreePicker, _w: u16, h: u16, p: &Palette) -> Vec<Line<'st
     let _ = _w; // palette reserved for per-kind styling below
     let mut out = Vec::new();
     out.push(Line::from(vec![
-        Span::styled(" 会话树 ", Style::new().fg(Color::Black).bg(Color::Rgb(0, 200, 120)).add_modifier(Modifier::BOLD)),
-        Span::styled(" ↑↓ 移动 · Enter 回到此节点 · Esc 退出 ", Style::new().fg(Color::DarkGray)),
+        Span::styled(
+            " 会话树 ",
+            Style::new()
+                .fg(Color::Black)
+                .bg(Color::Rgb(0, 200, 120))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " ↑↓ 移动 · Enter 回到此节点 · Esc 退出 ",
+            Style::new().fg(Color::DarkGray),
+        ),
     ]));
     out.push(Line::from(""));
     let rows = h.saturating_sub(3) as usize;
-    let start = picker.selected.saturating_sub(rows.saturating_sub(1)).min(picker.rows.len().saturating_sub(1).min(picker.selected));
+    let start = picker
+        .selected
+        .saturating_sub(rows.saturating_sub(1))
+        .min(picker.rows.len().saturating_sub(1).min(picker.selected));
     for (i, r) in picker.rows.iter().enumerate().skip(start).take(rows) {
         let marker = if i == picker.selected { "> " } else { "  " };
         let branch_note = match r.parent_seq {
@@ -142,7 +162,10 @@ pub fn render(picker: &TreePicker, _w: u16, h: u16, p: &Palette) -> Vec<Line<'st
             Style::new().fg(Color::DarkGray)
         };
         out.push(Line::from(Span::styled(
-            format!("{marker}#{:<4}{}{}{}", r.seq, branch_note, r.label, leaf_note),
+            format!(
+                "{marker}#{:<4}{}{}{}",
+                r.seq, branch_note, r.label, leaf_note
+            ),
             style,
         )));
     }
@@ -154,7 +177,12 @@ mod tests {
     use super::*;
 
     fn node(seq: i64, parent: Option<i64>, kind: &str, payload: &str) -> TreeNode {
-        TreeNode { seq, parent_seq: parent, kind: kind.into(), payload: payload.into() }
+        TreeNode {
+            seq,
+            parent_seq: parent,
+            kind: kind.into(),
+            payload: payload.into(),
+        }
     }
 
     #[test]
@@ -187,11 +215,22 @@ mod tests {
 
     #[test]
     fn summarize_maps_kinds() {
-        let (_, k) = summarize("user", Some(&Entry::User { content: "你好".into() }));
+        let (_, k) = summarize(
+            "user",
+            Some(&Entry::User {
+                content: "你好".into(),
+            }),
+        );
         assert_eq!(k, "user");
-        let (_, k) = summarize("tool_result", Some(&Entry::ToolResult {
-            call_id: "c".into(), name: "edit".into(), ok: true, result: String::new(),
-        }));
+        let (_, k) = summarize(
+            "tool_result",
+            Some(&Entry::ToolResult {
+                call_id: "c".into(),
+                name: "edit".into(),
+                ok: true,
+                result: String::new(),
+            }),
+        );
         assert_eq!(k, "tool");
     }
 }

@@ -23,7 +23,6 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 use tungstenite::Message;
 
-
 // A browser handle: either a process we spawned (owned, killed on drop) or
 // one already running (attached; the owner keeps the lifecycle).
 pub struct Browser {
@@ -52,7 +51,11 @@ impl Browser {
         if !Self::port_alive(port) {
             anyhow::bail!("no browser listening on 127.0.0.1:{port}");
         }
-        Ok(Browser { child: None, profile: profile.to_path_buf(), port })
+        Ok(Browser {
+            child: None,
+            profile: profile.to_path_buf(),
+            port,
+        })
     }
 
     pub fn launch_with(exe: &Path, profile: &Path, extra_args: &[&str]) -> anyhow::Result<Browser> {
@@ -78,10 +81,13 @@ impl Browser {
             .spawn()
             .with_context(|| format!("spawning browser {}", exe.display()))?;
 
-        let browser = Browser { child: Some(child), profile: profile.to_path_buf(), port: 0 };
+        let browser = Browser {
+            child: Some(child),
+            profile: profile.to_path_buf(),
+            port: 0,
+        };
         browser.wait_for_devtools()
     }
-
 
     fn wait_for_devtools(mut self) -> anyhow::Result<Browser> {
         // DevToolsActivePort appears once the WS endpoint is listening; the
@@ -92,15 +98,16 @@ impl Browser {
         loop {
             if let Ok(first) = std::fs::read_to_string(&port_file)
                 && let Some(line) = first.lines().next()
-                    && let Ok(port) = line.trim().parse::<u16>() {
-                        // A stale file from a previous session describes a
-                        // dead port — the file exists the instant the profile
-                        // does. Only accept it once /json/version answers.
-                        if Self::port_alive(port) {
-                            self.port = port;
-                            return Ok(self);
-                        }
-                    }
+                && let Ok(port) = line.trim().parse::<u16>()
+            {
+                // A stale file from a previous session describes a
+                // dead port — the file exists the instant the profile
+                // does. Only accept it once /json/version answers.
+                if Self::port_alive(port) {
+                    self.port = port;
+                    return Ok(self);
+                }
+            }
             if self
                 .child
                 .as_mut()
@@ -129,7 +136,11 @@ impl Browser {
     /// PUT /json/new?url=… — open a fresh tab, return its target.
     /// (Chromium ≥ 111 requires PUT; GET returns 405.)
     pub fn create_target(&self, url: &str) -> anyhow::Result<Target> {
-        let endpoint = format!("http://127.0.0.1:{}/json/new?{}", self.port, super::url::urlencode_component(url));
+        let endpoint = format!(
+            "http://127.0.0.1:{}/json/new?{}",
+            self.port,
+            super::url::urlencode_component(url)
+        );
         let mut resp = ureq::put(&endpoint)
             .header("Host", &format!("127.0.0.1:{}", self.port))
             .send_empty()
@@ -163,7 +174,6 @@ impl Browser {
             .context("parsing /json/list")?;
         Ok(body)
     }
-
 }
 
 impl Drop for Browser {
@@ -203,8 +213,8 @@ impl Cdp {
     /// drains the outgoing queue — so a quiet socket never parks outgoing
     /// traffic.
     pub fn connect(ws_url: &str) -> anyhow::Result<Cdp> {
-        let (mut ws, _resp) = tungstenite::connect(ws_url)
-            .with_context(|| format!("connecting {ws_url}"))?;
+        let (mut ws, _resp) =
+            tungstenite::connect(ws_url).with_context(|| format!("connecting {ws_url}"))?;
 
         if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_mut() {
             s.set_read_timeout(Some(Duration::from_millis(50)))?;
@@ -213,34 +223,36 @@ impl Cdp {
         let (in_tx, in_rx) = channel::<(u64, Value)>();
         let (out_tx, out_rx) = channel::<Message>();
 
-        let pump = std::thread::spawn(move || loop {
-            // 1) speak everything queued (cheap, non-blocking)
-            while let Ok(msg) = out_rx.try_recv() {
-                if ws.send(msg).is_err() {
-                    return; // socket closed
+        let pump = std::thread::spawn(move || {
+            loop {
+                // 1) speak everything queued (cheap, non-blocking)
+                while let Ok(msg) = out_rx.try_recv() {
+                    if ws.send(msg).is_err() {
+                        return; // socket closed
+                    }
                 }
-            }
-            // 2) listen within the read budget
-            let frame = match ws.read() {
-                Ok(Message::Text(text)) => text,
-                Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_)) => continue,
-                // The 50 ms read budget expires as WouldBlock — that is the
-                // loop's heartbeat, not a failure. Only real closures end
-                // the pump.
-                Err(tungstenite::Error::Io(e))
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    continue;
-                }
-                Ok(Message::Close(_)) | Err(_) => return, // socket closed
-                Ok(_) => continue,
-            };
-            // 3) forward inbound
-            if let Ok(v) = serde_json::from_str::<Value>(&frame) {
-                let id = v.get("id").and_then(Value::as_u64).unwrap_or(0);
-                if in_tx.send((id, v)).is_err() {
-                    return; // receiver gone: session closed
+                // 2) listen within the read budget
+                let frame = match ws.read() {
+                    Ok(Message::Text(text)) => text,
+                    Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_)) => continue,
+                    // The 50 ms read budget expires as WouldBlock — that is the
+                    // loop's heartbeat, not a failure. Only real closures end
+                    // the pump.
+                    Err(tungstenite::Error::Io(e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        continue;
+                    }
+                    Ok(Message::Close(_)) | Err(_) => return, // socket closed
+                    Ok(_) => continue,
+                };
+                // 3) forward inbound
+                if let Ok(v) = serde_json::from_str::<Value>(&frame) {
+                    let id = v.get("id").and_then(Value::as_u64).unwrap_or(0);
+                    if in_tx.send((id, v)).is_err() {
+                        return; // receiver gone: session closed
+                    }
                 }
             }
         });
@@ -255,7 +267,12 @@ impl Cdp {
 
     /// Send a command and wait for its response (events skipped en route).
     /// Timeout is global per call; CDP has no per-command deadline of its own.
-    pub fn call(&mut self, method: &str, params: Value, timeout: Duration) -> anyhow::Result<Value> {
+    pub fn call(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> anyhow::Result<Value> {
         self.next_id += 1;
         let id = self.next_id;
         let msg = json!({"id": id, "method": method, "params": params});
@@ -270,16 +287,17 @@ impl Cdp {
 
         let deadline = Instant::now() + timeout;
         loop {
-            let (got_id, v) = self.inbox.recv_timeout(
-                deadline.saturating_duration_since(Instant::now()),
-            ).map_err(|e| match e {
-                std::sync::mpsc::RecvTimeoutError::Disconnected => {
-                    anyhow!("{method}: connection reset (navigation or page closed)")
-                }
-                std::sync::mpsc::RecvTimeoutError::Timeout => {
-                    anyhow!("timeout waiting for {method} response")
-                }
-            })?;
+            let (got_id, v) = self
+                .inbox
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|e| match e {
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        anyhow!("{method}: connection reset (navigation or page closed)")
+                    }
+                    std::sync::mpsc::RecvTimeoutError::Timeout => {
+                        anyhow!("timeout waiting for {method} response")
+                    }
+                })?;
             if got_id == id {
                 if let Some(err) = v.get("error") {
                     return Err(anyhow!("{method} failed: {err}"));
@@ -295,7 +313,8 @@ impl Cdp {
     /// in ONE loop: either may arrive first, and an ack-only return is fine
     /// (callers poll content with their own deadline anyway).
     pub fn navigate(&mut self, url: &str, timeout: Duration) -> anyhow::Result<()> {
-        self.call("Page.enable", json!({}), Duration::from_secs(5)).ok();
+        self.call("Page.enable", json!({}), Duration::from_secs(5))
+            .ok();
         self.next_id += 1;
         let id = self.next_id;
         let msg = json!({"id": id, "method": "Page.navigate", "params": {"url": url}});

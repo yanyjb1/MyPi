@@ -7,13 +7,12 @@
 
 use anyhow::anyhow;
 
-use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
 use super::super::engine::SearchHit;
-use crate::web::utils::url::{percent_decode, urlencoded};
+use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
 use crate::web::utils::session::{self, RENDER_WAIT};
+use crate::web::utils::url::{percent_decode, urlencoded};
 
 const DDG_URL: &str = "https://html.duckduckgo.com/html/";
-
 
 /// Parse a DDG html-frontend SERP. Public for tests. Blocks are
 /// `div.result` containers; title anchor `a.result__a` carries the target
@@ -26,7 +25,9 @@ pub fn parse_ddg_html(html: &str) -> Vec<SearchHit> {
     while let Some(rel) = html[from..].find(marker) {
         let anchor_pos = from + rel;
         // Title anchor's href + text.
-        let Some(seg_end) = html[anchor_pos..].find("</a>") else { break };
+        let Some(seg_end) = html[anchor_pos..].find("</a>") else {
+            break;
+        };
         let seg = &html[anchor_pos..anchor_pos + seg_end];
         let Some(open_end) = seg.find('>') else { break };
         let Some(href) = extract_attr(&seg[..open_end], "href") else {
@@ -51,7 +52,11 @@ pub fn parse_ddg_html(html: &str) -> Vec<SearchHit> {
             .map(|s| strip_tags(&s))
             .unwrap_or_default();
 
-        hits.push(SearchHit { title, url: unwrap_ddg_href(&href), snippet });
+        hits.push(SearchHit {
+            title,
+            url: unwrap_ddg_href(&href),
+            snippet,
+        });
         from = next_anchor;
     }
     hits
@@ -114,8 +119,6 @@ mod tests {
   <a class="result__snippet" href="https://smol.rs/">A small and fast async runtime.</a>
 </div>"#;
 
-
-
     #[test]
     fn parses_ddg_results_and_unwraps_uddg() {
         let hits = parse_ddg_html(DDG_FIXTURE);
@@ -127,5 +130,4 @@ mod tests {
         assert_eq!(hits[1].url, "https://smol.rs/");
         assert_eq!(hits[1].snippet, "A small and fast async runtime.");
     }
-
 }

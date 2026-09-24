@@ -3,5 +3,5 @@
 mod engine;
 pub mod providers;
 
-pub use engine::{fetch, html_to_markdown, parse_fetch_args, FetchArgs};
 pub(crate) use engine::is_js_shell;
+pub use engine::{FetchArgs, fetch, html_to_markdown, parse_fetch_args};

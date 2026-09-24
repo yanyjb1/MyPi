@@ -53,11 +53,7 @@ impl LoopConfig {
     /// makes strict gateways (observed: local vLLM-style returns 503)
     /// reject requests that would never come close to the limit.
     pub fn effective_max_tokens(&self, ctx: &Context) -> u32 {
-        let used: usize = ctx
-            .messages
-            .iter()
-            .map(|m| m.approx_chars())
-            .sum();
+        let used: usize = ctx.messages.iter().map(|m| m.approx_chars()).sum();
         let used_tokens = (used / 4) as u32;
         self.max_tokens.saturating_sub(used_tokens).max(256)
     }
@@ -77,7 +73,6 @@ pub trait ToolExecutor {
     // model, which decides how to recover (retry with new arguments,
     // switch tools, or give up). Far more useful than breaking the loop.
     fn execute(&mut self, call: &ToolCall) -> Result<String>;
-
 }
 
 // An executor with no tools.
@@ -121,7 +116,12 @@ pub enum ToolEvent {
     // `args` is the raw JSON argument string (the card renders it); `intent`
     // is the model's own one-liner about what it is doing, surfaced while the
     // tool blocks the conversation.
-    Start { call_id: String, name: String, args: String, intent: String },
+    Start {
+        call_id: String,
+        name: String,
+        args: String,
+        intent: String,
+    },
     // Execution finished. `result` is the model-facing text; it is the only payload forwarded to the UI.
     Finish {
         call_id: String,
@@ -164,7 +164,12 @@ pub fn run(
     let mut rounds = 0usize;
 
     loop {
-        let assistant = client.stream(ctx, cfg.effective_max_tokens(ctx), &mut on_delta, &mut on_reasoning)?;
+        let assistant = client.stream(
+            ctx,
+            cfg.effective_max_tokens(ctx),
+            &mut on_delta,
+            &mut on_reasoning,
+        )?;
 
         // No tools requested, or interrupted/aborted — turn over.
         //
@@ -229,7 +234,12 @@ pub fn run(
             // ceiling was hit. The UI must surface this explicitly —
             // otherwise the user just sees a reply that mysteriously
             // stops mid-thought.
-            let last = client.stream(ctx, cfg.effective_max_tokens(ctx), &mut on_delta, &mut on_reasoning)?;
+            let last = client.stream(
+                ctx,
+                cfg.effective_max_tokens(ctx),
+                &mut on_delta,
+                &mut on_reasoning,
+            )?;
             ctx.messages.push(last.to_message());
             return Ok(TurnOutcome {
                 message: last,
@@ -293,7 +303,11 @@ mod tests {
         // shape of that message.
         let assistant = AssistantMessage {
             content: String::new(),
-            tool_calls: vec![ToolCall::new("c1", "read_file", json!({"path": "a"}).to_string())],
+            tool_calls: vec![ToolCall::new(
+                "c1",
+                "read_file",
+                json!({"path": "a"}).to_string(),
+            )],
             stop_reason: StopReason::ToolCalls,
             ..Default::default()
         };
@@ -304,7 +318,11 @@ mod tests {
             msg,
             Message::Assistant {
                 content: None,
-                tool_calls: vec![ToolCall::new("c1", "read_file", json!({"path": "a"}).to_string())],
+                tool_calls: vec![ToolCall::new(
+                    "c1",
+                    "read_file",
+                    json!({"path": "a"}).to_string()
+                )],
             }
         );
     }
@@ -323,7 +341,10 @@ mod tests {
         // Guard the test double itself, so the loop tests below do not
         // build on a broken fake
         let mut ok = FakeTools::new(Ok("result".into()));
-        assert_eq!(ok.execute(&ToolCall::new("c", "f", "{}")).unwrap(), "result");
+        assert_eq!(
+            ok.execute(&ToolCall::new("c", "f", "{}")).unwrap(),
+            "result"
+        );
         assert_eq!(ok.seen, vec!["f"]);
 
         let mut bad = FakeTools::new(Err("炸了".into()));

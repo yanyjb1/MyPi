@@ -77,13 +77,14 @@ pub fn normalize(raw: &str) -> anyhow::Result<String> {
             return Err(anyhow!("scheme not allowed: {scheme}"));
         }
     }
-    Ok(if lower.starts_with("http://") || lower.starts_with("https://") {
-        url.to_string()
-    } else {
-        format!("https://{url}")
-    })
+    Ok(
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            url.to_string()
+        } else {
+            format!("https://{url}")
+        },
+    )
 }
-
 
 /// Percent-encode everything except RFC 3986 unreserved (for URL query
 /// embedding, e.g. /json/new?url=…).

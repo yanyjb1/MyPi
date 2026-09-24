@@ -1,24 +1,34 @@
 //! Interactive `act` operations: navigate/click/fill/press/select/scroll/
 //! eval — one match arm per op over the session's `Page`.
 
-use anyhow::anyhow;
-use serde_json::Value;
 use super::super::engine::BrowserArgs;
 use crate::web::utils::session::Page;
+use anyhow::anyhow;
+use serde_json::Value;
 
 pub(crate) fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
-    let op = args.op.as_deref().ok_or_else(|| anyhow!("act requires op"))?;
+    let op = args
+        .op
+        .as_deref()
+        .ok_or_else(|| anyhow!("act requires op"))?;
     let js_escape = |s: &str| s.replace('\\', "\\\\").replace('\'', "\\'");
 
     match op {
         "navigate" => {
-            let url = args.url.as_deref().ok_or_else(|| anyhow!("navigate requires url"))?;
+            let url = args
+                .url
+                .as_deref()
+                .ok_or_else(|| anyhow!("navigate requires url"))?;
             let target = crate::web::utils::url::normalize(url)?;
             page.navigate(&target)?;
             Ok(format!("navigated: {target}"))
         }
         "click" => {
-            let sel = js_escape(args.selector.as_deref().ok_or_else(|| anyhow!("click requires selector"))?);
+            let sel = js_escape(
+                args.selector
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("click requires selector"))?,
+            );
             let r = page.evaluate(
                 &format!("(() => {{ const el = document.querySelector('{sel}'); if (!el) return 'NOT_FOUND'; el.click(); return 'clicked'; }})()"),
                 super::super::engine::ACT_TIMEOUT,
@@ -26,7 +36,11 @@ pub(crate) fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String>
             Ok(expect(&r, "click")?)
         }
         "fill" => {
-            let sel = js_escape(args.selector.as_deref().ok_or_else(|| anyhow!("fill requires selector"))?);
+            let sel = js_escape(
+                args.selector
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("fill requires selector"))?,
+            );
             let text = args
                 .value
                 .as_ref()
@@ -40,7 +54,10 @@ pub(crate) fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String>
             Ok(expect(&r, "fill")?)
         }
         "press" => {
-            let key = args.selector.as_deref().ok_or_else(|| anyhow!("press requires selector=key name"))?;
+            let key = args
+                .selector
+                .as_deref()
+                .ok_or_else(|| anyhow!("press requires selector=key name"))?;
             let r = page.evaluate(
                 &format!("(() => {{ const el = document.activeElement; if (!el) return 'NOT_FOUND'; el.dispatchEvent(new KeyboardEvent('keydown', {{key: '{key}', bubbles: true}})); el.dispatchEvent(new KeyboardEvent('keyup', {{key: '{key}', bubbles: true}})); return 'pressed'; }})()"),
                 super::super::engine::ACT_TIMEOUT,
@@ -48,7 +65,11 @@ pub(crate) fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String>
             Ok(expect(&r, "press")?)
         }
         "select" => {
-            let sel = js_escape(args.selector.as_deref().ok_or_else(|| anyhow!("select requires selector"))?);
+            let sel = js_escape(
+                args.selector
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("select requires selector"))?,
+            );
             let text = args
                 .value
                 .as_ref()
@@ -63,7 +84,10 @@ pub(crate) fn cmd_act(page: &Page, args: &BrowserArgs) -> anyhow::Result<String>
         }
         "scroll" => {
             let dy = args.value.as_ref().and_then(Value::as_i64).unwrap_or(600);
-            let r = page.evaluate(&format!("window.scrollBy(0, {dy}); 'scrolled'"), super::super::engine::ACT_TIMEOUT)?;
+            let r = page.evaluate(
+                &format!("window.scrollBy(0, {dy}); 'scrolled'"),
+                super::super::engine::ACT_TIMEOUT,
+            )?;
             Ok(expect(&r, "scroll")?)
         }
         "eval" => {

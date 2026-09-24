@@ -27,7 +27,12 @@ pub enum SessionEvent {
     ReasoningDelta(String),
     /// A tool started executing. `args` is the raw JSON argument string;
     /// `intent` is the model's one-line statement of purpose.
-    ToolStart { call_id: String, name: String, args: String, intent: String },
+    ToolStart {
+        call_id: String,
+        name: String,
+        args: String,
+        intent: String,
+    },
     /// A tool finished executing.
     ToolFinish {
         call_id: String,
@@ -56,6 +61,15 @@ pub enum SessionEvent {
     /// /cd landed: persist the migrated working directory under `seq`.
     /// Pure bookkeeping — no transcript change.
     SetCwd { seq: i64, path: String },
+    /// Compaction finished on the background thread: apply the fork.
+    /// `entries` is the marker to persist; `ctx` replaces the live chat
+    /// replica; the token stats are display-only.
+    Compaction {
+        entries: Vec<Entry>,
+        ctx: crate::ai::types::Context,
+        tokens_before: usize,
+        tokens_after: usize,
+    },
 }
 
 /// What happened after a mutation — enough for a renderer to react

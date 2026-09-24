@@ -32,7 +32,10 @@ pub(crate) fn fetch_direct(url: &str) -> anyhow::Result<(String, u16, usize)> {
         .call()
         .map_err(|e| anyhow!("request failed: {e}"))?;
     let status = response.status().as_u16();
-    let body = response.body_mut().read_to_string().context("reading body")?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .context("reading body")?;
     let len = body.len();
     Ok((body, status, len))
 }

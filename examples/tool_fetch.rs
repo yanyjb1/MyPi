@@ -7,7 +7,9 @@ fn main() -> anyhow::Result<()> {
         kind: "function".into(),
         function: mypi::ai::types::FunctionCall {
             name: "fetch".into(),
-            arguments: r#"{"intent":"读文档","url":"doc.rust-lang.org/book/ch17-00-async-await.html"}"#.into(),
+            arguments:
+                r#"{"intent":"读文档","url":"doc.rust-lang.org/book/ch17-00-async-await.html"}"#
+                    .into(),
         },
     };
     let out = tools.execute(&call)?;

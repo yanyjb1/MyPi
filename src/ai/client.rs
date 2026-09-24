@@ -21,9 +21,6 @@ pub struct Client {
     http: ureq::Agent,
 }
 
-
-
-
 // Non-streaming response body. Only the fields we need are parsed; serde leniency skips the rest.
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
@@ -160,7 +157,11 @@ impl ToolCallAccum {
                     // the id in the second one.
                     self.pending.push((
                         index,
-                        crate::ai::types::ToolCall::new(String::new(), String::new(), String::new()),
+                        crate::ai::types::ToolCall::new(
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                        ),
                     ));
                     &mut self.pending.last_mut().expect("just pushed").1
                 }
@@ -254,7 +255,9 @@ impl Client {
             stream,
             tools: (!tools.is_empty()).then_some(tools),
             stream_options: if stream {
-                Some(StreamOptions { include_usage: true })
+                Some(StreamOptions {
+                    include_usage: true,
+                })
             } else {
                 None
             },
@@ -288,7 +291,8 @@ impl Client {
     // It shares `build_body` / `post` with `stream`, so the two cannot
     // drift apart.
     pub fn complete(&self, ctx: &Context, max_tokens: u32) -> anyhow::Result<AssistantMessage> {
-        let messages = serde_json::to_value(&ctx.messages).expect("Message serialization is infallible");
+        let messages =
+            serde_json::to_value(&ctx.messages).expect("Message serialization is infallible");
         let body = self.build_body(max_tokens, false, &messages, &ctx.tools);
         let resp: ChatResponse = self
             .post(&body)?
@@ -331,7 +335,8 @@ impl Client {
         mut on_delta: impl FnMut(&str) -> bool,
         mut on_reasoning: impl FnMut(&str),
     ) -> anyhow::Result<AssistantMessage> {
-        let messages = serde_json::to_value(&ctx.messages).expect("Message serialization is infallible");
+        let messages =
+            serde_json::to_value(&ctx.messages).expect("Message serialization is infallible");
         let body = self.build_body(max_tokens, true, &messages, &ctx.tools);
 
         let resp = self.post(&body)?;
@@ -407,11 +412,14 @@ impl Client {
                 parse_finish_reason(finish_reason)
             },
             usage,
-            reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
+            reasoning: if reasoning.is_empty() {
+                None
+            } else {
+                Some(reasoning)
+            },
         })
     }
 }
-
 
 fn parse_finish_reason(reason: Option<String>) -> StopReason {
     match reason.as_deref() {
@@ -435,7 +443,10 @@ mod tests {
     #[test]
     fn base_url_trailing_slash_is_trimmed() {
         // A fat-fingered trailing slash in YAML is common; must not become //chat/completions
-        assert_eq!(client().endpoint(), "http://example.test/v1/chat/completions");
+        assert_eq!(
+            client().endpoint(),
+            "http://example.test/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -458,7 +469,10 @@ mod tests {
 
         let plain = c.build_body(100, false, &msgs, &tools);
         assert!(!plain.stream);
-        assert!(plain.stream_options.is_none(), "non-streaming must not send stream_options");
+        assert!(
+            plain.stream_options.is_none(),
+            "non-streaming must not send stream_options"
+        );
         // Without tools the whole field must be omitted, not an empty array
         assert!(serde_json::to_value(&plain).unwrap().get("tools").is_none());
     }
@@ -480,8 +494,14 @@ mod tests {
 
     #[test]
     fn finish_reason_maps_length_only() {
-        assert_eq!(parse_finish_reason(Some("length".into())), StopReason::Length);
-        assert_eq!(parse_finish_reason(Some("tool_calls".into())), StopReason::ToolCalls);
+        assert_eq!(
+            parse_finish_reason(Some("length".into())),
+            StopReason::Length
+        );
+        assert_eq!(
+            parse_finish_reason(Some("tool_calls".into())),
+            StopReason::ToolCalls
+        );
         assert_eq!(parse_finish_reason(Some("stop".into())), StopReason::Stop);
         // Unknown values leniently map to stop (a common compatibility-layer flaw)
         assert_eq!(parse_finish_reason(Some("weird".into())), StopReason::Stop);

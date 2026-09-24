@@ -27,7 +27,7 @@ use unicode_width::UnicodeWidthStr;
 use super::assistant::assistant_block;
 use super::cards::{result_card_visible, tool_exchange, tool_request_card, tool_result_card};
 use super::system::system_block;
-use crate::entry::Entry;
+use crate::entry::{Align, Entry};
 use crate::tui::theme::Palette;
 
 // Streaming tail: in-flight content at full weight (the final answer),
@@ -117,17 +117,26 @@ pub(crate) fn single_node(
     let e = &group[0];
     match e {
         Entry::User { content } => super::cards::user_card(content, p, width),
-        Entry::Assistant {
-            content,
-            usage,
-            reasoning,
-        } => assistant_block(
-            content,
-            reasoning.as_deref(),
-            usage.as_ref(),
-            p,
-            show_reasoning,
-        ),
+        Entry::Assistant { content, usage } => assistant_block(content, usage.as_ref(), p),
+        // The thinking chain, its own block: Ctrl+T hides the whole block
+        // (a *visibility* switch here, not a render flag — the cache keeps
+        // one variant per block and never re-renders).
+        Entry::Reasoning { content } => {
+            if !show_reasoning || content.trim().is_empty() {
+                return Vec::new();
+            }
+            let mut out: Vec<Line<'static>> = Vec::new();
+            for mut line in crate::tui::components::markdown::render_markdown(content, p) {
+                for sp in &mut line.spans {
+                    sp.style = sp
+                        .style
+                        .fg(p.muted)
+                        .add_modifier(ratatui::style::Modifier::ITALIC);
+                }
+                out.push(line);
+            }
+            out
+        }
         Entry::ToolRequest { name, args, .. } => {
             if group.len() == 2 {
                 let Entry::ToolResult {
@@ -164,6 +173,10 @@ pub(crate) fn single_node(
         Entry::System { text, align } => system_block(text, *align, p, width),
         // Name markers are metadata, not chat content: never a history row.
         Entry::Name { .. } => Vec::new(),
+        // Compaction fork point: a centered divider announcing the
+        // boundary. The summary itself lives in the context (a user
+        // turn), not on screen — this is just the seam marker.
+        Entry::Compaction { .. } => system_block("—— 上下文已压缩 ——", Align::Center, p, width),
     }
 }
 
@@ -214,7 +227,6 @@ mod tests {
             Entry::Assistant {
                 content: "回答".into(),
                 usage: None,
-                reasoning: None,
             },
             Entry::ToolRequest {
                 call_id: "c1".into(),
@@ -610,7 +622,6 @@ mod tests {
             },
             Entry::Assistant {
                 content: "回复".into(),
-                reasoning: None,
                 usage: Some(UsageSummary {
                     total_tokens: 10,
                     prompt_tokens: 8,
@@ -698,7 +709,6 @@ mod tests {
             &[Entry::Assistant {
                 content: "x".repeat(20),
                 usage: None,
-                reasoning: None,
             }],
             &Palette::default(),
             false,
@@ -715,10 +725,12 @@ mod tests {
             Entry::User {
                 content: "问".into(),
             },
+            Entry::Reasoning {
+                content: "想".into(),
+            },
             Entry::Assistant {
                 content: "答".into(),
                 usage: None,
-                reasoning: Some("想".into()),
             },
             Entry::System {
                 text: "切模型".into(),
@@ -726,8 +738,9 @@ mod tests {
             },
         ];
         let lines = render(&entries, &p, true, false);
-        // Gaps: node boundaries (2) plus the reasoning/answer seam inside
-        // the assistant block (1). Never a doubled blank row anywhere.
+        // Gaps: one per node boundary (3 nodes → 2 gaps) plus the
+        // reasoning/answer seam (the reasoning block's trailing blank row).
+        // Never a doubled blank row anywhere.
         let blanks = lines
             .iter()
             .filter(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
@@ -745,11 +758,15 @@ mod tests {
     #[test]
     fn reasoning_shown_by_default_hidden_when_folded() {
         let p = Palette::default();
-        let entries = vec![Entry::Assistant {
-            content: "答案".into(),
-            usage: None,
-            reasoning: Some("内心独白".into()),
-        }];
+        let entries = vec![
+            Entry::Reasoning {
+                content: "内心独白".into(),
+            },
+            Entry::Assistant {
+                content: "答案".into(),
+                usage: None,
+            },
+        ];
         // Default view: reasoning is visible, in the muted gray
         let open = render(&entries, &p, true, false);
         let open_text = text_of(&open);
@@ -773,11 +790,15 @@ mod tests {
     #[test]
     fn empty_reasoning_never_renders_even_expanded() {
         let p = Palette::default();
-        let entries = vec![Entry::Assistant {
-            content: "答案".into(),
-            usage: None,
-            reasoning: Some("  ".into()),
-        }];
+        let entries = vec![
+            Entry::Reasoning {
+                content: "  ".into(),
+            },
+            Entry::Assistant {
+                content: "答案".into(),
+                usage: None,
+            },
+        ];
         let lines = render(&entries, &p, true, false);
         let text = text_of(&lines);
         // Just the content: the inter-node blank row belongs to the caller.
@@ -787,22 +808,21 @@ mod tests {
 
     #[test]
     fn reasoning_round_trips_through_payload() {
-        let e = Entry::Assistant {
-            content: "答".into(),
-            usage: None,
-            reasoning: Some("想了想".into()),
+        let e = Entry::Reasoning {
+            content: "想了想".into(),
         };
         let (kind, payload) = e.to_payload();
+        assert_eq!(kind, "reasoning");
         assert_eq!(Entry::from_payload(kind, &payload).unwrap(), e);
-        // Old data lacks the reasoning field: reads as None without exploding
-        let legacy = r#"{"content":"老消息","usage":null}"#;
+        // The assistant payload no longer carries reasoning at all; a
+        // legacy row that still has one reads fine (field ignored).
+        let legacy = r#"{"content":"老消息","usage":null,"reasoning":"旧思考"}"#;
         let back = Entry::from_payload("assistant", legacy).unwrap();
         assert_eq!(
             back,
             Entry::Assistant {
                 content: "老消息".into(),
                 usage: None,
-                reasoning: None
             }
         );
     }

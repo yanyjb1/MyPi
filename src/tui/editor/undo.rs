@@ -161,8 +161,16 @@ mod tests {
         let t = t0();
         // Simulate typing "abc": record before each edit
         u.record(snap("", 0), EditKind::Typing, t);
-        u.record(snap("a", 1), EditKind::Typing, t + Duration::from_millis(50));
-        u.record(snap("ab", 2), EditKind::Typing, t + Duration::from_millis(100));
+        u.record(
+            snap("a", 1),
+            EditKind::Typing,
+            t + Duration::from_millis(50),
+        );
+        u.record(
+            snap("ab", 2),
+            EditKind::Typing,
+            t + Duration::from_millis(100),
+        );
 
         // Exactly 1 snapshot -> one undo returns to empty
         assert_eq!(u.undo.len(), 1);
@@ -202,8 +210,16 @@ mod tests {
         let t = t0();
         u.record(snap("", 0), EditKind::Typing, t);
         u.break_coalescing(); // simulate a cursor move
-        u.record(snap("a", 1), EditKind::Typing, t + Duration::from_millis(10));
-        assert_eq!(u.undo.len(), 2, "typing after a cursor move must be its own step");
+        u.record(
+            snap("a", 1),
+            EditKind::Typing,
+            t + Duration::from_millis(10),
+        );
+        assert_eq!(
+            u.undo.len(),
+            2,
+            "typing after a cursor move must be its own step"
+        );
     }
 
     #[test]
@@ -254,7 +270,11 @@ mod tests {
         for i in 0..(CAPACITY + 10) {
             u.record(snap(&"x".repeat(i), 0), EditKind::Other, t);
         }
-        assert_eq!(u.undo.len(), CAPACITY, "stack depth must not exceed the cap");
+        assert_eq!(
+            u.undo.len(),
+            CAPACITY,
+            "stack depth must not exceed the cap"
+        );
     }
 
     #[test]

@@ -7,5 +7,5 @@ pub(crate) mod direct;
 pub(crate) mod site;
 
 pub(crate) use browser::fetch_via_browser;
-pub(crate) use direct::looks_bot_blocked;
 pub(crate) use direct::fetch_direct;
+pub(crate) use direct::looks_bot_blocked;

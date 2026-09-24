@@ -10,7 +10,11 @@
 pub fn data_base() -> std::path::PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from).map(|h| h.join(".local/share")))
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|h| h.join(".local/share"))
+        })
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
@@ -20,7 +24,11 @@ pub fn data_base() -> std::path::PathBuf {
 pub fn config_base() -> std::path::PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from).map(|h| h.join(".config")))
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|h| h.join(".config"))
+        })
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
@@ -38,9 +46,10 @@ pub fn data_dir() -> std::path::PathBuf {
 /// inside [`std::env::temp_dir`] so a browser can still launch.
 pub fn browser_profile_dir() -> std::path::PathBuf {
     if let Some(dir) = std::env::var_os("MYPI_BROWSER_PROFILE_DIR")
-        && !dir.is_empty() {
-            return std::path::PathBuf::from(dir);
-        }
+        && !dir.is_empty()
+    {
+        return std::path::PathBuf::from(dir);
+    }
     let base = std::env::var_os("HOME")
         .map(|_| data_dir())
         .unwrap_or_else(std::env::temp_dir);
@@ -86,40 +95,52 @@ mod tests {
 
     #[test]
     fn profile_dir_prefers_the_explicit_override() {
-        with_env(&[
-            ("MYPI_BROWSER_PROFILE_DIR", Some("/tmp/explicit-profile")),
-            ("XDG_DATA_HOME", Some("/tmp/xdg-data")),
-            ("HOME", Some("/tmp/fake-home")),
-        ], || {
-            assert_eq!(browser_profile_dir(), std::path::PathBuf::from("/tmp/explicit-profile"));
-        });
+        with_env(
+            &[
+                ("MYPI_BROWSER_PROFILE_DIR", Some("/tmp/explicit-profile")),
+                ("XDG_DATA_HOME", Some("/tmp/xdg-data")),
+                ("HOME", Some("/tmp/fake-home")),
+            ],
+            || {
+                assert_eq!(
+                    browser_profile_dir(),
+                    std::path::PathBuf::from("/tmp/explicit-profile")
+                );
+            },
+        );
     }
 
     #[test]
     fn profile_dir_follows_xdg_data_home() {
-        with_env(&[
-            ("MYPI_BROWSER_PROFILE_DIR", None),
-            ("XDG_DATA_HOME", Some("/tmp/xdg-data")),
-        ], || {
-            assert_eq!(
-                browser_profile_dir(),
-                std::path::PathBuf::from("/tmp/xdg-data/mypi/browser/profile")
-            );
-        });
+        with_env(
+            &[
+                ("MYPI_BROWSER_PROFILE_DIR", None),
+                ("XDG_DATA_HOME", Some("/tmp/xdg-data")),
+            ],
+            || {
+                assert_eq!(
+                    browser_profile_dir(),
+                    std::path::PathBuf::from("/tmp/xdg-data/mypi/browser/profile")
+                );
+            },
+        );
     }
 
     #[test]
     fn profile_dir_falls_back_to_home_layout() {
-        with_env(&[
-            ("MYPI_BROWSER_PROFILE_DIR", None),
-            ("XDG_DATA_HOME", None),
-            ("HOME", Some("/tmp/fake-home")),
-        ], || {
-            assert_eq!(
-                browser_profile_dir(),
-                std::path::PathBuf::from("/tmp/fake-home/.local/share/mypi/browser/profile")
-            );
-        });
+        with_env(
+            &[
+                ("MYPI_BROWSER_PROFILE_DIR", None),
+                ("XDG_DATA_HOME", None),
+                ("HOME", Some("/tmp/fake-home")),
+            ],
+            || {
+                assert_eq!(
+                    browser_profile_dir(),
+                    std::path::PathBuf::from("/tmp/fake-home/.local/share/mypi/browser/profile")
+                );
+            },
+        );
     }
 
     #[test]

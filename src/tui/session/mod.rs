@@ -3,8 +3,8 @@
 //! domain owns everything from process start to cursor placement.
 
 mod db;
-pub mod signal;
 mod r#loop;
+pub mod signal;
 
 pub(crate) use db::{db_path, migrate_legacy_db};
 pub use r#loop::run_tui;

@@ -132,7 +132,7 @@ while seq < N:
         # blows past the spill threshold. The DB gets the full content in
         # artifacts, the context gets the 4-line placeholder — THAT is
         # what the renderer must chew, not the full text.
-        spill = random.random() < 0.33 or name in ('tree',)
+        spill = (random.random() < 0.33 or name in ('tree',)) and os.environ.get('NO_ARTIFACTS') != '1'
         if spill:
             nlines = random.randint(600, 3000)
             full = '\n'.join(f'{lorem(3)}  {rand_chars(24)}' for _ in range(nlines))

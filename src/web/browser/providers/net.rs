@@ -2,9 +2,9 @@
 //! its own performance-resource entries instead of tapping Network
 //! events. Zero protocol surface, no event races.
 
-use serde_json::Value;
 use super::super::engine::BrowserArgs;
 use crate::web::utils::session::Page;
+use serde_json::Value;
 
 pub(crate) fn capture_network(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
     let filter = args.filter.clone().unwrap_or_default();

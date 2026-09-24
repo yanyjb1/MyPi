@@ -27,6 +27,8 @@ impl App {
             "/resume" => self.cmd_resume(),
             "/model" => self.cmd_model(arg),
             "/switch" => self.cmd_switch(arg),
+            "/compact" => self.cmd_compact(arg),
+            "/profile" => self.cmd_profile(arg),
             other => {
                 // Any name passing lookup() must have an arm; reaching here is a programming error.
                 debug_assert!(false, "未实现命令: {other}");
@@ -252,5 +254,94 @@ impl App {
         }
     }
 
-    // Submit the current input.
+    // /compact [focus]: compress the finalized history into a checkpoint.
+    // The summarization round-trip runs on a background thread; results
+    // land via SessionEvent::Compaction. `focus` rides along as an extra
+    // emphasis inside the instruction.
+    pub(crate) fn cmd_compact(&mut self, arg: &str) {
+        if self.session.busy() {
+            self.session.echo(entry::Entry::Error {
+                text: "有回合正在进行，等它结束再压缩".into(),
+            });
+            return;
+        }
+        let ccfg = {
+            let cfg = self.cfg.as_ref().expect("cfg ready").borrow();
+            cfg.app.compact.clone()
+        };
+        match self.session.run_compact(arg, &ccfg) {
+            true => {
+                self.session.echo(entry::Entry::System {
+                    text: "正在压缩上下文…（总结请求走前缀回放，几乎只花输出费）".into(),
+                    align: entry::Align::Center,
+                });
+            }
+            false => {
+                self.session.echo(entry::Entry::Error {
+                    text: "压缩未能启动".into(),
+                });
+            }
+        }
+    }
+
+    // /profile [name]: switch the system-prompt profile. Without an
+    // argument, list what exists and mark the active one.
+    //
+    // Timing rule (the settled design): the system message is the head
+    // of the cached prefix, so a switch only takes effect at a context
+    // rebuild point — the next session start, or the first turn after a
+    // compaction fork (entries_to_context re-reads config then). Here we
+    // persist the choice; the transcript notes when it will land.
+    pub(crate) fn cmd_profile(&mut self, arg: &str) {
+        let cfg = self.cfg.as_ref().expect("cfg ready").borrow();
+        if arg.is_empty() {
+            let current = crate::server::profile::active_name(&cfg);
+            let mut lines = vec![format!(
+                "当前 profile：{current}（/profile <name> 切换；下次会话或压缩后生效）"
+            )];
+            for name in crate::server::profile::list(&cfg) {
+                let mark = if name == current { " ←" } else { "" };
+                lines.push(format!("  {name}{mark}"));
+            }
+            drop(cfg);
+            for l in lines {
+                self.session.echo(entry::Entry::Error { text: l });
+            }
+            return;
+        }
+        // Validate before persisting: unknown names are refused here so
+        // the next session never boots into a typo.
+        match crate::server::profile::resolve(&cfg, arg) {
+            Ok(_) => {
+                drop(cfg);
+                match self
+                    .cfg
+                    .as_ref()
+                    .expect("cfg ready")
+                    .borrow()
+                    .save_profile(arg)
+                {
+                    Ok(()) => {
+                        self.session.echo(entry::Entry::System {
+                            text: format!(
+                                "profile 已切换为 {arg}（写入 config.yaml；下次会话或压缩后生效）"
+                            ),
+                            align: entry::Align::Center,
+                        });
+                    }
+                    Err(e) => {
+                        self.session.echo(entry::Entry::Error {
+                            text: format!("写入 config.yaml 失败：{e:#}"),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                drop(cfg);
+                self.session.echo(entry::Entry::Error {
+                    text: format!("{e:#}"),
+                });
+            }
+        }
+    }
 }

@@ -8,7 +8,8 @@ fn main() -> anyhow::Result<()> {
         kind: "function".into(),
         function: mypi::ai::types::FunctionCall {
             name: "search".into(),
-            arguments: r#"{"intent":"验证工具注册","query":"site:github.com rust async","limit":3}"#.into(),
+            arguments:
+                r#"{"intent":"验证工具注册","query":"site:github.com rust async","limit":3}"#.into(),
         },
     };
     let out = tools.execute(&call)?;

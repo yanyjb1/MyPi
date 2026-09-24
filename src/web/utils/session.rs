@@ -83,13 +83,11 @@ impl Page {
         let mut last = String::new();
         loop {
             match self.dom_html() {
-                Ok(html) => {
-                    match ready(&html) {
-                        Some(Ok(())) => return Ok(html),
-                        Some(Err(e)) => return Err(e),
-                        None => last = html,
-                    }
-                }
+                Ok(html) => match ready(&html) {
+                    Some(Ok(())) => return Ok(html),
+                    Some(Err(e)) => return Err(e),
+                    None => last = html,
+                },
                 // Navigation reset the socket; keep polling — the next
                 // `resilient` call re-resolves the same tab transparently.
                 Err(e) if is_reset(&e) => {}
@@ -109,7 +107,11 @@ impl Page {
             params["captureBeyondViewport"] = json!(true);
         }
         let data = self.resilient(|c| {
-            let r = c.call("Page.captureScreenshot", params.clone(), Duration::from_secs(15))?;
+            let r = c.call(
+                "Page.captureScreenshot",
+                params.clone(),
+                Duration::from_secs(15),
+            )?;
             r.get("data")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
@@ -202,7 +204,10 @@ fn ensure_browser() -> anyhow::Result<u16> {
         None => Browser::launch(&profile).context("launching browser")?,
     };
     let port = browser.port;
-    *guard = Some(Session { browser, tabs: Default::default() });
+    *guard = Some(Session {
+        browser,
+        tabs: Default::default(),
+    });
     Ok(port)
 }
 

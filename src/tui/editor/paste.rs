@@ -35,8 +35,7 @@ pub struct Marker {
     pub end: usize,
 }
 
-impl Marker {
-}
+impl Marker {}
 
 // The store of folded originals.
 //
@@ -170,7 +169,11 @@ fn parse_marker_at(chars: &[char], start: usize) -> Option<(u64, usize)> {
     if i == digits_from {
         return None;
     }
-    let id: u64 = chars[digits_from..i].iter().collect::<String>().parse().ok()?;
+    let id: u64 = chars[digits_from..i]
+        .iter()
+        .collect::<String>()
+        .parse()
+        .ok()?;
 
     // Optional quantity segment: ` +N lines` or ` N chars`
     // Fall back on parse failure; `]` may directly follow the number
@@ -213,10 +216,23 @@ fn parse_marker_at(chars: &[char], start: usize) -> Option<(u64, usize)> {
 // `include_end` decides whether `pos == marker.end` counts:
 // - Backspace (cursor at the marker's **right** edge) needs it -> `include_end = true`
 // - Forward delete (cursor at the **left** edge) uses the `include_start` side.
-pub fn marker_spanning(chars: &[char], pos: usize, include_start: bool, include_end: bool) -> Option<Marker> {
+pub fn marker_spanning(
+    chars: &[char],
+    pos: usize,
+    include_start: bool,
+    include_end: bool,
+) -> Option<Marker> {
     find_markers(chars).into_iter().find(|m| {
-        let left_ok = if include_start { pos >= m.start } else { pos > m.start };
-        let right_ok = if include_end { pos <= m.end } else { pos < m.end };
+        let left_ok = if include_start {
+            pos >= m.start
+        } else {
+            pos > m.start
+        };
+        let right_ok = if include_end {
+            pos <= m.end
+        } else {
+            pos < m.end
+        };
         left_ok && right_ok
     })
 }
@@ -274,7 +290,10 @@ mod tests {
         assert_eq!(ms.len(), 3);
         assert_eq!(ms[0].id, 12);
         assert_eq!(ms[0].start, 2);
-        assert_eq!(&c[ms[0].start..ms[0].end].iter().collect::<String>(), "[paste #12 +30 lines]");
+        assert_eq!(
+            &c[ms[0].start..ms[0].end].iter().collect::<String>(),
+            "[paste #12 +30 lines]"
+        );
         assert_eq!(ms[1].id, 7);
         assert_eq!(ms[2].id, 3);
     }
@@ -403,7 +422,10 @@ mod tests {
         let c = chars("ab[paste #1 +30 lines]cd");
         let (lo, hi) = expand_over_markers(&c, 0, 3); // 切在标记的第 1 个字符处
         assert_eq!((lo, hi), (0, 22), "部分覆盖必须扩张成完整删除");
-        assert_eq!(&c[lo..hi].iter().collect::<String>(), "ab[paste #1 +30 lines]");
+        assert_eq!(
+            &c[lo..hi].iter().collect::<String>(),
+            "ab[paste #1 +30 lines]"
+        );
     }
 
     #[test]

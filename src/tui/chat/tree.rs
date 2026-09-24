@@ -6,9 +6,8 @@
 //! entries, so the render layer and the protocol agree on "current
 //! branch" without duplicating the projection logic.
 
-use crate::ai::types::{Context as ChatContext, Message};
-use crate::tui::app::App;
 use crate::entry;
+use crate::tui::app::App;
 
 impl App {
     // Navigate the conversation tree to an arbitrary stored row (pi's
@@ -17,19 +16,27 @@ impl App {
     // projection; the prefix cache is keyed on the rebuilt history, so a
     // cache hit survives navigation to a shared prefix.
     pub(crate) fn tree_navigate_to(&mut self, seq: i64) {
-        let Some(sid) = self.session.session_id() else { return };
+        let Some(sid) = self.session.session_id() else {
+            return;
+        };
         // Store work (leaf move + re-projection + name lookup) inside a
         // scoped borrow; the SessionState mutation happens after it ends.
         let (entries, effective, draft) = {
-            let Some(st) = self.session.store_mut() else { return };
+            let Some(st) = self.session.store_mut() else {
+                return;
+            };
             if let Err(e) = st.set_leaf(sid, Some(seq)) {
-                self.session.echo(entry::Entry::Error { text: format!("回溯失败：{e:#}") });
+                self.session.echo(entry::Entry::Error {
+                    text: format!("回溯失败：{e:#}"),
+                });
                 return;
             }
             let entries = match st.load_entries(sid) {
                 Ok(e) => e,
                 Err(e) => {
-                    self.session.echo(entry::Entry::Error { text: format!("重投影失败：{e:#}") });
+                    self.session.echo(entry::Entry::Error {
+                        text: format!("重投影失败：{e:#}"),
+                    });
                     return;
                 }
             };
@@ -67,21 +74,33 @@ impl App {
     // The first turn after resume appends a cwd note (pending_cwd_note)
     // — appended only, history untouched, cache prefix intact.
     pub(crate) fn resume_confirm(&mut self) {
-        let Some((items, sel)) = self.resume_pick.take() else { return };
-        let Some((id, name)) = items.get(sel).cloned() else { return };
+        let Some((items, sel)) = self.resume_pick.take() else {
+            return;
+        };
+        let Some((id, name)) = items.get(sel).cloned() else {
+            return;
+        };
         // Store reads (projection + metadata) in a scoped borrow; state
         // mutations happen after it ends.
         let (entries, meta, effective, last_cwd_seq) = {
-            let Some(st) = self.session.store() else { return };
+            let Some(st) = self.session.store() else {
+                return;
+            };
             let entries = match st.load_entries(id) {
                 Ok(e) => e,
                 Err(e) => {
-                    self.session.echo(entry::Entry::Error { text: format!("读取会话失败：{e:#}") });
+                    self.session.echo(entry::Entry::Error {
+                        text: format!("读取会话失败：{e:#}"),
+                    });
                     return;
                 }
             };
             let meta = st.session(id).ok();
-            let effective = st.effective_name(id).ok().flatten().or_else(|| meta.as_ref().and_then(|m| m.name.clone()));
+            let effective = st
+                .effective_name(id)
+                .ok()
+                .flatten()
+                .or_else(|| meta.as_ref().and_then(|m| m.name.clone()));
             let last_cwd_seq = st
                 .cwd_history(id)
                 .ok()
@@ -93,53 +112,9 @@ impl App {
         // 1) Rendering layer
         self.session.commit_round(entries.clone());
 
-        // 2) Chat context: rebuild the **full protocol messages** from
-        // entries (the inverse of collect_turn). Tool call details
-        // (call_id / arguments / results) are all in the DB — the live
-        // build and resume read the same source, so the model sees the
-        // history exactly as it did the first time.
-        let mut rebuilt = ChatContext::new().push(Message::System {
-            content: "你是一个简洁的编程助手。用中文回答。".into(),
-        });
-        // pending: accumulating the tool_calls Assistant (one call may fan out to several results)
-        for e in &entries {
-            match e {
-                entry::Entry::User { content } => {
-                    rebuilt = rebuilt.push(Message::User { content: content.clone() });
-                }
-                entry::Entry::Assistant { content, .. } => {
-                    rebuilt = rebuilt.push(Message::Assistant {
-                        content: Some(content.clone()),
-                        tool_calls: Vec::new(),
-                    });
-                }
-                entry::Entry::ToolRequest { call_id, name, args, .. } => {
-                    // args is the raw argument JSON; the Assistant(tool_calls) follows right after
-                    let call = crate::ai::types::ToolCall {
-                        id: call_id.clone(),
-                        kind: "function".into(),
-                        function: crate::ai::types::FunctionCall {
-                            name: name.clone(),
-                            arguments: args.clone(),
-                        },
-                    };
-                    rebuilt = rebuilt.push(Message::Assistant {
-                        content: None,
-                        tool_calls: vec![call],
-                    });
-                }
-                entry::Entry::ToolResult { call_id, result, .. } => {
-                    // The stored result is exactly what the model
-                    // received back then — use it verbatim; the view
-                    // (Plain/Diff) is only a rendering choice.
-                    rebuilt = rebuilt.push(Message::Tool {
-                        tool_call_id: call_id.clone(),
-                        content: result.clone(),
-                    });
-                }
-                entry::Entry::Error { .. } | entry::Entry::Name { .. } | entry::Entry::System { .. } => {}
-            }
-        }
+        // 2) Chat context: rebuild from the entries projection (the
+        // inverse of collect_turn). Compaction markers, if any, split the
+        // projection inside entries_to_context.
         self.session.rebuild_chat(&entries);
 
         // 3) Working directory: the session's last persisted migration (falls back to the initial cwd on record)

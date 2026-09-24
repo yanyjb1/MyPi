@@ -44,7 +44,11 @@ mod ansi_tests {
     #[test]
     fn widths_are_measured_on_the_clean_text() {
         let raw = "\u{1b}[31m红色\u{1b}[0m";
-        assert_eq!(display_width(&strip_ansi(raw)), 4, "剥离后按显示宽度计（红色 = 4 格）");
+        assert_eq!(
+            display_width(&strip_ansi(raw)),
+            4,
+            "剥离后按显示宽度计（红色 = 4 格）"
+        );
     }
 }
 

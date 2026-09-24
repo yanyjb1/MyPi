@@ -23,14 +23,20 @@ pub(crate) fn migrate_legacy_db(base: &std::path::Path) {
     let _ = std::fs::remove_dir_all(&stash);
     std::fs::create_dir_all(&stash).ok();
     for suffix in ["", "-wal", "-shm"] {
-        let _ = std::fs::rename(base.join(format!("mypi{suffix}")), stash.join(format!("db{suffix}")));
+        let _ = std::fs::rename(
+            base.join(format!("mypi{suffix}")),
+            stash.join(format!("db{suffix}")),
+        );
     }
     if let Err(e) = std::fs::create_dir_all(base.join("mypi")) {
         eprintln!("mypi: cannot create data dir: {e}");
         return;
     }
     for suffix in ["", "-wal", "-shm"] {
-        let _ = std::fs::rename(stash.join(format!("db{suffix}")), base.join(format!("mypi/sessions.db{suffix}")));
+        let _ = std::fs::rename(
+            stash.join(format!("db{suffix}")),
+            base.join(format!("mypi/sessions.db{suffix}")),
+        );
     }
     let _ = std::fs::remove_dir_all(&stash);
 }

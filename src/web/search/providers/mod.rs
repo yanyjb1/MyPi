@@ -5,5 +5,5 @@
 pub(super) mod bing;
 pub(super) mod ddg;
 
-pub(super) use ddg::via_browser;
 pub(super) use bing::direct;
+pub(super) use ddg::via_browser;

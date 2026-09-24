@@ -76,14 +76,22 @@ mod tests {
     use super::*;
 
     fn c(insert: &str) -> Completion {
-        Completion { name: String::new(), detail: String::new(), is_dir: false, insert: insert.into() }
+        Completion {
+            name: String::new(),
+            detail: String::new(),
+            is_dir: false,
+            insert: insert.into(),
+        }
     }
 
     #[test]
     fn exact_word_leaf() {
         // "zstd.h" -> "zstd.h": single candidate equals the word.
         let items = vec![c("zstd.h")];
-        assert_eq!(leaf_state(&items, "zstd.h", false, "看下 zstd.h"), Some(LeafReason::ExactWord));
+        assert_eq!(
+            leaf_state(&items, "zstd.h", false, "看下 zstd.h"),
+            Some(LeafReason::ExactWord)
+        );
         // Two candidates: not a leaf.
         let items = vec![c("zstd.h"), c("zstd.hpp")];
         assert_eq!(leaf_state(&items, "zstd.h", false, "x"), None);
@@ -93,7 +101,10 @@ mod tests {
     fn exact_command_leaf() {
         // "/q" is a full command name: leaf (only at line start).
         let items = vec![c("/q ")];
-        assert_eq!(leaf_state(&items, "/q", true, "/q"), Some(LeafReason::ExactCommand));
+        assert_eq!(
+            leaf_state(&items, "/q", true, "/q"),
+            Some(LeafReason::ExactCommand)
+        );
         // Mid-line: command rules do not apply.
         assert_eq!(leaf_state(&items, "/q", false, "x /q"), None);
         // "/qu" is a prefix, not an exact hit.
@@ -106,10 +117,16 @@ mod tests {
         // list re-offers the same line. Must be a leaf, not a re-open.
         let line = "/switch global:gpt-5.6-luna";
         let items = vec![c(line)];
-        assert_eq!(leaf_state(&items, line, true, line), Some(LeafReason::ExactLine));
+        assert_eq!(
+            leaf_state(&items, line, true, line),
+            Some(LeafReason::ExactLine)
+        );
         // A partial id still lists real candidates: not a leaf.
         let items = vec![c("/switch global:a"), c("/switch global:b")];
-        assert_eq!(leaf_state(&items, "/switch global:", true, "/switch global:"), None);
+        assert_eq!(
+            leaf_state(&items, "/switch global:", true, "/switch global:"),
+            None
+        );
     }
 
     #[test]

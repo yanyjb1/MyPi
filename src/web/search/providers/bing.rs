@@ -5,12 +5,12 @@
 //! nothing beyond plain terms — advanced-syntax queries route to the DDG
 //! engine instead (see `super::ddg`).
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use std::time::Duration;
 
-use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
 use super::super::engine::SearchHit;
-use crate::web::utils::url::{urlencoded};
+use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
+use crate::web::utils::url::urlencoded;
 
 pub(super) const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 const SEARCH_URL: &str = "https://www.bing.com/search";
@@ -32,9 +32,10 @@ fn unwrap_tracking_href(href: &str) -> String {
         // dropped result).
         if let Some(bytes) = base64url_decode(enc)
             && let Ok(s) = String::from_utf8(bytes)
-                && s.starts_with("http") {
-                    return s;
-                }
+            && s.starts_with("http")
+        {
+            return s;
+        }
         return href.to_string();
     }
     if let Some(pos) = href.find("&u=http") {
@@ -144,22 +145,29 @@ pub fn parse_bing_html(html: &str) -> Vec<SearchHit> {
 
         // Snippet: several markup generations exist; take the first that
         // yields non-empty text.
-        let snippet = ["<p class=\"b_lineclamp", "<p class=\"b_algoSlug", "<p class=\"b_caption"]
-            .iter()
-            .find_map(|marker| {
-                let pos = block.find(marker)?;
-                let seg = &block[pos..];
-                let p = extract_between(seg, "<p", "</p>")?;
-                let text = unescape_entities(strip_tags(&p.inner).trim());
-                (!text.is_empty()).then_some(text)
-            })
-            .unwrap_or_default();
+        let snippet = [
+            "<p class=\"b_lineclamp",
+            "<p class=\"b_algoSlug",
+            "<p class=\"b_caption",
+        ]
+        .iter()
+        .find_map(|marker| {
+            let pos = block.find(marker)?;
+            let seg = &block[pos..];
+            let p = extract_between(seg, "<p", "</p>")?;
+            let text = unescape_entities(strip_tags(&p.inner).trim());
+            (!text.is_empty()).then_some(text)
+        })
+        .unwrap_or_default();
 
-        hits.push(SearchHit { title, url, snippet });
+        hits.push(SearchHit {
+            title,
+            url,
+            snippet,
+        });
     }
     hits
 }
-
 
 // --- Tier 1: direct HTTPS ----------------------------------------------------
 
@@ -224,7 +232,10 @@ mod tests {
         assert_eq!(hits.len(), 4);
         assert_eq!(hits[0].title, "Rust Programming Language");
         assert_eq!(hits[0].url, "https://rust-lang.org/");
-        assert_eq!(hits[0].snippet, "A language empowering everyone to write reliable & efficient software.");
+        assert_eq!(
+            hits[0].snippet,
+            "A language empowering everyone to write reliable & efficient software."
+        );
     }
 
     #[test]
@@ -271,5 +282,4 @@ mod tests {
         );
         assert_eq!(base64url_decode(""), None);
     }
-
 }

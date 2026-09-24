@@ -66,9 +66,7 @@ pub fn candidate(text: &str, cursor: usize) -> Option<(usize, String)> {
     // preceded by whitespace (start == 0 or the previous char is whitespace; the scan
     // guarantees this). Otherwise it is part of a sentence and is not completed.
     // Explicit prefixes (./ ../ ~/ /) are exempt: they are path notation by themselves.
-    let explicit = word.starts_with('.')
-        || word.starts_with('~')
-        || word.starts_with('/');
+    let explicit = word.starts_with('.') || word.starts_with('~') || word.starts_with('/');
     if !explicit {
         // A bare relative path (src/ma) must be a **standalone word**: separated by
         // whitespace before it. start == 0 means nothing separates the word — it is the
@@ -79,9 +77,7 @@ pub fn candidate(text: &str, cursor: usize) -> Option<(usize, String)> {
         }
     }
     // Explicit notation (. ~ prefixes, or a leading /) is a path by itself; everything else needs a / to look like one
-    let looks_like_path = word.contains('/')
-        || word.starts_with('.')
-        || word.starts_with('~');
+    let looks_like_path = word.contains('/') || word.starts_with('.') || word.starts_with('~');
     if !looks_like_path {
         return None;
     }
@@ -95,12 +91,7 @@ pub fn candidate(text: &str, cursor: usize) -> Option<(usize, String)> {
 //
 // `at_line_start` comes from `candidate()`'s scan (is the word's start the line
 // start) — only a **line-start** `/` is a command; `/tmp/...` elsewhere stays a file path.
-pub fn complete(
-    input: &str,
-    at_line_start: bool,
-    cwd: &Path,
-    home: &Path,
-) -> Vec<Completion> {
+pub fn complete(input: &str, at_line_start: bool, cwd: &Path, home: &Path) -> Vec<Completion> {
     if at_line_start && input.starts_with('/') {
         return complete_commands(input);
     }
@@ -161,14 +152,56 @@ pub struct CommandSpec {
 
 // The command table: completion order and descriptions come from here.
 pub const COMMANDS: &[CommandSpec] = &[
-    CommandSpec { name: "/model", detail: "set default model (writes config.yaml)", args: ArgKind::ModelId },
-    CommandSpec { name: "/switch", detail: "switch session model (not persisted)", args: ArgKind::ModelId },
-    CommandSpec { name: "/name", detail: "name the session", args: ArgKind::None },
-    CommandSpec { name: "/cdp", detail: "change working directory (persisted)", args: ArgKind::Path },
-    CommandSpec { name: "/resume", detail: "resume a session of this project", args: ArgKind::None },
-    CommandSpec { name: "/q", detail: "quit (= /quit /exit)", args: ArgKind::None },
-    CommandSpec { name: "/quit", detail: "quit", args: ArgKind::None },
-    CommandSpec { name: "/exit", detail: "quit", args: ArgKind::None },
+    CommandSpec {
+        name: "/model",
+        detail: "set default model (writes config.yaml)",
+        args: ArgKind::ModelId,
+    },
+    CommandSpec {
+        name: "/switch",
+        detail: "switch session model (not persisted)",
+        args: ArgKind::ModelId,
+    },
+    CommandSpec {
+        name: "/name",
+        detail: "name the session",
+        args: ArgKind::None,
+    },
+    CommandSpec {
+        name: "/cdp",
+        detail: "change working directory (persisted)",
+        args: ArgKind::Path,
+    },
+    CommandSpec {
+        name: "/resume",
+        detail: "resume a session of this project",
+        args: ArgKind::None,
+    },
+    CommandSpec {
+        name: "/compact",
+        detail: "compress history into a checkpoint (optional focus)",
+        args: ArgKind::None,
+    },
+    CommandSpec {
+        name: "/profile",
+        detail: "switch the system-prompt profile",
+        args: ArgKind::None,
+    },
+    CommandSpec {
+        name: "/q",
+        detail: "quit (= /quit /exit)",
+        args: ArgKind::None,
+    },
+    CommandSpec {
+        name: "/quit",
+        detail: "quit",
+        args: ArgKind::None,
+    },
+    CommandSpec {
+        name: "/exit",
+        detail: "quit",
+        args: ArgKind::None,
+    },
 ];
 
 // Look up a command by name.
@@ -357,9 +390,9 @@ impl CompletionPopup {
     pub fn open(&mut self, items: Vec<Completion>, from: usize, to: usize) {
         // Closed -> open: a new completion session, lock the row height; already open
         // (cascading into the next tier, filtering): reuse the previous lock.
-        let locked = self.locked_height.unwrap_or_else(|| {
-            items.len().min(MAX_VISIBLE)
-        });
+        let locked = self
+            .locked_height
+            .unwrap_or_else(|| items.len().min(MAX_VISIBLE));
         self.items = items;
         self.selected = 0;
         self.from = from;
@@ -484,7 +517,11 @@ mod tests {
 
         let got = complete("al", true, &d, &d);
         let names: Vec<&str> = got.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, vec!["alpha/", "almond.txt"], "directories first, al* filter only");
+        assert_eq!(
+            names,
+            vec!["alpha/", "almond.txt"],
+            "directories first, al* filter only"
+        );
         assert!(got[0].is_dir);
         assert!(!got[1].is_dir);
         let _ = fs::remove_dir_all(&d);
@@ -498,7 +535,11 @@ mod tests {
 
         let got = complete("", true, &d, &d);
         let names: Vec<&str> = got.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names.len(), 2, "no hidden-file filtering, everything listed");
+        assert_eq!(
+            names.len(),
+            2,
+            "no hidden-file filtering, everything listed"
+        );
 
         // Prefix matching works as usual: typing "." matches only .env (a name prefix), not a hidden rule
         let got = complete(".", true, &d, &d);
@@ -572,8 +613,18 @@ mod tests {
     #[test]
     fn common_prefix_of_siblings() {
         let items = vec![
-            Completion { detail: String::new(), name: "main.rs".into(), is_dir: false, insert: "src/main.rs".into() },
-            Completion { detail: String::new(), name: "mainfest".into(), is_dir: false, insert: "src/mainfest".into() },
+            Completion {
+                detail: String::new(),
+                name: "main.rs".into(),
+                is_dir: false,
+                insert: "src/main.rs".into(),
+            },
+            Completion {
+                detail: String::new(),
+                name: "mainfest".into(),
+                is_dir: false,
+                insert: "src/mainfest".into(),
+            },
         ];
         assert_eq!(common_prefix(&items), Some("src/main".into()));
     }
@@ -581,8 +632,18 @@ mod tests {
     #[test]
     fn common_prefix_none_on_divergence() {
         let items = vec![
-            Completion { detail: String::new(), name: "a".into(), is_dir: false, insert: "a".into() },
-            Completion { detail: String::new(), name: "b".into(), is_dir: false, insert: "b".into() },
+            Completion {
+                detail: String::new(),
+                name: "a".into(),
+                is_dir: false,
+                insert: "a".into(),
+            },
+            Completion {
+                detail: String::new(),
+                name: "b".into(),
+                is_dir: false,
+                insert: "b".into(),
+            },
         ];
         assert_eq!(common_prefix(&items), None);
     }
@@ -605,7 +666,11 @@ mod tests {
         let home = Path::new("/home/u");
         assert_eq!(expand_tilde("~", home), Path::new("/home/u"));
         assert_eq!(expand_tilde("~/a/b", home), Path::new("/home/u/a/b"));
-        assert_eq!(expand_tilde("~x", home), Path::new("~x"), "~user is not expanded");
+        assert_eq!(
+            expand_tilde("~x", home),
+            Path::new("~x"),
+            "~user is not expanded"
+        );
         assert_eq!(expand_tilde("src", home), Path::new("src"));
     }
 
@@ -633,7 +698,11 @@ mod tests {
     #[test]
     fn selection_clamps_at_both_ends() {
         let mut p = CompletionPopup::default();
-        p.open(vec![cand("a", false), cand("b", false), cand("c", false)], 0, 1);
+        p.open(
+            vec![cand("a", false), cand("b", false), cand("c", false)],
+            0,
+            1,
+        );
         assert_eq!(p.selected(), 0);
         // ↑ at the top: stop, no wrapping
         p.move_selection(-1);
@@ -695,7 +764,11 @@ mod tests {
         let action = p.accept();
         assert_eq!(
             action,
-            CompletionAction::Replace { from: 4, to: 6, text: "main.rs".into() }
+            CompletionAction::Replace {
+                from: 4,
+                to: 6,
+                text: "main.rs".into()
+            }
         );
         assert!(!p.is_open(), "popup closes after confirm");
     }
@@ -714,7 +787,11 @@ mod tests {
         let action = p.accept();
         assert_eq!(
             action,
-            CompletionAction::Replace { from: 0, to: 2, text: "beta".into() }
+            CompletionAction::Replace {
+                from: 0,
+                to: 2,
+                text: "beta".into()
+            }
         );
     }
 
@@ -724,14 +801,31 @@ mod tests {
         // Input "sr", candidates src/ and srclib/ (common prefix "src", stops there)
         p.open(
             vec![
-                Completion { detail: String::new(), name: "src/".into(), is_dir: true, insert: "src/".into() },
-                Completion { detail: String::new(), name: "srcx".into(), is_dir: false, insert: "srcx".into() },
+                Completion {
+                    detail: String::new(),
+                    name: "src/".into(),
+                    is_dir: true,
+                    insert: "src/".into(),
+                },
+                Completion {
+                    detail: String::new(),
+                    name: "srcx".into(),
+                    is_dir: false,
+                    insert: "srcx".into(),
+                },
             ],
             0,
             2,
         );
         let action = p.accept_common_prefix("sr").unwrap();
-        assert_eq!(action, CompletionAction::Replace { from: 0, to: 2, text: "src".into() });
+        assert_eq!(
+            action,
+            CompletionAction::Replace {
+                from: 0,
+                to: 2,
+                text: "src".into()
+            }
+        );
     }
 
     #[test]
@@ -740,8 +834,18 @@ mod tests {
         // Input already "src", common prefix "src" -> no action
         p.open(
             vec![
-                Completion { detail: String::new(), name: "src/".into(), is_dir: true, insert: "src/".into() },
-                Completion { detail: String::new(), name: "srcx".into(), is_dir: false, insert: "srcx".into() },
+                Completion {
+                    detail: String::new(),
+                    name: "src/".into(),
+                    is_dir: true,
+                    insert: "src/".into(),
+                },
+                Completion {
+                    detail: String::new(),
+                    name: "srcx".into(),
+                    is_dir: false,
+                    insert: "srcx".into(),
+                },
             ],
             0,
             3,
@@ -779,7 +883,11 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].name, "/model");
         assert_eq!(got[0].insert, "/model ");
-        assert!(got[0].detail.contains("default model"), "detail present: {}", got[0].detail);
+        assert!(
+            got[0].detail.contains("default model"),
+            "detail present: {}",
+            got[0].detail
+        );
     }
 
     #[test]
@@ -788,7 +896,10 @@ mod tests {
         let names: Vec<String> = got.iter().map(|c| c.name.clone()).collect();
         assert_eq!(
             names,
-            vec!["/cdp", "/exit", "/model", "/name", "/q", "/quit", "/resume", "/switch"],
+            vec![
+                "/cdp", "/compact", "/exit", "/model", "/name", "/profile", "/q", "/quit",
+                "/resume", "/switch"
+            ],
             "按名字排序"
         );
     }
@@ -817,7 +928,10 @@ mod tests {
         let got = complete("/mod", true, &cwd, &cwd);
         assert!(!got.is_empty());
         assert!(got[0].name.starts_with("/"), "应是命令候选");
-        assert!(!got.iter().any(|c| c.name.ends_with("tmp/")), "不该混入文件");
+        assert!(
+            !got.iter().any(|c| c.name.ends_with("tmp/")),
+            "不该混入文件"
+        );
     }
 
     #[test]
@@ -825,7 +939,10 @@ mod tests {
         // "/mo" single candidate -> accept writes back "/model " (trailing space)
         let got = complete_commands("/mo");
         assert_eq!(got.len(), 1);
-        assert!(got[0].insert.ends_with(' '), "命令 insert 带尾随空格，触发参数级联");
+        assert!(
+            got[0].insert.ends_with(' '),
+            "命令 insert 带尾随空格，触发参数级联"
+        );
     }
 
     #[test]
@@ -853,13 +970,23 @@ mod tests {
     #[test]
     fn height_locks_on_open_and_survives_filtering() {
         let mut p = CompletionPopup::default();
-        p.open(vec![cand("a", false), cand("b", false), cand("c", false), cand("d", false)], 0, 1);
+        p.open(
+            vec![
+                cand("a", false),
+                cand("b", false),
+                cand("c", false),
+                cand("d", false),
+            ],
+            0,
+            1,
+        );
         assert_eq!(p.locked_height(), Some(4), "打开时锁定为候选数");
 
         // Cascading into the next tier: 8 candidates, locked value unchanged
         p.open(
             (0..8).map(|i| cand(&format!("n{i}/"), true)).collect(),
-            0, 5,
+            0,
+            5,
         );
         assert_eq!(p.locked_height(), Some(4), "级联沿用锁定值");
         // The visible window is capped at MAX_VISIBLE=8; locked at 4 -> only 4 shown
@@ -880,8 +1007,16 @@ mod tests {
     #[test]
     fn locked_height_capped_at_max_visible() {
         let mut p = CompletionPopup::default();
-        p.open((0..20).map(|i| cand(&format!("f{i}"), false)).collect(), 0, 1);
-        assert_eq!(p.locked_height(), Some(MAX_VISIBLE), "锁定值封顶 MAX_VISIBLE");
+        p.open(
+            (0..20).map(|i| cand(&format!("f{i}"), false)).collect(),
+            0,
+            1,
+        );
+        assert_eq!(
+            p.locked_height(),
+            Some(MAX_VISIBLE),
+            "锁定值封顶 MAX_VISIBLE"
+        );
     }
 
     #[test]
@@ -908,7 +1043,11 @@ mod tests {
     fn locked_height_larger_than_items_does_not_panic() {
         let mut p = CompletionPopup::default();
         // Locked at 6 rows (/usr root candidates); cascading filters down to 1
-        p.open((0..6).map(|i| cand(&format!("d{i}/"), true)).collect(), 0, 1);
+        p.open(
+            (0..6).map(|i| cand(&format!("d{i}/"), true)).collect(),
+            0,
+            1,
+        );
         assert_eq!(p.locked_height(), Some(6));
         p.open(vec![cand("only/", true)], 0, 5);
         assert_eq!(p.locked_height(), Some(6), "级联沿用锁定");

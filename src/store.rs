@@ -520,7 +520,6 @@ mod tests {
             Entry::Assistant {
                 content: "改好了".into(),
                 usage: None,
-                reasoning: None,
             },
         ];
         s.append(id, &entries).unwrap();
@@ -673,7 +672,6 @@ mod tree_tests {
         Entry::Assistant {
             content: t.into(),
             usage: None,
-            reasoning: None,
         }
     }
 
@@ -818,7 +816,6 @@ mod name_tests {
             &[Entry::Assistant {
                 content: "b".into(),
                 usage: None,
-                reasoning: None,
             }],
         )
         .unwrap();
@@ -830,5 +827,56 @@ mod name_tests {
             Entry::from_payload(kind, &payload).unwrap(),
             Entry::Name { name: "x".into() }
         );
+    }
+
+    /// The user's contract: a full round (reasoning + reply + tool round)
+    /// persists and reads back **byte-identical**, and the rebuilt
+    /// protocol context contains the reasoning nowhere.
+    #[test]
+    fn full_round_with_reasoning_round_trips_byte_identical() {
+        use crate::entry::Entry;
+        use crate::server::turn::entries_to_context;
+
+        let dir = std::env::temp_dir().join(format!("mypi-full-round-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Store::open(&dir.join("t.db")).unwrap();
+        let id = s.create_session("t", "/").unwrap();
+        let round = &[
+            Entry::User {
+                content: "先想再答".into(),
+            },
+            Entry::Reasoning {
+                content: "内心独白：\n1. 想一步\n2. 想两步".into(),
+            },
+            Entry::Assistant {
+                content: "最终答案".into(),
+                usage: None,
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: r#"{"command":"echo hi"}"#.into(),
+                intent: "打个招呼".into(),
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "hi".into(),
+            },
+        ];
+        s.append(id, round).unwrap();
+        let back = s.load_entries(id).unwrap();
+        assert_eq!(&back, round, "落盘→读回必须逐字节还原");
+
+        // And the protocol rebuild skips the reasoning entirely:
+        let ctx = entries_to_context(&back);
+        let has_reasoning_text = ctx
+            .messages
+            .iter()
+            .any(|m| format!("{m:?}").contains("内心独白"));
+        assert!(!has_reasoning_text, "推理不得进入协议上下文");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

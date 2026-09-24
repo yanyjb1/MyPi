@@ -161,7 +161,6 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
         }
     }
 
-
     // ---- while the completion popup is open, these keys are taken over first ----
     if cx.popup_open {
         match key.code {
@@ -347,28 +346,46 @@ mod tests {
 
     #[test]
     fn enter_submits_alt_enter_newlines() {
-        assert_eq!(translate(key(KeyCode::Enter, KeyModifiers::NONE)), Action::Submit);
-        assert_eq!(translate(key(KeyCode::Enter, KeyModifiers::ALT)), Action::Newline);
-        assert_eq!(translate(key(KeyCode::Enter, KeyModifiers::SHIFT)), Action::Newline);
+        assert_eq!(
+            translate(key(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::Submit
+        );
+        assert_eq!(
+            translate(key(KeyCode::Enter, KeyModifiers::ALT)),
+            Action::Newline
+        );
+        assert_eq!(
+            translate(key(KeyCode::Enter, KeyModifiers::SHIFT)),
+            Action::Newline
+        );
     }
 
     #[test]
     fn esc_idle_arms_tree_window() {
         // Idle Esc no longer quits directly: it reports EscIdle and the
         // app applies the double-Esc window (arm -> tree, timeout -> quit).
-        assert_eq!(translate(key(KeyCode::Esc, KeyModifiers::NONE)), Action::EscIdle);
+        assert_eq!(
+            translate(key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::EscIdle
+        );
     }
 
     #[test]
     fn ctrl_c_clears_input_then_quits_when_empty() {
         // Non-empty: clear (do not quit — abandoning a draft must not kill the program)
-        let busy = KeyContext { editor_empty: false, ..Default::default() };
+        let busy = KeyContext {
+            editor_empty: false,
+            ..Default::default()
+        };
         assert_eq!(
             translate_with(key(KeyCode::Char('c'), KeyModifiers::CONTROL), busy),
             Action::ClearInput
         );
         // Empty: quit
-        let empty = KeyContext { editor_empty: true, ..Default::default() };
+        let empty = KeyContext {
+            editor_empty: true,
+            ..Default::default()
+        };
         assert_eq!(
             translate_with(key(KeyCode::Char('c'), KeyModifiers::CONTROL), empty),
             Action::Quit
@@ -377,8 +394,15 @@ mod tests {
 
     #[test]
     fn esc_interrupts_while_streaming() {
-        let cx = KeyContext { streaming: true, editor_empty: false, ..Default::default() };
-        assert_eq!(translate_with(key(KeyCode::Esc, KeyModifiers::NONE), cx), Action::Interrupt);
+        let cx = KeyContext {
+            streaming: true,
+            editor_empty: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            translate_with(key(KeyCode::Esc, KeyModifiers::NONE), cx),
+            Action::Interrupt
+        );
     }
 
     #[test]
@@ -396,12 +420,18 @@ mod tests {
 
     #[test]
     fn ctrl_d_quits_only_when_empty() {
-        let empty = KeyContext { editor_empty: true, ..Default::default() };
+        let empty = KeyContext {
+            editor_empty: true,
+            ..Default::default()
+        };
         assert_eq!(
             translate_with(key(KeyCode::Char('d'), KeyModifiers::CONTROL), empty),
             Action::Quit
         );
-        let busy = KeyContext { editor_empty: false, ..Default::default() };
+        let busy = KeyContext {
+            editor_empty: false,
+            ..Default::default()
+        };
         assert_eq!(
             translate_with(key(KeyCode::Char('d'), KeyModifiers::CONTROL), busy),
             Action::Delete
@@ -415,26 +445,44 @@ mod tests {
             Action::Undo
         );
         assert_eq!(
-            translate(
-                key(KeyCode::Char('z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT)
-            ),
+            translate(key(
+                KeyCode::Char('z'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
             Action::Redo
         );
     }
 
     #[test]
     fn tab_requests_completion() {
-        assert_eq!(translate(key(KeyCode::Tab, KeyModifiers::NONE)), Action::Complete);
+        assert_eq!(
+            translate(key(KeyCode::Tab, KeyModifiers::NONE)),
+            Action::Complete
+        );
     }
 
     #[test]
     fn up_down_switch_to_history_at_edges() {
         // First row + empty input -> browse history
-        let top = KeyContext { at_first_line: true, editor_empty: true, ..Default::default() };
-        assert_eq!(translate_with(key(KeyCode::Up, KeyModifiers::NONE), top), Action::HistoryPrev);
+        let top = KeyContext {
+            at_first_line: true,
+            editor_empty: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            translate_with(key(KeyCode::Up, KeyModifiers::NONE), top),
+            Action::HistoryPrev
+        );
         // First row but non-empty input -> ordinary up (what makes ↑ usable in multiline input)
-        let mid = KeyContext { at_first_line: true, editor_empty: false, ..Default::default() };
-        assert_eq!(translate_with(key(KeyCode::Up, KeyModifiers::NONE), mid), Action::Up);
+        let mid = KeyContext {
+            at_first_line: true,
+            editor_empty: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            translate_with(key(KeyCode::Up, KeyModifiers::NONE), mid),
+            Action::Up
+        );
         // While browsing history, ↑ on the first row keeps browsing
         let browsing = KeyContext {
             at_first_line: true,
@@ -458,49 +506,105 @@ mod tests {
             Action::HistoryNext
         );
         // Last row but not browsing -> ordinary down
-        let plain = KeyContext { at_last_line: true, editor_empty: false, ..Default::default() };
-        assert_eq!(translate_with(key(KeyCode::Down, KeyModifiers::NONE), plain), Action::Down);
+        let plain = KeyContext {
+            at_last_line: true,
+            editor_empty: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            translate_with(key(KeyCode::Down, KeyModifiers::NONE), plain),
+            Action::Down
+        );
     }
 
     #[test]
     fn popup_owns_arrows_and_enter() {
-        let cx = KeyContext { popup_open: true, editor_empty: false, ..Default::default() };
-        assert_eq!(translate_with(key(KeyCode::Up, KeyModifiers::NONE), cx), Action::CompleteUp);
-        assert_eq!(translate_with(key(KeyCode::Down, KeyModifiers::NONE), cx), Action::CompleteDown);
-        assert_eq!(translate_with(key(KeyCode::Tab, KeyModifiers::NONE), cx), Action::Complete);
-        assert_eq!(translate_with(key(KeyCode::Enter, KeyModifiers::NONE), cx), Action::Complete);
+        let cx = KeyContext {
+            popup_open: true,
+            editor_empty: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            translate_with(key(KeyCode::Up, KeyModifiers::NONE), cx),
+            Action::CompleteUp
+        );
+        assert_eq!(
+            translate_with(key(KeyCode::Down, KeyModifiers::NONE), cx),
+            Action::CompleteDown
+        );
+        assert_eq!(
+            translate_with(key(KeyCode::Tab, KeyModifiers::NONE), cx),
+            Action::Complete
+        );
+        assert_eq!(
+            translate_with(key(KeyCode::Enter, KeyModifiers::NONE), cx),
+            Action::Complete
+        );
     }
 
     #[test]
     fn ctrl_arrows_are_word_navigation() {
-        assert_eq!(translate(key(KeyCode::Left, KeyModifiers::CONTROL)), Action::WordLeft);
-        assert_eq!(translate(key(KeyCode::Right, KeyModifiers::CONTROL)), Action::WordRight);
-        assert_eq!(translate(key(KeyCode::Left, KeyModifiers::NONE)), Action::Left);
-        assert_eq!(translate(key(KeyCode::Right, KeyModifiers::NONE)), Action::Right);
+        assert_eq!(
+            translate(key(KeyCode::Left, KeyModifiers::CONTROL)),
+            Action::WordLeft
+        );
+        assert_eq!(
+            translate(key(KeyCode::Right, KeyModifiers::CONTROL)),
+            Action::WordRight
+        );
+        assert_eq!(
+            translate(key(KeyCode::Left, KeyModifiers::NONE)),
+            Action::Left
+        );
+        assert_eq!(
+            translate(key(KeyCode::Right, KeyModifiers::NONE)),
+            Action::Right
+        );
     }
 
     #[test]
     fn arrows_are_vertical_navigation() {
         assert_eq!(translate(key(KeyCode::Up, KeyModifiers::NONE)), Action::Up);
-        assert_eq!(translate(key(KeyCode::Down, KeyModifiers::NONE)), Action::Down);
+        assert_eq!(
+            translate(key(KeyCode::Down, KeyModifiers::NONE)),
+            Action::Down
+        );
     }
 
     #[test]
     fn home_end_scope_depends_on_ctrl() {
-        assert_eq!(translate(key(KeyCode::Home, KeyModifiers::NONE)), Action::LineHome);
-        assert_eq!(translate(key(KeyCode::Home, KeyModifiers::CONTROL)), Action::DocHome);
-        assert_eq!(translate(key(KeyCode::End, KeyModifiers::NONE)), Action::LineEnd);
-        assert_eq!(translate(key(KeyCode::End, KeyModifiers::CONTROL)), Action::DocEnd);
+        assert_eq!(
+            translate(key(KeyCode::Home, KeyModifiers::NONE)),
+            Action::LineHome
+        );
+        assert_eq!(
+            translate(key(KeyCode::Home, KeyModifiers::CONTROL)),
+            Action::DocHome
+        );
+        assert_eq!(
+            translate(key(KeyCode::End, KeyModifiers::NONE)),
+            Action::LineEnd
+        );
+        assert_eq!(
+            translate(key(KeyCode::End, KeyModifiers::CONTROL)),
+            Action::DocEnd
+        );
     }
 
     #[test]
     fn plain_char_inserts_cjk() {
-        assert_eq!(translate(key(KeyCode::Char('中'), KeyModifiers::NONE)), Action::Insert('中'));
+        assert_eq!(
+            translate(key(KeyCode::Char('中'), KeyModifiers::NONE)),
+            Action::Insert('中')
+        );
     }
 
     #[test]
     fn ctrl_j_newlines() {
-        assert_eq!(translate(key(KeyCode::Char('j'), KeyModifiers::CONTROL)), Action::Newline);
+        assert_eq!(
+            translate(key(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+            Action::Newline
+        );
     }
 
     #[test]
@@ -528,15 +632,24 @@ mod tests {
             Action::DeleteWordBackward
         );
         // Bare Backspace still deletes exactly one char
-        assert_eq!(translate(key(KeyCode::Backspace, KeyModifiers::NONE)), Action::Backspace);
+        assert_eq!(
+            translate(key(KeyCode::Backspace, KeyModifiers::NONE)),
+            Action::Backspace
+        );
     }
 
     #[test]
     fn ctrl_d_and_delete_variants() {
         // Ctrl+D deletes forward one char (pi's deleteCharForward)
-        assert_eq!(translate(key(KeyCode::Char('d'), KeyModifiers::CONTROL)), Action::Delete);
+        assert_eq!(
+            translate(key(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            Action::Delete
+        );
         // Bare Delete deletes right one char; with modifiers a word
-        assert_eq!(translate(key(KeyCode::Delete, KeyModifiers::NONE)), Action::Delete);
+        assert_eq!(
+            translate(key(KeyCode::Delete, KeyModifiers::NONE)),
+            Action::Delete
+        );
         assert_eq!(
             translate(key(KeyCode::Delete, KeyModifiers::CONTROL)),
             Action::DeleteWordForward
@@ -556,7 +669,10 @@ mod tests {
             Action::DeleteWordBackward
         );
         // A bare h stays a plain character
-        assert_eq!(translate(key(KeyCode::Char('h'), KeyModifiers::NONE)), Action::Insert('h'));
+        assert_eq!(
+            translate(key(KeyCode::Char('h'), KeyModifiers::NONE)),
+            Action::Insert('h')
+        );
     }
 
     #[test]
@@ -592,9 +708,21 @@ mod tests {
 
     #[test]
     fn plain_d_still_inserts() {
-        assert_eq!(translate(key(KeyCode::Char('d'), KeyModifiers::NONE)), Action::Insert('d'));
-        assert_eq!(translate(key(KeyCode::Char('w'), KeyModifiers::NONE)), Action::Insert('w'));
-        assert_eq!(translate(key(KeyCode::Char('u'), KeyModifiers::NONE)), Action::Insert('u'));
-        assert_eq!(translate(key(KeyCode::Char('k'), KeyModifiers::NONE)), Action::Insert('k'));
+        assert_eq!(
+            translate(key(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Action::Insert('d')
+        );
+        assert_eq!(
+            translate(key(KeyCode::Char('w'), KeyModifiers::NONE)),
+            Action::Insert('w')
+        );
+        assert_eq!(
+            translate(key(KeyCode::Char('u'), KeyModifiers::NONE)),
+            Action::Insert('u')
+        );
+        assert_eq!(
+            translate(key(KeyCode::Char('k'), KeyModifiers::NONE)),
+            Action::Insert('k')
+        );
     }
 }

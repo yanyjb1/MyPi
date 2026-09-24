@@ -3,4 +3,4 @@
 mod engine;
 pub mod providers;
 
-pub use engine::{parse_search_args, render, search, SearchArgs, SearchHit};
+pub use engine::{SearchArgs, SearchHit, parse_search_args, render, search};

@@ -224,6 +224,12 @@ pub struct AppConfig {
     pub default: Option<String>,
     #[serde(default)]
     pub theme: Theme,
+    #[serde(default)]
+    pub compact: crate::server::compaction::CompactConfig,
+    /// Active system-prompt profile name (`/profile` switches it;
+    /// restart returns to this default). None = `default`.
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
 /// The merged view both files feed into (what the rest of the program sees).
@@ -390,6 +396,8 @@ impl Config {
                 let app = AppConfig {
                     default: Some(first),
                     theme: Theme::default(),
+                    compact: Default::default(),
+                    profile: None,
                 };
                 std::fs::create_dir_all(Self::config_dir()?)?;
                 let yaml = serde_yaml::to_string(&app)?;
@@ -443,6 +451,18 @@ impl Config {
         if let Some(d) = &self.app.default {
             self.model_by_id(d)?;
         }
+        Ok(())
+    }
+
+    /// Write the active profile name to config.yaml (`/profile`).
+    pub fn save_profile(&self, name: &str) -> anyhow::Result<()> {
+        let mut app = self.app.clone();
+        app.profile = Some(name.to_string());
+        let path = Self::app_path()?;
+        std::fs::create_dir_all(Self::config_dir()?)?;
+        let yaml = serde_yaml::to_string(&app)?;
+        std::fs::write(&path, yaml)
+            .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
 
@@ -559,6 +579,8 @@ providers:
             app: AppConfig {
                 default: Some("local:vendor-a/model-x".into()),
                 theme: Theme::default(),
+                compact: Default::default(),
+                profile: None,
             },
         };
         // Addressing is <provider>:<id>; the model entry itself keeps the bare id.
@@ -613,6 +635,8 @@ providers:
             app: AppConfig {
                 default: Some("local:global:gpt-5.6-luna".into()),
                 theme: Theme::default(),
+                compact: Default::default(),
+                profile: None,
             },
         };
         let rm = cfg.default_model().unwrap();
@@ -721,6 +745,8 @@ providers:
             app: AppConfig {
                 default: Some("local:a".into()),
                 theme: Theme::default(),
+                compact: Default::default(),
+                profile: None,
             },
         };
         cfg.save_default("local:b").unwrap();

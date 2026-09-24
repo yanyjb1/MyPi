@@ -429,6 +429,16 @@ pub struct BuiltinTools {
     // Oversized tool outputs spill here. None = artifact mode off (unit
     // tests, or no DB): results pass through untruncated as before.
     artifacts: Option<crate::server::artifacts::ArtifactStore>,
+    // Finalized pre-turn history + cwd migrations: the `context` tool's
+    // read-only view of "how did we get here". Snapshot semantics — the
+    // current turn's own calls are NOT inside (the model just saw them).
+    history: std::sync::Arc<Vec<crate::entry::Entry>>,
+    cwd_trail: std::sync::Arc<Vec<(i64, String)>>,
+    // Profile gate: `None` = all tools; `Some(names)` = only those are
+    // registered into the Context *and* accepted by execute(). Two gates
+    // on purpose: the roster keeps the model from ever seeing a disabled
+    // tool, the executor refuses hallucinated calls into the void.
+    enabled: Option<std::collections::BTreeSet<String>>,
 }
 
 impl BuiltinTools {
@@ -437,9 +447,26 @@ impl BuiltinTools {
             cwd,
             cwd_slot: None,
             artifacts: None,
+            history: std::sync::Arc::new(Vec::new()),
+            cwd_trail: std::sync::Arc::new(Vec::new()),
+            enabled: None,
         }
     }
 
+    // Profile gate: restrict which tools exist (definitions + execute).
+    // `None` re-enables everything.
+    pub fn with_enabled(mut self, names: Option<Vec<String>>) -> Self {
+        self.enabled = names.map(|v| v.into_iter().collect());
+        self
+    }
+
+    // Is `name` allowed through the profile gate?
+    fn allowed(&self, name: &str) -> bool {
+        match &self.enabled {
+            None => true,
+            Some(set) => set.contains(name),
+        }
+    }
     // Attach the shared cwd slot: cd migrations become visible to the
     // TUI and subsequent turns immediately.
     pub fn with_cwd_slot(
@@ -450,9 +477,30 @@ impl BuiltinTools {
         self
     }
 
+    // Attach the finalized history + cwd trail for the `context` tool.
+    pub fn with_history(
+        mut self,
+        history: std::sync::Arc<Vec<crate::entry::Entry>>,
+        cwd_trail: std::sync::Arc<Vec<(i64, String)>>,
+    ) -> Self {
+        self.history = history;
+        self.cwd_trail = cwd_trail;
+        self
+    }
+
     // Attach the artifact spill store (session-scoped, DB-backed).
+    // `None` detaches: oversized output then flows into the context
+    // verbatim (store-unavailable degradation).
     pub fn with_artifacts(mut self, store: crate::server::artifacts::ArtifactStore) -> Self {
         self.artifacts = Some(store);
+        self
+    }
+
+    pub fn with_artifacts_opt(
+        mut self,
+        store: Option<crate::server::artifacts::ArtifactStore>,
+    ) -> Self {
+        self.artifacts = store;
         self
     }
 
@@ -595,12 +643,210 @@ impl BuiltinTools {
                     "required": ["intent", "query"]
                 }),
             ),
+            ToolDef::function(
+                "context",
+                "查询会话历史的调用记录（只读，不执行）。主要用于压缩后自查：\
+                 巨物 #N（如 #1）是怎么产生的——传 anchor=\"#N\"（或工具结果的 call_id），\
+                 返回它前后的工具调用序列，含 cwd 变动轨迹。\
+                 anchor 也可以是一个 call_id 本身；before/after 控制前后各看几条；\
+                 include_user=true 时把用户消息也列出来（看需求变动）；\
+                 include_results=true 时附上每次调用的结果全文（看报错）。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "intent": {"type": "string", "description": "一句话说明这次调用要干什么，中文，会显示给用户看"},
+                        "anchor": {"type": "string", "description": "锚点：巨物引用（\"#1\"）或某次工具结果的 call_id"},
+                        "before": {"type": "integer", "description": "锚点前看几条工具调用，默认 10"},
+                        "after": {"type": "integer", "description": "锚点后看几条工具调用，默认 10"},
+                        "include_user": {"type": "boolean", "description": "是否包含用户消息，默认 false"},
+                        "include_results": {"type": "boolean", "description": "是否包含工具结果全文，默认 false（只列调用）"}
+                    },
+                    "required": ["intent", "anchor"]
+                }),
+            ),
         ]
     }
+
+    // The profile-filtered roster: what the *model* sees this session.
+    // `context` is always included when a filter is active — it is the
+    // compressed session's escape hatch back into its own history.
+    pub fn definitions_for(&self) -> Vec<crate::ai::types::ToolDef> {
+        match &self.enabled {
+            None => Self::definitions(),
+            Some(set) => Self::definitions()
+                .into_iter()
+                .filter(|d| d.function.name == "context" || set.contains(&d.function.name))
+                .collect(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// context tool — the history window query
+// ---------------------------------------------------------------------------
+
+// Arguments for the `context` tool.
+#[derive(Debug, Clone)]
+pub struct ContextArgs {
+    pub anchor: String,
+    pub before: usize,
+    pub after: usize,
+    pub include_user: bool,
+    pub include_results: bool,
+}
+
+pub fn parse_context_args(arguments: &str) -> Result<ContextArgs> {
+    let v: serde_json::Value =
+        serde_json::from_str(arguments).context("arguments is not valid JSON")?;
+    Ok(ContextArgs {
+        anchor: need_str(&v, "anchor")?,
+        before: v
+            .get("before")
+            .and_then(|b| b.as_u64())
+            .map(|b| b as usize)
+            .unwrap_or(10),
+        after: v
+            .get("after")
+            .and_then(|a| a.as_u64())
+            .map(|a| a as usize)
+            .unwrap_or(10),
+        include_user: v
+            .get("include_user")
+            .and_then(|u| u.as_bool())
+            .unwrap_or(false),
+        include_results: v
+            .get("include_results")
+            .and_then(|r| r.as_bool())
+            .unwrap_or(false),
+    })
+}
+
+// Scan the finalized history for the anchor (an artifact ref like "#1"
+// inside a tool result, or a bare call_id) and render the surrounding
+// tool-call window, annotated with cwd migrations. Read-only: it never
+// executes anything and never touches the live turn's entries.
+pub fn context_query(
+    history: &[crate::entry::Entry],
+    cwd_trail: &[(i64, String)],
+    args: &ContextArgs,
+) -> Result<String> {
+    use crate::entry::Entry;
+    let anchor = args.anchor.trim();
+
+    // Resolve the anchor to an index: a call_id matches a ToolRequest/
+    // ToolResult; "#N" matches any tool whose *result* references the
+    // artifact (the placeholder embeds `#N`).
+    let anchor_idx = if let Some(num) = anchor.strip_prefix('#') {
+        let id = num
+            .trim()
+            .parse::<u64>()
+            .with_context(|| format!("巨物引用格式应为 #N：{anchor}"))?;
+        let needle = format!("#{id}");
+        history
+            .iter()
+            .position(|e| matches!(e, Entry::ToolResult { result, .. } if result.contains(&needle)))
+            .with_context(|| format!("历史里没有巨物 {needle} 的产生记录"))?
+    } else {
+        history
+            .iter()
+            .position(|e| match e {
+                Entry::ToolRequest { call_id, .. } | Entry::ToolResult { call_id, .. } => {
+                    call_id == anchor
+                }
+                _ => false,
+            })
+            .with_context(|| format!("历史里没有 call_id {anchor}"))?
+    };
+
+    // Collect the (index, kind-of-row) pairs we will print: the anchor
+    // entry itself ± before/after *tool* entries, optionally interleaving
+    // user messages.
+    let mut picks: Vec<usize> = Vec::new();
+    for (i, e) in history.iter().enumerate() {
+        let is_tool = matches!(e, Entry::ToolRequest { .. } | Entry::ToolResult { .. });
+        let is_user = matches!(e, Entry::User { .. });
+        let in_window = i >= anchor_idx.saturating_sub(args.before)
+            && i <= anchor_idx.saturating_add(args.after);
+        if in_window && (is_tool || (args.include_user && is_user)) {
+            picks.push(i);
+        }
+    }
+    let mut out = String::new();
+    // cwd migration markers: (seq, path) — the trail's seq is the entry
+    // index at which the migration was recorded. Emit "cwd changed to"
+    // lines wherever a pick crosses one.
+    let mut trail = cwd_trail.iter().peekable();
+    for &i in &picks {
+        while let Some((_seq, path)) = trail
+            .peek()
+            .map(|(s, p)| (*s, p.clone()))
+            .filter(|(s, _)| *s <= i as i64)
+        {
+            out.push_str(&format!("cwd：{path}\n"));
+            trail.next();
+        }
+        match &history[i] {
+            Entry::User { content } => {
+                out.push_str(&format!("user：{}\n", first_line(content)));
+            }
+            Entry::ToolRequest {
+                call_id,
+                name,
+                args,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "#{i} 调用 {name}（{call_id}）：{}\n",
+                    first_line(args)
+                ));
+            }
+            Entry::ToolResult {
+                call_id,
+                name,
+                ok,
+                result,
+            } => {
+                if args.include_results {
+                    out.push_str(&format!(
+                        "#{} 结果 {}（{}）：\n{}\n",
+                        i,
+                        name,
+                        if *ok { "ok" } else { "FAILED" },
+                        result
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "#{i} 结果 {name}（{}）{}\n",
+                        call_id,
+                        if *ok { "ok" } else { "FAILED" }
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        out.push_str("（窗口内没有可显示的调用记录——放宽 before/after 试试）");
+    }
+    Ok(out)
+}
+
+fn first_line(s: &str) -> String {
+    let line = s.lines().next().unwrap_or("");
+    line.chars().take(120).collect()
 }
 
 impl super::loop_rs::ToolExecutor for BuiltinTools {
     fn execute(&mut self, call: &ToolCall) -> Result<String> {
+        // Gate two: even a hallucinated call into a disabled tool is
+        // refused (the roster already hid it from the model). `context`
+        // passes unconditionally — same exception as definitions_for:
+        // it is the compressed session's way back into its own history.
+        anyhow::ensure!(
+            call.name() == "context" || self.allowed(call.name()),
+            "tool `{}` is disabled by the active profile",
+            call.name()
+        );
         match call.name() {
             "edit" => edit(&self.cwd, &parse_edit_args(&call.function.arguments)?),
             "mass_edit" => mass_edit(&self.cwd, &parse_mass_edit_args(&call.function.arguments)?),
@@ -624,6 +870,11 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
                 let hits = crate::web::search(&args)?;
                 Ok(crate::web::render(&hits))
             }
+            "context" => context_query(
+                &self.history,
+                &self.cwd_trail,
+                &parse_context_args(&call.function.arguments)?,
+            ),
             other => Err(anyhow!("unknown tool: {other}")),
         }
     }
@@ -919,13 +1170,94 @@ mod tests {
                 "mass_edit",
                 "fetch",
                 "browser",
-                "search"
+                "search",
+                "context"
             ]
         );
         // The schema must declare required fields, or the model omits arguments
         for d in &defs {
             assert!(d.function.parameters.get("required").is_some());
         }
+    }
+
+    fn hist() -> Vec<crate::entry::Entry> {
+        use crate::entry::Entry;
+        vec![
+            Entry::User {
+                content: "帮我跑 tree".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: "{}".into(),
+                intent: "列出目录".into(),
+            },
+            // The artifact placeholder embeds `#1`.
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "[工具输出共 50000 行 / 640KB，过大已存为巨物 #1（bash）。]".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c2".into(),
+                name: "read".into(),
+                args: "{\"path\":\"a.rs\"}".into(),
+                intent: "读文件".into(),
+            },
+            Entry::ToolResult {
+                call_id: "c2".into(),
+                name: "read".into(),
+                ok: true,
+                result: "1: fn main() {}".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn context_finds_artifact_anchor() {
+        let h = hist();
+        let args = ContextArgs {
+            anchor: "#1".into(),
+            before: 10,
+            after: 10,
+            include_user: false,
+            include_results: false,
+        };
+        let out = context_query(&h, &[], &args).unwrap();
+        assert!(out.contains("调用 bash"), "{out}");
+        assert!(out.contains("结果 bash"), "{out}");
+        // include_results=false must NOT embed the full result text
+        assert!(!out.contains("50000 行"), "{out}");
+    }
+
+    #[test]
+    fn context_includes_results_and_users_when_asked() {
+        let h = hist();
+        let args = ContextArgs {
+            anchor: "c2".into(),
+            before: 10,
+            after: 10,
+            include_user: true,
+            include_results: true,
+        };
+        let out = context_query(&h, &[(1, "/tmp/elsewhere".into())], &args).unwrap();
+        assert!(out.contains("fn main()"), "{out}");
+        assert!(out.contains("帮我跑 tree"), "{out}");
+    }
+
+    #[test]
+    fn context_unknown_anchor_is_an_error() {
+        let h = hist();
+        let args = ContextArgs {
+            anchor: "#9".into(),
+            before: 1,
+            after: 1,
+            include_user: false,
+            include_results: false,
+        };
+        let err = format!("{:#}", context_query(&h, &[], &args).unwrap_err());
+        assert!(err.contains("#9"), "{err}");
     }
 
     #[test]

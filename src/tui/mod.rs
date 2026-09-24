@@ -17,7 +17,7 @@ pub mod layout;
 pub mod session;
 pub mod text;
 pub mod theme;
-mod transcript;
+pub mod transcript;
 pub mod view;
 pub mod zones;
 pub mod zones_impl;
@@ -67,7 +67,8 @@ pub mod bench {
     ) -> (Vec<ratatui::text::Line<'static>>, usize, usize) {
         let p = crate::tui::theme::Palette::current();
         cache.sync(entries, &p, true, true, width);
-        let (b0, b1) = cache.window_from_bottom(entries, &p, true, offset_rows, viewport_rows);
+        let (b0, b1) =
+            cache.window_from_bottom(entries, &p, true, true, offset_rows, viewport_rows);
         let (rows, _above) = cache.rows_for(entries, &p, true, true, b0..b1);
         (rows, cache.cached_rows(), cache.cached_blocks())
     }
@@ -99,6 +100,6 @@ pub mod bench {
     ) -> (usize, usize) {
         let p = crate::tui::theme::Palette::current();
         cache.sync(entries, &p, true, true, width);
-        cache.window_from_bottom(entries, &p, true, offset_rows, viewport_rows)
+        cache.window_from_bottom(entries, &p, true, true, offset_rows, viewport_rows)
     }
 }

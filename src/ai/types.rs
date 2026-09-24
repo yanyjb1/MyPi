@@ -83,9 +83,15 @@ impl Message {
     pub fn approx_chars(&self) -> usize {
         match self {
             Message::User { content } => content.len(),
-            Message::Assistant { content, tool_calls } => {
+            Message::Assistant {
+                content,
+                tool_calls,
+            } => {
                 content.as_deref().unwrap_or("").len()
-                    + tool_calls.iter().map(|c| c.function.arguments.len() + c.function.name.len()).sum::<usize>()
+                    + tool_calls
+                        .iter()
+                        .map(|c| c.function.arguments.len() + c.function.name.len())
+                        .sum::<usize>()
             }
             Message::Tool { content, .. } => content.len(),
             Message::System { content } => content.len(),
@@ -170,7 +176,11 @@ fn function_kind() -> String {
 
 impl ToolCall {
     // Build a call (`kind` filled here; callers never touch the constant).
-    pub fn new(id: impl Into<String>, name: impl Into<String>, arguments: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             kind: function_kind(),
@@ -344,9 +354,10 @@ mod tests {
     #[test]
     fn usage_deserializes_without_details() {
         // Gateways may omit _details; must not explode
-        let usage: Usage =
-            serde_json::from_str(r#"{"prompt_tokens":65,"completion_tokens":29,"total_tokens":94}"#)
-                .unwrap();
+        let usage: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":65,"completion_tokens":29,"total_tokens":94}"#,
+        )
+        .unwrap();
         assert_eq!(usage.prompt_tokens, 65);
         assert_eq!(usage.reasoning_tokens, None);
     }

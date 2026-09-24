@@ -51,15 +51,15 @@ impl Cli {
                 }
                 "--resume" => cli.resume = true,
                 "--model" => {
-                    let v = it.next().ok_or_else(|| anyhow::anyhow!("--model needs a value: --model <provider:id>"))?;
+                    let v = it.next().ok_or_else(|| {
+                        anyhow::anyhow!("--model needs a value: --model <provider:id>")
+                    })?;
                     if !v.contains(':') {
                         anyhow::bail!("--model expects <provider>:<id>, got `{v}`");
                     }
                     cli.model = Some(v);
                 }
-                other => anyhow::bail!(
-                    "unknown argument `{other}` — see `mypi --help`"
-                ),
+                other => anyhow::bail!("unknown argument `{other}` — see `mypi --help`"),
             }
         }
         Ok(cli)

@@ -107,7 +107,9 @@ impl Layout {
         let row = row.min(self.container_height.saturating_sub(1));
         let y = self.container_y(term_h).saturating_add(row);
         // The reserved area starts at `term_h - reserved_height`; the cursor may reach at most the row above it
-        let last_allowed = term_h.saturating_sub(self.reserved_height).saturating_sub(1);
+        let last_allowed = term_h
+            .saturating_sub(self.reserved_height)
+            .saturating_sub(1);
         y.min(last_allowed)
     }
 }
@@ -334,11 +336,17 @@ mod tests {
         let w = text::wrap("hi", 40);
         for term_h in [12u16, 24, 40, 60] {
             let l = compute(term_h, &w, 0, RESERVED_IDLE, RESERVED_IDLE);
-            assert_eq!(l.gap_height, 1, "({term_h}) 历史区与状态栏之间必须恰好一条空行");
+            assert_eq!(
+                l.gap_height, 1,
+                "({term_h}) 历史区与状态栏之间必须恰好一条空行"
+            );
             assert!(
                 l.chat_height + l.gap_height + l.container_height + l.reserved_height == term_h,
                 "({term_h}) 分区必须铺满终端: {} + {} + {} + {}",
-                l.chat_height, l.gap_height, l.container_height, l.reserved_height
+                l.chat_height,
+                l.gap_height,
+                l.container_height,
+                l.reserved_height
             );
             assert!(l.chat_height > 0, "({term_h}) 历史区不该被挤没");
         }
@@ -352,7 +360,10 @@ mod tests {
         let l = compute(3, &w, 0, RESERVED_IDLE, RESERVED_IDLE);
         assert_eq!(l.gap_height, 0, "空间不足时先牺牲间隔");
         assert_eq!(
-            l.chat_height as usize + l.gap_height as usize + l.container_height as usize + l.reserved_height as usize,
+            l.chat_height as usize
+                + l.gap_height as usize
+                + l.container_height as usize
+                + l.reserved_height as usize,
             3,
             "紧凑终端也必须铺满"
         );

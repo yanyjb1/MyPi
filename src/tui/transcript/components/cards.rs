@@ -214,6 +214,27 @@ pub(super) fn collapse_limit(tool: &str) -> usize {
     }
 }
 
+/// Does this exchange render **differently** under Ctrl+O (expand)?
+///
+/// The single source of truth for "does the tools_expanded switch matter
+/// for this block": a card folds only when a visible result's plain-text
+/// body exceeds its per-tool fold threshold, and diffs never fold. The
+/// cache consults this before rendering so single-state blocks are
+/// rendered (and stored) exactly once.
+pub(in crate::tui::transcript) fn exchange_has_two_states(
+    name: &str,
+    ok: bool,
+    result: &str,
+) -> bool {
+    if !result_card_visible(name) {
+        return false;
+    }
+    match ToolView::synthesize(name, ok, result) {
+        ToolView::Diff { .. } => false,
+        ToolView::Plain { text } => text.lines().count() > collapse_limit(name),
+    }
+}
+
 // Two cards glued into one: the call's content, the seam, the result's content.
 //
 // A tool call and its result are one exchange, not two messages — drawing

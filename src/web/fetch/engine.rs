@@ -18,7 +18,6 @@ use html_to_markdown_rs::convert;
 use html_to_markdown_rs::options::{ConversionOptions, PreprocessingOptions, PreprocessingPreset};
 use serde::Deserialize;
 
-
 // Context-window guard. ~4 pages of text; omp caps at 500k which is far
 // beyond what a model can use in one tool result.
 const MAX_OUTPUT_CHARS: usize = 24_000;
@@ -152,7 +151,6 @@ pub fn fetch(args: &FetchArgs) -> anyhow::Result<String> {
     }
 }
 
-
 fn format_output(url: &str, method: &str, content: &str, truncated: bool) -> String {
     let mut out = format!("URL: {url}\nMethod: {method}\n");
     if truncated {
@@ -176,10 +174,7 @@ mod tests {
             normalize_url("example.com/x").unwrap(),
             "https://example.com/x"
         );
-        assert_eq!(
-            normalize_url("http://a.b/").unwrap(),
-            "http://a.b/"
-        );
+        assert_eq!(normalize_url("http://a.b/").unwrap(), "http://a.b/");
         assert!(normalize_url("file:///etc/passwd").is_err());
         assert!(normalize_url("ftp://x/").is_err());
         assert!(normalize_url("data:text/html,x").is_err());
@@ -213,10 +208,16 @@ mod tests {
 
     #[test]
     fn bot_block_markers_match_live_gates() {
-        assert!(looks_bot_blocked(403, "<html>Attention Required! | Cloudflare</html>"));
+        assert!(looks_bot_blocked(
+            403,
+            "<html>Attention Required! | Cloudflare</html>"
+        ));
         assert!(looks_bot_blocked(503, "captcha challenge"));
         assert!(!looks_bot_blocked(200, "<html>normal</html>"));
-        assert!(!looks_bot_blocked(403, "plain forbidden text without markers"));
+        assert!(!looks_bot_blocked(
+            403,
+            "plain forbidden text without markers"
+        ));
     }
 
     #[test]

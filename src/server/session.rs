@@ -12,10 +12,10 @@
 use crate::ai::client::Client;
 use crate::ai::config::{Config, ModelEntry};
 use crate::ai::types::{Context as ChatContext, Usage};
-use std::sync::{Arc, Mutex};
 use crate::entry::Entry;
 use crate::server::events::{Change, LiveActivity, SessionEvent, StreamView};
 use crate::store::Store;
+use std::sync::{Arc, Mutex};
 
 /// Everything the renderer needs from the session, in one read-only
 /// snapshot (the TUI never mutates through this).
@@ -25,7 +25,6 @@ pub struct Snapshot {
     pub session_name: Option<String>,
     pub session_id: Option<i64>,
 }
-
 
 pub struct SessionState {
     // Rendered entries (in-memory + DB-resumed share one path).
@@ -93,14 +92,31 @@ impl SessionState {
                 self.stream.reasoning.push_str(&r);
                 Change::Stream
             }
-            SessionEvent::ToolStart { call_id, name, args, intent } => {
-                self.stream.live = LiveActivity::Tool { intent: intent.clone() };
-                let e = Entry::ToolRequest { call_id, name, args, intent };
+            SessionEvent::ToolStart {
+                call_id,
+                name,
+                args,
+                intent,
+            } => {
+                self.stream.live = LiveActivity::Tool {
+                    intent: intent.clone(),
+                };
+                let e = Entry::ToolRequest {
+                    call_id,
+                    name,
+                    args,
+                    intent,
+                };
                 self.pending.push(e.clone());
                 self.transcript.push(e);
                 Change::Transcript
             }
-            SessionEvent::ToolFinish { call_id, name, ok, result } => {
+            SessionEvent::ToolFinish {
+                call_id,
+                name,
+                ok,
+                result,
+            } => {
                 // The call this row described has landed; the next event
                 // (another tool, or the reply) decides what replaces it.
                 self.stream.live = LiveActivity::Idle;
@@ -124,15 +140,23 @@ impl SessionState {
             }
             SessionEvent::TurnDone(u, _stop) => {
                 let content = std::mem::take(&mut self.stream.text);
-                let content = if content.is_empty() { "(无输出)".into() } else { content };
+                let content = if content.is_empty() {
+                    "(无输出)".into()
+                } else {
+                    content
+                };
+                // Clone — do **not** take: `Commit` (arriving right after this
+                // event) reads this same buffer to fold the chain into the
+                // persisted round. Taking it here starved the commit path.
+                let reasoning = self.stream.reasoning.clone();
+                if !reasoning.is_empty() {
+                    let r = Entry::Reasoning { content: reasoning };
+                    self.pending.push(r.clone());
+                    self.transcript.push(r);
+                }
                 let e = Entry::Assistant {
                     content,
                     usage: Some(Entry::usage_summary(&u)),
-                    reasoning: if self.stream.reasoning.is_empty() {
-                        None
-                    } else {
-                        Some(self.stream.reasoning.clone())
-                    },
                 };
                 self.pending.push(e.clone());
                 self.transcript.push(e);
@@ -146,25 +170,34 @@ impl SessionState {
                 // runner's authoritative assembly, so it wins over our
                 // incremental pending mirror.
                 //
-                // The one thing it **cannot** carry is the thinking chain:
-                // reasoning is absent from the wire `Message`, so it never
-                // enters the chat context the runner projects from. The
-                // session owns that buffer — fold it into the reply entry
-                // here, or it dies with the turn. (A turn with tool rounds
-                // accumulates each round's reasoning into this one entry.)
+                // Two things the wire `Message` cannot carry — the thinking
+                // chain and usage — both live in this buffer. The reasoning
+                // becomes its **own** entry (`Entry::Reasoning`) spliced in
+                // directly before the reply it produced; usage rides on the
+                // reply. Miss this and both die with the turn.
                 let reasoning = std::mem::take(&mut self.stream.reasoning);
                 let usage = self.pending_usage.take().map(|u| Entry::usage_summary(&u));
-                if let Some(Entry::Assistant { reasoning: r, usage: u, .. }) = entries
-                    .iter_mut()
-                    .rev()
-                    .find(|e| matches!(e, Entry::Assistant { .. }))
+                if let Some(i) = entries
+                    .iter()
+                    .rposition(|e| matches!(e, Entry::Assistant { .. }))
                 {
+                    // Splice the chain *directly before* the reply it produced.
+                    // The `i` is captured before the insert; afterwards the
+                    // reply sits at `i + 1` only when the insert happened, so
+                    // address it by re-finding it instead of doing index math
+                    // (an unconditional `entries[i + 1]` panicked on the
+                    // simplest round there is — `[User, Assistant]`, no
+                    // thinking, reply already last).
                     if !reasoning.is_empty() {
-                        *r = Some(reasoning);
+                        entries.insert(i, Entry::Reasoning { content: reasoning });
                     }
-                    // Same reason as reasoning: the wire `Message` has no usage
-                    // field, so the runner cannot carry it here either.
-                    *u = usage;
+                    if let Some(Entry::Assistant { usage: u, .. }) = entries
+                        .iter_mut()
+                        .rev()
+                        .find(|e| matches!(e, Entry::Assistant { .. }))
+                    {
+                        *u = usage;
+                    }
                 }
                 if let Some((st, sid)) = self.persistence()
                     && let Err(e) = st.append(sid, &entries)
@@ -192,11 +225,13 @@ impl SessionState {
                 self.transcript.push(marker.clone());
                 // Borrow discipline: store writes in scoped blocks; error
                 // echoes go into the transcript only after the borrow ends.
-                let write_err = self.persistence().and_then(|(st, sid)| {
-                    st.append(sid, std::slice::from_ref(&marker)).err()
-                });
+                let write_err = self
+                    .persistence()
+                    .and_then(|(st, sid)| st.append(sid, std::slice::from_ref(&marker)).err());
                 if let Some(e) = write_err {
-                    self.transcript.push(Entry::Error { text: format!("命名写入失败：{e:#}") });
+                    self.transcript.push(Entry::Error {
+                        text: format!("命名写入失败：{e:#}"),
+                    });
                 }
                 if let Some((st, sid)) = self.persistence() {
                     let _ = st.set_session_name(sid, Some(&name));
@@ -208,6 +243,11 @@ impl SessionState {
                 if let Some((st, sid)) = self.persistence() {
                     let _ = st.record_cwd(sid, seq, &path);
                 }
+                Change::None
+            }
+            SessionEvent::Compaction { .. } => {
+                // Intercepted by `Session::ingest` before reaching here —
+                // the facade owns the chat replica this event replaces.
                 Change::None
             }
         }
@@ -234,10 +274,15 @@ impl SessionState {
     /// streaming slots. Called by the surface right before spawning the
     /// turn runner — one protocol action instead of three field pokes.
     pub fn start_turn(&mut self, user_text: &str) -> Change {
-        let e = Entry::User { content: user_text.to_string() };
+        let e = Entry::User {
+            content: user_text.to_string(),
+        };
         self.transcript.push(e.clone());
         self.pending.push(e);
-        self.stream = StreamView { active: true, ..Default::default() };
+        self.stream = StreamView {
+            active: true,
+            ..Default::default()
+        };
         Change::Stream
     }
 
@@ -317,12 +362,7 @@ impl SessionState {
 
     /// Create a fresh session (or adopt an existing one) and adopt the
     /// given entries as the transcript. Returns the session id.
-    pub fn adopt_session(
-        &mut self,
-        id: i64,
-        entries: Vec<Entry>,
-        name: Option<String>,
-    ) -> Change {
+    pub fn adopt_session(&mut self, id: i64, entries: Vec<Entry>, name: Option<String>) -> Change {
         self.session_id = Some(id);
         self.transcript = entries;
         self.session_name = name;
@@ -333,7 +373,6 @@ impl SessionState {
     pub fn set_session_name(&mut self, name: Option<String>) {
         self.session_name = name;
     }
-
 
     /// Tree navigation landed: replace transcript + pending wholesale
     /// and merge the effective name (never clobbers an explicit /name).
@@ -369,7 +408,9 @@ impl SessionState {
                 Some(id)
             }
             Err(e) => {
-                self.transcript.push(Entry::Error { text: format!("会话创建失败：{e:#}") });
+                self.transcript.push(Entry::Error {
+                    text: format!("会话创建失败：{e:#}"),
+                });
                 None
             }
         }
@@ -381,7 +422,6 @@ impl SessionState {
         Some((self.store.as_mut()?, sid))
     }
 }
-
 
 // ---- facade ------------------------------------------------------------
 
@@ -407,11 +447,21 @@ pub struct Session {
     pub cost: crate::ai::config::Cost,
     cost_tracker: crate::ai::pricing::CostTracker,
     tx: std::sync::mpsc::Sender<SessionEvent>,
+    // Profile tool roster (see `TurnRequest.tool_filter`). Set at
+    // startup from the active profile; the profile switch command only
+    // re-reads it at the next rebuild point.
+    tool_filter: Option<Vec<String>>,
+    // Session DB path (file-backed store): the turn thread opens its
+    // own connection from here to spill/fetch artifacts.
+    artifact_db: Option<std::path::PathBuf>,
 }
 
 impl Session {
     /// Assemble a session service + its event channel. `chat` starts as
     /// the system-prompt-only replica.
+    // A constructor wiring session resources one-to-one; a params struct
+    // would just mirror these fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         state: SessionState,
         client: Client,
@@ -419,6 +469,8 @@ impl Session {
         max_tokens: u32,
         cost: crate::ai::config::Cost,
         cwd: std::path::PathBuf,
+        tool_filter: Option<Vec<String>>,
+        db_path: Option<std::path::PathBuf>,
     ) -> (Self, std::sync::mpsc::Receiver<SessionEvent>) {
         let (tx, rx) = std::sync::mpsc::channel::<SessionEvent>();
         let s = Self {
@@ -431,8 +483,78 @@ impl Session {
             cost,
             cost_tracker: crate::ai::pricing::CostTracker::default(),
             tx,
+            tool_filter,
+            artifact_db: db_path,
         };
         (s, rx)
+    }
+
+    /// `/compact [focus]`: run context compaction on a background thread.
+    ///
+    /// The summarization round-trip is a blocking network call (the
+    /// non-streaming `complete` — no per-character display needed), so it
+    /// must not sit on the UI thread. The thread owns a cloned `Client`
+    /// (the real one stays behind the RefCell); results come back through
+    /// the event channel:
+    ///
+    /// - `Error` echoes the failure (context untouched; safe to retry),
+    /// - `Compaction { entries, ctx }` lets the session apply the fork
+    ///   atomically: persist the marker entry, swap the live context,
+    ///   echo the divider.
+    ///
+    /// Returns false when a turn is already streaming (compaction shares
+    /// the busy gate — two writers on one context is a torn read).
+    pub fn run_compact(
+        &mut self,
+        focus: &str,
+        ccfg: &crate::server::compaction::CompactConfig,
+    ) -> bool {
+        if self.state.busy() {
+            return false;
+        }
+        let client = self.client.borrow().clone();
+        let chat = self.chat.clone();
+        let tx = self.tx.clone();
+        let cwd_snapshot = self.state.transcript().to_vec();
+        let system = chat
+            .lock()
+            .expect("chat 锁中毒")
+            .messages
+            .first()
+            .map(|m| match m {
+                crate::ai::types::Message::System { content } => content.clone(),
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+        let ccfg = ccfg.clone();
+        let focus = focus.to_string();
+        let max_tokens = self.max_tokens;
+        std::thread::spawn(move || {
+            let mut summarize = |req: &crate::ai::types::Context| -> anyhow::Result<String> {
+                let reply = client.complete(req, max_tokens)?;
+                Ok(reply.content)
+            };
+            match crate::server::compaction::compact(
+                &system,
+                &cwd_snapshot,
+                &ccfg,
+                &focus,
+                &mut summarize,
+            ) {
+                Ok(out) => {
+                    let _ = tx.send(SessionEvent::Compaction {
+                        entries: vec![out.marker],
+                        ctx: out.ctx,
+                        tokens_before: out.tokens_before,
+                        tokens_after: out.tokens_after,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(SessionEvent::Error(format!("{e:#}")));
+                }
+            }
+        });
+        true
     }
 
     /// Submit user text: lazily create the session (in-memory mode
@@ -449,16 +571,17 @@ impl Session {
                 return self.finish_submit(text);
             };
             {
-            let now = crate::store::now_stamp();
-            match st.create_session(&now, &cwd) {
-                Ok(id) => {
-                    self.state.adopt_session(id, Vec::new(), None);
+                let now = crate::store::now_stamp();
+                match st.create_session(&now, &cwd) {
+                    Ok(id) => {
+                        self.state.adopt_session(id, Vec::new(), None);
+                    }
+                    Err(e) => {
+                        self.state.echo(crate::entry::Entry::Error {
+                            text: format!("数据库不可用：{e:#}"),
+                        });
+                    }
                 }
-                Err(e) => {
-                    self.state
-                        .echo(crate::entry::Entry::Error { text: format!("数据库不可用：{e:#}") });
-                }
-            }
             }
         }
         self.finish_submit(text)
@@ -478,6 +601,23 @@ impl Session {
                 interrupt: self.interrupt.clone(),
                 cwd: self.cwd.read().expect("cwd 锁中毒").clone(),
                 cwd_slot: self.cwd.clone(),
+                history: std::sync::Arc::new(self.state.transcript().to_vec()),
+                cwd_trail: std::sync::Arc::new(
+                    self.state
+                        .persistence()
+                        .and_then(|(st, sid)| st.cwd_history(sid).ok())
+                        .unwrap_or_default(),
+                ),
+                tool_filter: self.tool_filter.clone(),
+                // Session-scoped artifact store: the turn thread gets its
+                // own WAL-mode connection; a failed open degrades to None
+                // (oversized output then stays verbatim in the context).
+                artifacts: match (self.artifact_db.as_deref(), self.state.session_id()) {
+                    (Some(path), Some(sid)) => {
+                        crate::server::artifacts::ArtifactStore::open(path, sid)
+                    }
+                    _ => None,
+                },
             },
         );
         true
@@ -501,8 +641,7 @@ impl Session {
     /// Rebuild the shared chat replica from projected entries (tree
     /// navigation / resume). Dangling tool tails are repaired inside.
     pub fn rebuild_chat(&self, entries: &[Entry]) {
-        *self.chat.lock().expect("chat 锁中毒") =
-            crate::server::turn::entries_to_context(entries);
+        *self.chat.lock().expect("chat 锁中毒") = crate::server::turn::entries_to_context(entries);
     }
 
     /// Migrate the working directory; returns the previous value.
@@ -517,7 +656,10 @@ impl Session {
 
     /// Current model's display price: total spent + latest prompt tokens.
     pub fn spend(&self) -> (f64, u64) {
-        (self.cost_tracker.total, self.cost_tracker.last_prompt_tokens)
+        (
+            self.cost_tracker.total,
+            self.cost_tracker.last_prompt_tokens,
+        )
     }
 
     // ---- read-side passthrough (the surface renders through these) ----
@@ -601,6 +743,17 @@ impl Session {
     /// is priced locally against `cost` here. Returns the observed
     /// changes so the surface reacts without touching internals.
     pub fn ingest(&mut self, ev: SessionEvent) -> Change {
+        // Compaction lands at the facade: it must touch the chat replica
+        // (owned here, not by SessionState) and the store in one go.
+        if let SessionEvent::Compaction {
+            entries,
+            ctx,
+            tokens_before,
+            tokens_after,
+        } = ev
+        {
+            return self.apply_compaction(entries, ctx, tokens_before, tokens_after);
+        }
         let change = self.state.handle(ev);
         if change == Change::TurnDone
             && let Some(u) = self.state.take_last_usage()
@@ -608,6 +761,38 @@ impl Session {
             self.cost_tracker.record(&u, &self.cost);
         }
         change
+    }
+
+    /// Atomically apply a finished compaction: persist the fork marker,
+    /// swap the live context, echo the divider + stats.
+    fn apply_compaction(
+        &mut self,
+        entries: Vec<Entry>,
+        ctx: ChatContext,
+        tokens_before: usize,
+        tokens_after: usize,
+    ) -> Change {
+        // 1) Persist the marker under the current leaf (the tree keeps
+        //    the pre-compact branch reachable).
+        if let Some((st, sid)) = self.state.persistence()
+            && let Err(e) = st.append(sid, &entries)
+        {
+            let msg = format!("压缩标记落盘失败：{e:#}");
+            self.state.echo(Entry::Error { text: msg });
+        }
+        // 2) Swap the live context replica: next turn starts from
+        //    system + summary turn + kept region (prefix-cache cold
+        //    once, then warm).
+        *self.chat.lock().expect("chat 锁中毒") = ctx;
+        // 3) Transcript: the divider marker + the display stats.
+        for e in entries {
+            self.state.echo(e);
+        }
+        self.state.echo(Entry::System {
+            text: format!("上下文已压缩：≈{tokens_before} → ≈{tokens_after} tokens"),
+            align: crate::entry::Align::Center,
+        });
+        Change::Session
     }
 
     pub fn drain(&mut self, rx: &std::sync::mpsc::Receiver<SessionEvent>) -> Vec<Change> {
@@ -628,18 +813,167 @@ mod tests {
     }
 
     #[test]
+    fn plain_text_round_survives_the_full_turn_done_then_commit_sequence() {
+        // The exact shape that panicked in production: a plain text round
+        // with no thinking. `[User, Assistant]` — the reply is the last
+        // entry, and an unconditional `entries[i + 1]` walked off the end.
+        let mut s = st();
+        let _ = s.handle(SessionEvent::Delta("答案".into()));
+        let _ = s.handle(SessionEvent::TurnDone(
+            Usage::default(),
+            crate::ai::types::StopReason::Stop,
+        ));
+        // The runner's authoritative assembly for this round.
+        let _ = s.handle(SessionEvent::Commit(vec![
+            Entry::User {
+                content: "问".into(),
+            },
+            Entry::Assistant {
+                content: "答案".into(),
+                usage: None,
+            },
+        ]));
+    }
+
+    #[test]
+    fn tool_round_splices_reasoning_before_the_final_reply_only() {
+        // A tool round: [User, (ToolRequest, ToolResult) * 1, Assistant].
+        // The reasoning belongs to the *final* reply, not the request
+        // cards — and the reply is again the last entry (the shape that
+        // used to panic).
+        let dir = std::env::temp_dir().join(format!("mypi-toolround-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = SessionState::new(Some(Store::open(&dir.join("t.db")).unwrap()));
+        let id = s.ensure_session(&dir).unwrap();
+        let _ = s.handle(SessionEvent::ReasoningDelta("查一下".into()));
+        let _ = s.handle(SessionEvent::Delta("搞定".into()));
+        let _ = s.handle(SessionEvent::TurnDone(
+            Usage::default(),
+            crate::ai::types::StopReason::Stop,
+        ));
+        let _ = s.handle(SessionEvent::Commit(vec![
+            Entry::User {
+                content: "跑个命令".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: "{}".into(),
+                intent: "跑".into(),
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "ok".into(),
+            },
+            Entry::Assistant {
+                content: "搞定".into(),
+                usage: None,
+            },
+        ]));
+        let back = s.store().unwrap().load_entries(id).unwrap();
+        let kinds: Vec<&str> = back
+            .iter()
+            .map(|e| match e {
+                Entry::User { .. } => "user",
+                Entry::Reasoning { .. } => "reasoning",
+                Entry::Assistant { .. } => "assistant",
+                Entry::ToolRequest { .. } => "tool_request",
+                Entry::ToolResult { .. } => "tool_result",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "user",
+                "tool_request",
+                "tool_result",
+                "reasoning",
+                "assistant"
+            ],
+            "思考必须紧邻最终回复、在工具条目之后"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commit_splices_reasoning_before_the_reply_and_rides_usage_on_it() {
+        // `Commit` writes the round to the store (the transcript is the
+        // surface's business), so assert on what actually lands on disk.
+        let dir = std::env::temp_dir().join(format!("mypi-commit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = SessionState::new(Some(Store::open(&dir.join("t.db")).unwrap()));
+        let id = s.ensure_session(&dir).unwrap();
+        let _ = s.handle(SessionEvent::ReasoningDelta("想了想".into()));
+        let _ = s.handle(SessionEvent::Delta("答案".into()));
+        let _ = s.handle(SessionEvent::TurnDone(
+            Usage::default(),
+            crate::ai::types::StopReason::Stop,
+        ));
+        let _ = s.handle(SessionEvent::Commit(vec![
+            Entry::User {
+                content: "问".into(),
+            },
+            Entry::Assistant {
+                content: "答案".into(),
+                usage: None,
+            },
+        ]));
+        let back = s.store().unwrap().load_entries(id).unwrap();
+        let kinds: Vec<&str> = back
+            .iter()
+            .map(|e| match e {
+                Entry::User { .. } => "user",
+                Entry::Reasoning { .. } => "reasoning",
+                Entry::Assistant { .. } => "assistant",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["user", "reasoning", "assistant"]);
+        // Usage rode on the reply (the wire Message cannot carry it).
+        let usage = back
+            .iter()
+            .find_map(|e| match e {
+                Entry::Assistant { usage, .. } => Some(*usage),
+                _ => None,
+            })
+            .unwrap();
+        assert!(usage.is_some(), "usage 必须写在回复条目上");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn reasoning_survives_into_the_assistant_entry() {
         let mut s = st();
         let _ = s.handle(SessionEvent::ReasoningDelta("先想".into()));
         let _ = s.handle(SessionEvent::ReasoningDelta("再想".into()));
         let _ = s.handle(SessionEvent::Delta("答案".into()));
-        let _ = s.handle(SessionEvent::TurnDone(Usage::default(), crate::ai::types::StopReason::Stop));
-        let a = s.transcript().iter().find_map(|e| match e {
-            Entry::Assistant { content, reasoning, .. } => Some((content.clone(), reasoning.clone())),
+        let _ = s.handle(SessionEvent::TurnDone(
+            Usage::default(),
+            crate::ai::types::StopReason::Stop,
+        ));
+        let ts = s.transcript();
+        let reasoning = ts.iter().find_map(|e| match e {
+            Entry::Reasoning { content } => Some(content.clone()),
             _ => None,
-        }).expect("必须有一条 Assistant");
-        assert_eq!(a.0, "答案");
-        assert_eq!(a.1.as_deref(), Some("先想再想"), "reasoning 必须进入条目");
+        });
+        let reply = ts
+            .iter()
+            .find_map(|e| match e {
+                Entry::Assistant { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .expect("必须有一条 Assistant");
+        assert_eq!(reply, "答案");
+        assert_eq!(
+            reasoning.as_deref(),
+            Some("先想再想"),
+            "reasoning 必须落成独立条目"
+        );
     }
 
     #[test]
@@ -655,22 +989,32 @@ mod tests {
         });
         assert_eq!(ch, Change::ToolActivity);
         // Speech-side changes stay Transcript.
-        assert_eq!(s.handle(SessionEvent::Error("x".into())), Change::Transcript);
+        assert_eq!(
+            s.handle(SessionEvent::Error("x".into())),
+            Change::Transcript
+        );
     }
 
     #[test]
     fn echo_grows_transcript() {
         let mut s = st();
-        assert_eq!(s.echo(Entry::Error { text: "x".into() }), Change::Transcript);
+        assert_eq!(
+            s.echo(Entry::Error { text: "x".into() }),
+            Change::Transcript
+        );
         assert_eq!(s.transcript().len(), 1);
     }
 
     #[test]
     fn commit_round_clears_pending() {
         let mut s = st();
-        s.stage(Entry::User { content: "hi".into() });
+        s.stage(Entry::User {
+            content: "hi".into(),
+        });
         assert_eq!(s.pending_snapshot().len(), 1);
-        s.commit_round(vec![Entry::User { content: "hi".into() }]);
+        s.commit_round(vec![Entry::User {
+            content: "hi".into(),
+        }]);
         assert_eq!(s.pending_snapshot().len(), 0);
         assert_eq!(s.transcript().len(), 1);
     }

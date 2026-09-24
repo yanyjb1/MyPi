@@ -47,14 +47,11 @@ use crate::tui::text;
 // and new ones just join either set.
 const SEPARATORS: &[char] = &[
     // whitespace
-    ' ', '\t', '\n', '\r',
-    // Latin punctuation
-    '.', ',', ';', ':', '!', '?', '\'', '"', '(', ')', '[', ']', '{', '}',
-    '<', '>', '/', '\\', '|', '-', '_', '=', '+', '*', '&', '%', '$', '#', '@', '~', '`', '^',
-    // CJK punctuation
-    '，', '。', '、', '；', '：', '？', '！', '“', '”', '‘', '’',
-    '（', '）', '【', '】', '《', '》', '「', '」', '『', '』',
-    '—', '…', '·', '～', '·',
+    ' ', '\t', '\n', '\r', // Latin punctuation
+    '.', ',', ';', ':', '!', '?', '\'', '"', '(', ')', '[', ']', '{', '}', '<', '>', '/', '\\',
+    '|', '-', '_', '=', '+', '*', '&', '%', '$', '#', '@', '~', '`', '^', // CJK punctuation
+    '，', '。', '、', '；', '：', '？', '！', '“', '”', '‘', '’', '（', '）', '【', '】', '《',
+    '》', '「', '」', '『', '』', '—', '…', '·', '～', '·',
 ];
 
 fn is_separator(c: char) -> bool {
@@ -324,7 +321,10 @@ impl Editor {
             return Effect::Nothing;
         }
         // First check whether the cursor hugs a marker on its left (cursor at marker end or inside)
-        if let Some(m) = self.marker_at(self.cursor).or_else(|| self.marker_at(self.cursor - 1)) {
+        if let Some(m) = self
+            .marker_at(self.cursor)
+            .or_else(|| self.marker_at(self.cursor - 1))
+        {
             self.checkpoint(EditKind::Other);
             self.chars.drain(m.start..m.end);
             self.cursor = m.start;
@@ -657,7 +657,10 @@ mod tests {
         // Cursor lands before the last CJK char: after the 3 characters
         // before it (String byte indexes would be wrong; a CJK char is 3
         // bytes)
-        assert_eq!(e.text().chars().take(e.cursor()).collect::<String>(), "你好，");
+        assert_eq!(
+            e.text().chars().take(e.cursor()).collect::<String>(),
+            "你好，"
+        );
         e.word_left();
         // Skips the whole CJK word, reaching the start
         assert_eq!(e.cursor(), 0);
@@ -947,7 +950,10 @@ mod tests {
 
     // 35 lines -> must fold.
     fn big_paste() -> String {
-        (0..35).map(|i| format!("code line {i}")).collect::<Vec<_>>().join("\n")
+        (0..35)
+            .map(|i| format!("code line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]

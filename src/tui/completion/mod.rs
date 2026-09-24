@@ -11,8 +11,8 @@
 //! them to the editor text and the runtime config.
 
 pub mod controller;
-pub mod leaf;
 pub mod engine;
+pub mod leaf;
 pub mod popup;
 
 pub use controller::{CompletionController, InputCtx, ModelCandidate};

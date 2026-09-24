@@ -15,7 +15,6 @@
 //! kept for the day a gateway actually reports it.
 //!
 
-
 use crate::ai::config::Cost;
 use crate::ai::types::Usage;
 
@@ -72,7 +71,12 @@ mod tests {
     use super::*;
 
     fn c(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Cost {
-        Cost { input, output, cache_read, cache_write }
+        Cost {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        }
     }
 
     #[test]
@@ -141,7 +145,13 @@ mod tests {
     #[test]
     fn tracker_accumulates() {
         let mut t = CostTracker::default();
-        let u1 = Usage { prompt_tokens: 590, completion_tokens: 5, total_tokens: 595, cached_tokens: Some(0), reasoning_tokens: None };
+        let u1 = Usage {
+            prompt_tokens: 590,
+            completion_tokens: 5,
+            total_tokens: 595,
+            cached_tokens: Some(0),
+            reasoning_tokens: None,
+        };
         t.record(&u1, &c(0.8, 2.7, 0.1, 1.25));
         assert_eq!(t.last_prompt_tokens, 590);
         assert!(t.total > 0.0);

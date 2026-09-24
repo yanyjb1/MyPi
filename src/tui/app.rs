@@ -24,16 +24,15 @@
 
 use std::time::{Duration, Instant};
 
-
 use crate::ai::pricing::CostTracker;
-use crate::entry as entry;
+use crate::entry;
 use crate::tui::editor::{Editor, Effect, History};
 
-use crate::tui::keys::{Action, KeyContext};
-use crate::tui::zones::Zone as _;
 use crate::tui::completion::engine;
+use crate::tui::keys::{Action, KeyContext};
 use crate::tui::layout as tlayout;
 use crate::tui::text;
+use crate::tui::zones::Zone as _;
 
 // Spinner frames: `|` `/` `-` `\` cycling. While a turn is in flight
 // the loop wakes once per SPIN_INTERVAL to advance it (thinking phases
@@ -196,7 +195,11 @@ impl App {
         if self.resume_pick.is_some() {
             // Session picker: stretch to 2/3 of the terminal (min 6 rows); the history area shrinks to make room
             let cap = (term_h as usize * 2 / 3).max(6) as u16;
-            let want = self.resume_pick.as_ref().map(|(v, _)| v.len() as u16 + 1).unwrap_or(1);
+            let want = self
+                .resume_pick
+                .as_ref()
+                .map(|(v, _)| v.len() as u16 + 1)
+                .unwrap_or(1);
             want.min(cap).min(term_h)
         } else if let Some(h) = self.completion.reserved_height() {
             // Row height locks when the popup opens (inside open()) and
@@ -227,18 +230,26 @@ impl App {
     // Open the tree navigator (double-Esc). Builds the full-tree rows from
     // the store; a missing store degrades to an empty picker (never crashes).
     pub(crate) fn open_tree_picker(&mut self) {
-        let Some(st) = self.session.store() else { return };
+        let Some(st) = self.session.store() else {
+            return;
+        };
         let Some(sid) = self.session.session_id() else {
-            self.session.echo(entry::Entry::Error { text: "还没有会话可回溯".into() });
+            self.session.echo(entry::Entry::Error {
+                text: "还没有会话可回溯".into(),
+            });
             return;
         };
         let tree = st.load_tree(sid).unwrap_or_default();
         let leaf = st.get_leaf(sid).unwrap_or(None);
         if tree.is_empty() {
-            self.session.echo(entry::Entry::Error { text: "会话为空".into() });
+            self.session.echo(entry::Entry::Error {
+                text: "会话为空".into(),
+            });
             return;
         }
-        self.tree_pick = Some(crate::tui::components::tree_picker::TreePicker::from_tree(&tree, leaf));
+        self.tree_pick = Some(crate::tui::components::tree_picker::TreePicker::from_tree(
+            &tree, leaf,
+        ));
     }
 
     pub(crate) fn load_into_editor(&mut self, text: &str) {
@@ -698,10 +709,8 @@ impl App {
     }
 }
 
-
 // Session name for the statusline: an explicit /name wins; otherwise
 // one is synthesized — first 7 chars of the first user message within the session.
-
 
 pub(crate) fn display_name(app: &App) -> String {
     match app.session.session_name() {
@@ -717,5 +726,3 @@ pub(crate) fn display_name(app: &App) -> String {
             .unwrap_or_else(|| "新会话".into()),
     }
 }
-
-

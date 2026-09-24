@@ -71,7 +71,10 @@ mod tests {
 
     #[test]
     fn modal_ids_are_distinct() {
-        assert_ne!(ZoneId::Modal(ModalKind::Resume), ZoneId::Modal(ModalKind::Tree));
+        assert_ne!(
+            ZoneId::Modal(ModalKind::Resume),
+            ZoneId::Modal(ModalKind::Tree)
+        );
         assert_ne!(ZoneId::History, ZoneId::Input);
     }
 }

@@ -41,7 +41,10 @@ pub(crate) fn extract_between(hay: &str, open_prefix: &str, close: &str) -> Opti
     let open_tag = hay[start..=gt].to_string();
     let inner_start = gt + 1;
     let end = hay[inner_start..].find(close)? + inner_start;
-    Some(Tag { open_tag, inner: hay[inner_start..end].to_string() })
+    Some(Tag {
+        open_tag,
+        inner: hay[inner_start..end].to_string(),
+    })
 }
 
 pub(crate) fn extract_attr(tag: &str, attr: &str) -> Option<String> {
@@ -56,4 +59,3 @@ pub(crate) fn extract_attr(tag: &str, attr: &str) -> Option<String> {
     }
     None
 }
-

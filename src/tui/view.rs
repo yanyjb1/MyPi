@@ -184,17 +184,27 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
         .sync(s.history, p, s.show_reasoning, s.tools_expanded, chat_w);
     let viewport = chat_area.height as usize;
     let offset = if s.scroll_pinned { 0 } else { s.chat_scroll };
-    let (b0, b1) =
-        s.block_cache
-            .window_from_bottom(s.history, p, s.show_reasoning, offset, viewport);
+    let (b0, b1) = s.block_cache.window_from_bottom(
+        s.history,
+        p,
+        s.show_reasoning,
+        s.tools_expanded,
+        offset,
+        viewport,
+    );
     let (block_rows, _rows_above) =
         s.block_cache
             .rows_for(s.history, p, s.show_reasoning, s.tools_expanded, b0..b1);
-    // Splice from the bottom: the walk over-collects above the viewport
-    // top (one block of slack), so keep the LAST `viewport` rows.
-    let take_from = block_rows.len().saturating_sub(viewport);
+    // Splice: the walk covers `offset + viewport` rows ending at the
+    // document bottom, so the window we want sits at the range's TOP —
+    // drop the bottommost `offset` rows, then keep `viewport` rows.
+    // (Keeping the LAST viewport rows here instead re-anchored every
+    // scrolled frame to the document tail: the wheel bumped `chat_scroll`
+    // while the picture never moved — the "history won't scroll" bug.)
+    let cut_bottom = offset.min(block_rows.len().saturating_sub(viewport));
+    let keep_from = block_rows.len().saturating_sub(cut_bottom + viewport);
     let mut visible: Vec<Line<'static>> = Vec::with_capacity(viewport);
-    let mut it = block_rows.into_iter().skip(take_from);
+    let mut it = block_rows.into_iter().skip(keep_from).take(viewport);
     for _ in 0..viewport {
         match it.next() {
             Some(l) => visible.push(l),
@@ -313,5 +323,94 @@ mod tests {
                 .sum();
             assert!(w <= 4, "行宽超限: {w}");
         }
+    }
+
+    #[test]
+    fn wheel_scrolling_actually_moves_the_viewport() {
+        // The full-chain regression: wheel events only bump `chat_scroll`;
+        // the *visible* frame must change accordingly. A state where
+        // chat_scroll advances but the frame stays identical is exactly
+        // the "history won't scroll" bug.
+        use crate::entry::Entry;
+        use crate::tui::theme::Palette as P;
+
+        let p = P::default();
+        // 30 rounds → 60 blocks, each a few rows: comfortably taller
+        // than the 12-row viewport.
+        let mut entries: Vec<Entry> = Vec::new();
+        for i in 0..30 {
+            entries.push(Entry::User {
+                content: format!("USER-{i} 标记行"),
+            });
+            entries.push(Entry::Assistant {
+                content: format!("回答 {i}：第一行\n第二行\n第三行"),
+                usage: None,
+            });
+        }
+
+        let wrapped = crate::tui::text::wrap("", 40);
+        let empty_live = crate::server::events::LiveActivity::Idle;
+        let mut cache = crate::tui::transcript::cache::BlockCache::new();
+
+        let mut grab = |chat_scroll: usize, pinned: bool| -> Vec<String> {
+            let mut s = ViewState {
+                history: &entries,
+                block_cache: &mut cache,
+                chat_scroll,
+                scroll_pinned: pinned,
+                show_reasoning: false,
+                tools_expanded: false,
+                live: &empty_live,
+                streaming: None,
+                wrapped: &wrapped,
+                cursor_char: 0,
+                spinner: None,
+                model_name: "m",
+                session_name: "",
+                cwd: "/tmp",
+                git: None,
+                ctx_tokens: 0,
+                ctx_limit: 1000,
+                cost: 0.0,
+                currency_symbol: "¥",
+                show_cost: false,
+                palette: p,
+                popup: &crate::tui::completion::CompletionPopup::default(),
+                resume_pick: None,
+            };
+            let l = tlayout::Layout {
+                chat_height: 12,
+                gap_height: 1,
+                container_height: 3,
+                body_rows: 1,
+                first_visible: 0,
+                reserved_height: 1,
+            };
+            let mut term =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 20)).unwrap();
+            let l2 = &l;
+            term.draw(|f| {
+                let _ = draw(f, &mut s, l2);
+            })
+            .unwrap();
+            let buf = term.backend().buffer().clone();
+            (0..buf.area.height)
+                .map(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect()
+        };
+
+        let pinned_frame = grab(0, true);
+        let scrolled_frame = grab(9, false);
+
+        // The frames must differ, and the scrolled one must now show the
+        // OLDEST rows the pinned view could not reach.
+        assert_ne!(
+            pinned_frame, scrolled_frame,
+            "滚轮滚动后画面纹丝不动——滚动失效"
+        );
     }
 }

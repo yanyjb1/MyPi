@@ -2,9 +2,12 @@
 //!
 //! The cache unit is the block (one user message / assistant turn / tool
 //! exchange / system notice), not the row. Each slot stores the rendered
-//! rows for the block **in both fold states** (tool outputs render folded
-//! per their threshold and expanded; every other block renders the same
-//! rows for both). Row height is a *derived* property of the rendered
+//! rows for every **variant** the block actually has: a block reacts to at
+//! most one view switch (tool exchanges to Ctrl+O's `tools_expanded`),
+//! and only when its
+//! content actually changes between the switch's two positions (a short
+//! tool output renders identically folded and expanded — one variant, one
+//! render, one copy). Row height is a *derived* property of the rendered
 //! rows — nothing is measured ahead of time, nothing is rendered "just to
 //! measure and thrown away". Blocks the viewport never touches are never
 //! rendered at all.
@@ -24,6 +27,11 @@
 //! Invalidation is whole-sale on width/epoch change (every wrap is wrong)
 //! and index-truncate on transcript shrink (regenerate/rewind: entries
 //! after the fork point are gone).
+//!
+//! Heights are per-variant (`[usize; 2]`): slot 0 = the switch OFF, slot
+//! 1 = the switch ON, single-variant blocks occupy both with the same
+//! value (8 wasted bytes per block buys uniform indexing). `usize::MAX`
+//! = never measured.
 
 use std::collections::HashMap;
 
@@ -39,27 +47,58 @@ use crate::tui::theme::Palette;
 /// page — far past any wheel burst, and O(1) in transcript length.
 const BLOCK_BUDGET: usize = 256;
 
-/// Cached render of one block in both fold states + bookkeeping.
+/// Cached render of one block's **variants** + bookkeeping.
+///
+/// `variants` holds 1 or 2 rendered forms: two only when the block's
+/// content actually differs across its view switch (foldable tool output,
+/// non-empty reasoning). Single-variant blocks render and store once.
 struct Slot {
-    /// Rows when tools are folded (the default view).
-    folded: blocks::Block,
-    /// Rows when tools are expanded (Ctrl+O). For blocks with no foldable
-    /// content this is the same allocation as `folded` (Arc-shared is
-    /// overkill; equal-by-construction blocks just render twice at admit
-    /// time and cost one extra Vec — negligible vs the render itself).
-    expanded: blocks::Block,
+    /// Variant 0 = switch OFF, variant 1 = switch ON (`len` 1 or 2).
+    variants: Vec<blocks::Block>,
     /// LRU stamp — bumped on every hit; the lowest stamp is evicted.
     stamp: u64,
+}
+
+impl Slot {
+    /// The variant at `index` (0 = switch off, 1 = switch on). Panics on
+    /// an out-of-range index — callers derive it from `variants.len()`.
+    fn pick(&self, index: usize) -> &blocks::Block {
+        &self.variants[index.min(self.variants.len() - 1)]
+    }
+}
+
+/// The view switch a block reacts to, if any. Derived from the block's
+/// first entry; a block is sensitive to **at most one** switch (assistant
+/// blocks carry the reasoning, tool exchanges the fold).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Switch {
+    None,
+    /// Ctrl+T (`show_reasoning`).
+    Reasoning,
+    /// Ctrl+O (`tools_expanded`).
+    Tools,
+}
+
+/// Which switch changes this block's rendering. The single place that
+/// maps block kind → sensitive switch.
+fn block_switch(group: &[Entry]) -> Switch {
+    match group.first() {
+        Some(Entry::Reasoning { .. }) => Switch::Reasoning,
+        Some(Entry::ToolRequest { .. }) if group.len() == 2 => Switch::Tools,
+        _ => Switch::None,
+    }
 }
 
 pub struct BlockCache {
     /// Block ordinal (position in `blocks::blocks`) → rendered rows.
     slots: HashMap<usize, Slot>,
-    /// Heights of every measured block, transcript order. `usize::MAX` =
-    /// never rendered (never measured). Heights are derived facts, cheap
-    /// to keep for all blocks (8 bytes each) and they survive eviction —
-    /// scroll math over visited history stays O(1) forever.
-    heights: Vec<usize>,
+    /// Per-variant heights of every measured block, transcript order.
+    /// Index 0 = switch OFF, 1 = switch ON (single-variant blocks keep
+    /// both equal). `usize::MAX` = never rendered (never measured).
+    /// Heights are derived facts, cheap to keep for all blocks (16 bytes
+    /// each) and they survive eviction — scroll math over visited history
+    /// stays O(1) forever.
+    heights: Vec<[usize; 2]>,
     width: usize,
     stamp: u64,
     /// Theme epoch the cached rows were colored with. A theme swap bumps
@@ -80,7 +119,7 @@ impl BlockCache {
     pub fn cached_rows(&self) -> usize {
         self.slots
             .values()
-            .map(|s| s.folded.height + s.expanded.height)
+            .map(|s| s.variants.iter().map(|b| b.height).sum::<usize>())
             .sum()
     }
 
@@ -99,13 +138,19 @@ impl BlockCache {
         }
     }
 
-    /// Total display height over **measured** blocks (rows + gaps).
-    /// Unmeasured blocks count as gap-only. Debug/test/diagnostic surface:
-    /// the reverse scroll walk does not need it.
+    /// Total display height over **measured** blocks (rows + gaps),
+    /// counting variant 0 (switch OFF). Unmeasured blocks count as
+    /// gap-only. Debug/test/diagnostic surface: the reverse scroll walk
+    /// does not need it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn total_height(&self) -> usize {
-        let n = self.heights.iter().filter(|h| **h != usize::MAX).count();
-        let known: usize = self.heights.iter().filter(|h| **h != usize::MAX).sum();
+        let known: usize = self
+            .heights
+            .iter()
+            .filter(|h| h[0] != usize::MAX)
+            .map(|h| h[0])
+            .sum();
+        let n = self.heights.iter().filter(|h| h[0] != usize::MAX).count();
         known + n.saturating_sub(1)
     }
 
@@ -148,23 +193,69 @@ impl BlockCache {
                     self.slots.remove(&k);
                 }
             }
-            self.heights.resize(ranges.len(), usize::MAX); // unknown → measure on demand
+            self.heights.resize(ranges.len(), [usize::MAX; 2]); // unknown → measure on demand
         }
     }
 
-    /// Measure one block's height without caching its rows? No such thing
-    /// anymore — measuring IS rendering. Height arrives with the render.
-    fn render_both(
+    /// Render the block's **actual** variants (1 or 2). Returns the
+    /// rendered forms in order: `[switch-off]` or `[switch-off,
+    /// switch-on]` — empty never happens (a block always renders).
+    ///
+    /// A block reacts to at most one switch: tool exchanges to
+    /// `exchange_has_two_states` is the truth). A reasoning block's
+    /// "two states" are *visible vs hidden* — but hidden renders zero
+    /// rows and we do not cache emptiness, so it is single-variant too.
+    /// Everything else is single-variant, rendered exactly once.
+    fn render_variants(
         &self,
         entries: &[Entry],
         r: Range,
         p: &Palette,
         show_reasoning: bool,
+        tools_expanded: bool,
         width: usize,
-    ) -> (blocks::Block, blocks::Block) {
-        let folded = blocks::render_block(entries, r, p, show_reasoning, false, width);
-        let expanded = blocks::render_block(entries, r, p, show_reasoning, true, width);
-        (folded, expanded)
+    ) -> Vec<blocks::Block> {
+        let group = &entries[r.start..r.end];
+        // The (show_reasoning, tools_expanded) pairs to render for the
+        // switch-off and switch-on positions of this block's sensitive
+        // switch, plus whether the block actually has two forms.
+        let (off, on, two) = match &group[0] {
+            // Reasoning blocks are single-variant: Ctrl+T hides the block
+            // outright (view.rs skips it), so the cache only ever stores
+            // the visible form.
+            Entry::Reasoning { .. } => ((true, tools_expanded), (true, tools_expanded), false),
+            Entry::ToolRequest { name, .. } if group.len() == 2 => {
+                let Entry::ToolResult { ok, result, .. } = &group[1] else {
+                    unreachable!("group of 2 is always request+result (blocks guarantees)");
+                };
+                let two = super::components::cards::exchange_has_two_states(name, *ok, result);
+                ((show_reasoning, false), (show_reasoning, true), two)
+            }
+            _ => (
+                (show_reasoning, tools_expanded),
+                (show_reasoning, tools_expanded),
+                false,
+            ),
+        };
+        let mut out = Vec::with_capacity(if two { 2 } else { 1 });
+        out.push(blocks::render_block(entries, r, p, off.0, off.1, width));
+        if two {
+            out.push(blocks::render_block(entries, r, p, on.0, on.1, width));
+        }
+        out
+    }
+
+    /// Which cached variant answers the current view state: 0 = switch
+    /// off, 1 = switch on. Single-variant slots always answer 0.
+    fn variant_index(slot: &Slot, switch: Switch, view: (bool, bool)) -> usize {
+        if slot.variants.len() == 1 {
+            return 0;
+        }
+        match switch {
+            Switch::None => 0,
+            Switch::Reasoning => usize::from(view.0),
+            Switch::Tools => usize::from(view.1),
+        }
     }
 
     /// The rows to paint for `range` of blocks (by ordinal), plus the
@@ -185,13 +276,15 @@ impl BlockCache {
         let mut prefix_rows = 0usize; // known rows above `range.start`
         let mut gap_needed = false;
         for (i, r) in ranges.iter().enumerate() {
-            let known = self.heights.get(i).copied().unwrap_or(usize::MAX);
+            let known = self.heights.get(i);
             if i < range.start {
                 // Only *known* heights count toward the splice prefix.
                 // Unknown ones belong to never-visited history; the scroll
                 // walk measures them before this window is computed.
-                if known != usize::MAX {
-                    prefix_rows += known + 1; // + gap
+                if let Some(h) = known
+                    && h[0] != usize::MAX
+                {
+                    prefix_rows += h[0] + 1; // + gap
                 }
                 continue;
             }
@@ -221,6 +314,7 @@ impl BlockCache {
         entries: &[Entry],
         p: &Palette,
         show_reasoning: bool,
+        tools_expanded: bool,
         offset_rows: usize,
         viewport_rows: usize,
     ) -> (usize, usize) {
@@ -233,21 +327,36 @@ impl BlockCache {
         // rows below the window's top edge.
         let need = offset_rows.saturating_add(viewport_rows);
         let mut acc = 0usize;
-        let b1 = n; // exclusive end
         let mut b0 = n;
+        let b1 = n; // exclusive end
         for i in (0..n).rev() {
-            let h = match self.heights.get(i).copied().unwrap_or(usize::MAX) {
-                usize::MAX => {
-                    // Measure = render: both fold states render once and
-                    // land in the cache; this block is inside the requested
-                    // span, so the rows are immediately useful.
-                    let (f, e) =
-                        self.render_both(entries, ranges[i], p, show_reasoning, self.width);
-                    let h = f.height;
-                    self.admit(i, f, e);
-                    h
+            // The variant this walk measures under the current view
+            // state. Single-variant blocks keep both height slots equal,
+            // so indexing [0/1] by the switch is safe even when the
+            // block's rows were evicted (heights outlive slots).
+            let switch = block_switch(&entries[ranges[i].start..ranges[i].end]);
+            let slot_index = match switch {
+                Switch::None => 0,
+                Switch::Reasoning => usize::from(show_reasoning),
+                Switch::Tools => usize::from(tools_expanded),
+            };
+            let h = match self.heights.get(i) {
+                None | Some([usize::MAX, _]) => {
+                    // Measure = render: the block's variants render once
+                    // and land in the cache; this block is inside the
+                    // requested span, so the rows are immediately useful.
+                    let variants = self.render_variants(
+                        entries,
+                        ranges[i],
+                        p,
+                        show_reasoning,
+                        tools_expanded,
+                        self.width,
+                    );
+                    self.admit(i, variants);
+                    self.heights[i][slot_index]
                 }
-                h => h,
+                Some(h) => h[slot_index],
             };
             acc += h + 1; // + gap
             b0 = i;
@@ -261,7 +370,8 @@ impl BlockCache {
         (b0.saturating_sub(1), b1.min(n))
     }
 
-    /// One block, via the cache.
+    /// One block, via the cache, in the variant the current view state
+    /// asks for.
     fn block(
         &mut self,
         entries: &[Entry],
@@ -271,27 +381,29 @@ impl BlockCache {
         show_reasoning: bool,
         tools_expanded: bool,
     ) -> &blocks::Block {
-        if !self.slots.contains_key(&idx) || self.heights.get(idx) == Some(&usize::MAX) {
-            let (f, e) = self.render_both(entries, r, p, show_reasoning, self.width);
-            self.admit(idx, f, e);
+        let unmeasured = self.heights.get(idx).is_none_or(|h| h[0] == usize::MAX);
+        if !self.slots.contains_key(&idx) || unmeasured {
+            let variants =
+                self.render_variants(entries, r, p, show_reasoning, tools_expanded, self.width);
+            self.admit(idx, variants);
         }
         self.stamp += 1;
         let s = self.slots.get_mut(&idx).expect("just admitted");
         s.stamp = self.stamp;
         // Borrow dance: admit() may have evicted others; re-fetch is sound.
         let slot = self.slots.get(&idx).expect("hit after stamp bump");
-        if tools_expanded {
-            &slot.expanded
-        } else {
-            &slot.folded
-        }
+        let group = &entries[r.start..r.end];
+        let switch = block_switch(group);
+        let i = Self::variant_index(slot, switch, (show_reasoning, tools_expanded));
+        slot.pick(i)
     }
 
-    /// Insert a rendered block (both fold states); evict LRU (never the
-    /// newest) when the block budget would overflow.
-    fn admit(&mut self, idx: usize, folded: blocks::Block, expanded: blocks::Block) {
-        let h = folded.height;
-        self.heights[idx] = h;
+    /// Insert the rendered variants; evict LRU (never the newest) when
+    /// the block budget would overflow.
+    fn admit(&mut self, idx: usize, variants: Vec<blocks::Block>) {
+        let h = variants[0].height;
+        let h_on = variants.last().map(|b| b.height).unwrap_or(h);
+        self.heights[idx] = [h, h_on];
         // The newest block (highest ordinal present in cache) stays: it is
         // the follow-bottom hot path.
         let newest = self.slots.keys().copied().max();
@@ -311,8 +423,7 @@ impl BlockCache {
         self.slots.insert(
             idx,
             Slot {
-                folded,
-                expanded,
+                variants,
                 stamp: self.stamp,
             },
         );
@@ -337,7 +448,6 @@ mod tests {
             es.push(Entry::Assistant {
                 content: format!("回答 {i}"),
                 usage: None,
-                reasoning: None,
             });
         }
         es
@@ -351,7 +461,7 @@ mod tests {
         let mut c = BlockCache::new();
         c.sync(&es, &p(), true, false, 60);
         let n = blocks::blocks(&es).len();
-        let (b0, b1) = c.window_from_bottom(&es, &p(), true, 0, 40);
+        let (b0, b1) = c.window_from_bottom(&es, &p(), true, false, 0, 40);
         let _ = c.rows_for(&es, &p(), true, false, b0..b1);
         assert!(
             c.cached_blocks() < n / 4,
@@ -367,7 +477,7 @@ mod tests {
         let mut c = BlockCache::new();
         c.sync(&es, &p(), true, false, 60);
         // Ask for the bottom 40 rows.
-        let (b0, b1) = c.window_from_bottom(&es, &p(), true, 0, 40);
+        let (b0, b1) = c.window_from_bottom(&es, &p(), true, false, 0, 40);
         assert_eq!(b1, blocks::blocks(&es).len());
         let (rows, _) = c.rows_for(&es, &p(), true, false, b0..b1);
         assert!(!rows.is_empty());
@@ -403,7 +513,7 @@ mod tests {
         let n = blocks::blocks(&es).len();
         let _ = c.rows_for(&es, &p(), true, false, 0..8.min(n));
         for i in 0..8.min(n) {
-            assert_ne!(c.heights[i], usize::MAX, "height {i} must persist");
+            assert_ne!(c.heights[i][0], usize::MAX, "height {i} must persist");
         }
     }
 
@@ -418,5 +528,135 @@ mod tests {
         c.sync(&cut, &p(), true, false, 60);
         assert!(c.total_height() <= before, "回溯截断后总高只能变小");
         assert_eq!(c.heights.len(), 4);
+    }
+
+    // ---- per-variant bookkeeping (Ctrl+O / Ctrl+T) ----
+
+    /// An assistant turn with non-empty reasoning: two variants, and the
+    /// heights roster must record both — the switch flips the rendered
+    /// rows and the scroll ruler together. The reasoning entry renders
+    /// exactly one variant (visible form); hiding is a skip, not a
+    /// re-render.
+    #[test]
+    fn reasoning_block_is_single_variant_and_hides_cleanly() {
+        let es = vec![
+            Entry::Reasoning {
+                content: "推理过程，\n好几行。".into(),
+            },
+            Entry::Assistant {
+                content: "回答正文".into(),
+                usage: None,
+            },
+        ];
+        let mut c = BlockCache::new();
+        c.sync(&es, &p(), true, false, 60);
+        let _ = c.rows_for(&es, &p(), true, false, 0..2);
+        assert_eq!(c.slots[&0].variants.len(), 1, "reasoning 块单变体");
+        assert_eq!(c.heights[0][0], c.heights[0][1], "单变体两槽高度相等");
+        let shown = c.rows_for(&es, &p(), true, false, 0..2).0;
+        assert!(
+            shown
+                .iter()
+                .any(|l| l.spans.iter().any(|s| s.content.contains("推理")))
+        );
+    }
+
+    /// A tool exchange over the fold threshold: two variants, the
+    /// expanded one taller.
+    #[test]
+    fn foldable_exchange_heights_differ_per_expand_state() {
+        let es = vec![
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: "seq 1 30".into(),
+                intent: String::new(),
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: (1..=30)
+                    .map(|i| format!("line {i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            },
+        ];
+        let mut c = BlockCache::new();
+        c.sync(&es, &p(), true, false, 60);
+        let _ = c.rows_for(&es, &p(), true, false, 0..1);
+        let [off, on] = c.heights[0];
+        assert!(on > off, "展开后块必须变高: off={off} on={on}");
+        let folded = c.rows_for(&es, &p(), true, false, 0..1).0;
+        let expanded = c.rows_for(&es, &p(), true, true, 0..1).0;
+        assert!(expanded.len() > folded.len());
+    }
+
+    /// A tool exchange **under** the threshold renders identically in
+    /// both switch positions: exactly one variant, stored once (the
+    /// waste this refactor removed), and both height slots agree.
+    #[test]
+    fn short_exchange_stays_single_variant() {
+        let es = vec![
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: "echo hi".into(),
+                intent: String::new(),
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "hi".into(),
+            },
+        ];
+        let mut c = BlockCache::new();
+        c.sync(&es, &p(), true, false, 60);
+        let _ = c.rows_for(&es, &p(), true, false, 0..1);
+        assert_eq!(c.heights[0][0], c.heights[0][1], "单变体块两槽高度相等");
+        assert_eq!(c.slots[&0].variants.len(), 1, "未超限卡片只存一份");
+    }
+
+    /// The scroll walk under a *different* switch state must use that
+    /// state's heights — the old single-height bookkeeping silently
+    /// measured everything folded, so the wheel drifted after Ctrl+O.
+    #[test]
+    fn window_walk_uses_current_variant_heights() {
+        let mut es = Vec::new();
+        for i in 0..10 {
+            es.push(Entry::ToolRequest {
+                call_id: format!("c{i}"),
+                name: "bash".into(),
+                args: format!("cmd{i}"),
+                intent: String::new(),
+            });
+            es.push(Entry::ToolResult {
+                call_id: format!("c{i}"),
+                name: "bash".into(),
+                ok: true,
+                result: (1..=30)
+                    .map(|j| format!("line {j}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            });
+        }
+        let mut c = BlockCache::new();
+        c.sync(&es, &p(), true, false, 60);
+        // Measure everything folded…
+        let _ = c.rows_for(&es, &p(), true, false, 0..blocks::blocks(&es).len());
+        // …then walk expanded: heights must come back taller than the
+        // folded roster says.
+        let (b0, b1) = c.window_from_bottom(&es, &p(), true, true, 0, 20);
+        let acc: usize = (b0..b1)
+            .map(|i| c.heights[i][1] + 1)
+            .sum::<usize>()
+            .saturating_sub(1);
+        let folded_acc: usize = (b0..b1)
+            .map(|i| c.heights[i][0] + 1)
+            .sum::<usize>()
+            .saturating_sub(1);
+        assert!(acc >= 20, "展开态窗口行数必须覆盖视口: {acc}");
+        assert!(acc > folded_acc, "展开态计高必须大于折叠态");
     }
 }

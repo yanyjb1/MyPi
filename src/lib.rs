@@ -1,10 +1,10 @@
 pub mod agent;
 pub mod ai;
 pub mod cli;
-pub mod web;
 pub mod entry;
 pub mod git;
 pub mod server;
 pub mod store;
 pub mod tui;
+pub mod web;
 pub mod xdg;

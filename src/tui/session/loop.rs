@@ -161,8 +161,18 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
         (cost_cfg.input + cost_cfg.output + cost_cfg.cache_read + cost_cfg.cache_write) > 0.0;
     let current_model = std::rc::Rc::new(std::cell::RefCell::new(model.clone()));
 
+    // Session start is the first legal profile switch point: resolve the
+    // system prompt (and tool roster) from the configured profile. A
+    // broken/unreachable profile dir degrades to the built-in prompt —
+    // never block startup on cosmetics.
+    let profile_name = crate::server::profile::active_name(&cfg.borrow());
+    let (system_prompt, tool_filter) =
+        crate::server::profile::resolve(&cfg.borrow(), &profile_name).unwrap_or_else(|e| {
+            eprintln!("profile 警告：{e:#}——使用内置提示词");
+            (crate::server::profile::BUILTIN_SYSTEM.into(), None)
+        });
     let chat = ChatContext::new().push(Message::System {
-        content: "你是一个简洁的编程助手。用中文回答。".into(),
+        content: system_prompt,
     });
     // Workspace license: launching from $HOME would license the whole
     // home directory for rm/mv — exactly what the guard exists to
@@ -186,6 +196,8 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
         max_tokens,
         cost_cfg,
         cwd.clone(),
+        tool_filter,
+        Some(db_path()),
     );
     let mut app = App::new(session, current_model);
     app.cfg = Some(cfg.clone());
@@ -202,6 +214,25 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let ctx_limit = model.context_window;
 
     let mut terminal = ratatui::init();
+    // `ratatui::init` installs a panic hook that only disables raw mode
+    // and leaves the alternate screen — it knows nothing about the three
+    // modes **we** enable below (mouse capture, bracketed paste, the
+    // Kitty keyboard protocol). Without this chain a panic leaves the
+    // terminal reporting every mouse move as an escape sequence pasted
+    // into the shell. Restore order: undo our modes *first*, then defer
+    // to ratatui's hook (raw mode / alt screen).
+    let restore_full = |prev: Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send>| {
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(
+                std::io::stdout(),
+                ratatui::crossterm::event::PopKeyboardEnhancementFlags
+            );
+            let _ = execute!(std::io::stdout(), DisableMouseCapture);
+            let _ = execute!(std::io::stdout(), DisableBracketedPaste);
+            prev(info);
+        }));
+    };
+    restore_full(std::panic::take_hook());
     // Kitty keyboard protocol: ask the terminal to disambiguate escape
     // sequences so **Shift+Enter** arrives as Enter+SHIFT (newline) and
     // bare Enter as plain Enter (submit). Terminals without the

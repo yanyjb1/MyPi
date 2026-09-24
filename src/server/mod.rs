@@ -17,7 +17,9 @@
 //! of its own.
 
 pub mod artifacts;
+pub mod compaction;
 pub mod events;
+pub mod profile;
 pub mod session;
 pub mod turn;
 

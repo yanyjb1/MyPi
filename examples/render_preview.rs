@@ -7,9 +7,9 @@
 
 use mypi::entry::{Align, Entry};
 use mypi::tui::theme;
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::text::Line;
-use ratatui::Terminal;
 
 fn main() -> anyhow::Result<()> {
     let entries = vec![
@@ -21,8 +21,10 @@ fn main() -> anyhow::Result<()> {
         Entry::User {
             content: "帮我看下这个项目的渲染实现？重点 markdown 列表和代码高亮喵".into(),
         },
+        Entry::Reasoning {
+            content: "用户想要聊天区渲染效果，用 1/2/3 级标题、列表、代码块和引用各来一段，覆盖主要 token。".into(),
+        },
         Entry::Assistant {
-            reasoning: Some("用户想要聊天区渲染效果，用 1/2/3 级标题、列表、代码块和引用各来一段，覆盖主要 token。".into()),
             content: "\
 ## 渲染架构
 
@@ -91,7 +93,8 @@ pub fn rotate_for_seed(seed: &str) {
     }
 
     let width = 100usize;
-    let lines: Vec<Line<'static>> = mypi::tui::render_transcript_public(&entries, true, false, width);
+    let lines: Vec<Line<'static>> =
+        mypi::tui::render_transcript_public(&entries, true, false, width);
 
     let area_w = width as u16;
     let area_h = (lines.len() as u16).clamp(1, 60);
@@ -99,7 +102,9 @@ pub fn rotate_for_seed(seed: &str) {
     term.draw(|f| {
         use ratatui::widgets::{Block, Borders, Paragraph};
         let t = theme::theme();
-        let block = Block::default().borders(Borders::ALL).border_style(t.fg_style(theme::ColorToken::Border));
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(t.fg_style(theme::ColorToken::Border));
         let para = Paragraph::new(lines.clone()).block(block);
         f.render_widget(para, f.area());
     })?;
@@ -107,7 +112,9 @@ pub fn rotate_for_seed(seed: &str) {
     // Dump the TestBackend buffer as truecolor HTML, then rasterize to PNG
     // through the shared browser (the project's own screenshot path).
     let b = term.backend().buffer().clone();
-    let mut html = String::from("<html><head><meta charset='utf-8'><style>body{margin:0}pre{font:14px/1.45 'Sarasa Mono SC','JetBrains Mono',monospace;margin:0;padding:14px 18px;background:#0f1216;letter-spacing:0}</style></head><body>");
+    let mut html = String::from(
+        "<html><head><meta charset='utf-8'><style>body{margin:0}pre{font:14px/1.45 'Sarasa Mono SC','JetBrains Mono',monospace;margin:0;padding:14px 18px;background:#0f1216;letter-spacing:0}</style></head><body>",
+    );
     html.push_str(&format!(
         "<pre style='background:{}'>",
         css(theme::theme().color(theme::ColorToken::UserMessageBg))
@@ -128,9 +135,19 @@ pub fn rotate_for_seed(seed: &str) {
                 .replace('&', "&amp;")
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
-            let fgc = if fg == ratatui::style::Color::Reset { "#e8ecf4".to_string() } else { css(fg) };
-            let bgc = if bg == ratatui::style::Color::Reset { "transparent".to_string() } else { css(bg) };
-            html.push_str(&format!("<span style='color:{fgc};background:{bgc};{mods}'>{escaped}</span>"));
+            let fgc = if fg == ratatui::style::Color::Reset {
+                "#e8ecf4".to_string()
+            } else {
+                css(fg)
+            };
+            let bgc = if bg == ratatui::style::Color::Reset {
+                "transparent".to_string()
+            } else {
+                css(bg)
+            };
+            html.push_str(&format!(
+                "<span style='color:{fgc};background:{bgc};{mods}'>{escaped}</span>"
+            ));
         }
         html.push('\n');
     }

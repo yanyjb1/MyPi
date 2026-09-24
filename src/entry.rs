@@ -7,7 +7,6 @@
 //! Rendering (`crate::tui::components::chat`) dispatches on these kinds;
 //! persistence (`crate::store`) serializes them via to/from_payload.
 
-
 // One history entry: the four message kinds plus a session-level error.
 //
 // Persisted to the SQLite `entries` table: `seq` monotonically increasing from 1,
@@ -16,13 +15,23 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry {
     // A user message.
-    User { content: String },
+    User {
+        content: String,
+    },
     // Model reply (final). `usage` feeds the stats line; optional.
-    // `reasoning` is the thinking chain (display + persistence only; never sent back in requests).
+    // Persisted verbatim; resume replays it into the protocol message
+    // byte-identical. The thinking chain is a **separate** entry
+    // ([`Entry::Reasoning`]) — display toggles belong to that block.
     Assistant {
         content: String,
         usage: Option<UsageSummary>,
-        reasoning: Option<String>,
+    },
+    // The thinking chain, **its own entry/block** (split from Assistant:
+    // one block per display unit means the cache never renders the same
+    // block in two forms). Display + persistence only; never sent back
+    // in requests. Ordered immediately before its Assistant reply.
+    Reasoning {
+        content: String,
     },
     // Tool call request: the model named a tool.
     //
@@ -32,7 +41,12 @@ pub enum Entry {
     // `intent` is the model's own one-line "what am I about to do", shown in the
     // live slot while the (blocking) tool runs.
     // `call_id` is the protocol pairing key.
-    ToolRequest { call_id: String, name: String, args: String, intent: String },
+    ToolRequest {
+        call_id: String,
+        name: String,
+        args: String,
+        intent: String,
+    },
     // Tool call result. `ok` decides the card color.
     // `result` is the **exact text sent to the model** — the only thing persisted;
     // the rendering (view) is **synthesized at render time** from (name, ok, result), never stored.
@@ -43,18 +57,41 @@ pub enum Entry {
         result: String,
     },
     // Session-level errors (HTTP failures, round-limit brakes...). Not persisted; memory stream only.
-    Error { text: String },
+    Error {
+        text: String,
+    },
     // Session name marker on the conversation tree (pi's session_info). Persisted;
     // the effective name is the nearest `name` entry looking back from the leaf,
     // so branches inherit the name and renaming only affects the current branch.
-    Name { name: String },
+    Name {
+        name: String,
+    },
     // A system notice (`/model` switched, context compacted, `/resume` restored...).
     //
     // Unlike the fixed kinds above, the **emitter chooses the rendering**: it
     // constructs this entry with the alignment it wants, so a future feature
     // (context-compaction reports, model switches) can present itself without
     // the chat renderer learning about it. Persisted like everything else.
-    System { text: String, align: Align },
+    System {
+        text: String,
+        align: Align,
+    },
+    // A context compaction marker — the **conversation fork point**.
+    //
+    // Semantically it is a branch node on the entry tree: everything
+    // before `first_kept_seq` is superseded by `summary` (kept verbatim
+    // in the payload for audit; the live context rebuilds from
+    // first_kept_seq onward). Tokens before/after are *computed*, never
+    // stored — the CPU is good at arithmetic.
+    //
+    // entries_to_context treats this as the context root: system + a
+    // synthesized summary user turn + entries after the marker.
+    Compaction {
+        // First entry seq of the retained (verbatim) region.
+        first_kept_seq: usize,
+        // The compaction summary (the compacted region's stand-in).
+        summary: String,
+    },
 }
 
 // How a [`Entry::System`] notice lines itself up. The emitter picks; the
@@ -71,9 +108,14 @@ pub enum Align {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ToolView {
     // Plain text, no markdown rendering, auto-folded beyond 5 lines.
-    Plain { text: String },
+    Plain {
+        text: String,
+    },
     // Line diff: deletions on red, insertions on green (edit tool).
-    Diff { deletions: Vec<String>, insertions: Vec<String> },
+    Diff {
+        deletions: Vec<String>,
+        insertions: Vec<String>,
+    },
 }
 
 impl ToolView {
@@ -83,7 +125,9 @@ impl ToolView {
     // the view is a derived UI concept and takes no part in persistence.
     pub fn synthesize(name: &str, ok: bool, result: &str) -> ToolView {
         if !ok {
-            return ToolView::Plain { text: result.to_string() };
+            return ToolView::Plain {
+                text: result.to_string(),
+            };
         }
         match name {
             "edit" | "mass_edit" => {
@@ -98,12 +142,19 @@ impl ToolView {
                     }
                 }
                 if deletions.is_empty() && insertions.is_empty() {
-                    ToolView::Plain { text: result.to_string() }
+                    ToolView::Plain {
+                        text: result.to_string(),
+                    }
                 } else {
-                    ToolView::Diff { deletions, insertions }
+                    ToolView::Diff {
+                        deletions,
+                        insertions,
+                    }
                 }
             }
-            _ => ToolView::Plain { text: result.to_string() },
+            _ => ToolView::Plain {
+                text: result.to_string(),
+            },
         }
     }
 }
@@ -133,28 +184,55 @@ impl Entry {
     // Serialize to (kind, payload_json). Used for DB writes.
     pub fn to_payload(&self) -> (&'static str, String) {
         match self {
-            Entry::User { content } => ("user", serde_json::json!({ "content": content }).to_string()),
-            Entry::Assistant { content, usage, reasoning } => (
-                "assistant",
-                serde_json::json!({ "content": content, "usage": usage, "reasoning": reasoning })
-                    .to_string(),
+            Entry::User { content } => (
+                "user",
+                serde_json::json!({ "content": content }).to_string(),
             ),
-            Entry::ToolRequest { call_id, name, args, intent } => (
+            Entry::Assistant { content, usage } => (
+                "assistant",
+                serde_json::json!({ "content": content, "usage": usage }).to_string(),
+            ),
+            Entry::Reasoning { content } => (
+                "reasoning",
+                serde_json::json!({ "content": content }).to_string(),
+            ),
+            Entry::ToolRequest {
+                call_id,
+                name,
+                args,
+                intent,
+            } => (
                 "tool_request",
                 serde_json::json!({
                     "call_id": call_id, "name": name, "args": args, "intent": intent
                 })
                 .to_string(),
             ),
-            Entry::ToolResult { call_id, name, ok, result } => (
+            Entry::ToolResult {
+                call_id,
+                name,
+                ok,
+                result,
+            } => (
                 "tool_result",
-                serde_json::json!({ "call_id": call_id, "name": name, "ok": ok, "result": result }).to_string(),
+                serde_json::json!({ "call_id": call_id, "name": name, "ok": ok, "result": result })
+                    .to_string(),
             ),
             Entry::Error { text } => ("error", serde_json::json!({ "text": text }).to_string()),
             Entry::Name { name } => ("name", serde_json::json!({ "name": name }).to_string()),
             Entry::System { text, align } => (
                 "system",
                 serde_json::json!({ "text": text, "align": align }).to_string(),
+            ),
+            Entry::Compaction {
+                first_kept_seq,
+                summary,
+            } => (
+                "compaction",
+                serde_json::json!({
+                    "first_kept_seq": first_kept_seq, "summary": summary
+                })
+                .to_string(),
             ),
         }
     }
@@ -166,10 +244,17 @@ impl Entry {
             "user" => Entry::User {
                 content: v.get("content")?.as_str()?.to_string(),
             },
+            // Current format: reasoning is its own entry. A payload still
+            // carrying `reasoning` is a legacy row — replay the content and
+            // drop the chain (no old-DB migration is owed).
             "assistant" => Entry::Assistant {
                 content: v.get("content")?.as_str()?.to_string(),
-                usage: v.get("usage").and_then(|u| serde_json::from_value(u.clone()).ok()),
-                reasoning: v.get("reasoning").and_then(|r| r.as_str()).map(String::from),
+                usage: v
+                    .get("usage")
+                    .and_then(|u| serde_json::from_value(u.clone()).ok()),
+            },
+            "reasoning" => Entry::Reasoning {
+                content: v.get("content")?.as_str()?.to_string(),
             },
             "tool_request" => {
                 // `args` is the current key; `object` is the pre-refactor one
@@ -183,43 +268,69 @@ impl Entry {
                     .unwrap_or_default()
                     .to_string();
                 Entry::ToolRequest {
-                    call_id: v.get("call_id").and_then(|c| c.as_str()).unwrap_or_default().to_string(),
+                    call_id: v
+                        .get("call_id")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
                     name: v.get("name")?.as_str()?.to_string(),
                     args,
-                    intent: v.get("intent").and_then(|i| i.as_str()).unwrap_or_default().to_string(),
+                    intent: v
+                        .get("intent")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
                 }
             }
             "tool_result" => Entry::ToolResult {
-                call_id: v.get("call_id").and_then(|c| c.as_str()).unwrap_or_default().to_string(),
+                call_id: v
+                    .get("call_id")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
                 name: v.get("name")?.as_str()?.to_string(),
                 ok: v.get("ok")?.as_bool()?,
                 // Legacy DBs store view without result: recover from view once (migration path)
-                result: v.get("result").and_then(|r| r.as_str()).map(String::from).unwrap_or_else(|| {
-                    let view = v.get("view").cloned();
-                    match view.and_then(|view| serde_json::from_value::<ToolView>(view).ok()) {
-                        Some(ToolView::Plain { text }) => text,
-                        Some(ToolView::Diff { deletions, insertions }) => {
-                            let mut t = String::new();
-                            for d in &deletions {
-                                t.push_str("- ");
-                                t.push_str(d);
-                                t.push('\n');
+                result: v
+                    .get("result")
+                    .and_then(|r| r.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| {
+                        let view = v.get("view").cloned();
+                        match view.and_then(|view| serde_json::from_value::<ToolView>(view).ok()) {
+                            Some(ToolView::Plain { text }) => text,
+                            Some(ToolView::Diff {
+                                deletions,
+                                insertions,
+                            }) => {
+                                let mut t = String::new();
+                                for d in &deletions {
+                                    t.push_str("- ");
+                                    t.push_str(d);
+                                    t.push('\n');
+                                }
+                                for i in &insertions {
+                                    t.push_str("+ ");
+                                    t.push_str(i);
+                                }
+                                t
                             }
-                            for i in &insertions {
-                                t.push_str("+ ");
-                                t.push_str(i);
-                            }
-                            t
+                            None => String::new(),
                         }
-                        None => String::new(),
-                    }
-                }),
+                    }),
             },
             "error" => Entry::Error {
                 text: v.get("text")?.as_str()?.to_string(),
             },
             "name" => Entry::Name {
                 name: v.get("name")?.as_str()?.to_string(),
+            },
+            "compaction" => Entry::Compaction {
+                first_kept_seq: v
+                    .get("first_kept_seq")
+                    .and_then(|s| s.as_u64())
+                    .map(|s| s as usize)?,
+                summary: v.get("summary")?.as_str()?.to_string(),
             },
             "system" => Entry::System {
                 text: v.get("text")?.as_str()?.to_string(),

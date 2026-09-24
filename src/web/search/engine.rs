@@ -49,8 +49,9 @@ fn has_advanced_syntax(query: &str) -> bool {
     // define. Deliberately NOT "any word followed by :": a plain-words query
     // like `hello:world` would otherwise be forced onto the slow browser
     // tier for no benefit.
-    const OPERATORS: [&str; 8] =
-        ["site", "inurl", "intitle", "intext", "filetype", "ext", "before", "after"];
+    const OPERATORS: [&str; 8] = [
+        "site", "inurl", "intitle", "intext", "filetype", "ext", "before", "after",
+    ];
     for token in query.split_whitespace() {
         if token.starts_with('-')
             && token.len() > 1
@@ -58,7 +59,9 @@ fn has_advanced_syntax(query: &str) -> bool {
         {
             return true; // negation: -tokio
         }
-        let Some((head, tail)) = token.split_once(':') else { continue };
+        let Some((head, tail)) = token.split_once(':') else {
+            continue;
+        };
         if OPERATORS.contains(&head) && !tail.is_empty() {
             return true;
         }
@@ -104,8 +107,6 @@ pub fn render(hits: &[SearchHit]) -> String {
 mod tests {
     use super::*;
 
-
-
     #[test]
     fn render_is_numbered_and_has_no_engine_name() {
         let hits = vec![SearchHit {
@@ -132,5 +133,4 @@ mod tests {
         assert!(!has_advanced_syntax("rust - "));
         assert!(!has_advanced_syntax("rust :"));
     }
-
 }

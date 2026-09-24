@@ -42,7 +42,11 @@ pub fn snapshot(dir: &Path) -> Option<GitStatus> {
     let text = String::from_utf8_lossy(&out.stdout);
     let (staged, unstaged) = count_porcelain(&text);
 
-    Some(GitStatus { branch: branch_name(dir), unstaged, staged })
+    Some(GitStatus {
+        branch: branch_name(dir),
+        unstaged,
+        staged,
+    })
 }
 
 /// Current branch name. Uses `branch --show-current`: works even on an unborn HEAD (no commits yet).

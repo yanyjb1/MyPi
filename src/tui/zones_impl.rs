@@ -84,23 +84,26 @@ pub fn wheel_step(h: &mut HistoryState, up: bool, amount: u16) {
     }
 }
 
- #[cfg(test)]
- mod tests {
-     use super::*;
- 
-     #[test]
-     fn history_takes_only_its_toggles() {
-         let mut h = HistoryState::default();
-         assert!(h.wants(&Action::ToggleReasoning, false));
-         assert!(h.wants(&Action::ToggleTools, false));
-         assert!(!h.wants(&Action::Up, false));
-         assert!(!h.wants(&Action::Insert('x'), false));
- 
-         assert_eq!(h.handle(Action::ToggleReasoning), vec![Cascade::LayoutDirty]);
-         assert!(h.reasoning_folded);
-         assert_eq!(h.handle(Action::ToggleTools), vec![Cascade::LayoutDirty]);
-         assert!(h.tools_expanded);
-     }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_takes_only_its_toggles() {
+        let mut h = HistoryState::default();
+        assert!(h.wants(&Action::ToggleReasoning, false));
+        assert!(h.wants(&Action::ToggleTools, false));
+        assert!(!h.wants(&Action::Up, false));
+        assert!(!h.wants(&Action::Insert('x'), false));
+
+        assert_eq!(
+            h.handle(Action::ToggleReasoning),
+            vec![Cascade::LayoutDirty]
+        );
+        assert!(h.reasoning_folded);
+        assert_eq!(h.handle(Action::ToggleTools), vec![Cascade::LayoutDirty]);
+        assert!(h.tools_expanded);
+    }
 
     #[test]
     fn wheel_routes_by_row_and_modal() {
@@ -132,4 +135,4 @@ pub fn wheel_step(h: &mut HistoryState, up: bool, amount: u16) {
         assert_eq!(h.chat_scroll, 0);
         assert!(h.scroll_pinned);
     }
- }
+}

@@ -6,9 +6,9 @@
 //! (pure, unit-tested); this module only wires them to the editor text
 //! and the runtime config (model ids come from `Config`).
 
-use crate::ai::config::Config;
-use super::leaf;
 use super::engine::{self, CompletionPopup};
+use super::leaf;
+use crate::ai::config::Config;
 
 /// One model candidate as the controller sees it (id for the wire,
 /// detail for the popup's gray text).
@@ -44,7 +44,10 @@ pub struct CompletionController {
 
 impl CompletionController {
     pub fn new() -> Self {
-        Self { popup: CompletionPopup::default(), last_word: None }
+        Self {
+            popup: CompletionPopup::default(),
+            last_word: None,
+        }
     }
 
     // ---- read side (renderer / key routing) ----
@@ -59,7 +62,9 @@ impl CompletionController {
 
     /// Reserved-area height the popup claims (row lock while open).
     pub fn reserved_height(&self) -> Option<usize> {
-        self.popup.locked_height().or(Some(self.popup.items().len()))
+        self.popup
+            .locked_height()
+            .or(Some(self.popup.items().len()))
     }
 
     /// The word currently under the cursor, if it is a completion target.

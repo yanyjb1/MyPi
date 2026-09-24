@@ -51,6 +51,20 @@ impl ArtifactStore {
         }
     }
 
+    /// Production constructor: the turn thread opens its **own** SQLite
+    /// connection to the same WAL-mode DB (SQLite serializes writers, and
+    /// artifact I/O is rare + short), so the persisted `Store` owned by
+    /// the session never has to share its handle. `None` on open failure
+    /// = degrade to a session without artifacts (same as before this
+    /// existed).
+    pub fn open(path: &std::path::Path, session_id: i64) -> Option<Self> {
+        let st = crate::store::Store::open(path).ok()?;
+        Some(Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(st)),
+            session_id,
+        })
+    }
+
     /// Spill `content` into the table; returns (id, total_lines).
     pub fn spill(&self, tool_name: &str, content: &str) -> Result<(i64, usize)> {
         let lines = content.lines().count();
@@ -229,5 +243,39 @@ mod tests {
         // Unknown id: hard error, the model sees the message.
         let e = resolve_refs("cat #999", &art).unwrap_err().to_string();
         assert!(e.contains("#999"));
+    }
+    #[test]
+    fn open_path_constructor_roundtrips() {
+        // Production constructor: own connection, same DB. Spill through
+        // one handle, read back through another.
+        let path = std::env::temp_dir().join(format!("mypi-art-open-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut setup = crate::store::Store::open(&path).unwrap();
+        setup.create_session("t", "/tmp").unwrap();
+        drop(setup);
+
+        let a = ArtifactStore::open(&path, 1).expect("文件库必须能打开");
+        let (id, lines) = a.spill("bash", "one\ntwo\nthree").unwrap();
+        assert_eq!(lines, 3);
+
+        let b = ArtifactStore::open(&path, 1).expect("第二连接也必须能打开");
+        let (name, total, content) = b
+            .inner
+            .lock()
+            .unwrap()
+            .get_artifact(id, 1)
+            .unwrap()
+            .expect("跨连接可见");
+        assert_eq!(name, "bash");
+        assert_eq!(total, 3);
+        assert!(content.contains("two"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_fails_cleanly_on_a_bogus_path() {
+        assert!(
+            ArtifactStore::open(std::path::Path::new("/nonexistent-root-xyz/a.db"), 1).is_none()
+        );
     }
 }

@@ -20,7 +20,6 @@ use std::time::Duration;
 use super::providers::cmd_act;
 use crate::web::utils::session::Page;
 
-
 pub(crate) const ACT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_OUTPUT_CHARS: usize = 24_000;
 
@@ -66,7 +65,6 @@ fn cmd_open(page: &Page, url: Option<&str>) -> anyhow::Result<String> {
     ))
 }
 
-
 fn cmd_read(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
     // The page may still be a JS shell when read arrives right after open;
     // poll until the DOM converts to real markdown (best-effort on budget).
@@ -84,14 +82,19 @@ fn cmd_read(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
     }
     if md.chars().count() > MAX_OUTPUT_CHARS {
         let cut: String = md.chars().take(MAX_OUTPUT_CHARS).collect();
-        Ok(format!("{cut}\n\n[truncated at {MAX_OUTPUT_CHARS} chars — pass path to save the full text]"))
+        Ok(format!(
+            "{cut}\n\n[truncated at {MAX_OUTPUT_CHARS} chars — pass path to save the full text]"
+        ))
     } else {
         Ok(md)
     }
 }
 
 fn cmd_screenshot(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
-    let path = args.path.as_deref().ok_or_else(|| anyhow!("screenshot requires path"))?;
+    let path = args
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow!("screenshot requires path"))?;
     let bytes = page.screenshot(args.full_page.unwrap_or(false))?;
     std::fs::write(path, &bytes).with_context(|| format!("writing {path}"))?;
     Ok(format!("screenshot: {} bytes → {path}", bytes.len()))
