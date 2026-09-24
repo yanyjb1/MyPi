@@ -80,6 +80,7 @@ fn draw_frame(
         }
         let mut vs = ViewState {
             history: app.session.transcript(),
+            transcript_generation: app.session.transcript_generation(),
             block_cache: &mut app.block_cache,
             chat_scroll: app.history.chat_scroll,
             scroll_pinned: app.history.scroll_pinned,
@@ -197,6 +198,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
         cost_cfg,
         cwd.clone(),
         tool_filter,
+        cfg.borrow().app.tools.clone(),
         Some(db_path()),
     );
     let mut app = App::new(session, current_model);

@@ -226,6 +226,9 @@ pub struct AppConfig {
     pub theme: Theme,
     #[serde(default)]
     pub compact: crate::server::compaction::CompactConfig,
+    /// Tool-layer knobs (`bash` timeout, ...). See `agent::tools::ToolsConfig`.
+    #[serde(default)]
+    pub tools: crate::agent::tools::ToolsConfig,
     /// Active system-prompt profile name (`/profile` switches it;
     /// restart returns to this default). None = `default`.
     #[serde(default)]
@@ -397,6 +400,7 @@ impl Config {
                     default: Some(first),
                     theme: Theme::default(),
                     compact: Default::default(),
+                    tools: Default::default(),
                     profile: None,
                 };
                 std::fs::create_dir_all(Self::config_dir()?)?;
@@ -549,6 +553,18 @@ mod tests {
     }
 
     #[test]
+    fn tools_config_reads_camel_and_snake_and_defaults() {
+        // The file's prevailing key style is camelCase; both spellings are
+        // accepted, and an absent block falls back to 10 minutes.
+        let camel: AppConfig = serde_yaml::from_str("tools:\n  bashTimeoutSecs: 42\n").unwrap();
+        assert_eq!(camel.tools.bash_timeout_secs, 42);
+        let snake: AppConfig = serde_yaml::from_str("tools:\n  bash_timeout_secs: 90\n").unwrap();
+        assert_eq!(snake.tools.bash_timeout_secs, 90);
+        let absent: AppConfig = serde_yaml::from_str("theme: {}\n").unwrap();
+        assert_eq!(absent.tools.bash_timeout_secs, 600);
+    }
+
+    #[test]
     fn parses_nested_provider_models() {
         let models = parse_models(
             r#"
@@ -580,6 +596,7 @@ providers:
                 default: Some("local:vendor-a/model-x".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
+                tools: Default::default(),
                 profile: None,
             },
         };
@@ -636,6 +653,7 @@ providers:
                 default: Some("local:global:gpt-5.6-luna".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
+                tools: Default::default(),
                 profile: None,
             },
         };
@@ -746,6 +764,7 @@ providers:
                 default: Some("local:a".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
+                tools: Default::default(),
                 profile: None,
             },
         };

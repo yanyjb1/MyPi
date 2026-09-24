@@ -47,6 +47,8 @@ pub struct TurnRequest {
     // `ArtifactStore::open`). `None` = store unavailable — oversized tool
     // output flows into the context verbatim (the pre-artifact behavior).
     pub artifacts: Option<crate::server::artifacts::ArtifactStore>,
+    // Tool-layer knobs (bash timeout, ...) from config.yaml.
+    pub tools: crate::agent::tools::ToolsConfig,
 }
 
 // The background thread runs one turn. Owns its client and message replica.
@@ -64,6 +66,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             cwd_trail,
             tool_filter,
             artifacts,
+            tools: tools_cfg,
         } = req;
         let send = |ev: SessionEvent| -> bool { tx.send(ev).is_ok() };
         let chat_arc = chat.clone();
@@ -71,6 +74,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             .with_cwd_slot(cwd_slot)
             .with_history(history, cwd_trail)
             .with_artifacts_opt(artifacts)
+            .with_bash_timeout(tools_cfg.bash_timeout_secs)
             .with_enabled(tool_filter);
         // Snapshot for this turn: the lock is held only for the clone, never during network I/O
         let mut chat = chat.lock().expect("chat 锁中毒").clone();
@@ -129,13 +133,18 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
                     outcome.message.usage,
                     outcome.message.stop_reason,
                 ));
+                // Project the round out of `chat` **before** handing it
+                // back: `collect_turn` borrows, so this is the last use of
+                // the local — the write-back below can move it instead of
+                // cloning the whole history (tens of MB on a long session).
+                let entries = collect_turn(&chat, &text);
                 // Write the finalized history back to the shared slot: the model remembers
                 // this turn next round (and prefix-cache hits depend on it). Not written on Err —
                 // never pollute the shared slot with a partial history.
-                *chat_arc.lock().expect("chat 锁中毒") = chat.clone();
+                *chat_arc.lock().expect("chat 锁中毒") = chat;
                 // Whole turn finalized: user + (assistant.tool_calls + tool results) * N + assistant.
                 // Persisted in one shot by the session (Commit).
-                let _ = send(SessionEvent::Commit(collect_turn(&chat, &text)));
+                let _ = send(SessionEvent::Commit(entries));
             }
             Err(e) => {
                 let _ = send(SessionEvent::Error(format!("{e:#}")));

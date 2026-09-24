@@ -18,6 +18,9 @@ use crate::tui::theme::Palette;
 pub struct ViewState<'a> {
     // The rendered history entries.
     pub history: &'a [entry::Entry],
+    /// Generation of `history` (see `SessionState::transcript_generation`):
+    /// lets the block cache notice a wholesale transcript swap.
+    pub transcript_generation: u64,
     // History scroll offset (rows counted up from the bottom; 0 = follow).
     pub chat_scroll: usize,
     // Whether following the bottom (the user is not browsing elsewhere).
@@ -180,8 +183,14 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
     // unmeasured blocks on demand (render = measure; rows stay cached).
     // Nothing above the walk's stop point is ever rendered: cold start
     // paints exactly one viewport, ancient history waits until wheeled.
-    s.block_cache
-        .sync(s.history, p, s.show_reasoning, s.tools_expanded, chat_w);
+    s.block_cache.sync(
+        s.history,
+        s.transcript_generation,
+        p,
+        s.show_reasoning,
+        s.tools_expanded,
+        chat_w,
+    );
     let viewport = chat_area.height as usize;
     let offset = if s.scroll_pinned { 0 } else { s.chat_scroll };
     let (b0, b1) = s.block_cache.window_from_bottom(
@@ -355,6 +364,7 @@ mod tests {
         let mut grab = |chat_scroll: usize, pinned: bool| -> Vec<String> {
             let mut s = ViewState {
                 history: &entries,
+                transcript_generation: 0,
                 block_cache: &mut cache,
                 chat_scroll,
                 scroll_pinned: pinned,

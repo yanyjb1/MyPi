@@ -186,14 +186,7 @@ pub fn replay_context(ctx: &crate::ai::types::Context) -> crate::ai::types::Cont
     // already covers the compacted region exactly once. Re-rendering
     // `cut.compacted` from entries here duplicated it — the summarizer
     // paid ~2x the region and saw every turn twice.
-    for m in &ctx.messages {
-        match m {
-            Message::System { .. } => {
-                req.messages.push(m.clone());
-            }
-            _ => req.messages.push(m.clone()),
-        }
-    }
+    req.messages = ctx.messages.clone();
     // The instruction as the last user turn.
     req.messages.push(Message::User {
         content: String::new(), // filled by the caller (needs the instruction)

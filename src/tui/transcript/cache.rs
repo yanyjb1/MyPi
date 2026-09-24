@@ -92,6 +92,20 @@ fn block_switch(group: &[Entry]) -> Switch {
 pub struct BlockCache {
     /// Block ordinal (position in `blocks::blocks`) → rendered rows.
     slots: HashMap<usize, Slot>,
+    /// Grouping of the current transcript. Two jobs:
+    ///  - **correctness**: a transcript swapped wholesale (tree navigation,
+    ///    resume) with the *same* block count used to leave stale rows in
+    ///    place — the length-only fingerprint could not tell the branches
+    ///    apart. The generation below catches that; this list is kept so the
+    ///    per-frame path can reuse it instead of re-scanning.
+    ///  - **speed**: `window_from_bottom` / `rows_for` used to re-run the
+    ///    O(n) grouping scan on every paint; they read this instead.
+    ranges: Vec<blocks::Range>,
+    /// Transcript generation (see `SessionState::transcript_generation`):
+    /// bumped by the session when it **replaces** the entry list wholesale.
+    /// The length check cannot see a swap to an equally-sized branch; this
+    /// can. `u64::MAX` forces a rebuild on the first sync.
+    generation: u64,
     /// Per-variant heights of every measured block, transcript order.
     /// Index 0 = switch OFF, 1 = switch ON (single-variant blocks keep
     /// both equal). `usize::MAX` = never rendered (never measured).
@@ -131,6 +145,8 @@ impl BlockCache {
     pub(crate) fn new() -> Self {
         Self {
             slots: HashMap::new(),
+            ranges: Vec::new(),
+            generation: u64::MAX, // force a full rebuild on the first sync
             heights: Vec::new(),
             width: 0,
             stamp: 0,
@@ -154,11 +170,16 @@ impl BlockCache {
         known + n.saturating_sub(1)
     }
 
-    /// Re-sync with the transcript. Cheap when nothing changed: the
-    /// block count and per-block heights are the fingerprint.
+    /// Re-sync with the transcript. Cheap when nothing changed: the block
+    /// count and boundaries are the fingerprint for the append-only case,
+    /// and the **generation** stamps a wholesale replacement (tree
+    /// navigation / resume). Boundaries alone cannot see that swap: two
+    /// branches can share every `(start, end)` index while carrying
+    /// different text — exactly the navigation case.
     pub(crate) fn sync(
         &mut self,
         entries: &[Entry],
+        generation: u64,
         _p: &Palette,
         _show_reasoning: bool,
         _tools_expanded: bool,
@@ -168,6 +189,8 @@ impl BlockCache {
         if epoch != self.theme_epoch {
             self.slots.clear();
             self.heights.clear();
+            self.ranges.clear();
+            self.generation = u64::MAX;
             self.theme_epoch = epoch;
         }
         if width != self.width {
@@ -176,9 +199,18 @@ impl BlockCache {
             self.slots.clear();
             self.width = width;
             self.heights.clear();
+            self.ranges.clear();
+            self.generation = u64::MAX;
         }
         let ranges = blocks::blocks(entries);
-        if ranges.len() != self.heights.len() {
+        if generation != self.generation {
+            // Wholesale replacement: nothing cached describes the new
+            // transcript — drop rows *and* roster.
+            self.slots.clear();
+            self.heights.clear();
+            self.heights.resize(ranges.len(), [usize::MAX; 2]);
+            self.generation = generation;
+        } else if ranges.len() != self.heights.len() {
             // Transcript grew (normal) or shrank (rewind). Shrink is the
             // only structural surprise: truncate heights and evict orphans.
             if ranges.len() < self.heights.len() {
@@ -195,6 +227,7 @@ impl BlockCache {
             }
             self.heights.resize(ranges.len(), [usize::MAX; 2]); // unknown → measure on demand
         }
+        self.ranges = ranges;
     }
 
     /// Render the block's **actual** variants (1 or 2). Returns the
@@ -271,7 +304,10 @@ impl BlockCache {
         tools_expanded: bool,
         range: std::ops::Range<usize>,
     ) -> (Vec<Line<'static>>, usize) {
-        let ranges = blocks::blocks(entries);
+        // Reuse the grouping `sync` computed this frame instead of scanning
+        // the whole transcript again (`self.block` needs `&mut self`, so the
+        // list is taken out and put back).
+        let ranges = std::mem::take(&mut self.ranges);
         let mut out = Vec::new();
         let mut prefix_rows = 0usize; // known rows above `range.start`
         let mut gap_needed = false;
@@ -298,6 +334,7 @@ impl BlockCache {
             out.extend(b.rows.clone());
             gap_needed = true;
         }
+        self.ranges = ranges;
         (out, prefix_rows)
     }
 
@@ -318,9 +355,12 @@ impl BlockCache {
         offset_rows: usize,
         viewport_rows: usize,
     ) -> (usize, usize) {
-        let ranges = blocks::blocks(entries);
+        // Reuse the grouping `sync` computed this frame (the walk calls
+        // `render_variants` on `&mut self`, so the list is taken out).
+        let ranges = std::mem::take(&mut self.ranges);
         let n = ranges.len();
         if n == 0 {
+            self.ranges = ranges;
             return (0, 0);
         }
         // Accumulate rows upward: we need `offset_rows + viewport_rows`
@@ -367,6 +407,7 @@ impl BlockCache {
         // Trim the top: blocks entirely above the window's top edge drop
         // out of the window (their height already counted in the walk).
         // One block of slack above for smooth wheeling.
+        self.ranges = ranges;
         (b0.saturating_sub(1), b1.min(n))
     }
 
@@ -459,7 +500,7 @@ mod tests {
         // NOT render the whole thing just to measure heights.
         let es = convo(2000); // 4000 entries
         let mut c = BlockCache::new();
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         let n = blocks::blocks(&es).len();
         let (b0, b1) = c.window_from_bottom(&es, &p(), true, false, 0, 40);
         let _ = c.rows_for(&es, &p(), true, false, b0..b1);
@@ -475,7 +516,7 @@ mod tests {
     fn window_from_bottom_covers_the_requested_span() {
         let es = convo(30);
         let mut c = BlockCache::new();
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         // Ask for the bottom 40 rows.
         let (b0, b1) = c.window_from_bottom(&es, &p(), true, false, 0, 40);
         assert_eq!(b1, blocks::blocks(&es).len());
@@ -487,7 +528,7 @@ mod tests {
     fn cache_stays_bounded_when_walking_ancient_history() {
         let es = convo(400); // 800 entries — the "chatted for days" case
         let mut c = BlockCache::new();
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         // Walk to the top through windows, like a wheel burst would.
         let n = blocks::blocks(&es).len();
         let mut top = n;
@@ -509,7 +550,7 @@ mod tests {
         // history stays exact even after the rows are gone.
         let es = convo(400);
         let mut c = BlockCache::new();
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         let n = blocks::blocks(&es).len();
         let _ = c.rows_for(&es, &p(), true, false, 0..8.min(n));
         for i in 0..8.min(n) {
@@ -518,14 +559,81 @@ mod tests {
     }
 
     #[test]
+    fn content_swap_with_equal_block_count_must_not_render_stale_rows() {
+        // Tree navigation / resume **replace** the whole transcript. Two
+        // branches typically share the same block *shape* (same count, same
+        // (start,end) indices) while carrying different text — so a
+        // length- or boundary-only fingerprint cannot tell them apart, and
+        // the rows of the branch you left keep painting. The generation bump
+        // is what makes the swap visible.
+        let mut c = BlockCache::new();
+        let old: Vec<Entry> = vec![
+            Entry::User {
+                content: "旧用户消息".into(),
+            },
+            Entry::Assistant {
+                content: "旧回答".into(),
+                usage: None,
+            },
+        ];
+        let new: Vec<Entry> = vec![
+            Entry::User {
+                content: "新用户消息".into(),
+            },
+            Entry::Assistant {
+                content: "新回答".into(),
+                usage: None,
+            },
+        ];
+        assert_eq!(blocks::blocks(&old).len(), blocks::blocks(&new).len());
+        let has = |rows: &[ratatui::text::Line<'static>], needle: &str| {
+            rows.iter()
+                .any(|l| l.spans.iter().any(|s| s.content.contains(needle)))
+        };
+        c.sync(&old, 1, &p(), true, false, 60);
+        let (r0, _) = c.rows_for(&old, &p(), true, false, 0..2);
+        assert!(has(&r0, "旧回答"), "前置：渲染旧内容");
+
+        // Same generation would (correctly) keep the cache; the session
+        // bumps it on a wholesale swap, and that is what must clear it.
+        c.sync(&new, 2, &p(), true, false, 60);
+        let (r1, _) = c.rows_for(&new, &p(), true, false, 0..2);
+        assert!(!has(&r1, "旧回答"), "换 transcript 后不得渲染旧分支内容");
+        assert!(has(&r1, "新回答"), "必须渲染新内容");
+    }
+
+    #[test]
+    fn same_generation_append_keeps_measured_heights() {
+        // The generation must not fire on a normal append: that path keeps
+        // the heights already measured (the whole point of the roster).
+        let mut c = BlockCache::new();
+        let es = convo(3);
+        c.sync(&es, 1, &p(), true, false, 60);
+        let n = blocks::blocks(&es).len();
+        let _ = c.rows_for(&es, &p(), true, false, 0..n);
+        assert_ne!(c.heights[0][0], usize::MAX, "已测高度");
+        // Append one more round, same generation.
+        let mut grown = es.clone();
+        grown.push(Entry::User {
+            content: "再来".into(),
+        });
+        grown.push(Entry::Assistant {
+            content: "好".into(),
+            usage: None,
+        });
+        c.sync(&grown, 1, &p(), true, false, 60);
+        assert_ne!(c.heights[0][0], usize::MAX, "追加不得清空已测高度");
+    }
+
+    #[test]
     fn shrink_on_rewind_truncates_roster() {
         let mut c = BlockCache::new();
         let es = convo(5);
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         let _ = c.rows_for(&es, &p(), true, false, 0..10);
         let before = c.total_height();
         let cut: Vec<Entry> = es[..4].to_vec();
-        c.sync(&cut, &p(), true, false, 60);
+        c.sync(&cut, 1, &p(), true, false, 60);
         assert!(c.total_height() <= before, "回溯截断后总高只能变小");
         assert_eq!(c.heights.len(), 4);
     }
@@ -549,7 +657,7 @@ mod tests {
             },
         ];
         let mut c = BlockCache::new();
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         let _ = c.rows_for(&es, &p(), true, false, 0..2);
         assert_eq!(c.slots[&0].variants.len(), 1, "reasoning 块单变体");
         assert_eq!(c.heights[0][0], c.heights[0][1], "单变体两槽高度相等");
@@ -583,7 +691,7 @@ mod tests {
             },
         ];
         let mut c = BlockCache::new();
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         let _ = c.rows_for(&es, &p(), true, false, 0..1);
         let [off, on] = c.heights[0];
         assert!(on > off, "展开后块必须变高: off={off} on={on}");
@@ -612,7 +720,7 @@ mod tests {
             },
         ];
         let mut c = BlockCache::new();
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         let _ = c.rows_for(&es, &p(), true, false, 0..1);
         assert_eq!(c.heights[0][0], c.heights[0][1], "单变体块两槽高度相等");
         assert_eq!(c.slots[&0].variants.len(), 1, "未超限卡片只存一份");
@@ -642,7 +750,7 @@ mod tests {
             });
         }
         let mut c = BlockCache::new();
-        c.sync(&es, &p(), true, false, 60);
+        c.sync(&es, 1, &p(), true, false, 60);
         // Measure everything folded…
         let _ = c.rows_for(&es, &p(), true, false, 0..blocks::blocks(&es).len());
         // …then walk expanded: heights must come back taller than the

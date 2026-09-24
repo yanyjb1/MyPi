@@ -26,6 +26,7 @@
 //! error — the error goes back to the model, which self-corrects.
 
 use anyhow::{Context as _, Result, anyhow};
+use serde::{Deserialize, Serialize};
 
 use crate::ai::types::{ToolCall, ToolDef};
 
@@ -140,6 +141,7 @@ fn bash(
     cwd: &std::path::Path,
     command: &str,
     artifacts: Option<&crate::server::artifacts::ArtifactStore>,
+    timeout: std::time::Duration,
 ) -> Result<String> {
     let cmd = command.trim();
     anyhow::ensure!(!cmd.is_empty(), "empty command");
@@ -171,10 +173,10 @@ fn bash(
         crate::agent::bash_guard::Verdict::Warn(hits) => {
             // High-tier: run, but tag the output so the model sees it.
             let tags: Vec<&str> = hits.iter().map(|h| h.rule_id).collect();
-            let out = run_shell(cwd, &cmd)?;
+            let out = run_shell(cwd, &cmd, timeout)?;
             Ok(format!("[warn: {}]\n{}", tags.join("+"), out))
         }
-        crate::agent::bash_guard::Verdict::Allow => run_shell(cwd, &cmd),
+        crate::agent::bash_guard::Verdict::Allow => run_shell(cwd, &cmd, timeout),
     };
     if let Some(dir) = tmp_dir {
         let _ = std::fs::remove_dir_all(dir); // temp materializations die with the command
@@ -195,13 +197,37 @@ fn bash(
 
 // bash -c execution with captured output. One command, no newlines —
 // checked by the caller.
-fn run_shell(cwd: &std::path::Path, cmd: &str) -> Result<String> {
-    let out = std::process::Command::new("bash")
-        .arg("-c")
+//
+// The command runs under coreutils `timeout`, which places it in its own
+// **process group** and, on expiry, signals the whole group — not just
+// the direct `bash`. That distinction is the entire point: `bash -c "a | b"`
+// leaves `b` holding the stdout pipe's write end, so killing only bash
+// leaves the reader blocked forever (the pipe never reaches EOF). A group
+// signal takes the grandchildren down too. `-k 5` follows SIGTERM with a
+// SIGKILL five seconds later for anything that ignores the first.
+//
+// Degradation: on a box without coreutils `timeout` on PATH, fall back to
+// plain bash — the command still runs, just uncapped.
+fn run_shell(cwd: &std::path::Path, cmd: &str, timeout: std::time::Duration) -> Result<String> {
+    let secs = timeout.as_secs().max(1).to_string();
+    let timed_out = |code: i32| code == 124 || code == 137;
+    let out = match std::process::Command::new("timeout")
+        .args(["-k", "5"])
+        .arg(&secs)
+        .args(["bash", "-c"])
         .arg(cmd)
         .current_dir(cwd)
         .output()
-        .with_context(|| "spawn bash failed")?;
+    {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::process::Command::new("bash")
+            .arg("-c")
+            .arg(cmd)
+            .current_dir(cwd)
+            .output()
+            .with_context(|| "spawn bash failed")?,
+        Err(e) => return Err(e).with_context(|| "spawn bash failed"),
+    };
     // Strip the command's own ANSI escapes before the text goes anywhere.
     //
     // Programs colourise when they think they are on a terminal, and those
@@ -215,7 +241,12 @@ fn run_shell(cwd: &std::path::Path, cmd: &str) -> Result<String> {
         text.push_str(err.trim_end());
     }
     if !out.status.success() {
-        text.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+        let code = out.status.code().unwrap_or(-1);
+        if timed_out(code) {
+            text.push_str(&format!("\n[timeout: killed after {secs}s]"));
+        } else {
+            text.push_str(&format!("\n[exit {code}]"));
+        }
     }
     Ok(text.trim_end().to_string())
 }
@@ -439,6 +470,39 @@ pub struct BuiltinTools {
     // on purpose: the roster keeps the model from ever seeing a disabled
     // tool, the executor refuses hallucinated calls into the void.
     enabled: Option<std::collections::BTreeSet<String>>,
+    // Wall-clock cap on one `bash` command (config: `tools.bashTimeoutSecs`,
+    // default 600). A hung command (`sleep 9999`, waiting on stdin, a
+    // wedged network read) otherwise blocks the turn thread forever — the
+    // interrupt flag is only polled from the stream callback, which never
+    // runs while bash is executing.
+    bash_timeout: std::time::Duration,
+}
+
+/// **config.yaml → `tools:`** — tool-layer knobs (the settings that shape
+/// how the executor runs, as opposed to model/provider config).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolsConfig {
+    /// Cap on one `bash` command, in seconds. Default 600 (10 min).
+    /// Accepts `bashTimeoutSecs` (camelCase, the file's prevailing style)
+    /// or `bash_timeout_secs`.
+    #[serde(
+        default = "d_bash_timeout",
+        rename = "bashTimeoutSecs",
+        alias = "bash_timeout_secs"
+    )]
+    pub bash_timeout_secs: u64,
+}
+
+fn d_bash_timeout() -> u64 {
+    600
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            bash_timeout_secs: d_bash_timeout(),
+        }
+    }
 }
 
 impl BuiltinTools {
@@ -450,7 +514,14 @@ impl BuiltinTools {
             history: std::sync::Arc::new(Vec::new()),
             cwd_trail: std::sync::Arc::new(Vec::new()),
             enabled: None,
+            bash_timeout: std::time::Duration::from_secs(d_bash_timeout()),
         }
+    }
+
+    // Attach the bash wall-clock cap (config: `tools.bashTimeoutSecs`).
+    pub fn with_bash_timeout(mut self, secs: u64) -> Self {
+        self.bash_timeout = std::time::Duration::from_secs(secs);
+        self
     }
 
     // Profile gate: restrict which tools exist (definitions + execute).
@@ -854,6 +925,7 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
                 &self.cwd,
                 &parse_bash_args(&call.function.arguments)?,
                 self.artifacts.as_ref(),
+                self.bash_timeout,
             ),
             "read" => read(&self.cwd, &parse_read_args(&call.function.arguments)?),
             "cd" => self.tool_cd(&parse_cd_args(&call.function.arguments)?),
@@ -884,6 +956,10 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
 mod tests {
     use super::super::loop_rs::ToolExecutor as _;
     use super::*;
+
+    // Generous per-test timeout: the tests below only assert pass/deny
+    // behaviour, never the cap itself (that has its own dedicated test).
+    const T: std::time::Duration = std::time::Duration::from_secs(600);
 
     fn home_dir() -> std::path::PathBuf {
         std::env::var("HOME")
@@ -1294,7 +1370,7 @@ mod tests {
             "ls\nrm -rf /",
             "",
         ] {
-            assert!(bash(&cwd, bad, None).is_err(), "应拒绝: {bad:?}");
+            assert!(bash(&cwd, bad, None, T).is_err(), "应拒绝: {bad:?}");
         }
     }
 
@@ -1310,12 +1386,12 @@ mod tests {
         // From zone_a, deleting into zone_b (outside temp) is out of zone.
         let p = other.join("victim.txt");
         std::fs::write(&p, "x").unwrap();
-        assert!(bash(&d, &format!("rm {}", p.display()), None).is_err());
+        assert!(bash(&d, &format!("rm {}", p.display()), None, T).is_err());
         // cd into zone_b: now licensed there.
         t.tool_cd(other.to_str().unwrap()).unwrap();
         let cwd = t.cwd.clone();
         assert!(
-            bash(&cwd, &format!("rm {}", p.display()), None).is_ok(),
+            bash(&cwd, &format!("rm {}", p.display()), None, T).is_ok(),
             "cd 后新许可区应放行"
         );
         let _ = std::fs::remove_dir_all(&d);
@@ -1326,13 +1402,13 @@ mod tests {
     fn bash_real_shell_inside_zone() {
         let cwd = std::env::temp_dir();
         // Pipes/redirects run free inside the zone.
-        let out = bash(&cwd, "echo hello | tr a-z A-Z", None).unwrap();
+        let out = bash(&cwd, "echo hello | tr a-z A-Z", None, T).unwrap();
         assert!(out.contains("HELLO"), "管道可用: {out:?}");
         // grep with no match -> exit 1, reported verbatim
-        let out = bash(&cwd, "grep zzzz /dev/null", None).unwrap();
+        let out = bash(&cwd, "grep zzzz /dev/null", None, T).unwrap();
         assert!(out.contains("[exit"), "非零退出要标注: {out:?}");
         // High tier warns but executes.
-        let out = bash(&cwd, "echo ok", None).unwrap_or_default();
+        let out = bash(&cwd, "echo ok", None, T).unwrap_or_default();
         assert_eq!(out, "ok");
     }
 
@@ -1357,5 +1433,44 @@ mod tests {
         assert!(r.contains("changed to"), "结果说明: {r:?}");
         assert_eq!(*slot.read().unwrap(), deep, "共享槽被写回");
         let _ = std::fs::remove_dir_all(&deep);
+    }
+
+    #[test]
+    fn bash_timeout_kills_a_hung_command() {
+        // The whole point: a command that never returns must not block the
+        // turn thread forever. Cap at 1s and prove it comes back — with a
+        // marker, not a hang — in well under the command's own runtime.
+        let cwd = std::env::temp_dir();
+        let t0 = std::time::Instant::now();
+        let out = bash(&cwd, "sleep 30", None, std::time::Duration::from_secs(1)).unwrap();
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(15),
+            "超时必须生效，实际耗时 {elapsed:?}"
+        );
+        assert!(out.contains("timeout"), "超时要标注: {out:?}");
+    }
+
+    #[test]
+    fn bash_timeout_leaves_a_pipe_grandchild_nothing_to_hang_on() {
+        // The subtle case: `a | b` — `b` holds the stdout pipe's write end.
+        // Killing only bash would leave `b` alive and the reader blocked on
+        // a pipe that never EOFs. The group signal must take `b` too, so
+        // this returns promptly with a timeout marker.
+        let cwd = std::env::temp_dir();
+        let t0 = std::time::Instant::now();
+        let out = bash(
+            &cwd,
+            "sleep 30 | cat",
+            None,
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(15),
+            "管道孙进程也要被收掉，实际耗时 {:?}",
+            t0.elapsed()
+        );
+        assert!(out.contains("timeout"), "超时要标注: {out:?}");
     }
 }

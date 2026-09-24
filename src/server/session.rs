@@ -17,18 +17,14 @@ use crate::server::events::{Change, LiveActivity, SessionEvent, StreamView};
 use crate::store::Store;
 use std::sync::{Arc, Mutex};
 
-/// Everything the renderer needs from the session, in one read-only
-/// snapshot (the TUI never mutates through this).
-#[derive(Debug, Clone)]
-pub struct Snapshot {
-    pub transcript: Vec<Entry>,
-    pub session_name: Option<String>,
-    pub session_id: Option<i64>,
-}
-
 pub struct SessionState {
     // Rendered entries (in-memory + DB-resumed share one path).
     transcript: Vec<Entry>,
+    // Bumped whenever the transcript is **replaced** wholesale (tree
+    // navigation, resume) rather than appended to. The render cache keys
+    // on this: a swap to a same-length branch is invisible to a length
+    // check, so the rows of the branch you left would keep painting.
+    transcript_generation: u64,
     // Entries produced this round; verified/persisted at TurnDone (Commit).
     pending: Vec<Entry>,
     // Storage. None = DB unavailable (degrades to in-memory session).
@@ -52,6 +48,7 @@ impl SessionState {
     pub fn new(store: Option<Store>) -> Self {
         Self {
             transcript: Vec::new(),
+            transcript_generation: 0,
             pending: Vec::new(),
             store,
             session_id: None,
@@ -292,6 +289,12 @@ impl SessionState {
         &self.transcript
     }
 
+    /// Generation of the current transcript (0 = never replaced). The render
+    /// cache compares this across frames to notice a wholesale swap.
+    pub fn transcript_generation(&self) -> u64 {
+        self.transcript_generation
+    }
+
     pub fn session_name(&self) -> Option<&str> {
         self.session_name.as_deref()
     }
@@ -310,14 +313,6 @@ impl SessionState {
 
     pub fn store_mut(&mut self) -> Option<&mut Store> {
         self.store.as_mut()
-    }
-
-    pub fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            transcript: self.transcript.clone(),
-            session_name: self.session_name.clone(),
-            session_id: self.session_id,
-        }
     }
 
     pub fn pending_snapshot(&self) -> &[Entry] {
@@ -346,8 +341,16 @@ impl SessionState {
     /// (which include the merged pending tail), clear pending, and if a
     /// session exists persist everything not yet in the store.
     pub fn commit_round(&mut self, entries: Vec<Entry>) {
-        self.transcript = entries.clone();
+        self.replace_transcript(entries);
         self.pending.clear();
+    }
+
+    /// Swap in a whole new transcript and bump the generation so the render
+    /// cache drops the previous one. `replace_transcript` is the *only*
+    /// path that assigns `transcript` — one place to forget the bump.
+    fn replace_transcript(&mut self, entries: Vec<Entry>) {
+        self.transcript = entries;
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
     }
 
     /// Set the pending entries wholesale (TurnDone verification path).
@@ -364,7 +367,7 @@ impl SessionState {
     /// given entries as the transcript. Returns the session id.
     pub fn adopt_session(&mut self, id: i64, entries: Vec<Entry>, name: Option<String>) -> Change {
         self.session_id = Some(id);
-        self.transcript = entries;
+        self.replace_transcript(entries);
         self.session_name = name;
         Change::Session
     }
@@ -377,7 +380,7 @@ impl SessionState {
     /// Tree navigation landed: replace transcript + pending wholesale
     /// and merge the effective name (never clobbers an explicit /name).
     pub fn navigate_to(&mut self, entries: Vec<Entry>, effective_name: Option<String>) -> Change {
-        self.transcript = entries.clone();
+        self.replace_transcript(entries);
         self.pending.clear();
         self.session_name = effective_name.or(self.session_name.take());
         Change::Session
@@ -451,6 +454,9 @@ pub struct Session {
     // startup from the active profile; the profile switch command only
     // re-reads it at the next rebuild point.
     tool_filter: Option<Vec<String>>,
+    // Tool-layer knobs from config.yaml (`tools:`). Snapshotted per turn;
+    // a config edit takes effect on the next turn.
+    tools: crate::agent::tools::ToolsConfig,
     // Session DB path (file-backed store): the turn thread opens its
     // own connection from here to spill/fetch artifacts.
     artifact_db: Option<std::path::PathBuf>,
@@ -470,6 +476,7 @@ impl Session {
         cost: crate::ai::config::Cost,
         cwd: std::path::PathBuf,
         tool_filter: Option<Vec<String>>,
+        tools: crate::agent::tools::ToolsConfig,
         db_path: Option<std::path::PathBuf>,
     ) -> (Self, std::sync::mpsc::Receiver<SessionEvent>) {
         let (tx, rx) = std::sync::mpsc::channel::<SessionEvent>();
@@ -484,6 +491,7 @@ impl Session {
             cost_tracker: crate::ai::pricing::CostTracker::default(),
             tx,
             tool_filter,
+            tools,
             artifact_db: db_path,
         };
         (s, rx)
@@ -609,6 +617,7 @@ impl Session {
                         .unwrap_or_default(),
                 ),
                 tool_filter: self.tool_filter.clone(),
+                tools: self.tools.clone(),
                 // Session-scoped artifact store: the turn thread gets its
                 // own WAL-mode connection; a failed open degrades to None
                 // (oversized output then stays verbatim in the context).
@@ -673,8 +682,8 @@ impl Session {
     pub fn transcript(&self) -> &[Entry] {
         self.state.transcript()
     }
-    pub fn snapshot(&self) -> Snapshot {
-        self.state.snapshot()
+    pub fn transcript_generation(&self) -> u64 {
+        self.state.transcript_generation()
     }
     pub fn session_name(&self) -> Option<&str> {
         self.state.session_name()
