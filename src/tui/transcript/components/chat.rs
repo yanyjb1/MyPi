@@ -74,6 +74,26 @@ pub fn render_at(
     out
 }
 
+/// Example-only public shim over the test renderer (docs/preview tools
+/// render the real pipeline without opening a TUI). Not part of the API.
+#[doc(hidden)]
+pub fn render_at_public(
+    entries: &[Entry],
+    p: &Palette,
+    show_reasoning: bool,
+    tools_expanded: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for r in super::super::blocks::blocks(entries) {
+        if !out.is_empty() {
+            out.push(Line::from(""));
+        }
+        out.extend(single_node(&entries[r.start..r.end], p, show_reasoning, tools_expanded, width));
+    }
+    out
+}
+
 // Render exactly one transcript node (no gap, no pairing): the kind
 // dispatch `render_with_live` used to inline. Grouping decisions live in
 // `blocks::blocks`; this only paints.
