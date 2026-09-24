@@ -9,8 +9,8 @@ use crate::ai::client::Client;
 use crate::ai::config::Config;
 use crate::ai::types::{Context as ChatContext, Message};
 use crate::tui::app::{App, SPIN_INTERVAL};
-use crate::tui::keys::translate_with;
 use crate::tui::keys::Action;
+use crate::tui::keys::translate_with;
 use crate::tui::layout as tlayout;
 use crate::tui::theme::Palette;
 use crate::tui::view::{self, ViewState};
@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use anyhow::Result;
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyboardEnhancementFlags, KeyEventKind, MouseEventKind,
+    Event, KeyEventKind, KeyboardEnhancementFlags, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 
@@ -33,11 +33,14 @@ use crate::tui::app::display_name;
 fn draw_frame(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
-    palette: &Palette,
+    palette: &mut Palette,
     ctx_limit: u64,
     currency_symbol: &'static str,
     show_cost: bool,
 ) -> Result<crate::tui::layout::Layout> {
+    // Per-frame snapshot: a /theme-style runtime switch lands on the next
+    // frame with zero plumbing (omp's "bump epoch, repaint" contract).
+    *palette = Palette::current();
     let size = terminal.size()?;
     let wrapped = app.wrapped(size.width);
     let cwd_str = app.session.cwd().display().to_string();
@@ -70,7 +73,8 @@ fn draw_frame(
         // Modal takeover: the tree navigator draws over the whole
         // screen; base zones and the hardware cursor are skipped.
         if let Some(tp) = app.tree_pick.as_ref() {
-            let lines = crate::tui::components::tree_picker::render(tp, size.width, size.height, palette);
+            let lines =
+                crate::tui::components::tree_picker::render(tp, size.width, size.height, palette);
             f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
             return;
         }
@@ -86,7 +90,11 @@ fn draw_frame(
             live: &app.session.stream_view().live,
             streaming: {
                 let sv = app.session.stream_view();
-                if sv.text.is_empty() { None } else { Some(sv.text.as_str()) }
+                if sv.text.is_empty() {
+                    None
+                } else {
+                    Some(sv.text.as_str())
+                }
             },
             wrapped: &wrapped,
             cursor_char,
@@ -138,7 +146,12 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     let client = Client::new(&provider.base_url, &api_key, &model.id);
     let cost_cfg = model.cost;
     let currency_symbol = model.currency.symbol();
-    let palette = Palette::from_config(&cfg.borrow());
+    // Theme init: config.yaml 的 theme.name 指定 JSON 主题（内置 titanium/dark
+    // 或 ~/.config/mypi/themes/<name>.json）；未配置时用内置 titanium。
+    // models.yml 的 accent/gold 覆盖仅在其偏离默认值时生效（旧配置兼容）。
+    let cfg_theme = cfg.borrow().app.theme.clone();
+    crate::tui::theme::init_from_config(cfg_theme.name.as_deref(), Some(&cfg_theme));
+    let mut palette = Palette::current();
     // Cost is computed **locally**: the gateway only reports token counts
     // (prompt/completion/cached), the program multiplies by the unit
     // prices the user wrote in models.yml. All-zero prices = "no price
@@ -215,7 +228,14 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
         // Paint the first frame **before** blocking: the loop below is
         // signal-driven, and without an initial draw the user stares at
         // a blank screen until the first keystroke arrives.
-        draw_frame(&mut terminal, &mut app, &palette, ctx_limit, currency_symbol, show_cost)?;
+        draw_frame(
+            &mut terminal,
+            &mut app,
+            &mut palette,
+            ctx_limit,
+            currency_symbol,
+            show_cost,
+        )?;
 
         // ---- signal pump: input thread + session events ----
         //
@@ -258,7 +278,10 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
         // stream never reached the screen unless the user typed.)
         std::thread::spawn(move || {
             for ev in rx {
-                if sig_tx2.send(crate::tui::session::signal::Signal::Session(ev)).is_err() {
+                if sig_tx2
+                    .send(crate::tui::session::signal::Signal::Session(ev))
+                    .is_err()
+                {
                     break; // main loop gone
                 }
             }
@@ -298,56 +321,63 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             let mut batch_tools_ran = false;
             for sig in batch {
                 match sig {
-                crate::tui::session::signal::Signal::Key(k) => {
-                    let term_w = terminal.size()?.width;
-                    let action = translate_with(k, app.key_context(term_w));
-                    quit = !app.apply(action, term_w);
-                }
-                crate::tui::session::signal::Signal::Paste(s) => {
-                    // Paste also goes through `apply`.
-                    //
-                    // This used to be a **second** path: a direct
-                    // `app.editor.insert_paste()` plus two lines of
-                    // hand-copied epilogue, bypassing `apply`. It
-                    // missed `input_history.on_edit()` — pasting
-                    // while browsing history stuck in browse mode,
-                    // and the next ↑ jumped to the entry before last
-                    // instead of saving a draft. The two paths
-                    // agreeing was pure luck; unified now, no drift
-                    // possible.
-                    let term_w = terminal.size()?.width;
-                    quit = !app.apply(Action::Paste(s), term_w);
-                }
-                crate::tui::session::signal::Signal::Mouse(m) => {
-                    // Hit-test the pointer row against the last frame's
-                    // layout: only the history area scrolls (input and
-                    // reserved ignore the wheel). Up unpin; back at 0
-                    // re-pins. A modal turns the wheel into list scroll.
-                    let chat_h = last_layout
-                        .as_ref()
-                        .map(|l: &crate::tui::layout::Layout| l.chat_height)
-                        .unwrap_or(0);
-                    if crate::tui::zones_impl::wheel_zone(m.row, chat_h, app.resume_pick.is_some())
-                        == Some(crate::tui::zones::ZoneId::History)
-                    {
-                        match m.kind {
-                            MouseEventKind::ScrollUp => crate::tui::zones_impl::wheel_step(&mut app.history, true, 3),
-                            MouseEventKind::ScrollDown => crate::tui::zones_impl::wheel_step(&mut app.history, false, 3),
-                            _ => {}
+                    crate::tui::session::signal::Signal::Key(k) => {
+                        let term_w = terminal.size()?.width;
+                        let action = translate_with(k, app.key_context(term_w));
+                        quit = !app.apply(action, term_w);
+                    }
+                    crate::tui::session::signal::Signal::Paste(s) => {
+                        // Paste also goes through `apply`.
+                        //
+                        // This used to be a **second** path: a direct
+                        // `app.editor.insert_paste()` plus two lines of
+                        // hand-copied epilogue, bypassing `apply`. It
+                        // missed `input_history.on_edit()` — pasting
+                        // while browsing history stuck in browse mode,
+                        // and the next ↑ jumped to the entry before last
+                        // instead of saving a draft. The two paths
+                        // agreeing was pure luck; unified now, no drift
+                        // possible.
+                        let term_w = terminal.size()?.width;
+                        quit = !app.apply(Action::Paste(s), term_w);
+                    }
+                    crate::tui::session::signal::Signal::Mouse(m) => {
+                        // Hit-test the pointer row against the last frame's
+                        // layout: only the history area scrolls (input and
+                        // reserved ignore the wheel). Up unpin; back at 0
+                        // re-pins. A modal turns the wheel into list scroll.
+                        let chat_h = last_layout
+                            .as_ref()
+                            .map(|l: &crate::tui::layout::Layout| l.chat_height)
+                            .unwrap_or(0);
+                        if crate::tui::zones_impl::wheel_zone(
+                            m.row,
+                            chat_h,
+                            app.resume_pick.is_some(),
+                        ) == Some(crate::tui::zones::ZoneId::History)
+                        {
+                            match m.kind {
+                                MouseEventKind::ScrollUp => {
+                                    crate::tui::zones_impl::wheel_step(&mut app.history, true, 3)
+                                }
+                                MouseEventKind::ScrollDown => {
+                                    crate::tui::zones_impl::wheel_step(&mut app.history, false, 3)
+                                }
+                                _ => {}
+                            }
                         }
                     }
-                }
-                crate::tui::session::signal::Signal::Resized => {
-                    // Widths changed: every cached wrap is invalid. The
-                    // recompute below always reads terminal.size(), so
-                    // nothing else to do — the repaint below is
-                    // unconditional after any signal.
-                }
-                crate::tui::session::signal::Signal::Session(ev) => {
-                    if app.session.ingest(ev) == crate::server::events::Change::ToolActivity {
-                        batch_tools_ran = true;
+                    crate::tui::session::signal::Signal::Resized => {
+                        // Widths changed: every cached wrap is invalid. The
+                        // recompute below always reads terminal.size(), so
+                        // nothing else to do — the repaint below is
+                        // unconditional after any signal.
                     }
-                }
+                    crate::tui::session::signal::Signal::Session(ev) => {
+                        if app.session.ingest(ev) == crate::server::events::Change::ToolActivity {
+                            batch_tools_ran = true;
+                        }
+                    }
                 }
             }
 
@@ -366,7 +396,14 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
             app.advance_spinner();
 
             // ---- render one frame (shared with the pre-loop first draw) ----
-            let l = draw_frame(&mut terminal, &mut app, &palette, ctx_limit, currency_symbol, show_cost)?;
+            let l = draw_frame(
+                &mut terminal,
+                &mut app,
+                &mut palette,
+                ctx_limit,
+                currency_symbol,
+                show_cost,
+            )?;
             last_layout = Some(l);
         }
         Ok(())
@@ -384,4 +421,3 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
 
 // Turn machinery (spawn runner, collect_turn, entries_to_context) lives
 // in `crate::server::turn` now — the TUI is only a subscriber.
-

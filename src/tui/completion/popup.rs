@@ -40,11 +40,11 @@ pub fn render(popup: &CompletionPopup, term_w: u16, avail: usize, p: &Palette) -
         let marker = if selected { "> " } else { "  " };
         let mut spans = Vec::new();
         if selected {
-            spans.push(p.accent(marker));
+            spans.push(p.accent_span(marker));
         } else {
             spans.push(p.plain(marker));
         }
-        spans.push(p.accent(name.to_string()));
+        spans.push(p.accent_span(name.to_string()));
         if !detail.is_empty() {
             spans.push(p.plain("  "));
             spans.push(p.muted_italic(detail.to_string()));
@@ -52,7 +52,10 @@ pub fn render(popup: &CompletionPopup, term_w: u16, avail: usize, p: &Palette) -
         // Directory suffix hint (candidate names already carry `/`; the character suffices, no color coding)
         let _ = is_dir;
         // Pad to the full row width so no stale terminal background remains
-        let used: usize = spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
+        let used: usize = spans
+            .iter()
+            .map(|s| crate::tui::text::display_width(&s.content))
+            .sum();
         if used < inner {
             spans.push(p.plain(" ".repeat(inner - used)));
         }
@@ -79,8 +82,8 @@ pub fn render(popup: &CompletionPopup, term_w: u16, avail: usize, p: &Palette) -
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::engine::{Completion, CompletionPopup};
+    use super::*;
 
     fn cand(name: &str, is_dir: bool) -> Completion {
         Completion {

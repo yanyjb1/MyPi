@@ -9,7 +9,12 @@ use crate::tui::text::display_width;
 use crate::tui::theme::Palette;
 
 // System notice: the emitter chose the alignment, we only place it.
-pub(super) fn system_block(text: &str, align: Align, p: &Palette, width: usize) -> Vec<Line<'static>> {
+pub(super) fn system_block(
+    text: &str,
+    align: Align,
+    p: &Palette,
+    width: usize,
+) -> Vec<Line<'static>> {
     let style = Style::new().fg(p.muted);
     let mut out = Vec::new();
     for part in text.split('\n') {

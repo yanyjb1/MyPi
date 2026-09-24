@@ -33,10 +33,18 @@ pub struct StatusInfo<'a> {
 pub fn fmt_tokens(n: u64) -> String {
     if n >= 1_000_000 {
         let m = n as f64 / 1_000_000.0;
-        if m.fract() == 0.0 { format!("{}M", m as u64) } else { format!("{m:.1}M") }
+        if m.fract() == 0.0 {
+            format!("{}M", m as u64)
+        } else {
+            format!("{m:.1}M")
+        }
     } else if n >= 1000 {
         let k = n as f64 / 1000.0;
-        if k.fract() == 0.0 { format!("{}K", k as u64) } else { format!("{k:.1}K") }
+        if k.fract() == 0.0 {
+            format!("{}K", k as u64)
+        } else {
+            format!("{k:.1}K")
+        }
     } else {
         format!("{n}")
     }
@@ -44,7 +52,11 @@ pub fn fmt_tokens(n: u64) -> String {
 
 // Directory: at most one parent level. /home/Arisha/Utility/MyPi -> Utility/MyPi
 pub fn short_cwd(cwd: &str) -> String {
-    let parts: Vec<&str> = cwd.trim_end_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = cwd
+        .trim_end_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
     match parts.len() {
         0 => "/".into(),
         1 => format!("/{}", parts[0]),
@@ -121,21 +133,21 @@ pub fn render(info: &StatusInfo, p: &Palette, width: u16, spinner: Option<char>)
     // head: `+--` + capsules + `>`; tail: `:1M | session--+`
     let head = |crumbs: &[Span<'static>]| -> Vec<Span<'static>> {
         let mut v: Vec<Span<'static>> = Vec::new();
-        v.push(p.accent("+"));
+        v.push(p.accent_span("+"));
         v.push(adash(p, 2)); // `+--`: one more dash than the bottom edge
         v.extend(crumbs.iter().cloned());
-        v.push(p.accent(">")); // gauge start
+        v.push(p.accent_span(">")); // gauge start
         v
     };
     let tail: Vec<Span<'static>> = vec![
-        p.accent(format!(":{denom}")),
-        p.accent(" | "),
-        p.accent("<"),                        // left chevron of the session segment
-        p.on_black(" "),            // black cell after the chevron (cosmetic)
+        p.accent_span(format!(":{denom}")),
+        p.accent_span(" | "),
+        p.accent_span("<"),                 // left chevron of the session segment
+        p.on_black(" "),                    // black cell after the chevron (cosmetic)
         p.pill(sess_txt.clone(), p.accent), // black background only, the name itself
-        p.on_black(" "),            // black cell on the right
+        p.on_black(" "),                    // black cell on the right
         adash(p, 2),                        // `--`
-        p.accent("+"),                        // fixed right end
+        p.accent_span("+"),                 // fixed right end
     ];
     let tail_w: usize = tail.iter().map(|s| s.content.width()).sum();
 
@@ -157,7 +169,7 @@ pub fn render(info: &StatusInfo, p: &Palette, width: u16, spinner: Option<char>)
 
     spans.push(adash(p, lead)); // first cell after `>`: always accent
     spans.push(adash(p, used_rest)); // used part: accent
-    spans.push(p.accent(&pct_txt)); // 8%
+    spans.push(p.accent_span(&pct_txt)); // 8%
     spans.push(p.plain("-".repeat(plain_rest))); // unused: transparent background, plain
     spans.extend(tail);
 
@@ -213,7 +225,7 @@ fn truncate_crumbs(p: &Palette, crumbs: Vec<Span<'static>>, budget: usize) -> Ve
 }
 
 fn adash(p: &Palette, n: usize) -> Span<'static> {
-    p.accent("-".repeat(n))
+    p.accent_span("-".repeat(n))
 }
 
 #[cfg(test)]
@@ -249,7 +261,11 @@ mod tests {
         let info = StatusInfo {
             model_name: "global:model-z",
             cwd: "/home/Arisha/Utility/MyPi",
-            git: Some(&crate::git::GitStatus { branch: Some("main".into()), unstaged: 0, staged: 0 }),
+            git: Some(&crate::git::GitStatus {
+                branch: Some("main".into()),
+                unstaged: 0,
+                staged: 0,
+            }),
             ctx_tokens: 590,
             ctx_limit: 1_000_000,
             total_cost: 0.0042,
@@ -276,7 +292,11 @@ mod tests {
         let info = StatusInfo {
             model_name: "global:model-z",
             cwd: "/home/Arisha/Utility/MyPi",
-            git: Some(&crate::git::GitStatus { branch: Some("main".into()), unstaged: 0, staged: 0 }),
+            git: Some(&crate::git::GitStatus {
+                branch: Some("main".into()),
+                unstaged: 0,
+                staged: 0,
+            }),
             ctx_tokens: 80_000,
             ctx_limit: 1_000_000,
             total_cost: 1.2345,
@@ -313,9 +333,14 @@ mod tests {
         let rest = line
             .spans
             .iter()
-            .find(|s| !s.content.is_empty() && s.content.chars().all(|c| c == '-') && s.style.fg.is_none())
+            .find(|s| {
+                !s.content.is_empty() && s.content.chars().all(|c| c == '-') && s.style.fg.is_none()
+            })
             .expect("there should be a plain transparent dash run");
-        assert_eq!(rest.style.bg, None, "unused ctx part must have no background");
+        assert_eq!(
+            rest.style.bg, None,
+            "unused ctx part must have no background"
+        );
     }
 
     // The accent comes from config, not hardcoded: switching theme colors changes rendering.
@@ -374,7 +399,11 @@ mod tests {
                 busy.spans.iter().all(|s| s.content != "π"),
                 "pi must be gone while waiting (frame {i})"
             );
-            let sp = busy.spans.iter().find(|s| s.content == ch.to_string()).unwrap();
+            let sp = busy
+                .spans
+                .iter()
+                .find(|s| s.content == ch.to_string())
+                .unwrap();
             assert_eq!(sp.style.fg, Some(p.accent), "spinner frames must be accent");
         }
     }
@@ -410,7 +439,10 @@ mod tests {
         let i_q = text.find("?9").unwrap();
         let i_p = text.find("+2").unwrap();
         let i_money = text.find("¥1.50").unwrap();
-        assert!(i_path < i_br && i_br < i_q && i_q < i_p && i_p < i_money, "{text}");
+        assert!(
+            i_path < i_br && i_br < i_q && i_q < i_p && i_p < i_money,
+            "{text}"
+        );
         // Counts in gold
         let q = line.spans.iter().find(|s| s.content == "9").unwrap();
         assert_eq!(q.style.fg, Some(p.gold));
@@ -419,7 +451,11 @@ mod tests {
     // Clean repo: no ?/+ segments, branch only.
     #[test]
     fn clean_git_hides_counts() {
-        let git = crate::git::GitStatus { branch: Some("dev".into()), unstaged: 0, staged: 0 };
+        let git = crate::git::GitStatus {
+            branch: Some("dev".into()),
+            unstaged: 0,
+            staged: 0,
+        };
         let info = StatusInfo {
             model_name: "m",
             cwd: "/a/b",

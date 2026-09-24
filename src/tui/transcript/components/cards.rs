@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 
 use crate::entry::ToolView;
 use crate::tui::highlight;
+use crate::tui::theme::ColorToken;
 use crate::tui::theme::Palette;
 use unicode_width::UnicodeWidthStr;
 
@@ -23,7 +24,8 @@ use unicode_width::UnicodeWidthStr;
 pub(super) fn pad_to(mut line: Line<'static>, width: usize, fill: Style) -> Line<'static> {
     let used: usize = line.spans.iter().map(|s| s.content.as_ref().width()).sum();
     if used < width {
-        line.spans.push(Span::styled(" ".repeat(width - used), fill));
+        line.spans
+            .push(Span::styled(" ".repeat(width - used), fill));
     }
     line
 }
@@ -85,7 +87,12 @@ pub(super) fn card_edge(edge: Style, fill: Style, width: usize) -> Line<'static>
 }
 
 // One body row: `| ` + content + padding + ` |`.
-pub(super) fn card_row(content: Line<'static>, edge: Style, body_bg: Style, width: usize) -> Line<'static> {
+pub(super) fn card_row(
+    content: Line<'static>,
+    edge: Style,
+    body_bg: Style,
+    width: usize,
+) -> Line<'static> {
     let inner = width.saturating_sub(4);
     // Defensive: never let stray escape bytes reach the terminal from inside a
     // card. The tools strip their own output, but file contents and rows read
@@ -152,6 +159,40 @@ pub(super) fn clip_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'sta
 // tool cards
 // ---------------------------------------------------------------------------
 
+/// Result-card edge color: success/error token (theme-owned, not literal
+/// green/red — a mid-session theme switch recolors the next frame).
+fn result_edge(ok: bool) -> Color {
+    crate::tui::theme::theme().color(if ok {
+        ColorToken::ToolSuccessBg
+    } else {
+        ColorToken::ToolErrorBg
+    })
+}
+
+/// Readable foreground on the card background (omp's contrast rule).
+fn contrast_on(bg: Color) -> Color {
+    crate::tui::theme::contrast_text_on(bg)
+}
+
+/// Diff row background: the diff color dimmed toward the card background,
+/// so full-width rows stay quiet on the black card.
+fn dim_bg(fg: Color, card: Color) -> Color {
+    let (fr, fg_, fb) = match fg {
+        Color::Rgb(r, g, b) => (r as u32, g as u32, b as u32),
+        _ => return card,
+    };
+    let (cr, cg, cb) = match card {
+        Color::Rgb(r, g, b) => (r as u32, g as u32, b as u32),
+        _ => return card,
+    };
+    // 25% color + 75% card: readable tint, not a shout.
+    Color::Rgb(
+        ((cr * 3 + fr) / 4) as u8,
+        ((cg * 3 + fg_) / 4) as u8,
+        ((cb * 3 + fb) / 4) as u8,
+    )
+}
+
 // Whether a result deserves its own card.
 //
 // Reading is not a change: `read`'s result is the file it just showed, and
@@ -190,7 +231,7 @@ pub(super) fn tool_exchange(
     width: usize,
 ) -> Vec<Line<'static>> {
     let edge = Style::new().fg(p.accent);
-    let out_edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
+    let out_edge = Style::new().fg(result_edge(ok));
     let bg = Style::new().bg(p.black);
 
     let mut out = vec![card_edge(edge, bg, width)];
@@ -210,7 +251,12 @@ pub(super) fn tool_exchange(
 //
 // Used for a request that has no result yet (interrupt mid-call). The
 // labelable form is [`tool_exchange`].
-pub(super) fn tool_request_card(name: &str, args: &str, p: &Palette, width: usize) -> Vec<Line<'static>> {
+pub(super) fn tool_request_card(
+    name: &str,
+    args: &str,
+    p: &Palette,
+    width: usize,
+) -> Vec<Line<'static>> {
     let edge = Style::new().fg(p.accent);
     let bg = Style::new().bg(p.black);
     let mut out = vec![card_edge(edge, bg, width)];
@@ -233,7 +279,7 @@ pub(super) fn tool_result_card(
 ) -> Vec<Line<'static>> {
     // An unpaired result (interrupted call): colour tells the outcome, the
     // content tells the rest. No labels, same as every other card.
-    let edge = Style::new().fg(if ok { Color::Green } else { Color::Red });
+    let edge = Style::new().fg(result_edge(ok));
     let bg = Style::new().bg(p.black);
     let mut out = vec![card_edge(edge, bg, width)];
     for line in result_lines(name, ok, result, p, expanded) {
@@ -284,20 +330,28 @@ pub(super) fn result_lines(
                 ));
             }
         }
-        ToolView::Diff { deletions, insertions } => {
+        ToolView::Diff {
+            deletions,
+            insertions,
+        } => {
             // Deletions above, insertions below: red and green backgrounds
             // (vscode style). Kept as row styles; `card_row` folds them into
             // the spans so they survive the frame.
+            let t = crate::tui::theme::theme();
             for d in deletions {
                 out.push(Line::styled(
                     format!("- {d}"),
-                    Style::new().fg(Color::Black).bg(Color::Rgb(255, 128, 128)),
+                    Style::new()
+                        .fg(contrast_on(p.black))
+                        .bg(dim_bg(t.color(ColorToken::ToolDiffRemoved), p.black)),
                 ));
             }
             for i in insertions {
                 out.push(Line::styled(
                     format!("+ {i}"),
-                    Style::new().fg(Color::Black).bg(Color::Rgb(128, 200, 128)),
+                    Style::new()
+                        .fg(contrast_on(p.black))
+                        .bg(dim_bg(t.color(ColorToken::ToolDiffAdded), p.black)),
                 ));
             }
         }
@@ -325,18 +379,18 @@ pub(super) fn payload_lines(name: &str, args: &str, p: &Palette) -> Vec<Line<'st
         // edit / mass_edit: highlight by the target file's language.
         if let Some(path) = v.get("path").and_then(|c| c.as_str()) {
             let lang = highlight::language_for_path(path);
-            let mut out = vec![Line::styled(
-                format!("path: {path}"),
-                Style::new().fg(Color::White),
+            let t = crate::tui::theme::theme();
+            let mut out: Vec<Line<'static>> = vec![Line::from(
+                t.fg(ColorToken::ToolTitle, format!("path: {path}")),
             )];
             if let Some(old) = v.get("old").and_then(|c| c.as_str()) {
-                out.push(Line::styled("- old:", Style::new().fg(Color::Rgb(255, 128, 128))));
+                out.push(Line::from(t.fg(ColorToken::ToolDiffRemoved, "- old:")));
                 for l in old.lines() {
                     out.extend(highlight::highlight(l, lang));
                 }
             }
             if let Some(new) = v.get("new").and_then(|c| c.as_str()) {
-                out.push(Line::styled("+ new:", Style::new().fg(Color::Rgb(128, 200, 128))));
+                out.push(Line::from(t.fg(ColorToken::ToolDiffAdded, "+ new:")));
                 for l in new.lines() {
                     out.extend(highlight::highlight(l, lang));
                 }
@@ -370,22 +424,45 @@ pub(super) fn user_card(content: &str, p: &Palette, width: usize) -> Vec<Line<'s
     let mut out = Vec::new();
     // Breathing room: a blank row above and below, still on the accent gutter
     // and the true-black background, so the card reads as one solid block.
-    out.push(pad_to(Line::from(Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))), width, bg));
+    out.push(pad_to(
+        Line::from(Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))),
+        width,
+        bg,
+    ));
     for line in crate::tui::components::markdown::render_markdown(content, p) {
         // Force the card's own foreground/background: markdown may have
         // decided on a color for a code span, but a user message is
         // uniformly black-on-… white-on-black.
-        let mut spans = vec![Span::styled(
-            "▌ ",
-            Style::new().bg(p.black).fg(p.accent),
-        )];
+        let mut spans = vec![Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))];
         for sp in line.spans {
-            spans.push(Span::styled(sp.content, Style::new().bg(p.black).fg(Color::White)));
+            let t = crate::tui::theme::theme();
+            let body_fg = match t.color(ColorToken::UserMessageText) {
+                ratatui::style::Color::Reset => Color::White,
+                c => c,
+            };
+            spans.push(Span::styled(
+                sp.content,
+                Style::new().bg(p.black).fg(body_fg),
+            ));
         }
         out.push(pad_to(Line::from(spans), width, bg));
     }
-    out.push(pad_to(Line::from(Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))), width, bg));
+    out.push(pad_to(
+        Line::from(Span::styled("▌ ", Style::new().bg(p.black).fg(p.accent))),
+        width,
+        bg,
+    ));
     out
+}
+
+/// Test hook: markdown-in-user-card integration lives in markdown.rs tests.
+#[cfg(test)]
+pub(crate) fn user_card_public_for_test(
+    content: &str,
+    p: &Palette,
+    width: usize,
+) -> Vec<Line<'static>> {
+    user_card(content, p, width)
 }
 
 // (the trailing blank row between nodes is `section_gap`, added by the caller)

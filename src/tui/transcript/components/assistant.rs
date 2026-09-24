@@ -31,6 +31,8 @@ pub(super) fn assistant_block(
         // two thoughts: the same blank-row separation every other node gets.
         out.push(Line::from(""));
     }
-    out.extend(crate::tui::components::markdown::render_markdown(content, p));
+    out.extend(crate::tui::components::markdown::render_markdown(
+        content, p,
+    ));
     out
 }

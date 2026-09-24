@@ -16,12 +16,13 @@
 //! - **system** — a notice the emitter aligns (left or centered), e.g. compaction
 //!   reports.
 
-use ratatui::style::{Color, Style};
+#[cfg(test)]
+use ratatui::style::Color;
+use ratatui::text::Line;
 #[cfg(test)]
 use ratatui::widgets::Paragraph;
 #[cfg(test)]
 use unicode_width::UnicodeWidthStr;
-use ratatui::text::Line;
 
 use super::assistant::assistant_block;
 use super::cards::{result_card_visible, tool_exchange, tool_request_card, tool_result_card};
@@ -40,7 +41,12 @@ pub(crate) fn render_streaming(t: &str, p: &Palette) -> Vec<Line<'static>> {
 // The single render entry point: in-memory history and DB-resumed history
 // both go through it, guaranteeing "reopened after persistence" looks identical to "just typed".
 #[cfg(test)]
-pub fn render(entries: &[Entry], p: &Palette, show_reasoning: bool, tools_expanded: bool) -> Vec<Line<'static>> {
+pub fn render(
+    entries: &[Entry],
+    p: &Palette,
+    show_reasoning: bool,
+    tools_expanded: bool,
+) -> Vec<Line<'static>> {
     render_at(entries, p, show_reasoning, tools_expanded, 80)
 }
 
@@ -57,7 +63,13 @@ pub fn render_at(
         if !out.is_empty() {
             out.push(Line::from(""));
         }
-        out.extend(single_node(&entries[r.start..r.end], p, show_reasoning, tools_expanded, width));
+        out.extend(single_node(
+            &entries[r.start..r.end],
+            p,
+            show_reasoning,
+            tools_expanded,
+            width,
+        ));
     }
     out
 }
@@ -72,16 +84,33 @@ pub(crate) fn single_node(
     tools_expanded: bool,
     width: usize,
 ) -> Vec<Line<'static>> {
-    debug_assert!(group.len() <= 2, "a node is one entry or one request+result pair");
+    debug_assert!(
+        group.len() <= 2,
+        "a node is one entry or one request+result pair"
+    );
     let e = &group[0];
     match e {
         Entry::User { content } => super::cards::user_card(content, p, width),
-        Entry::Assistant { content, usage, reasoning } => {
-            assistant_block(content, reasoning.as_deref(), usage.as_ref(), p, show_reasoning)
-        }
+        Entry::Assistant {
+            content,
+            usage,
+            reasoning,
+        } => assistant_block(
+            content,
+            reasoning.as_deref(),
+            usage.as_ref(),
+            p,
+            show_reasoning,
+        ),
         Entry::ToolRequest { name, args, .. } => {
             if group.len() == 2 {
-                let Entry::ToolResult { name: rname, ok, result, .. } = &group[1] else {
+                let Entry::ToolResult {
+                    name: rname,
+                    ok,
+                    result,
+                    ..
+                } = &group[1]
+                else {
                     unreachable!("group of 2 is always request+result (blocks guarantees)");
                 };
                 let _ = rname;
@@ -94,13 +123,14 @@ pub(crate) fn single_node(
                 tool_request_card(name, args, p, width)
             }
         }
-        Entry::ToolResult { name, ok, result, .. } => {
-            tool_result_card(name, *ok, result, p, tools_expanded, width)
-        }
+        Entry::ToolResult {
+            name, ok, result, ..
+        } => tool_result_card(name, *ok, result, p, tools_expanded, width),
         Entry::Error { text } => {
+            let err = crate::tui::theme::theme().fg_style(crate::tui::theme::ColorToken::Error);
             let mut out = Vec::new();
             for part in text.split('\n') {
-                out.push(Line::styled(part.to_string(), Style::new().fg(Color::Red)));
+                out.push(Line::styled(part.to_string(), err));
             }
             out
         }
@@ -110,7 +140,6 @@ pub(crate) fn single_node(
         Entry::Name { .. } => Vec::new(),
     }
 }
-
 
 // Render entries into ratatui lines.
 //
@@ -130,16 +159,21 @@ pub fn estimated_height(lines: &[Line], width: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Modifier;
-    use crate::entry::{Align, ToolView, UsageSummary};
-    use unicode_width::UnicodeWidthStr;
     use super::super::{cards::*, system::*};
     use super::*;
+    use crate::entry::{Align, ToolView, UsageSummary};
+    use ratatui::style::Modifier;
+    use unicode_width::UnicodeWidthStr;
 
     fn text_of(lines: &[Line]) -> String {
         lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.to_string())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -148,8 +182,14 @@ mod tests {
     fn entries_render_by_kind_not_by_prefix() {
         let p = Palette::default();
         let entries = vec![
-            Entry::User { content: "问题".into() },
-            Entry::Assistant { content: "回答".into(), usage: None, reasoning: None },
+            Entry::User {
+                content: "问题".into(),
+            },
+            Entry::Assistant {
+                content: "回答".into(),
+                usage: None,
+                reasoning: None,
+            },
             Entry::ToolRequest {
                 call_id: "c1".into(),
                 name: "edit".into(),
@@ -162,25 +202,38 @@ mod tests {
                 ok: true,
                 result: "- 旧行\n+ 新行".into(),
             },
-            Entry::Error { text: "炸了".into() },
+            Entry::Error {
+                text: "炸了".into(),
+            },
         ];
         let lines = render(&entries, &p, false, false);
         let all = text_of(&lines);
         // User card opens with a blank accent row on a true-black background
         assert_eq!(lines[0].spans[0].content, "▌ ");
         assert_eq!(lines[0].spans[0].style.fg, Some(p.accent));
-        assert_eq!(lines[0].spans[0].style.bg, Some(Color::Rgb(0, 0, 0)));
+        assert_eq!(
+            lines[0].spans[0].style.bg,
+            Some(p.black),
+            "卡底必须走 userMessageBg token"
+        );
         // The matched pair renders as one stacked card: no in/out labels
         assert!(!all.contains("(in)") && !all.contains("(out)"), "{all}");
         // The call card carries the path…
         assert!(all.contains("./a.txt"), "{all}");
         // …and the diff body keeps its red/green rows (inside the card frame,
         // so the color sits on the span rather than the whole line)
-        let bgs: Vec<_> = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.style.bg).collect();
-        assert!(bgs.contains(&Some(Color::Rgb(255, 128, 128))), "{all}");
-        assert!(bgs.contains(&Some(Color::Rgb(128, 200, 128))), "{all}");
-        // Error stays red
-        assert_eq!(lines.last().unwrap().style.fg, Some(Color::Red));
+        // Diff rows: theme-tinted backgrounds, distinct per side.
+        let bgs: Vec<_> = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.style.bg)
+            .collect();
+        assert!(bgs.iter().any(|b| b.is_some()), "diff 行有底色: {all}");
+        // Error stays the theme error color
+        assert_eq!(
+            lines.last().unwrap().style.fg,
+            Some(crate::tui::theme::theme().color(crate::tui::theme::ColorToken::Error))
+        );
     }
 
     #[test]
@@ -193,7 +246,7 @@ mod tests {
             assert_eq!(t.trim(), "▌", "空行只有 accent 竖线: {t:?}");
             // …and the black background still covers the whole row
             for sp in &lines[i].spans {
-                assert_eq!(sp.style.bg, Some(Color::Rgb(0, 0, 0)), "空行也必须带真彩黑底");
+                assert_eq!(sp.style.bg, Some(p.black), "空行也必须带卡底色");
             }
         }
     }
@@ -205,7 +258,7 @@ mod tests {
         // Every body span: white on truecolor black (never the indexed black)
         for l in lines.iter().take(2).skip(1) {
             for (i, sp) in l.spans.iter().enumerate() {
-                assert_eq!(sp.style.bg, Some(Color::Rgb(0, 0, 0)), "用户消息必须是真彩黑底");
+                assert_eq!(sp.style.bg, Some(p.black), "用户消息必须带卡底色");
                 // span 0 is the accent gutter, not message text
                 if i > 0 && !sp.content.trim().is_empty() {
                     assert_eq!(sp.style.fg, Some(Color::White), "用户消息必须是白字");
@@ -219,14 +272,23 @@ mod tests {
         let p = Palette::default();
         let call = tool_request_card("bash", r#"{"command":"ls -la"}"#, &p, 30);
         // Top edge: bare frame, no tool name / in-out labels
-        assert!(text_of(&call[..1]).starts_with("+-"), "{}", text_of(&call[..1]));
+        assert!(
+            text_of(&call[..1]).starts_with("+-"),
+            "{}",
+            text_of(&call[..1])
+        );
         assert!(!text_of(&call).contains("(in)"), "不该再声明卡片类型");
         // Body row: pipes with a space inside both ends
         let body = text_of(&call[1..2]);
         assert!(body.starts_with("| "), "{body:?}");
         assert!(body.trim_end().ends_with("|"), "{body:?}");
         // Bottom edge
-        assert!(text_of(&call[call.len() - 1..]).trim_end().starts_with("+-"), "卡片必须有底边");
+        assert!(
+            text_of(&call[call.len() - 1..])
+                .trim_end()
+                .starts_with("+-"),
+            "卡片必须有底边"
+        );
         // Every row is **exactly** `width` cells: wider and the hard-wrap pass
         // would push the excess onto a line of its own (a stray black square).
         for l in &call {
@@ -240,9 +302,7 @@ mod tests {
         // The agreed shape (option F): symmetric breaks so a ligating font
         // cannot fuse the run and draw the frame short.
         let p = Palette::default();
-        let rows = tool_exchange(
-            "bash", r#"{"command":"ls"}"#, true, "out", &p, false, 40,
-        );
+        let rows = tool_exchange("bash", r#"{"command":"ls"}"#, true, "out", &p, false, 40);
         let edges: Vec<String> = rows
             .iter()
             .map(|l| text_of(std::slice::from_ref(l)))
@@ -257,7 +317,10 @@ mod tests {
             assert!(t.ends_with(" -+"), "右断口必须是 ` -+`: {t:?}");
             // …and the middle is still one continuous stretch.
             let inner = &t[4..t.len() - 4];
-            assert!(inner.len() > 10 && !inner.contains(' '), "中段必须连续: {t:?}");
+            assert!(
+                inner.len() > 10 && !inner.contains(' '),
+                "中段必须连续: {t:?}"
+            );
         }
     }
 
@@ -278,7 +341,12 @@ mod tests {
             );
             for l in &rows {
                 let w: usize = l.spans.iter().map(|s| s.content.as_ref().width()).sum();
-                assert_eq!(w, width, "({width}) 行宽必须恰好: {w} -> {:?}", text_of(std::slice::from_ref(l)));
+                assert_eq!(
+                    w,
+                    width,
+                    "({width}) 行宽必须恰好: {w} -> {:?}",
+                    text_of(std::slice::from_ref(l))
+                );
             }
         }
     }
@@ -306,12 +374,19 @@ mod tests {
             },
         ];
         let lines = render(&entries, &p, false, false);
-        let black = Some(Color::Rgb(0, 0, 0));
+        let black = Some(p.black);
         for l in &lines {
             // Only card rows (those with a frame) are checked; gaps have no spans.
-            if l.spans.iter().any(|s| s.content.contains('|') || s.content.contains('+')) {
+            if l.spans
+                .iter()
+                .any(|s| s.content.contains('|') || s.content.contains('+'))
+            {
                 for sp in &l.spans {
-                    assert_eq!(sp.style.bg, black, "卡片每一格都必须是真彩黑底: {:?}", sp.content);
+                    assert_eq!(
+                        sp.style.bg, black,
+                        "卡片每一格都必须是真彩黑底: {:?}",
+                        sp.content
+                    );
                 }
             }
         }
@@ -352,8 +427,8 @@ mod tests {
                 let cell = &buf[(x, y)];
                 assert_eq!(
                     cell.bg,
-                    ratatui::style::Color::Rgb(0, 0, 0),
-                    "卡片 ({x},{y}) 的格子没有黑底: {:?}",
+                    p.black,
+                    "卡片 ({x},{y}) 的格子没有卡底: {:?}",
                     cell.symbol()
                 );
             }
@@ -368,7 +443,9 @@ mod tests {
         // transcript, at several widths.
         for width in [30usize, 40, 80, 120] {
             let entries = vec![
-                Entry::User { content: "跑一下 sleep 5 看看".into() },
+                Entry::User {
+                    content: "跑一下 sleep 5 看看".into(),
+                },
                 Entry::ToolRequest {
                     call_id: "c1".into(),
                     name: "bash".into(),
@@ -395,7 +472,10 @@ mod tests {
             for l in &wrapped {
                 let text: String = l.spans.iter().map(|s| s.content.to_string()).collect();
                 if text.trim().is_empty() {
-                    assert!(l.spans.is_empty(), "({width}) 空行不该带任何样式格子: {text:?}");
+                    assert!(
+                        l.spans.is_empty(),
+                        "({width}) 空行不该带任何样式格子: {text:?}"
+                    );
                 }
             }
         }
@@ -423,9 +503,18 @@ mod tests {
         // two separate cards would produce two of each.
         let edges = lines
             .iter()
-            .filter(|l| text_of(std::slice::from_ref(*l)).trim_end().starts_with("+-"))
+            .filter(|l| {
+                text_of(std::slice::from_ref(*l))
+                    .trim_end()
+                    .starts_with("+-")
+            })
             .count();
-        assert_eq!(edges, 3, "合并后共 3 条横边（上/中/下）: {:?}", text_of(&lines));
+        assert_eq!(
+            edges,
+            3,
+            "合并后共 3 条横边（上/中/下）: {:?}",
+            text_of(&lines)
+        );
         // No type labels anywhere
         let all = text_of(&lines);
         assert!(!all.contains("(in)") && !all.contains("(out)"), "{all}");
@@ -444,9 +533,16 @@ mod tests {
     #[test]
     fn payload_highlight_uses_the_paths_language() {
         let p = Palette::default();
-        let lines = payload_lines("edit", r#"{"path":"main.rs","old":"let a","new":"let b"}"#, &p);
+        let lines = payload_lines(
+            "edit",
+            r#"{"path":"main.rs","old":"let a","new":"let b"}"#,
+            &p,
+        );
         let all = text_of(&lines);
-        assert!(all.contains("main.rs") && all.contains("let a") && all.contains("let b"), "{all}");
+        assert!(
+            all.contains("main.rs") && all.contains("let a") && all.contains("let b"),
+            "{all}"
+        );
     }
 
     #[test]
@@ -468,7 +564,10 @@ mod tests {
             call_id: "c1".into(),
             name: "t".into(),
             ok: true,
-            result: (1..=8).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n"),
+            result: (1..=8)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
         };
         let lines = render(&[long], &p, false, false);
         let joined = text_of(&lines);
@@ -480,11 +579,19 @@ mod tests {
     #[test]
     fn payload_round_trips_through_json() {
         let entries = vec![
-            Entry::User { content: "你好\n世界".into() },
+            Entry::User {
+                content: "你好\n世界".into(),
+            },
             Entry::Assistant {
                 content: "回复".into(),
                 reasoning: None,
-                usage: Some(UsageSummary { total_tokens: 10, prompt_tokens: 8, cached_tokens: 2, completion_tokens: 2, reasoning_tokens: 0 }),
+                usage: Some(UsageSummary {
+                    total_tokens: 10,
+                    prompt_tokens: 8,
+                    cached_tokens: 2,
+                    completion_tokens: 2,
+                    reasoning_tokens: 0,
+                }),
             },
             Entry::ToolRequest {
                 call_id: "c1".into(),
@@ -498,7 +605,10 @@ mod tests {
                 ok: false,
                 result: "出错".into(),
             },
-            Entry::System { text: "已切换模型".into(), align: Align::Center },
+            Entry::System {
+                text: "已切换模型".into(),
+                align: Align::Center,
+            },
         ];
         for e in &entries {
             let (kind, payload) = e.to_payload();
@@ -513,7 +623,9 @@ mod tests {
         let old = r#"{"call_id":"c1","name":"bash","object":""}"#;
         let back = Entry::from_payload("tool_request", old).unwrap();
         match back {
-            Entry::ToolRequest { args, intent, name, .. } => {
+            Entry::ToolRequest {
+                args, intent, name, ..
+            } => {
                 assert_eq!(args, "");
                 assert_eq!(intent, "");
                 assert_eq!(name, "bash");
@@ -534,18 +646,38 @@ mod tests {
         let lines = render(&[e], &p, false, false);
         // The colored rows live inside the card frame, so the red/green is the
         // inner span's style, not the row's.
-        let all: Vec<_> = lines
+        // Diff rows carry a background tint derived from the theme's
+        // toolDiffRemoved/Added over the card background — the two sides
+        // must stay visually distinct.
+        let del: Vec<_> = lines
             .iter()
             .flat_map(|l| l.spans.iter())
+            .filter(|s| s.content.starts_with("- "))
             .map(|s| s.style.bg)
             .collect();
-        assert!(all.contains(&Some(Color::Rgb(255, 128, 128))), "删除行必须红底");
-        assert!(all.contains(&Some(Color::Rgb(128, 200, 128))), "插入行必须绿底");
+        let ins: Vec<_> = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .filter(|s| s.content.starts_with("+ "))
+            .map(|s| s.style.bg)
+            .collect();
+        assert!(del.iter().all(|b| b.is_some()), "删除行必须有底色");
+        assert!(ins.iter().all(|b| b.is_some()), "插入行必须有底色");
+        assert_ne!(del[0], ins[0], "删除/插入的底色必须可区分");
     }
 
     #[test]
     fn estimated_height_counts_wrapped_rows() {
-        let lines = render(&[Entry::Assistant { content: "x".repeat(20), usage: None, reasoning: None }], &Palette::default(), false, false);
+        let lines = render(
+            &[Entry::Assistant {
+                content: "x".repeat(20),
+                usage: None,
+                reasoning: None,
+            }],
+            &Palette::default(),
+            false,
+            false,
+        );
         // 20 cells wide, container 10 -> 2 wrapped rows, no padding rows of its own
         assert_eq!(estimated_height(&lines, 10), 2);
     }
@@ -554,9 +686,18 @@ mod tests {
     fn every_node_is_separated_by_one_blank_row() {
         let p = Palette::default();
         let entries = vec![
-            Entry::User { content: "问".into() },
-            Entry::Assistant { content: "答".into(), usage: None, reasoning: Some("想".into()) },
-            Entry::System { text: "切模型".into(), align: Align::Center },
+            Entry::User {
+                content: "问".into(),
+            },
+            Entry::Assistant {
+                content: "答".into(),
+                usage: None,
+                reasoning: Some("想".into()),
+            },
+            Entry::System {
+                text: "切模型".into(),
+                align: Align::Center,
+            },
         ];
         let lines = render(&entries, &p, true, false);
         // Gaps: node boundaries (2) plus the reasoning/answer seam inside
@@ -565,7 +706,12 @@ mod tests {
             .iter()
             .filter(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
             .count();
-        assert_eq!(blanks, 3, "节点间2条 + 思考与回复间1条: {:?}", text_of(&lines));
+        assert_eq!(
+            blanks,
+            3,
+            "节点间2条 + 思考与回复间1条: {:?}",
+            text_of(&lines)
+        );
         let text = text_of(&lines);
         assert!(!text.contains("\n\n\n"), "不该出现连续两条空行: {text:?}");
     }
@@ -587,7 +733,12 @@ mod tests {
             .find(|l| l.spans.iter().any(|s| s.content == "内心独白"))
             .unwrap();
         assert_eq!(r_line.spans[0].style.fg, Some(p.muted));
-        assert!(r_line.spans[0].style.add_modifier.contains(Modifier::ITALIC));
+        assert!(
+            r_line.spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
         // Folded: gone
         let folded = render(&entries, &p, false, false);
         assert!(!text_of(&folded).contains("内心独白"));
@@ -610,13 +761,24 @@ mod tests {
 
     #[test]
     fn reasoning_round_trips_through_payload() {
-        let e = Entry::Assistant { content: "答".into(), usage: None, reasoning: Some("想了想".into()) };
+        let e = Entry::Assistant {
+            content: "答".into(),
+            usage: None,
+            reasoning: Some("想了想".into()),
+        };
         let (kind, payload) = e.to_payload();
         assert_eq!(Entry::from_payload(kind, &payload).unwrap(), e);
         // Old data lacks the reasoning field: reads as None without exploding
         let legacy = r#"{"content":"老消息","usage":null}"#;
         let back = Entry::from_payload("assistant", legacy).unwrap();
-        assert_eq!(back, Entry::Assistant { content: "老消息".into(), usage: None, reasoning: None });
+        assert_eq!(
+            back,
+            Entry::Assistant {
+                content: "老消息".into(),
+                usage: None,
+                reasoning: None
+            }
+        );
     }
 
     #[test]
@@ -639,19 +801,40 @@ mod tests {
     #[test]
     fn plain_view_respects_per_tool_limit_and_expansion() {
         let p = Palette::default();
-        let eight = (1..=8).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n");
+        let eight = (1..=8)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         // 8 rows: edit (threshold 14) does not fold; unknown tools (threshold 5) fold
-        let edit_e = Entry::ToolResult { call_id: "c1".into(), name: "edit".into(), ok: true, result: eight.clone() };
-        let other_e = Entry::ToolResult { call_id: "c".into(), name: "x".into(), ok: true, result: eight.clone() };
+        let edit_e = Entry::ToolResult {
+            call_id: "c1".into(),
+            name: "edit".into(),
+            ok: true,
+            result: eight.clone(),
+        };
+        let other_e = Entry::ToolResult {
+            call_id: "c".into(),
+            name: "x".into(),
+            ok: true,
+            result: eight.clone(),
+        };
         let edit_text = text_of(&render(&[edit_e], &p, false, false));
-        assert!(edit_text.contains("line8") && !edit_text.contains("共"), "edit 8 行不折叠: {edit_text}");
+        assert!(
+            edit_text.contains("line8") && !edit_text.contains("共"),
+            "edit 8 行不折叠: {edit_text}"
+        );
         let other_text = text_of(&render(std::slice::from_ref(&other_e), &p, false, false));
-        assert!(other_text.contains("共 8 行"), "未知工具 8 行折叠: {other_text}");
+        assert!(
+            other_text.contains("共 8 行"),
+            "未知工具 8 行折叠: {other_text}"
+        );
         // Ctrl+O expand: folded output expands too
         let open_text = text_of(&render(&[other_e], &p, false, true));
-        assert!(open_text.contains("line8") && !open_text.contains("共"), "展开后无折叠: {open_text}");
+        assert!(
+            open_text.contains("line8") && !open_text.contains("共"),
+            "展开后无折叠: {open_text}"
+        );
     }
-
 
     #[test]
     fn read_has_no_result_card() {
@@ -674,10 +857,17 @@ mod tests {
         // Upper card only: one top edge, one bottom edge, no seam.
         let edges = lines
             .iter()
-            .filter(|l| text_of(std::slice::from_ref(*l)).trim_end().starts_with("+-"))
+            .filter(|l| {
+                text_of(std::slice::from_ref(*l))
+                    .trim_end()
+                    .starts_with("+-")
+            })
             .count();
         assert_eq!(edges, 2, "read 只该有一张卡片: {:?}", text_of(&lines));
-        assert!(!text_of(&lines).contains("fn main"), "读到的内容不该重复出现");
+        assert!(
+            !text_of(&lines).contains("fn main"),
+            "读到的内容不该重复出现"
+        );
     }
 
     #[test]
@@ -710,7 +900,10 @@ mod tests {
         // After the round-trip the Diff is re-synthesized from data
         let back = Entry::from_payload("tool_result", &payload).unwrap();
         match ToolView::synthesize("edit", true, "- a\n+ b") {
-            ToolView::Diff { deletions, insertions } => {
+            ToolView::Diff {
+                deletions,
+                insertions,
+            } => {
                 assert_eq!(deletions, vec!["a"]);
                 assert_eq!(insertions, vec!["b"]);
             }

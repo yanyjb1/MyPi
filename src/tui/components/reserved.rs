@@ -28,24 +28,31 @@ pub fn render_resume_picker(
     let inner = crate::tui::layout::inner_width(term_w).saturating_sub(4);
     let mut out = vec![Line::from(vec![
         p.plain("  "),
-        p.accent("选择要恢复的会话（↑↓ 移动，Enter 恢复，Esc 取消）"),
+        p.accent_span("选择要恢复的会话（↑↓ 移动，Enter 恢复，Esc 取消）"),
     ])];
     // Session rows that fit = height - title
     let rows = height.saturating_sub(1).min(items.len().max(1));
     // Scrolling window: keep the selection visible
-    let start = if selected < rows { 0 } else { selected + 1 - rows };
+    let start = if selected < rows {
+        0
+    } else {
+        selected + 1 - rows
+    };
     for (i, (_, name)) in items.iter().enumerate().skip(start).take(rows) {
         let marker = if i == selected { "> " } else { "  " };
         let mut spans = Vec::new();
         if i == selected {
-            spans.push(p.accent(marker));
-            spans.push(p.accent(name.clone()));
+            spans.push(p.accent_span(marker));
+            spans.push(p.accent_span(name.clone()));
         } else {
             spans.push(p.plain(marker));
-            spans.push(p.muted(name.clone()));
+            spans.push(p.muted_span(name.clone()));
         }
         // Truncate names that are too wide
-        let used: usize = spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
+        let used: usize = spans
+            .iter()
+            .map(|s| crate::tui::text::display_width(&s.content))
+            .sum();
         if used > inner {
             spans.truncate(2);
             spans[1] = p.plain(crate::tui::text::take_width(name, inner.saturating_sub(1)).0);

@@ -51,9 +51,7 @@ pub fn blocks(entries: &[Entry]) -> Vec<Range> {
     while i < entries.len() {
         // A result immediately following its request, same id: one exchange.
         if let (
-            Entry::ToolRequest {
-                call_id, name, ..
-            },
+            Entry::ToolRequest { call_id, name, .. },
             Some(Entry::ToolResult {
                 call_id: rid,
                 name: rname,
@@ -63,11 +61,17 @@ pub fn blocks(entries: &[Entry]) -> Vec<Range> {
             && call_id == rid
             && name == rname
         {
-            out.push(Range { start: i, end: i + 2 });
+            out.push(Range {
+                start: i,
+                end: i + 2,
+            });
             i += 2;
             continue;
         }
-        out.push(Range { start: i, end: i + 1 });
+        out.push(Range {
+            start: i,
+            end: i + 1,
+        });
         i += 1;
     }
     out
@@ -95,7 +99,10 @@ pub(crate) fn render_block(
     let mut lines = components::chat::single_node(group, p, show_reasoning, tools_expanded, width);
     // Wrap now, once per cache fill — not once per frame.
     let rows = wrap_rows(lines.drain(..), width);
-    Block { height: rows.len(), rows }
+    Block {
+        height: rows.len(),
+        rows,
+    }
 }
 
 /// Hard-wrap rendered rows to `width` cells (moved out of `view.rs` so the
@@ -104,7 +111,11 @@ fn wrap_rows(lines: impl Iterator<Item = Line<'static>>, width: usize) -> Vec<Li
     let w = width.max(1);
     let mut out = Vec::new();
     for line in lines {
-        let total: usize = line.spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
+        let total: usize = line
+            .spans
+            .iter()
+            .map(|s| crate::tui::text::display_width(&s.content))
+            .sum();
         if total <= w {
             out.push(line);
             continue;
@@ -117,7 +128,10 @@ fn wrap_rows(lines: impl Iterator<Item = Line<'static>>, width: usize) -> Vec<Li
                 let cw = crate::tui::text::display_width(&ch.to_string());
                 if cur_w + cw > w {
                     if !buf.is_empty() {
-                        cur.push(ratatui::text::Span::styled(std::mem::take(&mut buf), sp.style));
+                        cur.push(ratatui::text::Span::styled(
+                            std::mem::take(&mut buf),
+                            sp.style,
+                        ));
                     }
                     out.push(Line::from(std::mem::take(&mut cur)));
                     cur_w = 0;
@@ -188,11 +202,17 @@ mod tests {
 
     #[test]
     fn block_rows_fit_the_width_exactly() {
-        let es = vec![user("一段很长很长的中文消息用来测试折行 behaviour with mixed 文本 abcdefgh")];
+        let es = vec![user(
+            "一段很长很长的中文消息用来测试折行 behaviour with mixed 文本 abcdefgh",
+        )];
         let b = render_block(&es, Range { start: 0, end: 1 }, &p(), true, false, 20);
         assert!(b.height >= 3, "用户卡至少三行: {}", b.height);
         for l in &b.rows {
-            let w: usize = l.spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
+            let w: usize = l
+                .spans
+                .iter()
+                .map(|s| crate::tui::text::display_width(&s.content))
+                .sum();
             assert!(w <= 20, "行宽 {w} 超出 20");
         }
     }
@@ -202,7 +222,11 @@ mod tests {
         let text = "一二三四五六七八九十".repeat(5);
         let es = vec![user(&text)];
         let b = render_block(&es, Range { start: 0, end: 1 }, &p(), true, false, 10);
-        let joined: String = b.rows.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let joined: String = b
+            .rows
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert_eq!(joined.replace(['▌', ' '], ""), text, "折行不得丢字");
     }
 }

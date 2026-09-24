@@ -58,6 +58,13 @@ use serde::{Deserialize, Serialize};
 /// (the π symbol and friends).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Theme {
+    /// JSON theme name (bundled `titanium`/`dark` or a file under
+    /// ~/.config/mypi/themes). When set, the JSON theme wins; the
+    /// accent/gold/black/muted fields below then only matter when they
+    /// deviate from their defaults (legacy override path).
+    #[serde(default)]
+    pub name: Option<String>,
+
     #[serde(default = "d_accent")]
     pub accent: ColorSpec,
     #[serde(default = "d_gold")]
@@ -68,14 +75,23 @@ pub struct Theme {
     pub muted: ColorSpec,
 }
 
-fn d_accent() -> ColorSpec { ColorSpec::Text("green".into()) }
-fn d_gold() -> ColorSpec { ColorSpec::Text("yellow".into()) }
-fn d_black() -> ColorSpec { ColorSpec::Rgb(0, 0, 0) }
-fn d_muted() -> ColorSpec { ColorSpec::Text("darkgray".into()) }
+fn d_accent() -> ColorSpec {
+    ColorSpec::Text("green".into())
+}
+fn d_gold() -> ColorSpec {
+    ColorSpec::Text("yellow".into())
+}
+fn d_black() -> ColorSpec {
+    ColorSpec::Rgb(0, 0, 0)
+}
+fn d_muted() -> ColorSpec {
+    ColorSpec::Text("darkgray".into())
+}
 
 impl Default for Theme {
     fn default() -> Self {
         Self {
+            name: None,
             accent: d_accent(),
             gold: d_gold(),
             black: d_black(),
@@ -155,7 +171,12 @@ pub struct Cost {
 
 impl Default for Cost {
     fn default() -> Self {
-        Self { input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0 }
+        Self {
+            input: 0.0,
+            output: 0.0,
+            cache_read: 0.0,
+            cache_write: 0.0,
+        }
     }
 }
 
@@ -283,17 +304,22 @@ impl ModelEntry {
     /// Human-facing name: the user-chosen `name` field, falling back to
     /// the wire id. Display only — the id is what the server sees.
     pub fn display_name(&self) -> &str {
-        if self.name.is_empty() { &self.id } else { &self.name }
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
     }
 }
-
 
 impl Config {
     /// XDG base for config files ($XDG_CONFIG_HOME, default ~/.config).
     fn xdg_config_base() -> anyhow::Result<std::path::PathBuf> {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+            })
             .ok_or_else(|| anyhow!("neither HOME nor XDG_CONFIG_HOME is set; cannot locate config"))
     }
 
@@ -330,7 +356,8 @@ impl Config {
         let models_path = Self::models_path()?;
         let app_path = Self::app_path()?;
 
-        const TEMPLATE_URL: &str = "https://raw.githubusercontent.com/yanyjb1/MyPi/main/models_example.yml";
+        const TEMPLATE_URL: &str =
+            "https://raw.githubusercontent.com/yanyjb1/MyPi/main/models_example.yml";
         let models_text = std::fs::read_to_string(&models_path).with_context(|| {
             format!(
                 "no models.yml at {} — create it yourself (the program never writes this file):\n  1. get the template: {}\n  2. put it at {}, fill in your providers and keys",
@@ -349,9 +376,13 @@ impl Config {
                 // Bootstrap: pick the alphabetically-first display name and
                 // persist the choice (config.yaml is program-owned; safe
                 // to write — unlike models.yml, which is never written).
-                let first = Self::alphabetical_default(&models)
-                    .ok_or_else(|| anyhow!("models.yml declares no models — add at least one `- id: ...` entry"))?;
-                let app = AppConfig { default: Some(first), theme: Theme::default() };
+                let first = Self::alphabetical_default(&models).ok_or_else(|| {
+                    anyhow!("models.yml declares no models — add at least one `- id: ...` entry")
+                })?;
+                let app = AppConfig {
+                    default: Some(first),
+                    theme: Theme::default(),
+                };
                 std::fs::create_dir_all(Self::config_dir()?)?;
                 let yaml = serde_yaml::to_string(&app)?;
                 std::fs::write(&app_path, yaml)
@@ -373,9 +404,9 @@ impl Config {
             .providers
             .iter()
             .flat_map(|(p, prov)| {
-                prov.models.iter().map(move |m| {
-                    (m.display_name().to_lowercase(), p.clone(), m.id.clone())
-                })
+                prov.models
+                    .iter()
+                    .map(move |m| (m.display_name().to_lowercase(), p.clone(), m.id.clone()))
             })
             .collect();
         all.sort();
@@ -396,7 +427,9 @@ impl Config {
             }
         }
         if !any {
-            return Err(anyhow!("models.yml declares no models — add at least one `- id: ...` entry"));
+            return Err(anyhow!(
+                "models.yml declares no models — add at least one `- id: ...` entry"
+            ));
         }
         // A persisted default must still address a declared model.
         if let Some(d) = &self.app.default {
@@ -412,7 +445,8 @@ impl Config {
         let path = Self::app_path()?;
         std::fs::create_dir_all(Self::config_dir()?)?;
         let yaml = serde_yaml::to_string(&app)?;
-        std::fs::write(&path, yaml).with_context(|| format!("failed to write {}", path.display()))?;
+        std::fs::write(&path, yaml)
+            .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
 
@@ -421,9 +455,12 @@ impl Config {
     pub fn models(&self) -> impl Iterator<Item = (&str, &ModelEntry)> {
         let mut names: Vec<&String> = self.models.providers.keys().collect();
         names.sort();
-        names
-            .into_iter()
-            .flat_map(move |n| self.models.providers[n.as_str()].models.iter().map(move |m| (n.as_str(), m)))
+        names.into_iter().flat_map(move |n| {
+            self.models.providers[n.as_str()]
+                .models
+                .iter()
+                .map(move |m| (n.as_str(), m))
+        })
     }
 
     /// Fetch the default model entry. The `default:` key is **mandatory**
@@ -441,13 +478,23 @@ impl Config {
     /// Find a model by its globally-addressed id `<provider>:<id>`
     /// (the form used by `default`, /model, /switch and completion).
     pub fn model_by_id(&self, id: &str) -> anyhow::Result<ResolvedModel> {
-        let (pname, mid) = id.split_once(':').ok_or_else(|| {
-            anyhow!("model id must be `<provider>:<id>`, got `{id}`")
-        })?;
-        let p = self.models.providers.get(pname).ok_or_else(|| anyhow!("unknown provider: {pname}"))?;
-        let m = p.models.iter().find(|m| m.id == mid)
+        let (pname, mid) = id
+            .split_once(':')
+            .ok_or_else(|| anyhow!("model id must be `<provider>:<id>`, got `{id}`"))?;
+        let p = self
+            .models
+            .providers
+            .get(pname)
+            .ok_or_else(|| anyhow!("unknown provider: {pname}"))?;
+        let m = p
+            .models
+            .iter()
+            .find(|m| m.id == mid)
             .ok_or_else(|| anyhow!("provider {pname} has no model `{mid}`"))?;
-        Ok(ResolvedModel { provider_name: pname.to_string(), entry: m.clone() })
+        Ok(ResolvedModel {
+            provider_name: pname.to_string(),
+            entry: m.clone(),
+        })
     }
 
     /// Resolve `${ENV_VAR}` references in api_key.
@@ -501,7 +548,10 @@ providers:
         .unwrap();
         let cfg = Config {
             models,
-            app: AppConfig { default: Some("local:vendor-a/model-x".into()), theme: Theme::default() },
+            app: AppConfig {
+                default: Some("local:vendor-a/model-x".into()),
+                theme: Theme::default(),
+            },
         };
         // Addressing is <provider>:<id>; the model entry itself keeps the bare id.
         let m = cfg.default_model().unwrap();
@@ -552,7 +602,10 @@ providers:
         .unwrap();
         let cfg = Config {
             models,
-            app: AppConfig { default: Some("local:global:gpt-5.6-luna".into()), theme: Theme::default() },
+            app: AppConfig {
+                default: Some("local:global:gpt-5.6-luna".into()),
+                theme: Theme::default(),
+            },
         };
         let rm = cfg.default_model().unwrap();
         assert_eq!(rm.provider_name, "local");
@@ -571,7 +624,10 @@ providers:
 "#,
         )
         .unwrap();
-        let cfg = Config { models, app: AppConfig::default() };
+        let cfg = Config {
+            models,
+            app: AppConfig::default(),
+        };
         let err = cfg.default_model().unwrap_err().to_string();
         assert!(err.contains("no default model set"), "{err}");
     }
@@ -654,7 +710,10 @@ providers:
         .unwrap();
         let cfg = Config {
             models,
-            app: AppConfig { default: Some("local:a".into()), theme: Theme::default() },
+            app: AppConfig {
+                default: Some("local:a".into()),
+                theme: Theme::default(),
+            },
         };
         cfg.save_default("local:b").unwrap();
         let text = std::fs::read_to_string(dir.join("config.yaml")).unwrap();
@@ -719,7 +778,11 @@ providers:
         // And the bootstrapped config file exists on disk.
         assert!(dir.join("config.yaml").exists());
         // Empty models list -> hard error.
-        std::fs::write(dir.join("models.yml"), "providers:\n  local:\n    baseUrl: http://x/v1\n    api: openai-completions\n").unwrap();
+        std::fs::write(
+            dir.join("models.yml"),
+            "providers:\n  local:\n    baseUrl: http://x/v1\n    api: openai-completions\n",
+        )
+        .unwrap();
         let err = Config::load().unwrap_err().to_string();
         assert!(err.contains("declares no models"), "{err}");
         unsafe {
@@ -727,5 +790,15 @@ providers:
             std::env::remove_var("MYPI_MODELS");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+impl ColorSpec {
+    /// Original textual spec (for the theme override detector).
+    pub fn to_spec(&self) -> String {
+        match self {
+            ColorSpec::Rgb(r, g, b) => format!("{r},{g},{b}"),
+            ColorSpec::Text(s) => s.clone(),
+        }
     }
 }

@@ -6,9 +6,9 @@
 //! dispatcher; every new command adds one arm + one method here.
 
 use crate::ai::config::Config;
+use crate::entry;
 use crate::server::events::SessionEvent;
 use crate::tui::app::App;
-use crate::entry;
 
 impl App {
     // Run a slash command (`cmd_name` is registered in the command table).
@@ -59,17 +59,24 @@ impl App {
             Ok(real) if real.is_dir() => {
                 let old = self.session.set_cwd(real.clone());
                 let seq = self.session.bump_cwd_seq();
-                self.session.handle(SessionEvent::SetCwd { seq, path: real.display().to_string() });
+                self.session.handle(SessionEvent::SetCwd {
+                    seq,
+                    path: real.display().to_string(),
+                });
                 self.session.echo(entry::Entry::System {
                     text: format!("工作目录：{} → {}（已落盘）", old.display(), real.display()),
                     align: entry::Align::Center,
                 });
             }
             Ok(_) => {
-                self.session.echo(entry::Entry::Error { text: format!("不是目录：{arg}") });
+                self.session.echo(entry::Entry::Error {
+                    text: format!("不是目录：{arg}"),
+                });
             }
             Err(e) => {
-                self.session.echo(entry::Entry::Error { text: format!("目录不存在：{arg}（{e}）") });
+                self.session.echo(entry::Entry::Error {
+                    text: format!("目录不存在：{arg}（{e}）"),
+                });
             }
         }
     }
@@ -82,14 +89,25 @@ impl App {
     pub(crate) fn cmd_name(&mut self, arg: &str) {
         if arg.is_empty() {
             let cur = self.session.session_name().unwrap_or("（未命名）");
-            self.session.echo(entry::Entry::Error { text: format!("当前会话名：{cur}。用法：/name <名字>") });
+            self.session.echo(entry::Entry::Error {
+                text: format!("当前会话名：{cur}。用法：/name <名字>"),
+            });
             return;
         }
         // One protocol event: marker entry, persistence, legacy column —
         // all the session's business now.
-        self.session.handle(SessionEvent::NameMarker(arg.to_string()));
+        self.session
+            .handle(SessionEvent::NameMarker(arg.to_string()));
+        // Theme trigger: the session's color set follows its name. Same
+        // name -> same theme (stable hash pick); session-temporary, the
+        // config default returns next launch. Next frame repaints via the
+        // per-frame Palette snapshot; the block cache drops on epoch bump.
+        crate::tui::theme::rotate_for_seed(arg);
         self.session.echo(entry::Entry::System {
-            text: format!("已命名：{arg}"),
+            text: format!(
+                "已命名：{arg}（主题 {}）",
+                crate::tui::theme::current_theme_name().unwrap_or_default()
+            ),
             align: entry::Align::Center,
         });
     }
@@ -97,22 +115,20 @@ impl App {
     // Build the resume picker entries for sessions recorded under `root`.
     // Shared by /resume and the `--resume` CLI flag (which opens the
     // picker before the first frame).
-    pub(crate) fn build_resume_items(st: &crate::store::Store, root: &std::path::Path)
-        -> anyhow::Result<Vec<(i64, String)>>
-    {
+    pub(crate) fn build_resume_items(
+        st: &crate::store::Store,
+        root: &std::path::Path,
+    ) -> anyhow::Result<Vec<(i64, String)>> {
         let metas = st.list_sessions_under(root)?;
         let items = metas
             .iter()
             .map(|m| {
-                let first = st
-                    .load_entries(m.id)
-                    .ok()
-                    .and_then(|es| {
-                        es.iter().find_map(|e| match e {
-                            entry::Entry::User { content } => Some(content.clone()),
-                            _ => None,
-                        })
-                    });
+                let first = st.load_entries(m.id).ok().and_then(|es| {
+                    es.iter().find_map(|e| match e {
+                        entry::Entry::User { content } => Some(content.clone()),
+                        _ => None,
+                    })
+                });
                 (m.id, crate::store::display_name(m, first.as_deref()))
             })
             .collect();
@@ -122,7 +138,9 @@ impl App {
     // /resume: list this project's sessions, stretching the reserved area.
     pub(crate) fn cmd_resume(&mut self) {
         let Some(st) = self.session.store() else {
-            self.session.echo(entry::Entry::Error { text: "存储未打开，无法 resume".into() });
+            self.session.echo(entry::Entry::Error {
+                text: "存储未打开，无法 resume".into(),
+            });
             return;
         };
         let root = self.session.cwd();
@@ -136,7 +154,9 @@ impl App {
                 self.resume_pick = Some((items, 0));
             }
             Err(e) => {
-                self.session.echo(entry::Entry::Error { text: format!("读会话失败：{e:#}") });
+                self.session.echo(entry::Entry::Error {
+                    text: format!("读会话失败：{e:#}"),
+                });
             }
         }
     }
@@ -146,7 +166,9 @@ impl App {
         if arg.is_empty() {
             let cfg = self.cfg.as_ref().expect("cfg ready").borrow();
             let current = cfg.app.default.as_deref().unwrap_or("(未设置)");
-            let mut lines = vec![format!("当前默认：{current}（/model <provider>:<id> 修改，写入 config.yaml）")];
+            let mut lines = vec![format!(
+                "当前默认：{current}（/model <provider>:<id> 修改，写入 config.yaml）"
+            )];
             for (pname, m) in cfg.models() {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
             }
@@ -155,8 +177,21 @@ impl App {
             }
             return;
         }
-        match self.cfg.as_ref().expect("cfg ready").borrow().model_by_id(arg).ok() {
-            Some(_) => match self.cfg.as_ref().expect("cfg ready").borrow().save_default(arg) {
+        match self
+            .cfg
+            .as_ref()
+            .expect("cfg ready")
+            .borrow()
+            .model_by_id(arg)
+            .ok()
+        {
+            Some(_) => match self
+                .cfg
+                .as_ref()
+                .expect("cfg ready")
+                .borrow()
+                .save_default(arg)
+            {
                 Ok(()) => {
                     self.session.echo(entry::Entry::System {
                         text: format!("默认模型已设为 {arg}，已写入 config.yaml"),
@@ -182,7 +217,9 @@ impl App {
         let cfg = self.cfg.as_ref().expect("cfg ready").borrow();
         if arg.is_empty() {
             let cur = self.current_model.borrow().display_name().to_string();
-            let mut lines = vec![format!("当前会话模型：{cur}（/switch <provider>:<id> 切换）")];
+            let mut lines = vec![format!(
+                "当前会话模型：{cur}（/switch <provider>:<id> 切换）"
+            )];
             for (pname, m) in cfg.models() {
                 lines.push(format!("  {pname}:{} ({})", m.id, Config::display_name(m)));
             }
@@ -194,13 +231,16 @@ impl App {
         match cfg.model_by_id(arg) {
             Ok(rm) => {
                 drop(cfg);
-                let new_model = self.session.switch_model(
-                    &self.cfg.as_ref().expect("cfg ready").borrow(),
-                    &rm,
-                );
+                let new_model = self
+                    .session
+                    .switch_model(&self.cfg.as_ref().expect("cfg ready").borrow(), &rm);
                 *self.current_model.borrow_mut() = new_model;
                 self.session.echo(entry::Entry::System {
-                    text: format!("已切换到 {} ({})，仅本会话生效", arg, Config::display_name(&rm.entry)),
+                    text: format!(
+                        "已切换到 {} ({})，仅本会话生效",
+                        arg,
+                        Config::display_name(&rm.entry)
+                    ),
                     align: entry::Align::Center,
                 });
             }

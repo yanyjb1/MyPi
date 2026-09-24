@@ -43,6 +43,11 @@ pub struct BlockCache {
     stamp: u64,
     /// Rows currently cached.
     cached_rows: usize,
+    /// Theme epoch the cached rows were colored with. A theme swap bumps
+    /// the epoch; the next sync sees a mismatch and drops every row
+    /// (heights re-derive from the re-render). omp's `themeEpoch` cache
+    /// key contract, applied to the whole block store.
+    theme_epoch: u64,
 }
 
 impl BlockCache {
@@ -53,6 +58,7 @@ impl BlockCache {
             width: 0,
             stamp: 0,
             cached_rows: 0,
+            theme_epoch: crate::tui::theme::theme_epoch(),
         }
     }
 
@@ -83,6 +89,15 @@ impl BlockCache {
         tools_expanded: bool,
         width: usize,
     ) {
+        let epoch = crate::tui::theme::theme_epoch();
+        if epoch != self.theme_epoch {
+            // Theme swap: every cached row is stale-colored. Drop rows;
+            // heights re-derive from the re-render (same as width change).
+            self.slots.clear();
+            self.cached_rows = 0;
+            self.heights.clear();
+            self.theme_epoch = epoch;
+        }
         if width != self.width {
             // Width change invalidates every wrap; drop rows but keep the
             // structure — heights re-derive from the re-render below.
@@ -97,7 +112,12 @@ impl BlockCache {
             // only structural surprise: truncate heights and evict orphans.
             if ranges.len() < self.heights.len() {
                 self.heights.truncate(ranges.len());
-                let dead: Vec<usize> = self.slots.keys().copied().filter(|k| *k >= ranges.len()).collect();
+                let dead: Vec<usize> = self
+                    .slots
+                    .keys()
+                    .copied()
+                    .filter(|k| *k >= ranges.len())
+                    .collect();
                 for k in dead {
                     if let Some(s) = self.slots.remove(&k) {
                         self.cached_rows -= s.rows;
@@ -142,7 +162,14 @@ impl BlockCache {
                     // Heights above the window must exist for the scroll
                     // math; render (uncached — a tall ancient block gets
                     // its height remembered but its rows dropped).
-                    let b = blocks::render_block(entries, *r, p, show_reasoning, tools_expanded, self.width);
+                    let b = blocks::render_block(
+                        entries,
+                        *r,
+                        p,
+                        show_reasoning,
+                        tools_expanded,
+                        self.width,
+                    );
                     self.set_height(i, b.height);
                     prefix_rows += b.height + 1; // + gap
                 } else {
@@ -216,7 +243,14 @@ impl BlockCache {
         }
         self.cached_rows += rows;
         self.stamp += 1;
-        self.slots.insert(idx, Slot { block: b, stamp: self.stamp, rows });
+        self.slots.insert(
+            idx,
+            Slot {
+                block: b,
+                stamp: self.stamp,
+                rows,
+            },
+        );
     }
 
     #[cfg(test)]
@@ -242,8 +276,14 @@ mod tests {
     fn convo(blocks_n: usize) -> Vec<Entry> {
         let mut es = Vec::new();
         for i in 0..blocks_n {
-            es.push(Entry::User { content: format!("用户消息 {i} 一点内容") });
-            es.push(Entry::Assistant { content: format!("回答 {i}"), usage: None, reasoning: None });
+            es.push(Entry::User {
+                content: format!("用户消息 {i} 一点内容"),
+            });
+            es.push(Entry::Assistant {
+                content: format!("回答 {i}"),
+                usage: None,
+                reasoning: None,
+            });
         }
         es
     }
@@ -282,7 +322,11 @@ mod tests {
         for start in (0..790).step_by(7).rev() {
             let _ = c.rows_for(&es, &p(), true, false, start..(start + 5).min(800));
         }
-        assert!(c.cached_rows() <= ROW_BUDGET, "缓存行数 {} 超预算", c.cached_rows());
+        assert!(
+            c.cached_rows() <= ROW_BUDGET,
+            "缓存行数 {} 超预算",
+            c.cached_rows()
+        );
         assert!(c.cached_block_count() < 800, "LRU 必须驱逐");
     }
 

@@ -70,7 +70,11 @@ pub fn render(spec: &InputSpec<'_>, p: &Palette) -> InputView {
     for i in starts..bottom_row {
         lines.push(bar_line(&wrapped.lines[i], w, p));
     }
-    let last = wrapped.lines.get(bottom_row).map(|s| s.as_str()).unwrap_or("");
+    let last = wrapped
+        .lines
+        .get(bottom_row)
+        .map(|s| s.as_str())
+        .unwrap_or("");
     lines.push(bottom_line(last, w, p));
 
     // Cursor row: the statusline takes 1 row, minus the rows before the viewport start
@@ -92,9 +96,9 @@ fn bar_line(content: &str, w: usize, p: &Palette) -> Line<'static> {
     let cw = crate::tui::text::display_width(content);
     let pad = inner.saturating_sub(cw);
     Line::from(vec![
-        p.accent("| "),
+        p.accent_span("| "),
         Span::styled(content.to_string(), Style::new()),
-        p.accent(format!("{} |", " ".repeat(pad))),
+        p.accent_span(format!("{} |", " ".repeat(pad))),
     ])
 }
 
@@ -105,10 +109,10 @@ fn bottom_line(content: &str, w: usize, p: &Palette) -> Line<'static> {
     let (seg, seg_w) = crate::tui::text::take_width(content, inner);
     let pad = inner.saturating_sub(seg_w);
     Line::from(vec![
-        p.accent("+-"),
+        p.accent_span("+-"),
         Span::styled(seg, Style::new()),
         p.plain(" ".repeat(pad)), // 留空，用户在此继续输入
-        p.accent("-+"),
+        p.accent_span("-+"),
     ])
 }
 
@@ -151,7 +155,8 @@ mod tests {
         let wrapped = text::wrap("hi", 40);
         let v = render(&spec(&wrapped, 0, 0, 2, 20), &p);
         assert_eq!(v.lines.len(), 2, "单行输入：状态栏 + 底边");
-        let text_of = |l: &Line| -> String { l.spans.iter().map(|s| s.content.to_string()).collect() };
+        let text_of =
+            |l: &Line| -> String { l.spans.iter().map(|s| s.content.to_string()).collect() };
         assert!(text_of(&v.lines[1]).starts_with("+-hi"));
         assert!(text_of(&v.lines[1]).ends_with("-+"));
     }
@@ -162,7 +167,8 @@ mod tests {
         let wrapped = text::wrap("aa\nbb\ncc", 40);
         let v = render(&spec(&wrapped, 0, 2, 2, 20), &p);
         assert_eq!(v.lines.len(), 4); // 状态栏 + 2 个 | 行 + 底边
-        let text_of = |l: &Line| -> String { l.spans.iter().map(|s| s.content.to_string()).collect() };
+        let text_of =
+            |l: &Line| -> String { l.spans.iter().map(|s| s.content.to_string()).collect() };
         assert!(text_of(&v.lines[1]).starts_with("| aa"));
         assert!(text_of(&v.lines[2]).starts_with("| bb"));
         assert!(text_of(&v.lines[3]).starts_with("+-cc"));
@@ -184,7 +190,11 @@ mod tests {
         let p = Palette::default();
         let wrapped = text::wrap("x", 40);
         let v = render(&spec(&wrapped, 0, 0, 1, 20), &p);
-        let t: String = v.lines[1].spans.iter().map(|s| s.content.to_string()).collect();
+        let t: String = v.lines[1]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         // Blanks in the middle, not dashes
         assert!(t.contains("+-x "), "{t:?}");
         assert!(!t.contains("---"), "底边不该用 - 填满: {t:?}");
@@ -229,7 +239,11 @@ mod tests {
         let wrapped = text::wrap("中文", 40);
         let v = render(&spec(&wrapped, 0, 0, 0, 20), &p);
         // "+-" + CJK text (4 cells) + blanks + "-+"
-        let t: String = v.lines[1].spans.iter().map(|s| s.content.to_string()).collect();
+        let t: String = v.lines[1]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert_eq!(width_of(&v.lines[1]), 20);
         assert!(t.starts_with("+-中文"), "{t:?}");
     }
