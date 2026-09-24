@@ -41,11 +41,21 @@ pub enum Entry {
     // `intent` is the model's own one-line "what am I about to do", shown in the
     // live slot while the (blocking) tool runs.
     // `call_id` is the protocol pairing key.
+    //
+    // `text` and `first` preserve the **wire shape** the model actually sent.
+    // One assistant message may carry text *and* several tool calls
+    // (`Assistant { content: Some("我先查一下"), tool_calls: [c1, c2] }`);
+    // replaying that as disconnected per-call messages would change the bytes
+    // the gateway sees. `first` marks the message's opening call (true) so
+    // replay can group a run of calls back into one message; `text` rides
+    // that opening call (empty on the rest).
     ToolRequest {
         call_id: String,
         name: String,
         args: String,
         intent: String,
+        text: String,
+        first: bool,
     },
     // Tool call result. `ok` decides the card color.
     // `result` is the **exact text sent to the model** — the only thing persisted;
@@ -201,10 +211,13 @@ impl Entry {
                 name,
                 args,
                 intent,
+                text,
+                first,
             } => (
                 "tool_request",
                 serde_json::json!({
-                    "call_id": call_id, "name": name, "args": args, "intent": intent
+                    "call_id": call_id, "name": name, "args": args, "intent": intent,
+                    "text": text, "first": first
                 })
                 .to_string(),
             ),
@@ -280,6 +293,14 @@ impl Entry {
                         .and_then(|i| i.as_str())
                         .unwrap_or_default()
                         .to_string(),
+                    // Legacy rows predate these fields: no attached text, and
+                    // treat each as its own message (the old replay shape).
+                    text: v
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    first: v.get("first").and_then(|f| f.as_bool()).unwrap_or(true),
                 }
             }
             "tool_result" => Entry::ToolResult {

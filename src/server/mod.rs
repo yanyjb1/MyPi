@@ -16,7 +16,6 @@
 //! drains the change stream, and draws. It holds no conversation state
 //! of its own.
 
-pub mod artifacts;
 pub mod compaction;
 pub mod events;
 pub mod profile;

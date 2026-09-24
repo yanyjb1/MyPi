@@ -121,6 +121,12 @@ pub enum ToolEvent {
         name: String,
         args: String,
         intent: String,
+        // The assistant message's text, carried by its opening call only
+        // (see `Entry::ToolRequest`). Empty for a pure tool round.
+        text: String,
+        // True on the message's first call: lets replay regroup a run of
+        // calls into the single Assistant message the model actually sent.
+        first: bool,
     },
     // Execution finished. `result` is the model-facing text; it is the only payload forwarded to the UI.
     Finish {
@@ -202,12 +208,22 @@ pub fn run(
         ctx.messages.push(assistant.to_message());
 
         // ---- Execute one by one, appending results immediately ----
-        for call in &assistant.tool_calls {
+        // One assistant message, N calls: the message's text rides its first
+        // call, and `first` marks that boundary so replay can rebuild the
+        // exact wire shape instead of N disconnected messages.
+        let round_text = assistant.content.clone();
+        for (i, call) in assistant.tool_calls.iter().enumerate() {
             on_tool(ToolEvent::Start {
                 call_id: call.id.clone(),
                 name: call.name().to_string(),
                 args: call.function.arguments.clone(),
                 intent: extract_intent(call),
+                text: if i == 0 {
+                    round_text.clone()
+                } else {
+                    String::new()
+                },
+                first: i == 0,
             });
             let (ok, content) = match tools.execute(call) {
                 Ok(text) => (true, text),

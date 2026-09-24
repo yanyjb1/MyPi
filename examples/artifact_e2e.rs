@@ -4,9 +4,9 @@
 //!
 //! Usage: cargo run --release --example artifact_e2e
 
+use mypi::agent::artifacts::ArtifactStore;
 use mypi::agent::loop_rs::ToolExecutor as _;
 use mypi::agent::tools::BuiltinTools;
-use mypi::server::artifacts::ArtifactStore;
 use std::sync::{Arc, Mutex};
 
 fn main() {

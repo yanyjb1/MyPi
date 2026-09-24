@@ -59,6 +59,8 @@ pub fn rotate_for_seed(seed: &str) {
             name: "bash".into(),
             args: r#"{"command":"cargo test --lib | tail -3"}"#.into(),
             intent: "跑测试".into(),
+                text: String::new(),
+                first: true,
         },
         Entry::ToolResult {
             call_id: "c1".into(),
@@ -71,6 +73,8 @@ pub fn rotate_for_seed(seed: &str) {
             name: "edit".into(),
             args: r#"{"path":"src/tui/theme/mod.rs","old":"let palette = Palette::from_config();","new":"let palette = Palette::current();"}"#.into(),
             intent: "改初始化".into(),
+                text: String::new(),
+                first: true,
         },
         Entry::ToolResult {
             call_id: "c2".into(),

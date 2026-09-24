@@ -679,6 +679,8 @@ mod tests {
                 name: "bash".into(),
                 args: "seq 1 30".into(),
                 intent: String::new(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),
@@ -711,6 +713,8 @@ mod tests {
                 name: "bash".into(),
                 args: "echo hi".into(),
                 intent: String::new(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),
@@ -738,6 +742,8 @@ mod tests {
                 name: "bash".into(),
                 args: format!("cmd{i}"),
                 intent: String::new(),
+                text: String::new(),
+                first: true,
             });
             es.push(Entry::ToolResult {
                 call_id: format!("c{i}"),

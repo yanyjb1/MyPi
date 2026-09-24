@@ -102,7 +102,7 @@ pub(super) fn card_row(
         content
             .spans
             .into_iter()
-            .map(|sp| Span::styled(crate::tui::text::strip_ansi(&sp.content), sp.style))
+            .map(|sp| Span::styled(crate::ansi::strip_ansi(&sp.content), sp.style))
             .collect::<Vec<_>>(),
     )
     .style(clean_style);

@@ -46,7 +46,7 @@ pub struct TurnRequest {
     // Artifact storage for this session (own DB connection; see
     // `ArtifactStore::open`). `None` = store unavailable — oversized tool
     // output flows into the context verbatim (the pre-artifact behavior).
-    pub artifacts: Option<crate::server::artifacts::ArtifactStore>,
+    pub artifacts: Option<crate::agent::artifacts::ArtifactStore>,
     // Tool-layer knobs (bash timeout, ...) from config.yaml.
     pub tools: crate::agent::tools::ToolsConfig,
 }
@@ -101,11 +101,15 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
                         name,
                         args,
                         intent,
+                        text,
+                        first,
                     } => SessionEvent::ToolStart {
                         call_id,
                         name,
                         args,
                         intent,
+                        text,
+                        first,
                     },
                     crate::agent::loop_rs::ToolEvent::Finish {
                         call_id,
@@ -133,18 +137,13 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
                     outcome.message.usage,
                     outcome.message.stop_reason,
                 ));
-                // Project the round out of `chat` **before** handing it
-                // back: `collect_turn` borrows, so this is the last use of
-                // the local — the write-back below can move it instead of
-                // cloning the whole history (tens of MB on a long session).
-                let entries = collect_turn(&chat, &text);
-                // Write the finalized history back to the shared slot: the model remembers
-                // this turn next round (and prefix-cache hits depend on it). Not written on Err —
-                // never pollute the shared slot with a partial history.
+                // Persistence is the session's job now: it stores what the
+                // event stream built up (`pending`), not a re-projection of
+                // this context. We still write the finalized history back so
+                // the **next request** carries it (the model must remember
+                // this turn, and the prefix cache keys on it).
                 *chat_arc.lock().expect("chat 锁中毒") = chat;
-                // Whole turn finalized: user + (assistant.tool_calls + tool results) * N + assistant.
-                // Persisted in one shot by the session (Commit).
-                let _ = send(SessionEvent::Commit(entries));
+                let _ = text; // retained for signature parity; no longer projected
             }
             Err(e) => {
                 let _ = send(SessionEvent::Error(format!("{e:#}")));
@@ -156,42 +155,50 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
 
 // ---- turn assembly ------------------------------------------------------
 
-/// Rebuild the **full protocol messages** from projected entries (the
-/// inverse of [`collect_turn`]). Tool call details (call_id / arguments /
-/// results) are all in the DB — the live build, resume, and tree
-/// navigation all read the same source, so the model sees the history
-/// exactly as it did the first time.
+/// Rebuild the **full protocol messages** from projected entries. Tool call
+/// details (call_id / arguments / results) are all in the DB — the live
+/// build, resume, and tree navigation all read the same source, so the model
+/// sees the history exactly as it did the first time.
 ///
 /// Dangling safety: if the projection ends inside a tool chain (leaf on
 /// a ToolRequest with no matching ToolResult, or vice versa), the tail
 /// is repaired — a request without results is dropped together with its
 /// pending calls (never a half-open tool_calls message), so the next
 /// `run()` always starts from a protocol-legal boundary.
-pub fn entries_to_context(entries: &[Entry]) -> ChatContext {
+pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
+    // A compaction marker is the context root: everything before the **last**
+    // one is superseded by that marker's summary. Dropping it here is what
+    // makes a resumed /compacted session replay the *compacted* context —
+    // the marker's own arm below emits the summary, and the entries ahead of
+    // it never reach the model. Without this the pre-compaction region came
+    // back on resume / tree navigation and the user paid for the same tokens
+    // a second time.
+    let start = entries
+        .iter()
+        .rposition(|e| matches!(e, Entry::Compaction { .. }))
+        .unwrap_or(0);
+    let entries = &entries[start..];
     let mut rebuilt = ChatContext::new().push(crate::ai::types::Message::System {
-        content: crate::server::profile::BUILTIN_SYSTEM.into(),
+        content: system.to_string(),
     });
-    // Pair requests with their results first: call_id -> (ok, result)
-    use std::collections::BTreeMap;
-    let mut results: BTreeMap<String, (bool, String)> = BTreeMap::new();
+    // Which calls actually got a result. A call without one is a dangling
+    // tail (the leaf sits mid-tool, e.g. an interrupted turn); it must not
+    // become a tool_calls message the gateway would reject for having no
+    // matching result. Groups are emitted complete-only below.
+    let mut complete: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for e in entries {
-        if let Entry::ToolResult {
-            call_id,
-            ok,
-            result,
-            ..
-        } = e
-        {
-            results.insert(call_id.clone(), (*ok, result.clone()));
+        if let Entry::ToolResult { call_id, .. } = e {
+            complete.insert(call_id.clone());
         }
     }
-    let mut served: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for e in entries {
-        match e {
+    let mut i = 0;
+    while i < entries.len() {
+        match &entries[i] {
             Entry::User { content } => {
                 rebuilt = rebuilt.push(crate::ai::types::Message::User {
                     content: content.clone(),
                 });
+                i += 1;
             }
             // Reasoning never re-enters the protocol: display-only.
             Entry::Assistant { content, .. } => {
@@ -199,39 +206,90 @@ pub fn entries_to_context(entries: &[Entry]) -> ChatContext {
                     content: Some(content.clone()),
                     tool_calls: Vec::new(),
                 });
+                i += 1;
             }
-            Entry::Reasoning { .. } => {}
-            Entry::ToolRequest {
-                call_id,
-                name,
-                args,
-                ..
-            } => {
-                // `args` is replayed verbatim: the model must see the call it
-                // actually made, not a reconstruction.
-                let call = crate::ai::types::ToolCall {
-                    id: call_id.clone(),
-                    kind: "function".into(),
-                    function: crate::ai::types::FunctionCall {
-                        name: name.clone(),
-                        arguments: args.clone(),
-                    },
-                };
-                rebuilt = rebuilt.push(crate::ai::types::Message::Assistant {
-                    content: None,
-                    tool_calls: vec![call],
-                });
-            }
-            Entry::ToolResult {
-                call_id, result, ..
-            } => {
-                // The stored result is exactly what the model received
-                // back then — use it verbatim.
-                served.insert(call_id.clone());
-                rebuilt = rebuilt.push(crate::ai::types::Message::Tool {
-                    tool_call_id: call_id.clone(),
-                    content: result.clone(),
-                });
+            Entry::Reasoning { .. } => i += 1,
+            // A run of tool entries is one assistant message (possibly
+            // several calls) plus its result messages. Rebuild the **original
+            // wire shape**: group the calls the model sent together, emit one
+            // Assistant carrying them all, then the Tool messages — not N
+            // disconnected assistant/tool pairs, which serialize to different
+            // bytes and cost a prefix-cache miss.
+            Entry::ToolRequest { .. } | Entry::ToolResult { .. } => {
+                let end = entries[i..]
+                    .iter()
+                    .position(|e| {
+                        !matches!(e, Entry::ToolRequest { .. } | Entry::ToolResult { .. })
+                    })
+                    .map(|p| i + p)
+                    .unwrap_or(entries.len());
+                let block = &entries[i..end];
+                // Split the block into call groups: a `first` request opens
+                // one; the rest of its message's calls follow.
+                // (text, calls, results) — one entry per original message.
+                type Group = (
+                    String,
+                    Vec<crate::ai::types::ToolCall>,
+                    Vec<(String, String)>,
+                );
+                let mut groups: Vec<Group> = Vec::new();
+                for e in block {
+                    match e {
+                        Entry::ToolRequest {
+                            call_id,
+                            name,
+                            args,
+                            text,
+                            first,
+                            ..
+                        } => {
+                            if *first || groups.is_empty() {
+                                groups.push((text.clone(), Vec::new(), Vec::new()));
+                            }
+                            if complete.contains(call_id) {
+                                let call = crate::ai::types::ToolCall {
+                                    id: call_id.clone(),
+                                    kind: "function".into(),
+                                    function: crate::ai::types::FunctionCall {
+                                        name: name.clone(),
+                                        // `args` replays verbatim: the model
+                                        // must see the call it actually made.
+                                        arguments: args.clone(),
+                                    },
+                                };
+                                groups.last_mut().expect("just pushed").1.push(call);
+                            }
+                        }
+                        Entry::ToolResult {
+                            call_id, result, ..
+                        } => {
+                            if let Some(g) = groups.last_mut() {
+                                g.2.push((call_id.clone(), result.clone()));
+                            }
+                        }
+                        _ => unreachable!("block holds only tool entries"),
+                    }
+                }
+                for (text, calls, results) in groups {
+                    // A group whose every call dangles has nothing legal to
+                    // emit — drop it (the old repair pass did this after the
+                    // fact; doing it here keeps construction the only source
+                    // of truth).
+                    if calls.is_empty() {
+                        continue;
+                    }
+                    rebuilt = rebuilt.push(crate::ai::types::Message::Assistant {
+                        content: (!text.is_empty()).then_some(text),
+                        tool_calls: calls,
+                    });
+                    for (call_id, result) in results {
+                        rebuilt = rebuilt.push(crate::ai::types::Message::Tool {
+                            tool_call_id: call_id,
+                            content: result,
+                        });
+                    }
+                }
+                i = end;
             }
             // A compaction marker is the context root: everything the
             // caller passed *before* it is dropped upstream (the compacted
@@ -241,138 +299,297 @@ pub fn entries_to_context(entries: &[Entry]) -> ChatContext {
                 rebuilt = rebuilt.push(crate::ai::types::Message::User {
                     content: summary.clone(),
                 });
+                i += 1;
             }
             // System notices and Name markers are UI/persistence metadata:
             // neither has a protocol role.
-            Entry::Error { .. } | Entry::Name { .. } | Entry::System { .. } => {}
-        }
-    }
-    // Repair pass: drop trailing requests whose results never arrived
-    // (dangling leaf). Walk backwards while the tail is ToolRequest-
-    // without-result or a Tool message whose request was dropped.
-    loop {
-        match rebuilt.messages.last() {
-            Some(crate::ai::types::Message::Tool { tool_call_id, .. }) if !served.is_empty() => {
-                // A Tool result always pairs with the preceding request;
-                // by construction requests come before results, so this
-                // cannot dangle. Stop when we hit anything else.
-                let id = tool_call_id.clone();
-                // Remove this Tool message and its (already emitted) request
-                // stays — a result with request is protocol-legal. Nothing
-                // to repair.
-                let _ = id;
-                break;
-            }
-            Some(crate::ai::types::Message::Assistant {
-                content: None,
-                tool_calls,
-            }) if !tool_calls.is_empty() => {
-                // Pure tool-call round with no results yet: dangling.
-                // Rewind to before this message.
-                rebuilt.messages.pop();
-                // Also remove the matching result markers (none here by
-                // construction) and continue checking the new tail.
-                continue;
-            }
-            _ => break,
+            Entry::Error { .. } | Entry::Name { .. } | Entry::System { .. } => i += 1,
         }
     }
     rebuilt
 }
 
-/// Whole-turn assembly from the finalized chat replica: user +
-/// (assistant.tool_calls + tool results) \* N + final assistant.
-pub(crate) fn collect_turn(chat: &ChatContext, text: &str) -> Vec<Entry> {
-    use crate::ai::types::Message;
-    // The turn starts at the last User message (pushed at the top of run()).
-    // Walk **forward** from there — the old "scan backward then reverse" approach
-    // inverted each request -> result pair into result -> request.
-    let start = chat
-        .messages
-        .iter()
-        .rposition(|m| matches!(m, Message::User { .. }))
-        .expect("本轮一定 push 过 User");
-    let mut out = Vec::new();
-    for m in &chat.messages[start..] {
-        match m {
-            Message::User { content } => {
-                out.push(Entry::User {
-                    content: content.clone(),
-                });
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The byte-fidelity contract: a tool round carrying assistant text and
+    /// several calls must replay as the **one** Assistant message the model
+    /// sent, not N disconnected messages.
+    #[test]
+    fn replay_regroups_a_multi_call_message_with_its_text() {
+        use crate::ai::types::{Message, ToolCall};
+        let es = vec![
+            Entry::User {
+                content: "跑两个".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: r#"{"command":"a"}"#.into(),
+                intent: String::new(),
+                // The model said something *and* called two tools.
+                text: "我先跑两个命令".into(),
+                first: true,
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "a-out".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c2".into(),
+                name: "bash".into(),
+                args: r#"{"command":"b"}"#.into(),
+                intent: String::new(),
+                text: String::new(),
+                first: false,
+            },
+            Entry::ToolResult {
+                call_id: "c2".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "b-out".into(),
+            },
+            Entry::Assistant {
+                content: "都好了".into(),
+                usage: None,
+            },
+        ];
+        let ctx = entries_to_context("sys", &es);
+        // system, user, assistant(1 msg, 2 calls), tool, tool, assistant
+        assert_eq!(
+            ctx.messages.len(),
+            6,
+            "多调用必须合成一条: {:?}",
+            ctx.messages
+        );
+        match &ctx.messages[2] {
             Message::Assistant {
                 content,
                 tool_calls,
             } => {
-                let c = content.clone().unwrap_or_default();
-                if !tool_calls.is_empty() {
-                    for tc in tool_calls {
-                        // Keep the raw arguments **verbatim**: the card renders
-                        // them and resume replays them, so any extraction here
-                        // would lose information (an earlier version stored
-                        // only `path`, which blanked every bash card and
-                        // mis-replayed non-JSON paths as arguments).
-                        out.push(Entry::ToolRequest {
-                            call_id: tc.id.clone(),
-                            name: tc.function.name.clone(),
-                            args: tc.function.arguments.clone(),
-                            intent: tc
-                                .function
-                                .arguments_json()
-                                .ok()
-                                .and_then(|v| {
-                                    v.get("intent").and_then(|i| i.as_str()).map(String::from)
-                                })
-                                .unwrap_or_default(),
-                        });
-                    }
-                    // The tool_calls assistant appears only as a request card;
-                    // no duplicate Assistant entry (its content is usually empty)
-                } else {
-                    out.push(Entry::Assistant {
-                        content: c,
-                        usage: None,
-                    });
-                }
+                assert_eq!(content.as_deref(), Some("我先跑两个命令"), "文本必须还原");
+                let ids: Vec<&str> = tool_calls.iter().map(|c| c.id.as_str()).collect();
+                assert_eq!(ids, vec!["c1", "c2"], "两个调用同属一条消息");
+                assert!(matches!(tool_calls[0], ToolCall { .. }));
             }
-            Message::Tool {
-                tool_call_id,
-                content,
-            } => {
-                // name/call_id backfill from the nearest preceding request card with the same name
-                // (pairing unchanged: tool_call_id is the protocol key, name is display-only)
-                let name = out
-                    .iter()
-                    .rev()
-                    .find_map(|e| match e {
-                        Entry::ToolRequest { call_id, name, .. }
-                            if call_id == tool_call_id.as_str() =>
-                        {
-                            Some(name.clone())
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                out.push(Entry::ToolResult {
-                    call_id: tool_call_id.clone(),
-                    name,
-                    ok: true,
-                    result: content.clone(),
-                });
-            }
-            Message::System { .. } => {}
+            other => panic!("第 3 条应是合并后的 Assistant: {other:?}"),
         }
     }
-    // Sanity: the first extracted entry must be User (guards against misalignment).
-    // text is not compared — it is trimmed input and may differ in whitespace from chat.
-    let _ = text;
-    debug_assert!(out.first().is_some_and(|e| matches!(e, Entry::User { .. })));
-    out
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    /// A dangling tail (call with no result) must not become a tool_calls
+    /// message — the gateway rejects a call with no matching result.
+    #[test]
+    fn replay_drops_a_call_without_a_result() {
+        use crate::ai::types::Message;
+        let es = vec![
+            Entry::User {
+                content: "q".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: "{}".into(),
+                intent: String::new(),
+                text: "想着要跑".into(),
+                first: true,
+            },
+            // no result — the turn died here
+        ];
+        let ctx = entries_to_context("sys", &es);
+        // system + user only: the dangling call (text and all) is dropped.
+        assert_eq!(ctx.messages.len(), 2, "{:?}", ctx.messages);
+        assert!(matches!(&ctx.messages[1], Message::User { .. }));
+    }
+
+    /// The user's contract: a full round (reasoning + reply + tool round)
+    /// persists and reads back **byte-identical**, and the rebuilt
+    /// protocol context contains the reasoning nowhere.
+    #[test]
+    fn full_round_with_reasoning_round_trips_byte_identical() {
+        use crate::entry::Entry;
+        use crate::server::turn::entries_to_context;
+        use crate::store::Store;
+
+        let dir = std::env::temp_dir().join(format!("mypi-full-round-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Store::open(&dir.join("t.db")).unwrap();
+        let id = s.create_session("t", "/").unwrap();
+        let round = &[
+            Entry::User {
+                content: "先想再答".into(),
+            },
+            Entry::Reasoning {
+                content: "内心独白：\n1. 想一步\n2. 想两步".into(),
+            },
+            Entry::Assistant {
+                content: "最终答案".into(),
+                usage: None,
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: r#"{"command":"echo hi"}"#.into(),
+                intent: "打个招呼".into(),
+                text: String::new(),
+                first: true,
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "hi".into(),
+            },
+        ];
+        s.append(id, round).unwrap();
+        let back = s.load_entries(id).unwrap();
+        assert_eq!(&back, round, "落盘→读回必须逐字节还原");
+
+        // And the protocol rebuild skips the reasoning entirely:
+        let ctx = entries_to_context("sys", &back);
+        let has_reasoning_text = ctx
+            .messages
+            .iter()
+            .any(|m| format!("{m:?}").contains("内心独白"));
+        assert!(!has_reasoning_text, "推理不得进入协议上下文");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The user's hard contract, end to end: a conversation whose rounds
+    /// include assistant text on tool turns, several calls in one message,
+    /// reasoning, and a mid-turn break — persisted, read back, and replayed
+    /// as protocol JSON — must serialize to **exactly** the bytes the model
+    /// originally saw. Not "a semantically equivalent history": the same
+    /// bytes, so the prefix cache hits and resume is indistinguishable.
+    #[test]
+    fn a_whole_conversation_replays_byte_identically() {
+        use crate::ai::types::{Context as Wire, Message, ToolCall};
+        use crate::entry::Entry;
+        use crate::server::turn::entries_to_context;
+        use crate::store::Store;
+
+        let dir = std::env::temp_dir().join(format!("mypi-bytefit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Store::open(&dir.join("t.db")).unwrap();
+        let id = s.create_session("t", "/").unwrap();
+
+        // The conversation as the model saw it (wire form) and the entries
+        // the event stream produces for the same turn — these must agree.
+        let entries = vec![
+            Entry::User {
+                content: "帮我看看".into(),
+            },
+            Entry::Reasoning {
+                content: "先想想".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: r#"{"command":"ls"}"#.into(),
+                intent: "列目录".into(),
+                text: "我先列个目录".into(),
+                first: true,
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "a.txt\nb.txt".into(),
+            },
+            Entry::Assistant {
+                content: "有两个文件".into(),
+                usage: Some(Entry::usage_summary(&crate::ai::types::Usage::default())),
+            },
+        ];
+        s.append(id, &entries).unwrap();
+
+        // Read back from disk and replay.
+        let back = s.load_entries(id).unwrap();
+        assert_eq!(back, entries, "落盘→读回逐字节还原");
+        let replayed = entries_to_context("sys", &back);
+
+        // The expected wire: exactly these messages, in order.
+        let expected = Wire::new()
+            .push(Message::System {
+                content: "sys".into(),
+            })
+            .push(Message::User {
+                content: "帮我看看".into(),
+            })
+            .push(Message::Assistant {
+                content: Some("我先列个目录".into()),
+                tool_calls: vec![ToolCall::new("c1", "bash", r#"{"command":"ls"}"#)],
+            })
+            .push(Message::Tool {
+                tool_call_id: "c1".into(),
+                content: "a.txt\nb.txt".into(),
+            })
+            .push(Message::Assistant {
+                content: Some("有两个文件".into()),
+                tool_calls: vec![],
+            });
+
+        assert_eq!(
+            serde_json::to_string(&replayed.messages).unwrap(),
+            serde_json::to_string(&expected.messages).unwrap(),
+            "回放必须与原始 wire 逐字节一致\n回放: {:?}\n期望: {:?}",
+            replayed.messages,
+            expected.messages
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_starts_at_the_last_compaction_marker() {
+        // The bug this guards: a resumed /compacted session used to replay
+        // the *whole* stored chain, resurrecting the region the summary
+        // replaced — the user paid for those tokens a second time. Replay
+        // must start at the marker.
+        let es = vec![
+            Entry::User {
+                content: "AAAA 已压缩".into(),
+            },
+            Entry::Assistant {
+                content: "BBBB 已压缩".into(),
+                usage: None,
+            },
+            Entry::Compaction {
+                first_kept_seq: 2,
+                summary: "【摘要】".into(),
+            },
+            Entry::User {
+                content: "保留问题".into(),
+            },
+        ];
+        let ctx = entries_to_context("sys", &es);
+        let dump = format!("{:?}", ctx.messages);
+        assert!(!dump.contains("AAAA"), "压缩前内容不得复活");
+        assert!(!dump.contains("BBBB"), "压缩前内容不得复活");
+        assert!(dump.contains("【摘要】"), "摘要必须在");
+        assert!(dump.contains("保留问题"), "保留区必须在");
+        // system + summary + kept user = 3
+        assert_eq!(ctx.messages.len(), 3);
+    }
+
+    #[test]
+    fn replay_uses_the_given_system_prompt() {
+        // Resume must not silently swap the profile's prompt for the
+        // built-in one.
+        let es = vec![Entry::User {
+            content: "问".into(),
+        }];
+        let ctx = entries_to_context("我的自定义提示词", &es);
+        match &ctx.messages[0] {
+            crate::ai::types::Message::System { content } => {
+                assert_eq!(content, "我的自定义提示词");
+            }
+            other => panic!("首条必须是 System: {other:?}"),
+        }
+    }
 
     #[test]
     fn rebuild_handles_complete_and_dangling_tool_tails() {
@@ -386,6 +603,8 @@ mod tests {
                 name: "bash".into(),
                 args: "{}".into(),
                 intent: String::new(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),
@@ -398,7 +617,7 @@ mod tests {
                 usage: None,
             },
         ];
-        let ctx = entries_to_context(&complete);
+        let ctx = entries_to_context("sys", &complete);
         assert!(matches!(
             ctx.messages[1],
             crate::ai::types::Message::User { .. }
@@ -421,9 +640,11 @@ mod tests {
                 name: "bash".into(),
                 args: "{}".into(),
                 intent: String::new(),
+                text: String::new(),
+                first: true,
             },
         ];
-        let ctx = entries_to_context(&dangling);
+        let ctx = entries_to_context("sys", &dangling);
         assert_eq!(ctx.messages.len(), 2); // system + user
     }
 }

@@ -94,15 +94,26 @@ impl SessionState {
                 name,
                 args,
                 intent,
+                text,
+                first,
             } => {
                 self.stream.live = LiveActivity::Tool {
                     intent: intent.clone(),
                 };
+                // The message's text and its opening call are captured here;
+                // the round's own text buffer is cleared because it belongs
+                // to this tool message now, not to the final reply (else the
+                // two would merge into one reply on screen and on disk).
+                if first && !text.is_empty() {
+                    self.stream.text.clear();
+                }
                 let e = Entry::ToolRequest {
                     call_id,
                     name,
                     args,
                     intent,
+                    text,
+                    first,
                 };
                 self.pending.push(e.clone());
                 self.transcript.push(e);
@@ -130,80 +141,27 @@ impl SessionState {
                 Change::ToolActivity
             }
             SessionEvent::Error(e) => {
-                // Session-level errors are not persisted (not one of the
-                // four message kinds); memory stream only
+                // Mid-flight death (network drop, malformed stream) or a
+                // session-level notice. If a turn was streaming, whatever it
+                // produced is finalized **and persisted** first: a dropped
+                // connection must not cost the user the partial reply they
+                // already watched arrive. The error itself is display-only
+                // (not a protocol message kind).
+                if self.stream.active {
+                    self.finalize_round(None);
+                }
                 self.transcript.push(Entry::Error { text: e });
                 Change::Transcript
             }
             SessionEvent::TurnDone(u, _stop) => {
-                let content = std::mem::take(&mut self.stream.text);
-                let content = if content.is_empty() {
-                    "(无输出)".into()
-                } else {
-                    content
-                };
-                // Clone — do **not** take: `Commit` (arriving right after this
-                // event) reads this same buffer to fold the chain into the
-                // persisted round. Taking it here starved the commit path.
-                let reasoning = self.stream.reasoning.clone();
-                if !reasoning.is_empty() {
-                    let r = Entry::Reasoning { content: reasoning };
-                    self.pending.push(r.clone());
-                    self.transcript.push(r);
-                }
-                let e = Entry::Assistant {
-                    content,
-                    usage: Some(Entry::usage_summary(&u)),
-                };
-                self.pending.push(e.clone());
-                self.transcript.push(e);
+                // The single assembly point: whatever the event stream built
+                // up in `pending` IS the round. No second assembler runs, so
+                // there is nothing to keep in sync and no lossy projection
+                // between what streamed and what is stored.
+                self.finalize_round(Some(u.clone()));
                 self.pending_usage = Some(u.clone());
                 self.last_usage = Some(u);
-                self.stream.active = false;
                 Change::TurnDone
-            }
-            SessionEvent::Commit(mut entries) => {
-                // Persist the finalized round in one shot. `entries` is the
-                // runner's authoritative assembly, so it wins over our
-                // incremental pending mirror.
-                //
-                // Two things the wire `Message` cannot carry — the thinking
-                // chain and usage — both live in this buffer. The reasoning
-                // becomes its **own** entry (`Entry::Reasoning`) spliced in
-                // directly before the reply it produced; usage rides on the
-                // reply. Miss this and both die with the turn.
-                let reasoning = std::mem::take(&mut self.stream.reasoning);
-                let usage = self.pending_usage.take().map(|u| Entry::usage_summary(&u));
-                if let Some(i) = entries
-                    .iter()
-                    .rposition(|e| matches!(e, Entry::Assistant { .. }))
-                {
-                    // Splice the chain *directly before* the reply it produced.
-                    // The `i` is captured before the insert; afterwards the
-                    // reply sits at `i + 1` only when the insert happened, so
-                    // address it by re-finding it instead of doing index math
-                    // (an unconditional `entries[i + 1]` panicked on the
-                    // simplest round there is — `[User, Assistant]`, no
-                    // thinking, reply already last).
-                    if !reasoning.is_empty() {
-                        entries.insert(i, Entry::Reasoning { content: reasoning });
-                    }
-                    if let Some(Entry::Assistant { usage: u, .. }) = entries
-                        .iter_mut()
-                        .rev()
-                        .find(|e| matches!(e, Entry::Assistant { .. }))
-                    {
-                        *u = usage;
-                    }
-                }
-                if let Some((st, sid)) = self.persistence()
-                    && let Err(e) = st.append(sid, &entries)
-                {
-                    let msg = format!("落盘失败：{e:#}");
-                    self.transcript.push(Entry::Error { text: msg });
-                }
-                self.pending.clear();
-                Change::Transcript
             }
             SessionEvent::Done => {
                 self.stream.active = false;
@@ -247,6 +205,47 @@ impl SessionState {
                 // the facade owns the chat replica this event replaces.
                 Change::None
             }
+        }
+    }
+
+    /// The **single** assembly point for a round. Folds the streaming
+    /// buffers into entries (reasoning first, then the reply riding usage),
+    /// then persists everything `pending` accumulated this round and clears
+    /// it. Called at TurnDone *and* on a mid-flight Error, so a dropped
+    /// connection stores exactly what streamed instead of losing the round.
+    ///
+    /// `usage` is `None` on the error path (the stream died before the
+    /// final usage chunk arrived); the reply entry is still written, just
+    /// without a stats line.
+    fn finalize_round(&mut self, usage: Option<Usage>) {
+        let content = std::mem::take(&mut self.stream.text);
+        let content = if content.is_empty() {
+            "(无输出)".into()
+        } else {
+            content
+        };
+        let reasoning = std::mem::take(&mut self.stream.reasoning);
+        if !reasoning.is_empty() {
+            let r = Entry::Reasoning { content: reasoning };
+            self.pending.push(r.clone());
+            self.transcript.push(r);
+        }
+        let e = Entry::Assistant {
+            content,
+            usage: usage.map(|u| Entry::usage_summary(&u)),
+        };
+        self.pending.push(e.clone());
+        self.transcript.push(e);
+        self.stream.active = false;
+
+        // Take the round out before persisting: `persistence()` borrows
+        // `self` mutably and the store write must not alias the buffer.
+        let round = std::mem::take(&mut self.pending);
+        if let Some((st, sid)) = self.persistence()
+            && let Err(e) = st.append(sid, &round)
+        {
+            let msg = format!("落盘失败：{e:#}");
+            self.transcript.push(Entry::Error { text: msg });
         }
     }
 
@@ -623,7 +622,7 @@ impl Session {
                 // (oversized output then stays verbatim in the context).
                 artifacts: match (self.artifact_db.as_deref(), self.state.session_id()) {
                     (Some(path), Some(sid)) => {
-                        crate::server::artifacts::ArtifactStore::open(path, sid)
+                        crate::agent::artifacts::ArtifactStore::open(path, sid)
                     }
                     _ => None,
                 },
@@ -648,9 +647,19 @@ impl Session {
     }
 
     /// Rebuild the shared chat replica from projected entries (tree
-    /// navigation / resume). Dangling tool tails are repaired inside.
+    /// navigation / resume). Dangling tool tails are repaired inside, and
+    /// the **current** system prompt (the live profile's) is preserved —
+    /// resume must not silently swap the prompt back to the built-in one.
     pub fn rebuild_chat(&self, entries: &[Entry]) {
-        *self.chat.lock().expect("chat 锁中毒") = crate::server::turn::entries_to_context(entries);
+        let system = {
+            let chat = self.chat.lock().expect("chat 锁中毒");
+            match chat.messages.first() {
+                Some(crate::ai::types::Message::System { content }) => content.clone(),
+                _ => crate::server::profile::BUILTIN_SYSTEM.to_string(),
+            }
+        };
+        *self.chat.lock().expect("chat 锁中毒") =
+            crate::server::turn::entries_to_context(&system, entries);
     }
 
     /// Migrate the working directory; returns the previous value.
@@ -822,66 +831,68 @@ mod tests {
     }
 
     #[test]
-    fn plain_text_round_survives_the_full_turn_done_then_commit_sequence() {
-        // The exact shape that panicked in production: a plain text round
-        // with no thinking. `[User, Assistant]` — the reply is the last
-        // entry, and an unconditional `entries[i + 1]` walked off the end.
-        let mut s = st();
+    fn a_plain_text_round_persists_what_streamed() {
+        // Drive the real event flow end to end: user submit, deltas, done.
+        // The round that lands in the store must be exactly the events the
+        // session consumed — no second assembler exists to disagree.
+        let dir = std::env::temp_dir().join(format!("mypi-plain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = SessionState::new(Some(Store::open(&dir.join("t.db")).unwrap()));
+        let id = s.ensure_session(&dir).unwrap();
+        let _ = s.start_turn("问");
         let _ = s.handle(SessionEvent::Delta("答案".into()));
         let _ = s.handle(SessionEvent::TurnDone(
             Usage::default(),
             crate::ai::types::StopReason::Stop,
         ));
-        // The runner's authoritative assembly for this round.
-        let _ = s.handle(SessionEvent::Commit(vec![
-            Entry::User {
-                content: "问".into(),
-            },
-            Entry::Assistant {
-                content: "答案".into(),
-                usage: None,
-            },
-        ]));
+        let back = s.store().unwrap().load_entries(id).unwrap();
+        assert_eq!(
+            back,
+            vec![
+                Entry::User {
+                    content: "问".into()
+                },
+                Entry::Assistant {
+                    content: "答案".into(),
+                    usage: Some(Entry::usage_summary(&Usage::default())),
+                },
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn tool_round_splices_reasoning_before_the_final_reply_only() {
-        // A tool round: [User, (ToolRequest, ToolResult) * 1, Assistant].
-        // The reasoning belongs to the *final* reply, not the request
-        // cards — and the reply is again the last entry (the shape that
-        // used to panic).
+    fn tool_round_persists_requests_results_and_reply_with_reasoning() {
+        // A tool round driven through events: the reasoning buffer folds in
+        // right before the reply, the tool pair keeps its real `ok`, and the
+        // round lands in one transaction.
         let dir = std::env::temp_dir().join(format!("mypi-toolround-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut s = SessionState::new(Some(Store::open(&dir.join("t.db")).unwrap()));
         let id = s.ensure_session(&dir).unwrap();
+        let _ = s.start_turn("跑个命令");
+        let _ = s.handle(SessionEvent::ToolStart {
+            call_id: "c1".into(),
+            name: "bash".into(),
+            args: "{}".into(),
+            intent: "跑".into(),
+            text: String::new(),
+            first: true,
+        });
+        let _ = s.handle(SessionEvent::ToolFinish {
+            call_id: "c1".into(),
+            name: "bash".into(),
+            ok: false,
+            result: "boom".into(),
+        });
         let _ = s.handle(SessionEvent::ReasoningDelta("查一下".into()));
         let _ = s.handle(SessionEvent::Delta("搞定".into()));
         let _ = s.handle(SessionEvent::TurnDone(
             Usage::default(),
             crate::ai::types::StopReason::Stop,
         ));
-        let _ = s.handle(SessionEvent::Commit(vec![
-            Entry::User {
-                content: "跑个命令".into(),
-            },
-            Entry::ToolRequest {
-                call_id: "c1".into(),
-                name: "bash".into(),
-                args: "{}".into(),
-                intent: "跑".into(),
-            },
-            Entry::ToolResult {
-                call_id: "c1".into(),
-                name: "bash".into(),
-                ok: true,
-                result: "ok".into(),
-            },
-            Entry::Assistant {
-                content: "搞定".into(),
-                usage: None,
-            },
-        ]));
         let back = s.store().unwrap().load_entries(id).unwrap();
         let kinds: Vec<&str> = back
             .iter()
@@ -905,33 +916,29 @@ mod tests {
             ],
             "思考必须紧邻最终回复、在工具条目之后"
         );
+        // The **real** ok survives: a failed tool stays failed on disk.
+        let ok = back.iter().find_map(|e| match e {
+            Entry::ToolResult { ok, .. } => Some(*ok),
+            _ => None,
+        });
+        assert_eq!(ok, Some(false), "失败的 ok 必须落盘（旧路径硬编码 true）");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn commit_splices_reasoning_before_the_reply_and_rides_usage_on_it() {
-        // `Commit` writes the round to the store (the transcript is the
-        // surface's business), so assert on what actually lands on disk.
+    fn reasoning_and_usage_land_on_the_persisted_round() {
         let dir = std::env::temp_dir().join(format!("mypi-commit-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut s = SessionState::new(Some(Store::open(&dir.join("t.db")).unwrap()));
         let id = s.ensure_session(&dir).unwrap();
+        let _ = s.start_turn("问");
         let _ = s.handle(SessionEvent::ReasoningDelta("想了想".into()));
         let _ = s.handle(SessionEvent::Delta("答案".into()));
         let _ = s.handle(SessionEvent::TurnDone(
             Usage::default(),
             crate::ai::types::StopReason::Stop,
         ));
-        let _ = s.handle(SessionEvent::Commit(vec![
-            Entry::User {
-                content: "问".into(),
-            },
-            Entry::Assistant {
-                content: "答案".into(),
-                usage: None,
-            },
-        ]));
         let back = s.store().unwrap().load_entries(id).unwrap();
         let kinds: Vec<&str> = back
             .iter()
@@ -983,6 +990,51 @@ mod tests {
             Some("先想再想"),
             "reasoning 必须落成独立条目"
         );
+    }
+
+    #[test]
+    fn a_stream_death_still_persists_the_partial_reply() {
+        // The hard constraint: a dropped connection must not cost the user
+        // the reply they already watched arrive. Error while streaming ->
+        // whatever was produced is finalized and stored, then the error is
+        // recorded (display-only). Replayable from any break point.
+        let dir = std::env::temp_dir().join(format!("mypi-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = SessionState::new(Some(Store::open(&dir.join("t.db")).unwrap()));
+        let id = s.ensure_session(&dir).unwrap();
+        let _ = s.start_turn("问");
+        let _ = s.handle(SessionEvent::Delta("半句".into()));
+        let _ = s.handle(SessionEvent::ReasoningDelta("想着".into()));
+        // Connection dies mid-stream.
+        let _ = s.handle(SessionEvent::Error("stream read interrupted".into()));
+
+        let back = s.store().unwrap().load_entries(id).unwrap();
+        let kinds: Vec<&str> = back
+            .iter()
+            .map(|e| match e {
+                Entry::User { .. } => "user",
+                Entry::Reasoning { .. } => "reasoning",
+                Entry::Assistant { .. } => "assistant",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["user", "reasoning", "assistant"],
+            "断网也要落盘已到达的部分"
+        );
+        let reply = back.iter().find_map(|e| match e {
+            Entry::Assistant { content, .. } => Some(content.clone()),
+            _ => None,
+        });
+        assert_eq!(reply.as_deref(), Some("半句"), "部分回复必须保留");
+        // The error itself is display-only — not one of the stored kinds.
+        assert!(
+            back.iter().all(|e| !matches!(e, Entry::Error { .. })),
+            "错误提示不落盘（无协议角色）"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -140,7 +140,7 @@ fn parse_bash_args(raw: &str) -> Result<String> {
 fn bash(
     cwd: &std::path::Path,
     command: &str,
-    artifacts: Option<&crate::server::artifacts::ArtifactStore>,
+    artifacts: Option<&crate::agent::artifacts::ArtifactStore>,
     timeout: std::time::Duration,
 ) -> Result<String> {
     let cmd = command.trim();
@@ -152,7 +152,7 @@ fn bash(
     // any other path).
     let (cmd, tmp_dir) = match artifacts {
         Some(a) => {
-            let (c, dir) = crate::server::artifacts::resolve_refs(cmd, a)?;
+            let (c, dir) = crate::agent::artifacts::resolve_refs(cmd, a)?;
             (c, dir) // dir: Option<PathBuf> — None when no refs resolved
         }
         None => (cmd.to_string(), None),
@@ -185,10 +185,10 @@ fn bash(
     // Spill: an overflowing output becomes an artifact; the context gets
     // the placeholder (which itself references #id for further use).
     if let Some(a) = artifacts
-        && crate::server::artifacts::over_threshold(&out)
+        && crate::agent::artifacts::over_threshold(&out)
     {
         let (id, total) = a.spill("bash", &out)?;
-        return Ok(crate::server::artifacts::placeholder(
+        return Ok(crate::agent::artifacts::placeholder(
             id, "bash", total, &out,
         ));
     }
@@ -234,8 +234,8 @@ fn run_shell(cwd: &std::path::Path, cmd: &str, timeout: std::time::Duration) -> 
     // bytes would otherwise travel two ways: to the model (which does not
     // need escape codes) and into the card (where the terminal re-interprets
     // them, resetting our background mid-row).
-    let mut text = crate::tui::text::strip_ansi(&String::from_utf8_lossy(&out.stdout));
-    let err = crate::tui::text::strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    let mut text = crate::ansi::strip_ansi(&String::from_utf8_lossy(&out.stdout));
+    let err = crate::ansi::strip_ansi(&String::from_utf8_lossy(&out.stderr));
     if !err.trim().is_empty() {
         text.push_str("\n[stderr] ");
         text.push_str(err.trim_end());
@@ -459,7 +459,7 @@ pub struct BuiltinTools {
     cwd_slot: Option<std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>>,
     // Oversized tool outputs spill here. None = artifact mode off (unit
     // tests, or no DB): results pass through untruncated as before.
-    artifacts: Option<crate::server::artifacts::ArtifactStore>,
+    artifacts: Option<crate::agent::artifacts::ArtifactStore>,
     // Finalized pre-turn history + cwd migrations: the `context` tool's
     // read-only view of "how did we get here". Snapshot semantics — the
     // current turn's own calls are NOT inside (the model just saw them).
@@ -562,14 +562,14 @@ impl BuiltinTools {
     // Attach the artifact spill store (session-scoped, DB-backed).
     // `None` detaches: oversized output then flows into the context
     // verbatim (store-unavailable degradation).
-    pub fn with_artifacts(mut self, store: crate::server::artifacts::ArtifactStore) -> Self {
+    pub fn with_artifacts(mut self, store: crate::agent::artifacts::ArtifactStore) -> Self {
         self.artifacts = Some(store);
         self
     }
 
     pub fn with_artifacts_opt(
         mut self,
-        store: Option<crate::server::artifacts::ArtifactStore>,
+        store: Option<crate::agent::artifacts::ArtifactStore>,
     ) -> Self {
         self.artifacts = store;
         self
@@ -1267,6 +1267,8 @@ mod tests {
                 name: "bash".into(),
                 args: "{}".into(),
                 intent: "列出目录".into(),
+                text: String::new(),
+                first: true,
             },
             // The artifact placeholder embeds `#1`.
             Entry::ToolResult {
@@ -1280,6 +1282,8 @@ mod tests {
                 name: "read".into(),
                 args: "{\"path\":\"a.rs\"}".into(),
                 intent: "读文件".into(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c2".into(),

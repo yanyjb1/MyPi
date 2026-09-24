@@ -1,8 +1,10 @@
 pub mod agent;
 pub mod ai;
+pub mod ansi;
 pub mod cli;
 pub mod entry;
 pub mod git;
+pub mod grouping;
 pub mod server;
 pub mod store;
 pub mod tui;

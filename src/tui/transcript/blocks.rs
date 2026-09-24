@@ -40,50 +40,9 @@ pub(crate) struct Block {
     pub(crate) height: usize,
 }
 
-/// Group transcript entries into renderable nodes.
-///
-/// The only place that knows a request+result pair is one visual node;
-/// `chat::render_with_live` is reduced to rendering single nodes (its
-/// pair-gluing moves here, where grouping lives).
-pub fn blocks(entries: &[Entry]) -> Vec<Range> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < entries.len() {
-        // A result immediately following its request, same id: one exchange.
-        if let (
-            Entry::ToolRequest { call_id, name, .. },
-            Some(Entry::ToolResult {
-                call_id: rid,
-                name: rname,
-                ..
-            }),
-        ) = (&entries[i], entries.get(i + 1))
-            && call_id == rid
-            && name == rname
-        {
-            out.push(Range {
-                start: i,
-                end: i + 2,
-            });
-            i += 2;
-            continue;
-        }
-        out.push(Range {
-            start: i,
-            end: i + 1,
-        });
-        i += 1;
-    }
-    out
-}
-
-/// A block's slice of the transcript: `entries[start..end]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Range {
-    pub start: usize,
-    /// Exclusive.
-    pub end: usize,
-}
+// Grouping (`blocks`/`Range`) lives in `crate::grouping` — it is pure
+// domain logic shared with the compactor, not a renderer concern.
+pub use crate::grouping::{Range, blocks};
 
 /// Render one block to width-wrapped rows. The single funnel every node
 /// kind passes through — `single_node` renders the group, this wraps it.
@@ -173,6 +132,8 @@ mod tests {
             name: "bash".into(),
             args: r#"{"command":"ls"}"#.into(),
             intent: String::new(),
+            text: String::new(),
+            first: true,
         }
     }
 

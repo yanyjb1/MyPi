@@ -233,6 +233,8 @@ mod tests {
                 name: "edit".into(),
                 args: r#"{"path":"./a.txt"}"#.into(),
                 intent: "改文件".into(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),
@@ -402,6 +404,8 @@ mod tests {
                 name: "bash".into(),
                 args: r#"{"command":"ls --color=always"}"#.into(),
                 intent: "列目录".into(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),
@@ -489,6 +493,8 @@ mod tests {
                     name: "bash".into(),
                     args: r#"{"command":"sleep 5 && echo done"}"#.into(),
                     intent: "等五秒".into(),
+                    text: String::new(),
+                    first: true,
                 },
                 Entry::ToolResult {
                     call_id: "c1".into(),
@@ -528,6 +534,8 @@ mod tests {
                 name: "bash".into(),
                 args: r#"{"command":"ls"}"#.into(),
                 intent: "看目录".into(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),
@@ -635,6 +643,8 @@ mod tests {
                 name: "edit".into(),
                 args: r#"{"path":"p"}"#.into(),
                 intent: "改一下".into(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),
@@ -891,6 +901,8 @@ mod tests {
                 name: "read".into(),
                 args: r#"{"path":"main.rs"}"#.into(),
                 intent: "读文件".into(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),

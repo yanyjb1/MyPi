@@ -26,12 +26,17 @@ pub enum SessionEvent {
     /// Streaming reasoning delta.
     ReasoningDelta(String),
     /// A tool started executing. `args` is the raw JSON argument string;
-    /// `intent` is the model's one-line statement of purpose.
+    /// `intent` is the model's one-line statement of purpose. `text` is the
+    /// assistant text that accompanied the call (usually empty — a pure
+    /// tool round has none); `first` marks the message's opening call so a
+    /// multi-call message replays as one Assistant message, not N.
     ToolStart {
         call_id: String,
         name: String,
         args: String,
         intent: String,
+        text: String,
+        first: bool,
     },
     /// A tool finished executing.
     ToolFinish {
@@ -40,14 +45,17 @@ pub enum SessionEvent {
         ok: bool,
         result: String,
     },
-    /// An error occurred (not persisted; memory stream only).
+    /// An error occurred. If a turn is streaming, this is a mid-flight
+    /// death (network drop, malformed stream): whatever the turn produced
+    /// is finalized and persisted before the error is recorded — a
+    /// conversation must stay replayable even when the connection dies.
     Error(String),
     /// A turn finished: usage for billing, stop_reason to distinguish
-    /// interrupts. Finalizes the streaming slots into an Assistant entry.
+    /// interrupts. Finalizes the streaming slots into the reply entry and
+    /// **persists the whole round** (the session's `pending` buffer is the
+    /// single source of truth — there is no separate assemble-and-commit
+    /// step, so the stored round is exactly what streamed).
     TurnDone(Usage, StopReason),
-    /// Turn finalized: the whole round's entries ship for one-shot
-    /// persistence (the session verifies them against its pending list).
-    Commit(Vec<Entry>),
     /// The turn runner thread is exiting.
     Done,
 

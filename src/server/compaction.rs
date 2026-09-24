@@ -215,7 +215,7 @@ pub fn compact(
         bail!("空会话无需压缩");
     }
 
-    let blocks = crate::tui::transcript::blocks::blocks(entries)
+    let blocks = crate::grouping::blocks(entries)
         .into_iter()
         .map(|r| (r.start, r.end))
         .collect::<Vec<_>>();
@@ -228,7 +228,7 @@ pub fn compact(
     let region_chars: usize = entries[cut.compacted.clone()].iter().map(entry_chars).sum();
 
     // The replay request: prefix + compacted region + instruction.
-    let live = super::turn::entries_to_context(entries);
+    let live = super::turn::entries_to_context(system, entries);
     let mut req = replay_context(&live);
     let instruction = render_instruction(&load_instruction(cfg.instruction_file()), focus);
     // Fill the placeholder user turn.
@@ -270,7 +270,7 @@ pub fn compact(
         content: format!("以下是之前工作的压缩检查点。直接从此处继续：\n\n{summary}"),
     });
     let kept = &entries[cut.first_kept..];
-    let mut kept_ctx = super::turn::entries_to_context(kept);
+    let mut kept_ctx = super::turn::entries_to_context(system, kept);
     if matches!(kept_ctx.messages.first(), Some(Message::System { .. })) {
         kept_ctx.messages.remove(0);
     }
@@ -336,7 +336,7 @@ mod tests {
     fn cut_keeps_newest_block_even_over_budget() {
         // 4 user entries = 4 blocks; budget admits only the last one.
         let es: Vec<Entry> = (0..4).map(|_i| user(&"x".repeat(400))).collect();
-        let blocks = crate::tui::transcript::blocks::blocks(&es)
+        let blocks = crate::grouping::blocks(&es)
             .into_iter()
             .map(|r| (r.start, r.end))
             .collect::<Vec<(usize, usize)>>();
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn cut_grows_backwards_within_budget() {
         let es: Vec<Entry> = (0..4).map(|_i| user(&"x".repeat(100))).collect();
-        let blocks = crate::tui::transcript::blocks::blocks(&es)
+        let blocks = crate::grouping::blocks(&es)
             .into_iter()
             .map(|r| (r.start, r.end))
             .collect::<Vec<(usize, usize)>>();
@@ -368,6 +368,8 @@ mod tests {
                 name: "bash".into(),
                 args: "{}".into(),
                 intent: String::new(),
+                text: String::new(),
+                first: true,
             },
             Entry::ToolResult {
                 call_id: "c1".into(),
@@ -377,7 +379,7 @@ mod tests {
             },
             user("newest"),
         ];
-        let blocks = crate::tui::transcript::blocks::blocks(&es)
+        let blocks = crate::grouping::blocks(&es)
             .into_iter()
             .map(|r| (r.start, r.end))
             .collect::<Vec<(usize, usize)>>();
