@@ -94,7 +94,7 @@ pub fn rotate_for_seed(seed: &str) {
     let lines: Vec<Line<'static>> = mypi::tui::render_transcript_public(&entries, true, false, width);
 
     let area_w = width as u16;
-    let area_h = (lines.len() as u16).min(60).max(1);
+    let area_h = (lines.len() as u16).clamp(1, 60);
     let mut term = Terminal::new(TestBackend::new(area_w, area_h))?;
     term.draw(|f| {
         use ratatui::widgets::{Block, Borders, Paragraph};

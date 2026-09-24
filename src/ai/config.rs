@@ -109,6 +109,14 @@ pub enum ColorSpec {
 }
 
 impl ColorSpec {
+    /// Original textual spec (for the theme override detector).
+    pub fn to_spec(&self) -> String {
+        match self {
+            ColorSpec::Rgb(r, g, b) => format!("{r},{g},{b}"),
+            ColorSpec::Text(s) => s.clone(),
+        }
+    }
+
     /// Convert to a ratatui color. Named colors go through ANSI indexed colors.
     pub fn to_color(&self) -> ratatui::style::Color {
         use ratatui::style::Color;
@@ -790,15 +798,5 @@ providers:
             std::env::remove_var("MYPI_MODELS");
         }
         let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
-impl ColorSpec {
-    /// Original textual spec (for the theme override detector).
-    pub fn to_spec(&self) -> String {
-        match self {
-            ColorSpec::Rgb(r, g, b) => format!("{r},{g},{b}"),
-            ColorSpec::Text(s) => s.clone(),
-        }
     }
 }

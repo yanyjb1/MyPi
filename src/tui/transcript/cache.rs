@@ -51,6 +51,23 @@ pub struct BlockCache {
 }
 
 impl BlockCache {
+    /// Bench/preview harness constructor (doc-hidden, not API).
+    #[doc(hidden)]
+    pub fn new_public() -> Self {
+        Self::new()
+    }
+
+    /// Bench harness getters (doc-hidden, not API).
+    #[doc(hidden)]
+    pub fn cached_rows(&self) -> usize {
+        self.cached_rows
+    }
+
+    #[doc(hidden)]
+    pub fn cached_blocks(&self) -> usize {
+        self.slots.len()
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             slots: HashMap::new(),
@@ -131,7 +148,7 @@ impl BlockCache {
         // except the *last* one, which must be known immediately (the
         // follow-the-bottom path uses it every frame).
         if let Some((idx, last)) = ranges.len().checked_sub(1).map(|i| (i, ranges[i]))
-            && self.heights[last.start] == usize::MAX
+            && self.heights.get(idx).copied().unwrap_or(usize::MAX) == usize::MAX
         {
             let b = blocks::render_block(entries, last, p, show_reasoning, tools_expanded, width);
             self.admit(idx, b);
@@ -258,10 +275,6 @@ impl BlockCache {
         self.slots.len()
     }
 
-    #[cfg(test)]
-    fn cached_rows(&self) -> usize {
-        self.cached_rows
-    }
 }
 
 #[cfg(test)]

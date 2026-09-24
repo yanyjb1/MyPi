@@ -320,7 +320,6 @@ impl Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use token::ALL_TOKENS;
 
     #[test]
     fn bundled_themes_compile_and_have_all_tokens() {

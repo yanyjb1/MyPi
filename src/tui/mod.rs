@@ -48,3 +48,29 @@ pub fn render_transcript_public(
     }
     out
 }
+
+/// Bench harness surface (doc-hidden): BlockCache + blocks() re-exported
+/// for examples/render_bench.rs. Not API.
+#[doc(hidden)]
+pub mod bench {
+    pub use crate::tui::transcript::blocks::blocks;
+    pub use crate::tui::transcript::cache::BlockCache;
+
+    /// Cache sync + windowed render, mirroring view.rs's hot path.
+    pub fn window(
+        cache: &mut BlockCache,
+        entries: &[crate::entry::Entry],
+        b0: usize,
+        b1: usize,
+        width: usize,
+    ) -> (Vec<ratatui::text::Line<'static>>, usize, usize) {
+        let p = crate::tui::theme::Palette::current();
+        cache.sync(entries, &p, true, true, width);
+        let (rows, _above) = cache.rows_for(entries, &p, true, true, b0..b1);
+        (rows, cache.cached_rows(), cache.cached_blocks())
+    }
+
+    pub fn block_count(entries: &[crate::entry::Entry]) -> usize {
+        blocks(entries).len()
+    }
+}
