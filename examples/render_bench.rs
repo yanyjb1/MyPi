@@ -17,10 +17,14 @@ use mypi::entry::Entry;
 use mypi::tui::bench;
 
 const DB: &str = "/tmp/mypi-bench/sessions.db";
+/// `MYPI_BENCH_DB` overrides the DB path (12k/20k scaling runs).
+fn db() -> String {
+    std::env::var("MYPI_BENCH_DB").unwrap_or_else(|_| DB.to_string())
+}
 const WIDTH: usize = 120;
 
 fn load_entries() -> Vec<Entry> {
-    let store = mypi::store::Store::open(std::path::Path::new(DB)).expect("open bench db");
+    let store = mypi::store::Store::open(std::path::Path::new(&db())).expect("open bench db");
     let t = Instant::now();
     let entries = store.load_entries(1).expect("load");
     println!(
@@ -88,7 +92,13 @@ fn main() {
             }
             let _ = rows.len();
             if i % 100 == 0 && i > 0 {
-                eprintln!("  scroll step {i}/{}: {}..{} {:.2} ms", i, b0, b1, d.as_secs_f64() * 1e3);
+                eprintln!(
+                    "  scroll step {i}/{}: {}..{} {:.2} ms",
+                    i,
+                    b0,
+                    b1,
+                    d.as_secs_f64() * 1e3
+                );
             }
         }
         let total = t2.elapsed();
@@ -152,7 +162,12 @@ fn main() {
         let mut found = None;
         for start in 0..entries.len().saturating_sub(120) {
             let window = &entries[start..start + 120];
-            if window.iter().filter(|e| matches!(e, Entry::ToolResult { .. })).count() > 16 {
+            if window
+                .iter()
+                .filter(|e| matches!(e, Entry::ToolResult { .. }))
+                .count()
+                > 16
+            {
                 found = Some(start);
                 break;
             }
@@ -178,8 +193,7 @@ fn main() {
         let entries = load_entries();
         let mut cache = bench::BlockCache::new_public();
         let n = bench::block_count(&entries);
-        let (_, cached_rows, cached_blocks) =
-            bench::window(&mut cache, &entries, 0, n, WIDTH);
+        let (_, cached_rows, cached_blocks) = bench::window(&mut cache, &entries, 0, n, WIDTH);
         println!(
             "mem:         {} entries, {} blocks, cache rows={} (budget 8192), cached blocks={}",
             entries.len(),

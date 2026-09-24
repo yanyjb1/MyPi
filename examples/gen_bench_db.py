@@ -15,8 +15,8 @@ for suf in ('-wal', '-shm'):
     if os.path.exists(db + suf):
         os.remove(db + suf)
 
-N = 8000
-TARGET_BYTES = 12_000_000  # ~12 MB of text total (typical long-lived session scale)
+N = int(os.environ.get('N', '8000'))
+TARGET_BYTES = int(os.environ.get('BYTES', '12000000'))  # ~12 MB of text total (typical long-lived session scale)
 
 conn = sqlite3.connect(db)
 conn.execute("PRAGMA journal_mode=WAL")
