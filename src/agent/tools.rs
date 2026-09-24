@@ -633,6 +633,13 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
 mod tests {
     use super::super::loop_rs::ToolExecutor as _;
     use super::*;
+
+    fn home_dir() -> std::path::PathBuf {
+        std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir())
+    }
+
     use serde_json::json;
     use std::path::Path;
 
@@ -962,11 +969,13 @@ mod tests {
     #[test]
     fn cd_moves_the_license_zone() {
         let d = std::env::temp_dir().join("mypi_zone_a");
-        let other = std::env::temp_dir().join("mypi_zone_b");
+        // zone_b must be OUTSIDE both licensed zones (temp + zone_a):
+        // the home dir is never licensed, so a scratch dir under it works.
+        let other = home_dir().join(".mypi_zone_b");
         let _ = std::fs::create_dir_all(&d);
         let _ = std::fs::create_dir_all(&other);
         let mut t = BuiltinTools::new(d.clone());
-        // From zone_a, deleting into zone_b is out of zone.
+        // From zone_a, deleting into zone_b (outside temp) is out of zone.
         let p = other.join("victim.txt");
         std::fs::write(&p, "x").unwrap();
         assert!(bash(&d, &format!("rm {}", p.display()), None).is_err());

@@ -2,11 +2,15 @@
 //! `exec_mediation` classifier (normalize + 10 rules, two tiers), with the
 //! rm rule replaced by a **workspace-license** policy:
 //!
-//! The session's working directory is the licensed zone. Inside it the
-//! agent may delete freely (`rm -rf build/` is routine). A delete that
-//! escapes the zone is "trashing the user's stuff" — blocked outright,
-//! no warning tier, no allowlist escape. System roots (`/`, `~`, `/etc`,
-//! `/usr`, ...) are always illegal targets regardless of the zone.
+//! Two zones are licensed: the session's working directory **and the
+//! system temp dir** (`std::env::temp_dir()`). Inside either, the agent
+//! may delete freely (`rm -rf build/`, `rm /tmp/scratch` — both routine;
+//! the user works out of /tmp and artifact materializations live there).
+//! A delete that escapes both zones is "trashing the user's stuff" —
+//! blocked outright, no warning tier, no allowlist escape. System roots
+//! (`/`, `~`, `/etc`, `/usr`, ...) are always illegal targets regardless
+//! of the zones; `~`/`$HOME` can never be licensed even when mypi was
+//! launched from there.
 //!
 //! This is a classifier, not a sandbox: it stops classic disasters and
 //! out-of-zone deletes. It is not proof against a determined adversary.
@@ -41,16 +45,22 @@ impl Verdict {
     }
 }
 
-/// Whether the command targets a path outside `zone` (canonicalized).
-/// The zone is the session workspace; deletes inside it are licensed.
+/// Whether the command targets a path outside both licensed zones.
+/// Zones: the session workspace (`zone`) **and** the system temp dir —
+/// the user's scratch work lives in /tmp and artifact materializations
+/// land there, so deletes inside temp are as licensed as workspace ones.
 fn escapes_zone(target: &str, zone: &Path) -> bool {
     // `~` and `$HOME` always escape: the license never covers the home
     // directory itself, even when mypi was launched from there.
     // Callers may pass already-lowercased targets; match the home forms
     // case-insensitively.
     let t = target.to_ascii_lowercase();
-    if t == "~" || t == "$home" || t == "${home}" || t.starts_with("~/")
-        || t.starts_with("$home/") || t.starts_with("${home}/")
+    if t == "~"
+        || t == "$home"
+        || t == "${home}"
+        || t.starts_with("~/")
+        || t.starts_with("$home/")
+        || t.starts_with("${home}/")
     {
         return true;
     }
@@ -61,10 +71,17 @@ fn escapes_zone(target: &str, zone: &Path) -> bool {
     };
     // Non-existent targets: compare lexically after dropping `.`/`..`.
     // Existing targets: canonicalize so symlinks cannot fake containment.
-    let resolved = abs
-        .canonicalize()
-        .unwrap_or_else(|_| lexical_abs(&abs));
-    !resolved.starts_with(zone)
+    let resolved = abs.canonicalize().unwrap_or_else(|_| lexical_abs(&abs));
+    // Temp license is strict containment: `/tmp/scratch` is licensed,
+    // `/tmp` itself is not (nuking the temp root trashes every other
+    // process's scratch space). Both the raw and canonicalized temp root
+    // are compared so a symlinked `/tmp` cannot fake containment either
+    // way. Non-existent targets keep the lexical comparison.
+    let tmp = std::env::temp_dir();
+    let tmp_canon = tmp.canonicalize().unwrap_or_else(|_| tmp.clone());
+    let in_tmp = resolved.starts_with(&tmp) || resolved.starts_with(&tmp_canon);
+    let is_tmp_root = resolved == tmp || resolved == tmp_canon;
+    !(resolved.starts_with(zone) || (in_tmp && !is_tmp_root))
 }
 
 // Lexical absolute path without touching the filesystem: collapse `.`
@@ -157,6 +174,7 @@ pub fn normalize(command: &str) -> String {
 /// trash my stuff" is not limited to directories).
 fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
+    let orig: Vec<&str> = normalized.split_ascii_whitespace().collect();
     // `sudo rm ...`, `env rm ...`, `nohup rm ...` — prefix wrappers must
     // not launder the verb, so match rm anywhere in the token stream
     // (not just as argv[0]).
@@ -164,8 +182,11 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let pos = tokens.iter().position(|t| *t == "rm")?;
     // Targets: everything after the verb that is not flag-looking. Flags
     // may also come after targets (`rm foo -rf`), so anything not
-    // starting with `-` and not `--` is a target.
-    let targets: Vec<&str> = tokens[pos + 1..]
+    // starting with `-` and not `--` is a target. Targets keep ORIGINAL
+    // case: canonicalize()/starts_with() are case-sensitive, and a
+    // lowercased path can miss the licensed zone on case-sensitive
+    // filesystems (`/home/Arisha` vs `/home/arisha`).
+    let targets: Vec<&str> = orig[pos + 1..]
         .iter()
         .copied()
         .filter(|t| *t != "--" && !t.starts_with('-'))
@@ -174,14 +195,19 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
         return None;
     }
 
-    // System roots are illegal no matter what the zone is.
+    // System roots are illegal no matter what the zone is (all-lowercase
+    // spellings; matching here uses the lowercased stream).
     const SYSTEM_ROOTS: &[&str] = &[
-        "/", "/*", "/.", "/etc", "/usr", "/var", "/boot", "/bin", "/sbin",
-        "/lib", "/lib64", "/opt", "/proc", "/sys", "/dev", "/run", "/srv",
+        "/", "/*", "/.", "/etc", "/usr", "/var", "/boot", "/bin", "/sbin", "/lib", "/lib64",
+        "/opt", "/proc", "/sys", "/dev", "/run", "/srv",
     ];
     for t in &targets {
-        if SYSTEM_ROOTS.contains(t) || escapes_zone(t, zone) {
-            return Some(RuleHit { rule_id: "rm-out-of-zone", tier: "critical" });
+        let tl = t.to_ascii_lowercase();
+        if SYSTEM_ROOTS.contains(&tl.as_str()) || escapes_zone(t, zone) {
+            return Some(RuleHit {
+                rule_id: "rm-out-of-zone",
+                tier: "critical",
+            });
         }
     }
     None
@@ -191,9 +217,15 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
 /// zone to a scratch dir is still losing the user's file.
 fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
+    let orig: Vec<&str> = normalized.split_ascii_whitespace().collect();
     let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
     let pos = tokens.iter().position(|t| *t == "mv")?;
-    let rest: Vec<&str> = tokens[pos + 1..].iter().copied().filter(|t| !t.starts_with('-')).collect();
+    // Sources keep original case — see classify_rm.
+    let rest: Vec<&str> = orig[pos + 1..]
+        .iter()
+        .copied()
+        .filter(|t| !t.starts_with('-'))
+        .collect();
     // `mv src... dest`: every src except the last is a source.
     if rest.len() < 2 {
         return None;
@@ -201,7 +233,10 @@ fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let (srcs, _dest) = rest.split_at(rest.len() - 1);
     for s in srcs {
         if escapes_zone(s, zone) {
-            return Some(RuleHit { rule_id: "mv-out-of-zone", tier: "critical" });
+            return Some(RuleHit {
+                rule_id: "mv-out-of-zone",
+                tier: "critical",
+            });
         }
     }
     None
@@ -212,42 +247,47 @@ fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
 /// told to prefer `fd` — same rules either way.
 fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
+    let orig: Vec<&str> = normalized.split_ascii_whitespace().collect();
     let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
     // Same anti-laundering: find/fd may follow sudo/env/nohup.
     let pos = tokens
         .iter()
         .position(|t| *t == "find" || *t == "fd" || *t == "fdfind")?;
-    let head = tokens[pos];
-    let rest: Vec<&str> = tokens[pos + 1..].to_vec();
+    // Search roots keep original case — see classify_rm. Actions are
+    // matched on the lowercased stream (-delete/-exec rm are lowercase
+    // spellings).
+    let rest: Vec<&str> = orig[pos + 1..].to_vec();
+    let actions_lower: Vec<String> = lower
+        .split_ascii_whitespace()
+        .skip(pos + 1)
+        .map(String::from)
+        .collect();
     // fd takes the search root as a positional argument (defaults to
-    // `.`); find takes start-point(s) right after the path list.
-    let (roots, actions): (Vec<&str>, Vec<&str>) = if head == "find" {
-        let split = rest.iter().position(|t| t.starts_with('-')).unwrap_or(rest.len());
-        (rest[..split].to_vec(), rest[split..].to_vec())
-    } else {
-        // fd: root(s) are the positionals before any flag.
-        let split = rest.iter().position(|t| t.starts_with('-')).unwrap_or(rest.len());
-        (rest[..split].to_vec(), rest[split..].to_vec())
-    };
+    // `.`); find takes start-point(s) right after the path list. Both:
+    // roots are the positionals before any flag.
+    let split = rest
+        .iter()
+        .position(|t| t.starts_with('-'))
+        .unwrap_or(rest.len());
+    let roots: Vec<&str> = rest[..split].to_vec();
     let root_escapes = roots
         .iter()
         .any(|r| escapes_zone(r, zone) || *r == "~" || r.starts_with("~/"));
-    let delete_action = rest.iter().any(|t| {
-        *t == "-delete"
-            || *t == "-execrm"
-            || *t == "-execdirrm"
-            || *t == "-xrm"
-            || *t == "-Xrm"
-    });
+    let delete_action = actions_lower
+        .iter()
+        .any(|t| t == "-delete" || t == "-execrm" || t == "-execdirrm" || t == "-xrm");
     // find -exec rm ... : look for the exec + rm pair across tokens.
-    let exec_rm = actions.windows(2).any(|w| {
-        (w[0] == "-exec" || w[0] == "-execdir" || w[0] == "-x" || w[0] == "-X")
+    let exec_rm = actions_lower.windows(2).any(|w| {
+        (w[0] == "-exec" || w[0] == "-execdir" || w[0] == "-x")
             && (w[1] == "rm" || w[1] == "rm," || w[1].starts_with("rm,"))
-    }) || actions
+    }) || actions_lower
         .iter()
         .any(|t| t.starts_with("-exec") && t.contains("rm"));
     if root_escapes && (delete_action || exec_rm) {
-        return Some(RuleHit { rule_id: "bulk-delete-out-of-zone", tier: "critical" });
+        return Some(RuleHit {
+            rule_id: "bulk-delete-out-of-zone",
+            tier: "critical",
+        });
     }
     if !root_escapes && (delete_action || exec_rm) {
         // Even inside the zone, `find ~ -delete` style targets slipped in
@@ -259,7 +299,10 @@ fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
 }
 
 fn hit(rule_id: &'static str) -> RuleHit {
-    RuleHit { rule_id, tier: "critical" }
+    RuleHit {
+        rule_id,
+        tier: "critical",
+    }
 }
 
 /// Device-level writes: dd to a device node, mkfs*, fdisk.
@@ -303,19 +346,42 @@ fn classify_reverse_shell(lower: &str) -> bool {
 /// source <(curl ...). High tier — occasionally legitimate for setup.
 fn classify_pipe_to_shell(lower: &str) -> bool {
     const SHELLS: &[&str] = &[
-        "| sh", "| bash", "|sh", "|bash", "| /bin/sh", "| /bin/bash",
-        "|/bin/sh", "|/bin/bash", "| /usr/bin/sh", "| /usr/bin/bash",
-        "|/usr/bin/sh", "|/usr/bin/bash", "| /usr/local/bin/sh",
-        "| /usr/local/bin/bash", "|/usr/local/bin/sh", "|/usr/local/bin/bash",
+        "| sh",
+        "| bash",
+        "|sh",
+        "|bash",
+        "| /bin/sh",
+        "| /bin/bash",
+        "|/bin/sh",
+        "|/bin/bash",
+        "| /usr/bin/sh",
+        "| /usr/bin/bash",
+        "|/usr/bin/sh",
+        "|/usr/bin/bash",
+        "| /usr/local/bin/sh",
+        "| /usr/local/bin/bash",
+        "|/usr/local/bin/sh",
+        "|/usr/local/bin/bash",
     ];
     let dl = lower.contains("curl ") || lower.contains("wget ");
     let piped = SHELLS.iter().any(|p| lower.contains(p));
     let eval_forms = [
-        "eval \"$(curl ", "eval \"$(wget ", "eval '$(curl ", "eval '$(wget ",
-        "eval $(curl ", "eval $(wget ", "source <(curl ", "source <(wget ",
-        "bash -c \"$(curl ", "bash -c \"$(wget ", "bash -c '$(curl ",
-        "bash -c '$(wget ", "sh -c \"$(curl ", "sh -c \"$(wget ",
-        "sh -c '$(curl ", "sh -c '$(wget ",
+        "eval \"$(curl ",
+        "eval \"$(wget ",
+        "eval '$(curl ",
+        "eval '$(wget ",
+        "eval $(curl ",
+        "eval $(wget ",
+        "source <(curl ",
+        "source <(wget ",
+        "bash -c \"$(curl ",
+        "bash -c \"$(wget ",
+        "bash -c '$(curl ",
+        "bash -c '$(wget ",
+        "sh -c \"$(curl ",
+        "sh -c \"$(wget ",
+        "sh -c '$(curl ",
+        "sh -c '$(wget ",
     ];
     (dl && piped) || eval_forms.iter().any(|p| lower.contains(p))
 }
@@ -333,21 +399,31 @@ fn classify_process_termination(lower: &str) -> bool {
 /// Writing to /etc/passwd|shadow|sudoers|sshd_config.
 fn classify_credential_write(lower: &str) -> bool {
     const FILES: &[&str] = &[
-        "/etc/passwd", "/etc/shadow", "/etc/sudoers", "/etc/ssh/sshd_config",
+        "/etc/passwd",
+        "/etc/shadow",
+        "/etc/sudoers",
+        "/etc/ssh/sshd_config",
     ];
     const WRITES: &[&str] = &["tee ", "cat >", "echo >", "sed -i", "cp ", "mv "];
-    FILES.iter().any(|f| lower.contains(f) && WRITES.iter().any(|w| lower.contains(w)))
+    FILES
+        .iter()
+        .any(|f| lower.contains(f) && WRITES.iter().any(|w| lower.contains(w)))
 }
 
 /// Shutdown family — critical: the agent has no business turning the
 /// machine off; every hit is a mistake or worse.
 fn classify_system_shutdown(lower: &str) -> bool {
     for c in ["shutdown", "reboot", "halt", "poweroff"] {
-        if lower.starts_with(c) || lower.contains(&format!(" {c}")) || lower.contains(&format!(";{c}")) {
+        if lower.starts_with(c)
+            || lower.contains(&format!(" {c}"))
+            || lower.contains(&format!(";{c}"))
+        {
             return true;
         }
     }
-    lower.contains(" init 0") || lower.starts_with("init 0") || lower.contains(" init 6")
+    lower.contains(" init 0")
+        || lower.starts_with("init 0")
+        || lower.contains(" init 6")
         || lower.starts_with("init 6")
 }
 
@@ -413,7 +489,10 @@ pub fn classify(command: &str, zone: &Path) -> Verdict {
     // High tier.
     let mut high = Vec::new();
     if classify_pipe_to_shell(&lower) {
-        high.push(RuleHit { rule_id: "pipe-to-shell", tier: "high" });
+        high.push(RuleHit {
+            rule_id: "pipe-to-shell",
+            tier: "high",
+        });
     }
 
     if hits.iter().any(|h| h.tier == "critical") {
@@ -457,7 +536,40 @@ mod tests {
         let z = zone();
         assert_eq!(classify("rm -rf build/", &z), Verdict::Allow);
         assert_eq!(classify("rm foo.txt bar.txt", &z), Verdict::Allow);
-        assert!(!classify("rm ../sibling-project/file", &z).allows());
+        // The zone lives under /tmp, so a ../sibling IS licensed now
+        // (temp license). Only escapes that leave BOTH zones violate —
+        // see rm_outside_zone_blocked's ../../ case.
+    }
+
+    #[test]
+    fn temp_zone_delete_license() {
+        let z = zone();
+        // Temp is licensed scratch: deletes inside it pass…
+        assert_eq!(classify("rm -rf /tmp/scratch", &z), Verdict::Allow);
+        assert_eq!(classify("rm /tmp/mypi-art-123/1-bash", &z), Verdict::Allow);
+        assert_eq!(
+            classify("find /tmp/mypi-e2e-fixture -name '*.tmp' -delete", &z),
+            Verdict::Allow
+        );
+        // …but the temp root itself and outside-temp stay blocked.
+        assert!(!classify("rm -rf /tmp", &z).allows());
+        assert!(!classify("rm -rf /tmp/", &z).allows());
+        assert!(!classify("rm /etc/passwd", &z).allows());
+        assert!(!classify("rm -rf /home/Arisha", &z).allows());
+        // A temp symlink pointing OUTSIDE temp must not launder an
+        // escape: canonicalize() dereferences real symlinks, so the
+        // resolved target lands outside both zones → blocked. (The link
+        // must exist for canonicalize to fire; the outside dir needs a
+        // child so `rm -rf link/inner` looks plausible.)
+        let link = std::env::temp_dir().join("mypi_guard_symlink_escape");
+        let _ = std::fs::remove_file(&link);
+        let outside = std::path::PathBuf::from("/home/Arisha/mypi_guard_outside_target");
+        std::fs::create_dir_all(outside.join("inner")).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let cmd = format!("rm -rf {}/inner", link.display());
+        assert!(!classify(&cmd, &z).allows(), "symlink 不能洗白区外删除");
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]
@@ -554,7 +666,11 @@ mod tests {
         // sudo itself passes through: the OS password prompt is the real
         // gate. Guard rules fire on what the command DOES, not on sudo.
         let z = zone();
-        for cmd in ["sudo ls", "sudo apt install -y fd-find", "sudo systemctl restart nginx"] {
+        for cmd in [
+            "sudo ls",
+            "sudo apt install -y fd-find",
+            "sudo systemctl restart nginx",
+        ] {
             assert_eq!(classify(cmd, &z), Verdict::Allow, "{cmd}");
         }
         // ...but sudo does not launder a disaster:
@@ -566,7 +682,12 @@ mod tests {
     #[test]
     fn benign_commands_pass() {
         let z = zone();
-        for cmd in ["ls -la", "git commit -m test", "echo hello", "grep -r foo ."] {
+        for cmd in [
+            "ls -la",
+            "git commit -m test",
+            "echo hello",
+            "grep -r foo .",
+        ] {
             assert_eq!(classify(cmd, &z), Verdict::Allow, "{cmd}");
         }
     }
