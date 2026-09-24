@@ -1,13 +1,17 @@
 //! Statusline — exactly per the user's spec:
 //!
-//! +--[π > [M]{Model}(accent) > [D]Utility/MyPi > @{branch} > {cost}]---{ctx%}-----:1M | <[{session}]--+
-//!    \_________pure-black capsules, accent text, gray pi_________/  \_acc_/_plain_/\acc/\black capsule/borders acc
+//! +-- π > [M] {Model} > [D] {path} > @ {branch} > {cost} >---{ctx%}-----:1M | < {session} --+
+//!    \__________ pure-black capsule: accent, white path, git color __________/ \acc/ \plain/ \_capsule_/ \_borders acc_/
 //!
-//! - cost: session total (not per-turn), with the currency symbol (models.yml currency)
+//! - model: `[M]` + one space + name, the whole group accent
+//! - path: `[D]` + one space + directory, the whole group **white**
+//! - git: `@` + one space + branch, `@` carrying the branch's own color (clean/dirty)
+//! - cost: session total (not per-turn), with the currency symbol (models.yml currency);
+//!   the capsule's right padding (one space) is fixed frame, so truncation never eats it
 //! - ctx gauge: `>`---{pct}---` accent dashes on both sides, no background; denominator `:1M`
 //! - fixed `+--` / `--+` at both ends; the pure-black background applies only inside [] capsules
 
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -71,40 +75,41 @@ pub fn fmt_money(v: f64, symbol: &str) -> String {
 
 // The statusline: **one row**, forming the top edge of the input container.
 //
-// `+--pi > model > path > @branch > cost >----ctx 8%-----:1M | <[session]--+`
+// `+--pi > [M] model > [D] path > @ branch > cost >----ctx 8%-----:1M | <session>--+`
 //
 // Colors:
 // - `+--` / `--+` at the ends: accent green
 // - `π`: gray, the only permitted gray
-// - `[M]` / `[D]`：accent
-// - model name / path / branch: accent
-// - cost: gold
+// - `[M]` + model name: accent, one space between them
+// - `[D]` + path: white
+// - `@` + branch: the theme's git color (clean or dirty), one space between them
+// - `?N` / `+N`: gold counts
+// - cost: gold, followed by the capsule's fixed right padding (one space)
 // - ctx: **transparent background**, used part accent, unused part plain; shows only the percentage (e.g. `8%`)
 // - capsule background: black (from the theme)
 //
 // `spinner`: animation frame while waiting (e.g. `|`/`/`/`-`/`\\`); `None` means idle, showing pi.
 pub fn render(info: &StatusInfo, p: &Palette, width: u16, spinner: Option<char>) -> Line<'static> {
     let w = width as usize;
-
-    // ---- left black capsules: pi/spinner > [M]model > [D]path > @branch > cost ----
-    // The [M]/[D] markers are accent too, keeping the whole capsule one color.
-    let mut crumbs: Vec<Span> = vec![
-        p.on_black(" "), // one black cell before the glyph, for visual balance
-        p.symbol(spinner),
-    ];
+    let mut crumbs: Vec<Span> = vec![p.on_black(" "), p.symbol(spinner)];
     crumbs.push(p.on_black(" > "));
-    crumbs.push(p.mark("[M]"));
-    crumbs.push(p.pill(info.model_name, p.accent));
+    // Model: `[M]`, one space, the name — one span, one capsule color.
+    crumbs.push(p.pill(format!("[M] {}", info.model_name), p.accent));
     crumbs.push(p.on_black(" > "));
-    crumbs.push(p.mark("[D]"));
-    crumbs.push(p.pill(short_cwd(info.cwd), p.accent));
+    // The directory is one white group: `[D]`, one space, the path. One span, so
+    // truncation can never leave the marker glued to the path.
+    crumbs.push(p.pill(format!("[D] {}", short_cwd(info.cwd)), Color::White));
     if let Some(g) = info.git {
-        // Position: between `[D]path` and the cost
         if let Some(b) = &g.branch {
-            crumbs.push(p.on_black(" > @"));
-            crumbs.push(p.pill(b, p.accent));
+            let color = if g.unstaged == 0 && g.staged == 0 {
+                p.git_clean()
+            } else {
+                p.git_dirty()
+            };
+            // `@` wears the branch's own color, one space before the name.
+            crumbs.push(p.on_black(" > "));
+            crumbs.push(p.pill(format!("@ {b}"), color));
         }
-        // ?N = files needing add; +N = staged files. Counts files, never lines.
         if g.unstaged > 0 {
             crumbs.push(p.on_black(" ?"));
             crumbs.push(p.pill(g.unstaged.to_string(), p.gold));
@@ -118,61 +123,57 @@ pub fn render(info: &StatusInfo, p: &Palette, width: u16, spinner: Option<char>)
         crumbs.push(p.on_black(" > "));
         crumbs.push(p.gold_on_black(fmt_money(info.total_cost, info.currency_symbol)));
     }
-    crumbs.push(p.on_black(" "));
 
-    // ---- live ctx percentage: the number only, e.g. `8%` ----
     let denom = fmt_tokens(info.ctx_limit);
-    let pct = if info.ctx_limit > 0 {
-        (info.ctx_tokens as f64 / info.ctx_limit as f64 * 100.0).round() as u64
-    } else {
+    let pct = if info.ctx_limit == 0 {
         0
+    } else {
+        ((info.ctx_tokens.min(info.ctx_limit) as f64 / info.ctx_limit as f64 * 100.0).round()
+            as u64)
+            .min(100)
     };
     let pct_txt = format!("{pct}%");
-    let sess_txt = info.session_name.to_string();
-
-    // head: `+--` + capsules + `>`; tail: `:1M | session--+`
-    let head = |crumbs: &[Span<'static>]| -> Vec<Span<'static>> {
-        let mut v: Vec<Span<'static>> = Vec::new();
-        v.push(p.accent_span("+"));
-        v.push(adash(p, 2)); // `+--`: one more dash than the bottom edge
-        v.extend(crumbs.iter().cloned());
-        v.push(p.accent_span(">")); // gauge start
+    let head = |c: &[Span<'static>]| {
+        let mut v = vec![p.accent_span("+"), adash(p, 2)];
+        v.extend(c.iter().cloned());
+        // The capsule's right padding: fixed frame, not a crumb — the price keeps its
+        // space even when the breadcrumb is truncated.
+        v.push(p.on_black(" "));
+        v.push(p.accent_span(">"));
         v
     };
-    let tail: Vec<Span<'static>> = vec![
-        p.accent_span(format!(":{denom}")),
-        p.accent_span(" | "),
-        p.accent_span("<"),                 // left chevron of the session segment
-        p.on_black(" "),                    // black cell after the chevron (cosmetic)
-        p.pill(sess_txt.clone(), p.accent), // black background only, the name itself
-        p.on_black(" "),                    // black cell on the right
-        adash(p, 2),                        // `--`
-        p.accent_span("+"),                 // fixed right end
-    ];
-    let tail_w: usize = tail.iter().map(|s| s.content.width()).sum();
-
     let mut spans = head(&crumbs);
     let mut head_w: usize = spans.iter().map(|s| s.content.width()).sum();
-
-    // Narrow screens: shrink capsules, then zero out the gauge
+    let session_budget = w.saturating_sub(head_w + pct_txt.width() + 10);
+    let session = truncate_text(info.session_name, session_budget);
+    let tail = vec![
+        p.accent_span(format!(":{denom}")),
+        p.accent_span(" | "),
+        p.accent_span("<"),
+        p.on_black(" "),
+        p.pill(session, p.accent),
+        p.on_black(" "),
+        adash(p, 2),
+        p.accent_span("+"),
+    ];
+    let tail_w: usize = tail.iter().map(|s| s.content.width()).sum();
     if head_w + tail_w + pct_txt.width() > w {
-        crumbs = truncate_crumbs(p, crumbs, 8);
+        // `+--` + the capsule's padding + the gauge's `>` are frame, not crumbs.
+        let budget = w.saturating_sub(tail_w + pct_txt.width() + 5);
+        crumbs = truncate_crumbs(p, crumbs, budget);
         spans = head(&crumbs);
         head_w = spans.iter().map(|s| s.content.width()).sum();
     }
     let dash_w = w.saturating_sub(head_w + tail_w + pct_txt.width());
-    // Used cells computed live from the percentage; the first cell right of `>` is always accent (purely cosmetic)
-    let used = ((pct as usize) * dash_w / 100).min(dash_w);
+    let used = (pct as usize * dash_w / 100).min(dash_w);
     let lead = usize::from(dash_w > 0);
     let used_rest = used.saturating_sub(lead);
     let plain_rest = dash_w.saturating_sub(lead + used_rest);
-
-    spans.push(adash(p, lead)); // first cell after `>`: always accent
-    spans.push(adash(p, used_rest)); // used part: accent
-    spans.push(p.accent_span(&pct_txt)); // 8%
-    spans.push(p.plain("-".repeat(plain_rest))); // unused: transparent background, plain
+    spans.push(adash(p, lead));
+    spans.push(adash(p, used_rest));
+    spans.push(p.accent_span(&pct_txt));
+    spans.push(p.plain("-".repeat(plain_rest)));
     spans.extend(tail);
-
     Line::from(fit_width(spans, w))
 }
 
@@ -208,19 +209,39 @@ fn fit_width(spans: Vec<Span<'static>>, w: usize) -> Vec<Span<'static>> {
     out
 }
 
-// On narrow terminals truncate the breadcrumb to the budget, appending `> ...`.
+// On narrow terminals truncate the breadcrumb to the exact budget.
 fn truncate_crumbs(p: &Palette, crumbs: Vec<Span<'static>>, budget: usize) -> Vec<Span<'static>> {
-    let mut out: Vec<Span> = Vec::new();
-    let mut used = 1; // π
+    let mut out = Vec::new();
+    let mut used = 0usize;
     for s in crumbs {
-        let len = s.content.width();
-        if used + len > budget.saturating_sub(3) {
+        let remaining = budget.saturating_sub(used);
+        let text = truncate_text(&s.content, remaining);
+        if text.is_empty() {
             break;
         }
-        used += len;
-        out.push(s);
+        used += text.width();
+        out.push(Span::styled(text, s.style));
+        if used >= budget {
+            break;
+        }
     }
-    out.push(p.pill(" > …", p.accent));
+    if out.is_empty() && budget > 0 {
+        out.push(p.pill("…", p.accent));
+    }
+    out
+}
+
+fn truncate_text(text: &str, budget: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let cw = ch.to_string().width();
+        if used + cw > budget {
+            break;
+        }
+        used += cw;
+        out.push(ch);
+    }
     out
 }
 
@@ -285,8 +306,8 @@ mod tests {
         }
     }
 
-    // Colors: ends/[M]/[D]/model name accent, pi gray, cost gold,
-    // ctx unused part **transparent background** (no bg set), showing `N%` only.
+    // Colors: ends/[M]/model name accent, `[D]`+path white, `@`+branch git-colored,
+    // pi gray, cost gold, ctx unused part **transparent background** (no bg set), `N%` only.
     #[test]
     fn colors_match_spec() {
         let info = StatusInfo {
@@ -318,14 +339,31 @@ mod tests {
         let pi = find("π").unwrap();
         assert_eq!(pi.fg, Some(p.muted));
         assert_eq!(pi.bg, Some(p.black));
-        // [M] / [D]：accent
-        assert_eq!(find("[M]").unwrap().fg, Some(p.accent));
-        assert_eq!(find("[D]").unwrap().fg, Some(p.accent));
-        // Model name / path: accent
-        assert_eq!(find("global:model-z").unwrap().fg, Some(p.accent));
-        assert_eq!(find("Utility/MyPi").unwrap().fg, Some(p.accent));
-        // Cost: gold
+        // [M] + model name: one accent group, one space between the marker and the name
+        let model = find("[M] global:model-z").unwrap();
+        assert_eq!(model.fg, Some(p.accent));
+        assert_eq!(model.bg, Some(p.black));
+        // [D] + path: one white group, one space between the marker and the path
+        let dir = find("[D] Utility/MyPi").unwrap();
+        assert_eq!(dir.fg, Some(Color::White));
+        assert_eq!(dir.bg, Some(p.black));
+        // `@` + branch: the branch's own color, one space between them
+        let br = find("@ main").unwrap();
+        assert_eq!(br.fg, Some(p.git_clean()));
+        assert_eq!(br.bg, Some(p.black));
+        // Cost: gold, then the capsule's right padding (a black space) before the gauge's `>`
         assert_eq!(find("¥1.23").unwrap().fg, Some(p.gold));
+        let cost = line
+            .spans
+            .iter()
+            .position(|s| s.content == "¥1.23")
+            .expect("cost span");
+        let after = &line.spans[cost + 1];
+        assert_eq!(
+            (after.content.as_ref(), after.style.bg),
+            (" ", Some(p.black)),
+            "the price must be followed by one black padding cell"
+        );
         // Percentage shows `8%` only, no "ctx" prefix
         assert!(line.spans.iter().any(|s| s.content == "8%"));
         assert!(!line.spans.iter().any(|s| s.content.contains("ctx")));
@@ -408,7 +446,7 @@ mod tests {
         }
     }
 
-    // git segment: after [D]path, before the cost; ?N/+N in gold.
+    // git segment: after `[D] path`, before the cost; `@ branch` in the branch color, ?N/+N in gold.
     #[test]
     fn git_segment_renders_between_path_and_cost() {
         let git = crate::git::GitStatus {
@@ -430,12 +468,12 @@ mod tests {
         let p = Palette::default();
         let line = render(&info, &p, 120, None);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
-        assert!(text.contains("> @main"), "{text}");
+        assert!(text.contains("> @ main"), "{text}");
         assert!(text.contains(" ?9"), "{text}");
         assert!(text.contains(" +2"), "{text}");
         // Order: path < @branch < ?N < +N < cost
-        let i_path = text.find("> [D]a/b").unwrap();
-        let i_br = text.find("@main").unwrap();
+        let i_path = text.find("> [D] a/b").unwrap();
+        let i_br = text.find("@ main").unwrap();
         let i_q = text.find("?9").unwrap();
         let i_p = text.find("+2").unwrap();
         let i_money = text.find("¥1.50").unwrap();
@@ -446,6 +484,9 @@ mod tests {
         // Counts in gold
         let q = line.spans.iter().find(|s| s.content == "9").unwrap();
         assert_eq!(q.style.fg, Some(p.gold));
+        // A dirty repo colors `@` with the branch: dirty theme color, not clean
+        let br = line.spans.iter().find(|s| s.content == "@ main").unwrap();
+        assert_eq!(br.style.fg, Some(p.git_dirty()));
     }
 
     // Clean repo: no ?/+ segments, branch only.
@@ -473,7 +514,7 @@ mod tests {
             .iter()
             .map(|s| s.content.to_string())
             .collect();
-        assert!(text.contains("@dev"), "{text}");
+        assert!(text.contains("@ dev"), "{text}");
         assert!(!text.contains(" ?"), "no ?N expected: {text}");
         assert!(!text.contains(" +"), "no +N expected: {text}");
     }

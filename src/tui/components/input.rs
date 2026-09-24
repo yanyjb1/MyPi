@@ -2,7 +2,7 @@
 //!
 //! Layout (user spec):
 //! ```text
-//! +--pi > [M]model > [D]path ... --+     <- statusline (1 row, top edge)
+//! +--pi > [M] model > [D] path ... --+     <- statusline (1 row, top edge)
 //! | first input row                  |    <- appears only when input > 1 row
 //! | second input row                 |
 //! +-last input row------------------+    <- bottom edge; +- / -+ ends, blanks between

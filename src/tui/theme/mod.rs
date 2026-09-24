@@ -280,11 +280,6 @@ impl Palette {
         Span::styled(text.into(), Style::new().bg(self.black))
     }
 
-    /// Card background + accent foreground (`[M]` / `[D]` style markers).
-    pub fn mark(&self, text: impl Into<String>) -> Span<'static> {
-        Span::styled(text.into(), Style::new().bg(self.black).fg(self.accent))
-    }
-
     /// Card background + money color.
     pub fn gold_on_black(&self, text: impl Into<String>) -> Span<'static> {
         Span::styled(text.into(), Style::new().bg(self.black).fg(self.gold))
@@ -314,6 +309,15 @@ impl Palette {
             Some(c) => Span::styled(c.to_string(), Style::new().bg(self.black).fg(self.accent)),
             None => Span::styled("π", Style::new().bg(self.black).fg(self.muted)),
         }
+    }
+    /// Theme-defined clean git branch color.
+    pub fn git_clean(&self) -> Color {
+        theme().color(T::StatusLineGitClean)
+    }
+
+    /// Theme-defined dirty git branch color.
+    pub fn git_dirty(&self) -> Color {
+        theme().color(T::StatusLineGitDirty)
     }
 }
 
