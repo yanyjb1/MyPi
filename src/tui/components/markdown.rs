@@ -155,16 +155,23 @@ pub fn render_markdown(text: &str, _p: &Palette) -> Vec<Line<'static>> {
                     code_buf.push_str(&s);
                 } else if quote_depth > 0 {
                     // Quote rows: gutter + text, italics muted (omp mdQuote).
+                    // Continuation events (inline code, wrapped source rows)
+                    // append to the open quote row — the gutter appears once
+                    // per visual row, not once per parser event.
                     for part in s.split('\n') {
-                        flush(&mut row, &mut out);
-                        let mut r = Row { spans: Vec::new() };
-                        r.push(t.fg(ColorToken::MdQuoteBorder, "▏ ".to_string()));
+                        if part.is_empty() {
+                            continue;
+                        }
+                        ensure_row!(row);
+                        let r = row.as_mut().unwrap();
+                        if r.spans.is_empty() {
+                            r.push(t.fg(ColorToken::MdQuoteBorder, "▏ ".to_string()));
+                        }
                         r.push(Span::styled(
                             part.to_string(),
                             t.fg_style(ColorToken::MdQuote)
                                 .add_modifier(Modifier::ITALIC),
                         ));
-                        out.push(r.take());
                     }
                 } else {
                     ensure_row!(row);
