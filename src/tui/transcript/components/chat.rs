@@ -89,7 +89,13 @@ pub fn render_at_public(
         if !out.is_empty() {
             out.push(Line::from(""));
         }
-        out.extend(single_node(&entries[r.start..r.end], p, show_reasoning, tools_expanded, width));
+        out.extend(single_node(
+            &entries[r.start..r.end],
+            p,
+            show_reasoning,
+            tools_expanded,
+            width,
+        ));
     }
     out
 }

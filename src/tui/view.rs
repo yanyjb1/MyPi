@@ -8,9 +8,9 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
-use crate::entry as entry;
-use crate::tui::components::{input, statusline};
+use crate::entry;
 use crate::tui::completion::popup;
+use crate::tui::components::{input, statusline};
 use crate::tui::layout as tlayout;
 use crate::tui::theme::Palette;
 
@@ -69,7 +69,11 @@ fn hard_wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
     let w = width.max(1);
     let mut out = Vec::new();
     for line in lines {
-        let total: usize = line.spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
+        let total: usize = line
+            .spans
+            .iter()
+            .map(|s| crate::tui::text::display_width(&s.content))
+            .sum();
         if total <= w {
             out.push(line.clone());
             continue;
@@ -83,7 +87,10 @@ fn hard_wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
                 let cw = crate::tui::text::display_width(&ch.to_string());
                 if cur_w + cw > w {
                     if !buf.is_empty() {
-                        cur.push(ratatui::text::Span::styled(std::mem::take(&mut buf), sp.style));
+                        cur.push(ratatui::text::Span::styled(
+                            std::mem::take(&mut buf),
+                            sp.style,
+                        ));
                     }
                     out.push(Line::from(std::mem::take(&mut cur)));
                     cur_w = 0;
@@ -100,34 +107,6 @@ fn hard_wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
         }
     }
     out
-}
-
-// Map the visible row window to a block range (with one block of slack
-// above). `heights` may contain `usize::MAX` sentinels for not-yet-measured
-// blocks — they count as their gap+1 until `rows_for` measures them, which
-// is fine: the window edge can only overshoot by a block, and the splice
-// below clamps.
-fn window_blocks(heights: &[usize], n: usize, first_row: usize, viewport: usize) -> (usize, usize) {
-    let mut acc = 0usize;
-    let (mut b0, mut b1) = (n, n);
-    for (i, h) in heights.iter().enumerate() {
-        let size = if *h == usize::MAX { 1 } else { *h + 1 }; // + gap
-        if b0 == n && acc + size > first_row {
-            b0 = i;
-        }
-        acc += size;
-        if b0 != n && acc > first_row + viewport {
-            b1 = (i + 1).min(n);
-            break;
-        }
-    }
-    if b0 == n {
-        b0 = n.saturating_sub(1); // window past the end (empty roster edge)
-    }
-    if b1 <= b0 {
-        b1 = (b0 + 1).min(n);
-    }
-    (b0.saturating_sub(1), b1) // one block of slack above
 }
 
 // Draw one frame and return where the cursor belongs (container-relative (row, col)) for the caller to place the hardware cursor.
@@ -180,11 +159,7 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
         p,
     );
     let viewport_h = container_area.height as usize;
-    let lines: Vec<_> = iv
-        .lines
-        .into_iter()
-        .take(viewport_h)
-        .collect();
+    let lines: Vec<_> = iv.lines.into_iter().take(viewport_h).collect();
     f.render_widget(Paragraph::new(lines), container_area);
 
     // ---- history area ----
@@ -200,34 +175,26 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
     // the input box's 4 border columns) left a strip of bare terminal
     // background down the right edge of every card.
     let chat_w = area.width as usize;
-    // Block path: sync heights, then render **only** the blocks the
-    // viewport touches. Total height comes from the roster (prefix sums),
-    // so scrolling never needs the far-away rows at all.
-    s.block_cache.sync(
-        s.history,
-        p,
-        s.show_reasoning,
-        s.tools_expanded,
-        chat_w,
-    );
-    let total = s.block_cache.total_height();
+    // Block path: the window is anchored at the **bottom** (offset = rows
+    // up from the tail), so locating it is a reverse walk that measures
+    // unmeasured blocks on demand (render = measure; rows stay cached).
+    // Nothing above the walk's stop point is ever rendered: cold start
+    // paints exactly one viewport, ancient history waits until wheeled.
+    s.block_cache
+        .sync(s.history, p, s.show_reasoning, s.tools_expanded, chat_w);
     let viewport = chat_area.height as usize;
-    let max_offset = total.saturating_sub(viewport);
-    // `scroll` counts rows up from the bottom (0 = newest visible).
-    let offset = if s.scroll_pinned { 0 } else { s.chat_scroll.min(max_offset) };
-    let first_row = max_offset - offset; // absolute top row of the window
-
-    // Which blocks does [first_row, first_row+viewport) touch? Walk the
-    // height roster — O(blocks), no rendering — then materialize that
-    // slice (+1 block of slack above for smooth wheeling).
-    let n_blocks = crate::tui::transcript::blocks::blocks(s.history).len();
-    let (b0, b1) = window_blocks(s.block_cache.heights_slice(), n_blocks, first_row, viewport);
-    let (block_rows, rows_above) =
-        s.block_cache.rows_for(s.history, p, s.show_reasoning, s.tools_expanded, b0..b1);
-    // Splice: rows above the window are dropped; what remains paints.
-    let skip = first_row.saturating_sub(rows_above);
+    let offset = if s.scroll_pinned { 0 } else { s.chat_scroll };
+    let (b0, b1) =
+        s.block_cache
+            .window_from_bottom(s.history, p, s.show_reasoning, offset, viewport);
+    let (block_rows, _rows_above) =
+        s.block_cache
+            .rows_for(s.history, p, s.show_reasoning, s.tools_expanded, b0..b1);
+    // Splice from the bottom: the walk over-collects above the viewport
+    // top (one block of slack), so keep the LAST `viewport` rows.
+    let take_from = block_rows.len().saturating_sub(viewport);
     let mut visible: Vec<Line<'static>> = Vec::with_capacity(viewport);
-    let mut it = block_rows.into_iter().skip(skip);
+    let mut it = block_rows.into_iter().skip(take_from);
     for _ in 0..viewport {
         match it.next() {
             Some(l) => visible.push(l),
@@ -240,17 +207,25 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
     // Appended below the newest block; the follow-bottom window keeps it
     // on screen because it rides the same `total` bookkeeping… except it
     // is not a block, so splice it when the window reaches the bottom.
-    if max_offset - offset == 0 || first_row + viewport > rows_above {
+    if offset == 0 {
         match s.live {
             crate::server::events::LiveActivity::Thinking => visible.push(Line::styled(
                 "thinking",
-                ratatui::style::Style::new().fg(p.muted).add_modifier(ratatui::style::Modifier::ITALIC),
+                ratatui::style::Style::new()
+                    .fg(p.muted)
+                    .add_modifier(ratatui::style::Modifier::ITALIC),
             )),
             crate::server::events::LiveActivity::Tool { intent } => {
-                let label = if intent.trim().is_empty() { "working" } else { intent.as_str() };
+                let label = if intent.trim().is_empty() {
+                    "working"
+                } else {
+                    intent.as_str()
+                };
                 visible.push(Line::styled(
                     label.to_string(),
-                    ratatui::style::Style::new().fg(p.muted).add_modifier(ratatui::style::Modifier::ITALIC),
+                    ratatui::style::Style::new()
+                        .fg(p.muted)
+                        .add_modifier(ratatui::style::Modifier::ITALIC),
                 ));
             }
             crate::server::events::LiveActivity::Idle => {}
@@ -258,7 +233,9 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
         if let Some(t) = s.streaming
             && !t.is_empty()
         {
-            visible.extend(crate::tui::transcript::components::chat::render_streaming(t, p));
+            visible.extend(crate::tui::transcript::components::chat::render_streaming(
+                t, p,
+            ));
         }
     }
     f.render_widget(Paragraph::new(visible), chat_area);
@@ -268,7 +245,11 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
     if reserved_area.height > 0 {
         if let Some((items, selected)) = s.resume_pick {
             let lines = crate::tui::components::reserved::render_resume_picker(
-                items, selected, area.width, reserved_area.height as usize, p,
+                items,
+                selected,
+                area.width,
+                reserved_area.height as usize,
+                p,
             );
             f.render_widget(Paragraph::new(lines), reserved_area);
         } else {
@@ -315,12 +296,21 @@ mod tests {
         let wrapped = hard_wrap(&lines, 4);
         let joined: String = wrapped
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.to_string())
+                    .collect::<String>()
+            })
             .collect();
         assert_eq!(joined, "一二三四五六七八九十ab", "换行不得丢字");
         // Every produced row fits the width (CJK counts as 2 cells).
         for l in &wrapped {
-            let w: usize = l.spans.iter().map(|s| crate::tui::text::display_width(&s.content)).sum();
+            let w: usize = l
+                .spans
+                .iter()
+                .map(|s| crate::tui::text::display_width(&s.content))
+                .sum();
             assert!(w <= 4, "行宽超限: {w}");
         }
     }

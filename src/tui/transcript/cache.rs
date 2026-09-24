@@ -1,15 +1,29 @@
-//! Bounded LRU cache of rendered transcript blocks.
+//! Bounded LRU cache of rendered transcript **blocks**.
 //!
-//! Contract with `view.rs`: give me the transcript, width, and scroll
-//! position; I give back the rows to paint and the total height. Only the
-//! blocks near the viewport are materialized; everything else is a height
-//! number. Memory and per-frame work are bounded by the budget, not by
-//! conversation length — the user can chat for days without the frame
-//! cost creeping up.
+//! The cache unit is the block (one user message / assistant turn / tool
+//! exchange / system notice), not the row. Each slot stores the rendered
+//! rows for the block **in both fold states** (tool outputs render folded
+//! per their threshold and expanded; every other block renders the same
+//! rows for both). Row height is a *derived* property of the rendered
+//! rows — nothing is measured ahead of time, nothing is rendered "just to
+//! measure and thrown away". Blocks the viewport never touches are never
+//! rendered at all.
 //!
-//! Invalidation is whole-sale on width change (every wrap is wrong) and
-//! index-truncate on transcript shrink (regenerate/rewind: entries after
-//! the fork point are gone; the roster follows).
+//! Scrolling: `view.rs` walks **up from the bottom** (`chat_scroll` is
+//! already defined as rows-up-from-bottom). Unknown heights are measured
+//! on demand during that walk, so cold start renders exactly one
+//! viewport. Walking into never-rendered ancient history pays a one-time
+//! measure-as-you-go cost that then stays cached.
+//!
+//! Eviction: by **block count** (`BLOCK_BUDGET`, 256). Blocks average
+//! ~14 rows, so 256 blocks ≈ 3.7k rows ≈ 1 MB of spans — comfortably
+//! under the old 8192-row budget, with a hard worst case (all-huge
+//! blocks) around 7 MB. Memory and per-frame work stay bounded by the
+//! budget, not the conversation length.
+//!
+//! Invalidation is whole-sale on width/epoch change (every wrap is wrong)
+//! and index-truncate on transcript shrink (regenerate/rewind: entries
+//! after the fork point are gone).
 
 use std::collections::HashMap;
 
@@ -19,34 +33,38 @@ use super::blocks::{self, Range};
 use crate::entry::Entry;
 use crate::tui::theme::Palette;
 
-/// Row budget for cached blocks. One screenful is ~50 rows; this holds
-/// roughly 150 screens — far past anything a wheel can reach in a burst,
-/// and O(1) no matter the transcript length.
-const ROW_BUDGET: usize = 8192;
+/// Block-count budget for cached blocks. Blocks average ~14 rows (24k-entry
+/// bench), so this is ≈3.7k rows ≈ 1 MB of span data; the pathological
+/// all-huge-blocks worst case is ~7 MB. Roughly 6 screens cached per wheel
+/// page — far past any wheel burst, and O(1) in transcript length.
+const BLOCK_BUDGET: usize = 256;
 
-/// Cached render of one block + bookkeeping.
+/// Cached render of one block in both fold states + bookkeeping.
 struct Slot {
-    block: blocks::Block,
+    /// Rows when tools are folded (the default view).
+    folded: blocks::Block,
+    /// Rows when tools are expanded (Ctrl+O). For blocks with no foldable
+    /// content this is the same allocation as `folded` (Arc-shared is
+    /// overkill; equal-by-construction blocks just render twice at admit
+    /// time and cost one extra Vec — negligible vs the render itself).
+    expanded: blocks::Block,
     /// LRU stamp — bumped on every hit; the lowest stamp is evicted.
     stamp: u64,
-    /// Rows this slot costs against the budget.
-    rows: usize,
 }
 
 pub struct BlockCache {
     /// Block ordinal (position in `blocks::blocks`) → rendered rows.
     slots: HashMap<usize, Slot>,
-    /// Heights of every block in transcript order — cheap truth that
-    /// survives eviction (recomputed only when a block re-renders).
+    /// Heights of every measured block, transcript order. `usize::MAX` =
+    /// never rendered (never measured). Heights are derived facts, cheap
+    /// to keep for all blocks (8 bytes each) and they survive eviction —
+    /// scroll math over visited history stays O(1) forever.
     heights: Vec<usize>,
     width: usize,
     stamp: u64,
-    /// Rows currently cached.
-    cached_rows: usize,
     /// Theme epoch the cached rows were colored with. A theme swap bumps
-    /// the epoch; the next sync sees a mismatch and drops every row
-    /// (heights re-derive from the re-render). omp's `themeEpoch` cache
-    /// key contract, applied to the whole block store.
+    /// the epoch; the next sync drops everything (heights re-derive from
+    /// the re-render). omp's `themeEpoch` cache-key contract.
     theme_epoch: u64,
 }
 
@@ -60,7 +78,10 @@ impl BlockCache {
     /// Bench harness getters (doc-hidden, not API).
     #[doc(hidden)]
     pub fn cached_rows(&self) -> usize {
-        self.cached_rows
+        self.slots
+            .values()
+            .map(|s| s.folded.height + s.expanded.height)
+            .sum()
     }
 
     #[doc(hidden)]
@@ -74,26 +95,18 @@ impl BlockCache {
             heights: Vec::new(),
             width: 0,
             stamp: 0,
-            cached_rows: 0,
             theme_epoch: crate::tui::theme::theme_epoch(),
         }
     }
 
-    /// Total display height (rows + inter-block gaps) — O(blocks), derived
-    /// from the height roster instead of a second mutable ledger: one
-    /// source of truth, no drift.
+    /// Total display height over **measured** blocks (rows + gaps).
+    /// Unmeasured blocks count as gap-only. Debug/test/diagnostic surface:
+    /// the reverse scroll walk does not need it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn total_height(&self) -> usize {
         let n = self.heights.iter().filter(|h| **h != usize::MAX).count();
         let known: usize = self.heights.iter().filter(|h| **h != usize::MAX).sum();
-        // Unknown blocks still cost their gap in the coordinate space? No —
-        // they render on demand before the viewport math runs; treat unknown
-        // as 0 here and let every caller force-render first (rows_for does).
         known + n.saturating_sub(1)
-    }
-
-    /// Read-only height roster for viewport math (`usize::MAX` = unmeasured).
-    pub(crate) fn heights_slice(&self) -> &[usize] {
-        &self.heights
     }
 
     /// Re-sync with the transcript. Cheap when nothing changed: the
@@ -101,17 +114,14 @@ impl BlockCache {
     pub(crate) fn sync(
         &mut self,
         entries: &[Entry],
-        p: &Palette,
-        show_reasoning: bool,
-        tools_expanded: bool,
+        _p: &Palette,
+        _show_reasoning: bool,
+        _tools_expanded: bool,
         width: usize,
     ) {
         let epoch = crate::tui::theme::theme_epoch();
         if epoch != self.theme_epoch {
-            // Theme swap: every cached row is stale-colored. Drop rows;
-            // heights re-derive from the re-render (same as width change).
             self.slots.clear();
-            self.cached_rows = 0;
             self.heights.clear();
             self.theme_epoch = epoch;
         }
@@ -119,7 +129,6 @@ impl BlockCache {
             // Width change invalidates every wrap; drop rows but keep the
             // structure — heights re-derive from the re-render below.
             self.slots.clear();
-            self.cached_rows = 0;
             self.width = width;
             self.heights.clear();
         }
@@ -136,30 +145,33 @@ impl BlockCache {
                     .filter(|k| *k >= ranges.len())
                     .collect();
                 for k in dead {
-                    if let Some(s) = self.slots.remove(&k) {
-                        self.cached_rows -= s.rows;
-                    }
+                    self.slots.remove(&k);
                 }
             }
-            self.heights.resize(ranges.len(), usize::MAX); // unknown → forced render below
-        }
-        // Render only unknown-height blocks that are also needed now —
-        // heights fill lazily: unknown blocks render on demand in `rows_for`,
-        // except the *last* one, which must be known immediately (the
-        // follow-the-bottom path uses it every frame).
-        if let Some((idx, last)) = ranges.len().checked_sub(1).map(|i| (i, ranges[i]))
-            && self.heights.get(idx).copied().unwrap_or(usize::MAX) == usize::MAX
-        {
-            let b = blocks::render_block(entries, last, p, show_reasoning, tools_expanded, width);
-            self.admit(idx, b);
+            self.heights.resize(ranges.len(), usize::MAX); // unknown → measure on demand
         }
     }
 
+    /// Measure one block's height without caching its rows? No such thing
+    /// anymore — measuring IS rendering. Height arrives with the render.
+    fn render_both(
+        &self,
+        entries: &[Entry],
+        r: Range,
+        p: &Palette,
+        show_reasoning: bool,
+        width: usize,
+    ) -> (blocks::Block, blocks::Block) {
+        let folded = blocks::render_block(entries, r, p, show_reasoning, false, width);
+        let expanded = blocks::render_block(entries, r, p, show_reasoning, true, width);
+        (folded, expanded)
+    }
+
     /// The rows to paint for `range` of blocks (by ordinal), plus the
-    /// absolute first row of that block range in transcript coordinates.
-    ///
-    /// Missing blocks render on demand (wheel into ancient history); the
-    /// LRU evicts the coldest blocks when the budget would overflow.
+    /// number of **known** rows above `range.start` (for the splice in
+    /// view.rs). Unmeasured blocks inside the range render now; unmeasured
+    /// blocks above the range do **not** render — the caller's scroll walk
+    /// (reverse, from the bottom) measures those it actually crosses.
     pub(crate) fn rows_for(
         &mut self,
         entries: &[Entry],
@@ -170,26 +182,15 @@ impl BlockCache {
     ) -> (Vec<Line<'static>>, usize) {
         let ranges = blocks::blocks(entries);
         let mut out = Vec::new();
-        let mut prefix_rows = 0usize; // rows above `range.start`
+        let mut prefix_rows = 0usize; // known rows above `range.start`
         let mut gap_needed = false;
         for (i, r) in ranges.iter().enumerate() {
             let known = self.heights.get(i).copied().unwrap_or(usize::MAX);
             if i < range.start {
-                if known == usize::MAX {
-                    // Heights above the window must exist for the scroll
-                    // math; render (uncached — a tall ancient block gets
-                    // its height remembered but its rows dropped).
-                    let b = blocks::render_block(
-                        entries,
-                        *r,
-                        p,
-                        show_reasoning,
-                        tools_expanded,
-                        self.width,
-                    );
-                    self.set_height(i, b.height);
-                    prefix_rows += b.height + 1; // + gap
-                } else {
+                // Only *known* heights count toward the splice prefix.
+                // Unknown ones belong to never-visited history; the scroll
+                // walk measures them before this window is computed.
+                if known != usize::MAX {
                     prefix_rows += known + 1; // + gap
                 }
                 continue;
@@ -201,12 +202,63 @@ impl BlockCache {
             if gap_needed {
                 out.push(blocks::block_gap());
             }
-            // Visible blocks only (~a viewport): cloning the rows out is
-            // negligible next to the rendering the cache just saved.
             out.extend(b.rows.clone());
             gap_needed = true;
         }
         (out, prefix_rows)
+    }
+
+    /// Reverse scroll walk: given the desired rows-up-from-bottom offset,
+    /// find the block range whose rows cover `[offset, offset+viewport)`.
+    ///
+    /// Walks from the last block backwards, measuring unmeasured blocks as
+    /// it goes (measure = render; the rows stay cached and immediately
+    /// useful). Stops as soon as enough height has accumulated. This is
+    /// the whole point of the block cache: nothing above the walk's stop
+    /// point is ever touched, so cold start renders one viewport.
+    pub(crate) fn window_from_bottom(
+        &mut self,
+        entries: &[Entry],
+        p: &Palette,
+        show_reasoning: bool,
+        offset_rows: usize,
+        viewport_rows: usize,
+    ) -> (usize, usize) {
+        let ranges = blocks::blocks(entries);
+        let n = ranges.len();
+        if n == 0 {
+            return (0, 0);
+        }
+        // Accumulate rows upward: we need `offset_rows + viewport_rows`
+        // rows below the window's top edge.
+        let need = offset_rows.saturating_add(viewport_rows);
+        let mut acc = 0usize;
+        let b1 = n; // exclusive end
+        let mut b0 = n;
+        for i in (0..n).rev() {
+            let h = match self.heights.get(i).copied().unwrap_or(usize::MAX) {
+                usize::MAX => {
+                    // Measure = render: both fold states render once and
+                    // land in the cache; this block is inside the requested
+                    // span, so the rows are immediately useful.
+                    let (f, e) =
+                        self.render_both(entries, ranges[i], p, show_reasoning, self.width);
+                    let h = f.height;
+                    self.admit(i, f, e);
+                    h
+                }
+                h => h,
+            };
+            acc += h + 1; // + gap
+            b0 = i;
+            if acc >= need {
+                break;
+            }
+        }
+        // Trim the top: blocks entirely above the window's top edge drop
+        // out of the window (their height already counted in the walk).
+        // One block of slack above for smooth wheeling.
+        (b0.saturating_sub(1), b1.min(n))
     }
 
     /// One block, via the cache.
@@ -220,61 +272,51 @@ impl BlockCache {
         tools_expanded: bool,
     ) -> &blocks::Block {
         if !self.slots.contains_key(&idx) || self.heights.get(idx) == Some(&usize::MAX) {
-            let b = blocks::render_block(entries, r, p, show_reasoning, tools_expanded, self.width);
-            self.admit(idx, b);
+            let (f, e) = self.render_both(entries, r, p, show_reasoning, self.width);
+            self.admit(idx, f, e);
         }
         self.stamp += 1;
         let s = self.slots.get_mut(&idx).expect("just admitted");
         s.stamp = self.stamp;
         // Borrow dance: admit() may have evicted others; re-fetch is sound.
         let slot = self.slots.get(&idx).expect("hit after stamp bump");
-        &slot.block
-    }
-
-    fn set_height(&mut self, idx: usize, h: usize) {
-        if let Some(old) = self.heights.get_mut(idx) {
-            *old = h;
+        if tools_expanded {
+            &slot.expanded
+        } else {
+            &slot.folded
         }
     }
 
-    /// Insert a rendered block; evict LRU (never the newest) if needed.
-    fn admit(&mut self, idx: usize, b: blocks::Block) {
-        self.set_height(idx, b.height);
-        let rows = b.height;
+    /// Insert a rendered block (both fold states); evict LRU (never the
+    /// newest) when the block budget would overflow.
+    fn admit(&mut self, idx: usize, folded: blocks::Block, expanded: blocks::Block) {
+        let h = folded.height;
+        self.heights[idx] = h;
         // The newest block (highest ordinal present in cache) stays: it is
         // the follow-bottom hot path.
         let newest = self.slots.keys().copied().max();
-        while self.cached_rows + rows > ROW_BUDGET {
+        while self.slots.len() >= BLOCK_BUDGET {
             let Some(victim) = self
                 .slots
-                .iter()
-                .filter(|(k, _)| Some(**k) != newest && **k != idx)
-                .min_by_key(|(_, s)| s.stamp)
-                .map(|(k, _)| *k)
+                .keys()
+                .copied()
+                .filter(|k| Some(*k) != newest && *k != idx)
+                .min_by_key(|k| self.slots[k].stamp)
             else {
-                break; // budget cannot hold even this block alone; keep it anyway
+                break; // budget full of pinned blocks; keep anyway
             };
-            if let Some(s) = self.slots.remove(&victim) {
-                self.cached_rows -= s.rows;
-            }
+            self.slots.remove(&victim);
         }
-        self.cached_rows += rows;
         self.stamp += 1;
         self.slots.insert(
             idx,
             Slot {
-                block: b,
+                folded,
+                expanded,
                 stamp: self.stamp,
-                rows,
             },
         );
     }
-
-    #[cfg(test)]
-    fn cached_block_count(&self) -> usize {
-        self.slots.len()
-    }
-
 }
 
 #[cfg(test)]
@@ -302,29 +344,33 @@ mod tests {
     }
 
     #[test]
-    fn viewport_slice_matches_full_render() {
-        let es = convo(6);
+    fn cold_start_renders_only_the_bottom_window() {
+        // The contract: a huge transcript + a bottom-window request must
+        // NOT render the whole thing just to measure heights.
+        let es = convo(2000); // 4000 entries
         let mut c = BlockCache::new();
         c.sync(&es, &p(), true, false, 60);
-        // Materialize blocks 1..4 through the cache.
-        let (rows, _) = c.rows_for(&es, &p(), true, false, 1..4);
-        // The same slice straight from the convenience path.
-        let full = crate::tui::transcript::components::chat::render(&es, &p(), true, false);
-        // Count only: exact styling is chat.rs's own test suite's job.
-        assert!(!rows.is_empty());
-        assert!(full.len() > rows.len(), "全量必须包含更多块");
+        let n = blocks::blocks(&es).len();
+        let (b0, b1) = c.window_from_bottom(&es, &p(), true, 0, 40);
+        let _ = c.rows_for(&es, &p(), true, false, b0..b1);
+        assert!(
+            c.cached_blocks() < n / 4,
+            "冷启动必须只渲染底部窗口：{} / {} 块",
+            c.cached_blocks(),
+            n
+        );
     }
 
     #[test]
-    fn total_height_is_gap_inclusive() {
-        let es = convo(3);
+    fn window_from_bottom_covers_the_requested_span() {
+        let es = convo(30);
         let mut c = BlockCache::new();
         c.sync(&es, &p(), true, false, 60);
-        // Force-render everything.
-        let _ = c.rows_for(&es, &p(), true, false, 0..6);
-        // n blocks + (n-1) gaps.
-        let blocks_sum: usize = c.heights.iter().sum();
-        assert_eq!(c.total_height(), blocks_sum + 5, "总高 = 块高 + 间隙");
+        // Ask for the bottom 40 rows.
+        let (b0, b1) = c.window_from_bottom(&es, &p(), true, 0, 40);
+        assert_eq!(b1, blocks::blocks(&es).len());
+        let (rows, _) = c.rows_for(&es, &p(), true, false, b0..b1);
+        assert!(!rows.is_empty());
     }
 
     #[test]
@@ -332,15 +378,33 @@ mod tests {
         let es = convo(400); // 800 entries — the "chatted for days" case
         let mut c = BlockCache::new();
         c.sync(&es, &p(), true, false, 60);
-        for start in (0..790).step_by(7).rev() {
-            let _ = c.rows_for(&es, &p(), true, false, start..(start + 5).min(800));
+        // Walk to the top through windows, like a wheel burst would.
+        let n = blocks::blocks(&es).len();
+        let mut top = n;
+        while top > 0 {
+            let b0 = top.saturating_sub(8);
+            let _ = c.rows_for(&es, &p(), true, false, b0..top);
+            top = b0;
         }
         assert!(
-            c.cached_rows() <= ROW_BUDGET,
-            "缓存行数 {} 超预算",
-            c.cached_rows()
+            c.cached_blocks() <= BLOCK_BUDGET,
+            "LRU 必须按块数封顶：{}",
+            c.cached_blocks()
         );
-        assert!(c.cached_block_count() < 800, "LRU 必须驱逐");
+    }
+
+    #[test]
+    fn heights_survive_eviction() {
+        // Evicted rows leave their heights behind: scroll math over visited
+        // history stays exact even after the rows are gone.
+        let es = convo(400);
+        let mut c = BlockCache::new();
+        c.sync(&es, &p(), true, false, 60);
+        let n = blocks::blocks(&es).len();
+        let _ = c.rows_for(&es, &p(), true, false, 0..8.min(n));
+        for i in 0..8.min(n) {
+            assert_ne!(c.heights[i], usize::MAX, "height {i} must persist");
+        }
     }
 
     #[test]

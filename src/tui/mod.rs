@@ -7,17 +7,17 @@
 //! - Components (render state into Lines): `components/*`
 //! - Orchestration (event loop + rendering): `app` / `view` / `events`
 pub mod app;
-mod transcript;
-pub mod completion;
 pub mod chat;
-pub mod editor;
+pub mod completion;
 pub mod components;
+pub mod editor;
 pub mod highlight;
 pub mod keys;
 pub mod layout;
-pub mod text;
 pub mod session;
+pub mod text;
 pub mod theme;
+mod transcript;
 pub mod view;
 pub mod zones;
 pub mod zones_impl;
@@ -57,7 +57,23 @@ pub mod bench {
     pub use crate::tui::transcript::cache::BlockCache;
 
     /// Cache sync + windowed render, mirroring view.rs's hot path.
-    pub fn window(
+    /// `offset_rows` counts up from the transcript bottom (0 = newest).
+    pub fn window_bottom(
+        cache: &mut BlockCache,
+        entries: &[crate::entry::Entry],
+        offset_rows: usize,
+        viewport_rows: usize,
+        width: usize,
+    ) -> (Vec<ratatui::text::Line<'static>>, usize, usize) {
+        let p = crate::tui::theme::Palette::current();
+        cache.sync(entries, &p, true, true, width);
+        let (b0, b1) = cache.window_from_bottom(entries, &p, true, offset_rows, viewport_rows);
+        let (rows, _above) = cache.rows_for(entries, &p, true, true, b0..b1);
+        (rows, cache.cached_rows(), cache.cached_blocks())
+    }
+
+    /// Old-style direct block-range window (for cache-hit benchmarks).
+    pub fn window_at(
         cache: &mut BlockCache,
         entries: &[crate::entry::Entry],
         b0: usize,
@@ -72,5 +88,17 @@ pub mod bench {
 
     pub fn block_count(entries: &[crate::entry::Entry]) -> usize {
         blocks(entries).len()
+    }
+    /// Measure-only window walk (no rows painted): for bench offsets.
+    pub fn walk_window(
+        cache: &mut BlockCache,
+        entries: &[crate::entry::Entry],
+        offset_rows: usize,
+        viewport_rows: usize,
+        width: usize,
+    ) -> (usize, usize) {
+        let p = crate::tui::theme::Palette::current();
+        cache.sync(entries, &p, true, true, width);
+        cache.window_from_bottom(entries, &p, true, offset_rows, viewport_rows)
     }
 }
