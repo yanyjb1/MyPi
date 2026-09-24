@@ -22,6 +22,7 @@ fn db() -> String {
     std::env::var("MYPI_BENCH_DB").unwrap_or_else(|_| DB.to_string())
 }
 const WIDTH: usize = 120;
+const VIEWPORT: usize = 40;
 
 fn load_entries() -> Vec<Entry> {
     let store = mypi::store::Store::open(std::path::Path::new(&db())).expect("open bench db");
@@ -51,7 +52,8 @@ fn main() {
         let n = bench::block_count(&entries);
         let t1 = Instant::now();
         // First frame: bottom window (what a launched TUI paints).
-        let (rows, _, _) = bench::window(&mut cache, &entries, n.saturating_sub(8), n, WIDTH);
+        let (rows, cached_rows, cached_blocks) =
+            bench::window_bottom(&mut cache, &entries, 0, VIEWPORT, WIDTH);
         let t_first = t1.elapsed();
         println!(
             "cold:        load {:>7.2} ms + first-frame {:>7.2} ms  ({} blocks, {} rows painted)",
@@ -62,67 +64,67 @@ fn main() {
         );
     }
 
-    // ---- scroll: page-up from bottom to top, then warm repeat ----
+    // ---- scroll: wheel up from the bottom to the top ----
     if only.is_none() || only == Some("scroll") {
         let entries = load_entries();
         let mut cache = bench::BlockCache::new_public();
-        let n = bench::block_count(&entries);
-        // Prime the roster heights (the real app does this on frame 1).
-        let _ = bench::window(&mut cache, &entries, n.saturating_sub(8), n, WIDTH);
+        let _ = bench::window_bottom(&mut cache, &entries, 0, VIEWPORT, WIDTH);
 
-        // Page-up in ~viewport-sized steps, bottom → top.
-        let page_blocks = 12;
-        let mut steps: Vec<(usize, usize)> = Vec::new();
-        let mut top = n;
-        while top > 0 {
-            let b0 = top.saturating_sub(page_blocks);
-            steps.push((b0, top));
-            top = b0;
-        }
-        let t2 = Instant::now();
+        // Wheel-up in 3-row steps until the window top hits block 0.
+        let mut offset = 0usize;
+        let mut steps = 0usize;
         let mut worst = std::time::Duration::ZERO;
         let mut worst_at = 0usize;
-        for (i, &(b0, b1)) in steps.iter().enumerate() {
+        let t2 = Instant::now();
+        // Upper bound on total rows: every block renders at most ~200 rows.
+        let max_offset = bench::block_count(&entries) * 200;
+        loop {
             let t = Instant::now();
-            let (rows, _, _) = bench::window(&mut cache, &entries, b0, b1, WIDTH);
+            let (b0, _b1) = bench::walk_window(&mut cache, &entries, offset, VIEWPORT, WIDTH);
             let d = t.elapsed();
             if d > worst {
                 worst = d;
-                worst_at = b0;
+                worst_at = offset;
             }
-            let _ = rows.len();
-            if i % 100 == 0 && i > 0 {
-                eprintln!(
-                    "  scroll step {i}/{}: {}..{} {:.2} ms",
-                    i,
-                    b0,
-                    b1,
-                    d.as_secs_f64() * 1e3
-                );
+            steps += 1;
+            if b0 == 0 || offset > max_offset {
+                break; // reached the top (or bounded walk end)
             }
+            offset += 3;
         }
         let total = t2.elapsed();
         println!(
-            "scroll-cold: {} steps, total {:>8.1} ms, mean {:>6.2} ms, worst {:>6.2} ms @ block {}",
-            steps.len(),
+            "scroll-cold: {} wheel steps to the top, total {:>8.1} ms, mean {:>6.2} ms/step, worst {:>6.2} ms @ offset {}",
+            steps,
             total.as_secs_f64() * 1e3,
-            total.as_secs_f64() * 1e3 / steps.len() as f64,
+            total.as_secs_f64() * 1e3 / steps as f64,
             worst.as_secs_f64() * 1e3,
             worst_at
         );
+        println!(
+            "             cache after walk: {} blocks, {} rows",
+            cache.cached_blocks(),
+            cache.cached_rows()
+        );
 
-        // Warm pass: mostly cache hits (budget evicts, so tail is cold again).
+        // Warm pass: everything visited is cached; walk back down.
+        let mut offset2 = 0usize;
         let t3 = Instant::now();
-        for &(b0, b1) in steps.iter().rev() {
-            let (rows, _, _) = bench::window(&mut cache, &entries, b0, b1, WIDTH);
-            let _ = rows.len();
+        let mut steps2 = 0usize;
+        loop {
+            let (b0, _b1) = bench::walk_window(&mut cache, &entries, offset2, VIEWPORT, WIDTH);
+            steps2 += 1;
+            if b0 == 0 || offset2 > max_offset {
+                break;
+            }
+            offset2 += 3;
         }
         let warm = t3.elapsed();
         println!(
-            "scroll-warm: {} steps, total {:>8.1} ms, mean {:>6.2} ms",
-            steps.len(),
+            "scroll-warm: {} steps down, total {:>8.1} ms, mean {:>6.2} ms/step",
+            steps2,
             warm.as_secs_f64() * 1e3,
-            warm.as_secs_f64() * 1e3 / steps.len() as f64
+            warm.as_secs_f64() * 1e3 / steps2 as f64
         );
     }
 
@@ -131,7 +133,7 @@ fn main() {
         let entries = load_entries();
         let mut cache = bench::BlockCache::new_public();
         let n = bench::block_count(&entries);
-        let _ = bench::window(&mut cache, &entries, n.saturating_sub(8), n, WIDTH);
+        let _ = bench::window_bottom(&mut cache, &entries, 0, VIEWPORT, WIDTH);
 
         // A keystroke re-renders the bottom window (cache hits). The input
         // line itself is one Paragraph row — negligible vs history.
@@ -140,7 +142,7 @@ fn main() {
         for k in 0..frames {
             let buf = format!("打字测试 {}", k % 10);
             let _ = buf.len();
-            let (rows, _, _) = bench::window(&mut cache, &entries, n.saturating_sub(8), n, WIDTH);
+            let (rows, _, _) = bench::window_bottom(&mut cache, &entries, 0, VIEWPORT, WIDTH);
             let _ = rows.len();
         }
         let d = t4.elapsed();
@@ -156,7 +158,7 @@ fn main() {
         let entries = load_entries();
         let mut cache = bench::BlockCache::new_public();
         let n = bench::block_count(&entries);
-        let _ = bench::window(&mut cache, &entries, n.saturating_sub(8), n, WIDTH);
+        let _ = bench::window_bottom(&mut cache, &entries, 0, VIEWPORT, WIDTH);
 
         // Locate ~a run with many tool results in the middle of the transcript.
         let mut found = None;
@@ -179,7 +181,7 @@ fn main() {
         let ranges = bench::blocks(&entries);
         let bidx = ranges.iter().position(|r| r.start >= start).unwrap_or(0);
         let t5 = Instant::now();
-        let (rows, _, _) = bench::window(&mut cache, &entries, bidx, (bidx + 30).min(n), WIDTH);
+        let (rows, _, _) = bench::window_at(&mut cache, &entries, bidx, (bidx + 30).min(n), WIDTH);
         let d = t5.elapsed();
         println!(
             "tools:       30-block tool-dense window render {:>6.2} ms ({} rows)",
@@ -193,13 +195,23 @@ fn main() {
         let entries = load_entries();
         let mut cache = bench::BlockCache::new_public();
         let n = bench::block_count(&entries);
-        let (_, cached_rows, cached_blocks) = bench::window(&mut cache, &entries, 0, n, WIDTH);
+        // Walk the whole transcript once (worst-case cache fill).
+        let mut offset = 0usize;
+        loop {
+            let (b0, _) = bench::walk_window(&mut cache, &entries, offset, VIEWPORT, WIDTH);
+            if b0 == 0 {
+                break;
+            }
+            offset += 60;
+        }
+        let (_, cached_rows, cached_blocks) =
+            bench::window_bottom(&mut cache, &entries, 0, VIEWPORT, WIDTH);
         println!(
-            "mem:         {} entries, {} blocks, cache rows={} (budget 8192), cached blocks={}",
+            "mem:         {} entries, {} blocks, cache {} blocks / {} rows (budget 256 blocks)",
             entries.len(),
             n,
-            cached_rows,
-            cached_blocks
+            cached_blocks,
+            cached_rows
         );
     }
 }
