@@ -15,6 +15,8 @@
 
 use anyhow::{Context as _, anyhow};
 use html_to_markdown_rs::convert;
+
+use crate::ai::config::BrowserConfig;
 use html_to_markdown_rs::options::{ConversionOptions, PreprocessingOptions, PreprocessingPreset};
 use serde::Deserialize;
 
@@ -99,7 +101,7 @@ pub(crate) fn is_js_shell(raw_len: usize, converted: &str) -> bool {
 }
 
 /// layer and tests.
-pub fn fetch(args: &FetchArgs) -> anyhow::Result<String> {
+pub fn fetch(args: &FetchArgs, browser: &BrowserConfig) -> anyhow::Result<String> {
     let url = normalize_url(&args.url)?;
     let raw = args.raw.unwrap_or(false);
 
@@ -143,7 +145,7 @@ pub fn fetch(args: &FetchArgs) -> anyhow::Result<String> {
             Ok(format_output(&url, "raw", &out, cut))
         }
         Tier::Fallback => {
-            let html = super::providers::fetch_via_browser(&url)?;
+            let html = super::providers::fetch_via_browser(&url, browser)?;
             let converted = if raw { html } else { html_to_markdown(&html)? };
             let (out, cut) = truncate(&converted);
             Ok(format_output(&url, "browser", &out, cut))

@@ -26,7 +26,6 @@
 //! error — the error goes back to the model, which self-corrects.
 
 use anyhow::{Context as _, Result, anyhow};
-use serde::{Deserialize, Serialize};
 
 use crate::ai::types::{ToolCall, ToolDef};
 
@@ -476,33 +475,9 @@ pub struct BuiltinTools {
     // interrupt flag is only polled from the stream callback, which never
     // runs while bash is executing.
     bash_timeout: std::time::Duration,
-}
-
-/// **config.yaml → `tools:`** — tool-layer knobs (the settings that shape
-/// how the executor runs, as opposed to model/provider config).
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ToolsConfig {
-    /// Cap on one `bash` command, in seconds. Default 600 (10 min).
-    /// Accepts `bashTimeoutSecs` (camelCase, the file's prevailing style)
-    /// or `bash_timeout_secs`.
-    #[serde(
-        default = "d_bash_timeout",
-        rename = "bashTimeoutSecs",
-        alias = "bash_timeout_secs"
-    )]
-    pub bash_timeout_secs: u64,
-}
-
-fn d_bash_timeout() -> u64 {
-    600
-}
-
-impl Default for ToolsConfig {
-    fn default() -> Self {
-        Self {
-            bash_timeout_secs: d_bash_timeout(),
-        }
-    }
+    // Which browser the web tools drive (config.yaml → `browser:`). Inert
+    // without the `web` feature.
+    browser: crate::ai::config::BrowserConfig,
 }
 
 impl BuiltinTools {
@@ -514,8 +489,19 @@ impl BuiltinTools {
             history: std::sync::Arc::new(Vec::new()),
             cwd_trail: std::sync::Arc::new(Vec::new()),
             enabled: None,
-            bash_timeout: std::time::Duration::from_secs(d_bash_timeout()),
+            // The default lives with the config schema (`ai::config`), so a
+            // bare `BuiltinTools` (unit tests) and a configured one agree.
+            bash_timeout: std::time::Duration::from_secs(
+                crate::ai::config::ToolsConfig::default().bash_timeout_secs,
+            ),
+            browser: Default::default(),
         }
+    }
+
+    // Attach the browser settings for the web tools (config.yaml → `browser:`).
+    pub fn with_browser(mut self, cfg: crate::ai::config::BrowserConfig) -> Self {
+        self.browser = cfg;
+        self
     }
 
     // Attach the bash wall-clock cap (config: `tools.bashTimeoutSecs`).
@@ -660,6 +646,7 @@ impl BuiltinTools {
                     "required": ["intent", "path", "edits"]
                 }),
             ),
+            #[cfg(feature = "web")]
             ToolDef::function(
                 "fetch",
                 "读取一个网页，返回干净的 Markdown 正文（自动去导航/广告/页脚）。\
@@ -675,6 +662,7 @@ impl BuiltinTools {
                     "required": ["intent", "url"]
                 }),
             ),
+            #[cfg(feature = "web")]
             ToolDef::function(
                 "browser",
                 "操控真实浏览器（Chromium 内核，如 Helium）。四个命令：\
@@ -699,6 +687,7 @@ impl BuiltinTools {
                     "required": ["intent", "command"]
                 }),
             ),
+            #[cfg(feature = "web")]
             ToolDef::function(
                 "search",
                 "网页搜索，返回标题、链接与摘要。支持高级语法：\
@@ -929,19 +918,30 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
             ),
             "read" => read(&self.cwd, &parse_read_args(&call.function.arguments)?),
             "cd" => self.tool_cd(&parse_cd_args(&call.function.arguments)?),
+            #[cfg(feature = "web")]
             "fetch" => {
                 let args = crate::web::parse_fetch_args(&call.function.arguments)?;
-                crate::web::fetch(&args)
+                crate::web::fetch(&args, &self.browser)
             }
+            #[cfg(feature = "web")]
             "browser" => {
                 let args = crate::web::parse_browser_args(&call.function.arguments)?;
-                crate::web::browser(&args)
+                crate::web::browser(&args, &self.browser)
             }
+            #[cfg(feature = "web")]
             "search" => {
                 let args = crate::web::parse_search_args(&call.function.arguments)?;
-                let hits = crate::web::search(&args)?;
+                let hits = crate::web::search(&args, &self.browser)?;
                 Ok(crate::web::render(&hits))
             }
+            // A build without the `web` feature still answers hallucinated
+            // calls explicitly — silence would make the model believe the tool
+            // ran.
+            #[cfg(not(feature = "web"))]
+            "fetch" | "browser" | "search" => Err(anyhow!(
+                "tool `{}` is not compiled in (rebuild with --features web)",
+                call.name()
+            )),
             "context" => context_query(
                 &self.history,
                 &self.cwd_trail,
@@ -977,6 +977,7 @@ mod tests {
         d
     }
 
+    #[cfg(feature = "web")]
     #[test]
     fn search_tool_is_registered_with_schema() {
         let defs = BuiltinTools::definitions();
@@ -994,6 +995,38 @@ mod tests {
         let props = &s.function.parameters["properties"];
         assert!(props.get("query").is_some());
         assert!(props.get("limit").is_some());
+    }
+
+    #[cfg(feature = "web")]
+    #[test]
+    fn web_tools_are_in_the_roster_with_the_feature() {
+        let defs = BuiltinTools::definitions();
+        let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
+        for present in ["fetch", "browser", "search"] {
+            assert!(
+                names.contains(&present),
+                "{present} 必须在名册里: {names:?}"
+            );
+        }
+    }
+
+    #[cfg(not(feature = "web"))]
+    #[test]
+    fn web_tools_are_absent_without_the_feature() {
+        // A build without `web` must not advertise tools it cannot run, and a
+        // hallucinated call must say so — silence would make the model believe
+        // the fetch had happened.
+        let defs = BuiltinTools::definitions();
+        let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
+        for absent in ["fetch", "browser", "search"] {
+            assert!(!names.contains(&absent), "{absent} 不该在名册里: {names:?}");
+        }
+        let mut t = BuiltinTools::new(std::env::temp_dir());
+        let err = t
+            .execute(&ToolCall::new("c1", "fetch", "{}"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not compiled in"), "{err}");
     }
 
     #[test]
@@ -1233,23 +1266,16 @@ mod tests {
     }
 
     #[test]
-    fn definitions_carry_both_tools() {
+    fn definitions_carry_the_core_tools() {
+        // The core roster (web tools are conditional on the `web` feature and
+        // are asserted separately, see web_tools_are_*).
         let defs = BuiltinTools::definitions();
         let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "read",
-                "edit",
-                "cd",
-                "bash",
-                "mass_edit",
-                "fetch",
-                "browser",
-                "search",
-                "context"
-            ]
-        );
+        for core in ["read", "edit", "cd", "bash", "mass_edit", "context"] {
+            assert!(names.contains(&core), "{core} 必须在名册里: {names:?}");
+        }
+        // `context` is last: it is the compressed session's escape hatch.
+        assert_eq!(names.last(), Some(&"context"));
         // The schema must declare required fields, or the model omits arguments
         for d in &defs {
             assert!(d.function.parameters.get("required").is_some());

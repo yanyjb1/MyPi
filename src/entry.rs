@@ -7,6 +7,16 @@
 //! Rendering (`crate::tui::components::chat`) dispatches on these kinds;
 //! persistence (`crate::store`) serializes them via to/from_payload.
 
+/// Stand-in for an assistant reply that arrived empty.
+///
+/// Lives here because **two writers must agree on it byte-for-byte**: the
+/// session writes it into the reply entry it persists, and the agent loop
+/// writes it into the live context it sends. When they disagreed (the loop
+/// sent `content: null`, the store held this placeholder) the live
+/// conversation and its replay differed, so a restart changed the bytes the
+/// model saw and the prefix cache went cold.
+pub const EMPTY_REPLY: &str = "(无输出)";
+
 // One history entry: the four message kinds plus a session-level error.
 //
 // Persisted to the SQLite `entries` table: `seq` monotonically increasing from 1,

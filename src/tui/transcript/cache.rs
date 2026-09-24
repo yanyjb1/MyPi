@@ -291,11 +291,11 @@ impl BlockCache {
         }
     }
 
-    /// The rows to paint for `range` of blocks (by ordinal), plus the
-    /// number of **known** rows above `range.start` (for the splice in
-    /// view.rs). Unmeasured blocks inside the range render now; unmeasured
-    /// blocks above the range do **not** render — the caller's scroll walk
-    /// (reverse, from the bottom) measures those it actually crosses.
+    /// The rows to paint for `range` of blocks (by ordinal). Unmeasured
+    /// blocks inside the range render now; unmeasured blocks above the range
+    /// do **not** render — the caller's scroll walk (reverse, from the
+    /// bottom) measures those it actually crosses, and the splice in
+    /// `view.rs` only ever needs the rows of this window.
     pub(crate) fn rows_for(
         &mut self,
         entries: &[Entry],
@@ -303,25 +303,15 @@ impl BlockCache {
         show_reasoning: bool,
         tools_expanded: bool,
         range: std::ops::Range<usize>,
-    ) -> (Vec<Line<'static>>, usize) {
+    ) -> Vec<Line<'static>> {
         // Reuse the grouping `sync` computed this frame instead of scanning
         // the whole transcript again (`self.block` needs `&mut self`, so the
         // list is taken out and put back).
         let ranges = std::mem::take(&mut self.ranges);
         let mut out = Vec::new();
-        let mut prefix_rows = 0usize; // known rows above `range.start`
         let mut gap_needed = false;
         for (i, r) in ranges.iter().enumerate() {
-            let known = self.heights.get(i);
             if i < range.start {
-                // Only *known* heights count toward the splice prefix.
-                // Unknown ones belong to never-visited history; the scroll
-                // walk measures them before this window is computed.
-                if let Some(h) = known
-                    && h[0] != usize::MAX
-                {
-                    prefix_rows += h[0] + 1; // + gap
-                }
                 continue;
             }
             if i >= range.end {
@@ -335,7 +325,7 @@ impl BlockCache {
             gap_needed = true;
         }
         self.ranges = ranges;
-        (out, prefix_rows)
+        out
     }
 
     /// Reverse scroll walk: given the desired rows-up-from-bottom offset,
@@ -520,7 +510,7 @@ mod tests {
         // Ask for the bottom 40 rows.
         let (b0, b1) = c.window_from_bottom(&es, &p(), true, false, 0, 40);
         assert_eq!(b1, blocks::blocks(&es).len());
-        let (rows, _) = c.rows_for(&es, &p(), true, false, b0..b1);
+        let rows = c.rows_for(&es, &p(), true, false, b0..b1);
         assert!(!rows.is_empty());
     }
 
@@ -591,13 +581,13 @@ mod tests {
                 .any(|l| l.spans.iter().any(|s| s.content.contains(needle)))
         };
         c.sync(&old, 1, &p(), true, false, 60);
-        let (r0, _) = c.rows_for(&old, &p(), true, false, 0..2);
+        let r0 = c.rows_for(&old, &p(), true, false, 0..2);
         assert!(has(&r0, "旧回答"), "前置：渲染旧内容");
 
         // Same generation would (correctly) keep the cache; the session
         // bumps it on a wholesale swap, and that is what must clear it.
         c.sync(&new, 2, &p(), true, false, 60);
-        let (r1, _) = c.rows_for(&new, &p(), true, false, 0..2);
+        let r1 = c.rows_for(&new, &p(), true, false, 0..2);
         assert!(!has(&r1, "旧回答"), "换 transcript 后不得渲染旧分支内容");
         assert!(has(&r1, "新回答"), "必须渲染新内容");
     }
@@ -661,7 +651,7 @@ mod tests {
         let _ = c.rows_for(&es, &p(), true, false, 0..2);
         assert_eq!(c.slots[&0].variants.len(), 1, "reasoning 块单变体");
         assert_eq!(c.heights[0][0], c.heights[0][1], "单变体两槽高度相等");
-        let shown = c.rows_for(&es, &p(), true, false, 0..2).0;
+        let shown = c.rows_for(&es, &p(), true, false, 0..2);
         assert!(
             shown
                 .iter()
@@ -697,8 +687,8 @@ mod tests {
         let _ = c.rows_for(&es, &p(), true, false, 0..1);
         let [off, on] = c.heights[0];
         assert!(on > off, "展开后块必须变高: off={off} on={on}");
-        let folded = c.rows_for(&es, &p(), true, false, 0..1).0;
-        let expanded = c.rows_for(&es, &p(), true, true, 0..1).0;
+        let folded = c.rows_for(&es, &p(), true, false, 0..1);
+        let expanded = c.rows_for(&es, &p(), true, true, 0..1);
         assert!(expanded.len() > folded.len());
     }
 

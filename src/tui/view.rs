@@ -201,34 +201,21 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
         offset,
         viewport,
     );
-    let (block_rows, _rows_above) =
+    let block_rows =
         s.block_cache
             .rows_for(s.history, p, s.show_reasoning, s.tools_expanded, b0..b1);
-    // Splice: the walk covers `offset + viewport` rows ending at the
-    // document bottom, so the window we want sits at the range's TOP —
-    // drop the bottommost `offset` rows, then keep `viewport` rows.
-    // (Keeping the LAST viewport rows here instead re-anchored every
-    // scrolled frame to the document tail: the wheel bumped `chat_scroll`
-    // while the picture never moved — the "history won't scroll" bug.)
-    let cut_bottom = offset.min(block_rows.len().saturating_sub(viewport));
-    let keep_from = block_rows.len().saturating_sub(cut_bottom + viewport);
-    let mut visible: Vec<Line<'static>> = Vec::with_capacity(viewport);
-    let mut it = block_rows.into_iter().skip(keep_from).take(viewport);
-    for _ in 0..viewport {
-        match it.next() {
-            Some(l) => visible.push(l),
-            None => break,
-        }
-    }
     // ---- live tail (bottom-most history rows) ----
     // Thinking / tool intent draw as a muted italic label; in-flight
     // content streams in at full weight (it is the final answer).
-    // Appended below the newest block; the follow-bottom window keeps it
-    // on screen because it rides the same `total` bookkeeping… except it
-    // is not a block, so splice it when the window reaches the bottom.
+    // It is not a block, so it is spliced in by hand — and its height must be
+    // **reserved before the block window is cut**: appending it after a full
+    // viewport put it past the last row, where `Paragraph` clips it, so the
+    // "thinking" label and the streaming reply were invisible in any session
+    // whose history filled the chat area.
+    let mut tail: Vec<Line<'static>> = Vec::new();
     if offset == 0 {
         match s.live {
-            crate::server::events::LiveActivity::Thinking => visible.push(Line::styled(
+            crate::server::events::LiveActivity::Thinking => tail.push(Line::styled(
                 "thinking",
                 ratatui::style::Style::new()
                     .fg(p.muted)
@@ -240,7 +227,7 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
                 } else {
                     intent.as_str()
                 };
-                visible.push(Line::styled(
+                tail.push(Line::styled(
                     label.to_string(),
                     ratatui::style::Style::new()
                         .fg(p.muted)
@@ -252,11 +239,35 @@ pub fn draw(f: &mut Frame, s: &mut ViewState, l: &tlayout::Layout) -> (u16, u16)
         if let Some(t) = s.streaming
             && !t.is_empty()
         {
-            visible.extend(crate::tui::transcript::components::chat::render_streaming(
+            tail.extend(crate::tui::transcript::components::chat::render_streaming(
                 t, p,
             ));
         }
     }
+    // Rows left for the transcript once the live tail has taken its share.
+    let keep = viewport.saturating_sub(tail.len().min(viewport));
+    // Splice: the walk covers `offset + viewport` rows ending at the
+    // document bottom, so the window we want sits at the range's TOP —
+    // drop the bottommost `offset` rows, then keep `keep` rows.
+    // (Keeping the LAST viewport rows here instead re-anchored every
+    // scrolled frame to the document tail: the wheel bumped `chat_scroll`
+    // while the picture never moved — the "history won't scroll" bug.)
+    let cut_bottom = offset.min(block_rows.len().saturating_sub(keep));
+    let keep_from = block_rows.len().saturating_sub(cut_bottom + keep);
+    let mut visible: Vec<Line<'static>> = Vec::with_capacity(viewport);
+    let mut it = block_rows.into_iter().skip(keep_from).take(keep);
+    for _ in 0..keep {
+        match it.next() {
+            Some(l) => visible.push(l),
+            None => break,
+        }
+    }
+    // A live tail taller than the whole area (a long streaming reply) shows
+    // its **newest** rows: keep the bottom of it, not the top.
+    let skip_tail = tail
+        .len()
+        .saturating_sub(viewport.saturating_sub(visible.len()));
+    visible.extend(tail.into_iter().skip(skip_tail));
     f.render_widget(Paragraph::new(visible), chat_area);
 
     // ---- bottom reserved area: the popup float zone (height already in layout; history/input gave way) ----
@@ -421,6 +432,113 @@ mod tests {
         assert_ne!(
             pinned_frame, scrolled_frame,
             "滚轮滚动后画面纹丝不动——滚动失效"
+        );
+    }
+
+    #[test]
+    fn the_live_tail_is_visible_when_the_history_fills_the_area() {
+        // Regression: the live rows were appended *after* a full viewport had
+        // been spliced, so `Paragraph` clipped them away. In any session whose
+        // history filled the chat area the "thinking" label, the tool intent
+        // and the streaming reply were all invisible — the reply only appeared
+        // once the turn ended.
+        use crate::entry::Entry;
+        use crate::server::events::LiveActivity;
+        use crate::tui::theme::Palette as P;
+
+        let p = P::default();
+        let mut entries: Vec<Entry> = Vec::new();
+        for i in 0..30 {
+            entries.push(Entry::User {
+                content: format!("USER-{i} 标记行"),
+            });
+            entries.push(Entry::Assistant {
+                content: format!("回答 {i}：第一行\n第二行\n第三行"),
+                usage: None,
+            });
+        }
+        let wrapped = crate::tui::text::wrap("", 40);
+        let mut cache = crate::tui::transcript::cache::BlockCache::new();
+        let mut frame = |live: LiveActivity, streaming: Option<&str>| -> Vec<String> {
+            let mut s = ViewState {
+                history: &entries,
+                transcript_generation: 0,
+                block_cache: &mut cache,
+                chat_scroll: 0,
+                scroll_pinned: true,
+                show_reasoning: false,
+                tools_expanded: false,
+                live: &live,
+                streaming,
+                wrapped: &wrapped,
+                cursor_char: 0,
+                spinner: None,
+                model_name: "m",
+                session_name: "",
+                cwd: "/tmp",
+                git: None,
+                ctx_tokens: 0,
+                ctx_limit: 1000,
+                cost: 0.0,
+                currency_symbol: "¥",
+                show_cost: false,
+                palette: p,
+                popup: &crate::tui::completion::CompletionPopup::default(),
+                resume_pick: None,
+            };
+            let l = tlayout::Layout {
+                chat_height: 12,
+                gap_height: 1,
+                container_height: 3,
+                body_rows: 1,
+                first_visible: 0,
+                reserved_height: 1,
+            };
+            let mut term =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 20)).unwrap();
+            let l2 = &l;
+            term.draw(|f| {
+                let _ = draw(f, &mut s, l2);
+            })
+            .unwrap();
+            let buf = term.backend().buffer().clone();
+            (0..12)
+                .map(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect()
+        };
+
+        // TestBackend stores one symbol per cell, so a wide CJK glyph leaves a
+        // filler cell — compare with the padding stripped.
+        let flat = |rows: &[String]| -> String { rows.concat().replace(' ', "") };
+
+        let thinking = frame(LiveActivity::Thinking, None);
+        assert!(
+            thinking.iter().any(|r| r.contains("thinking")),
+            "thinking 行必须可见: {thinking:?}"
+        );
+
+        // A running tool shows the model's intent on the same row.
+        let tool = frame(
+            LiveActivity::Tool {
+                intent: "跑一下测试".into(),
+            },
+            None,
+        );
+        assert!(flat(&tool).contains("跑一下测试"), "{tool:?}");
+
+        // In-flight content reaches the screen too, and when it is taller than
+        // the area the *newest* rows are the ones kept.
+        let streamed = frame(LiveActivity::Idle, Some("流式第一行\n流式第二行"));
+        assert!(flat(&streamed).contains("流式第二行"), "{streamed:?}");
+        let tall: String = (0..40).map(|i| format!("行{i}\n")).collect();
+        let rows = frame(LiveActivity::Idle, Some(&tall));
+        assert!(
+            flat(&rows).contains("行39"),
+            "最新的流式行必须在屏: {rows:?}"
         );
     }
 }

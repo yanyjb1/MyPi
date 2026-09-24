@@ -69,7 +69,7 @@ pub mod bench {
         cache.sync(entries, 0, &p, true, true, width);
         let (b0, b1) =
             cache.window_from_bottom(entries, &p, true, true, offset_rows, viewport_rows);
-        let (rows, _above) = cache.rows_for(entries, &p, true, true, b0..b1);
+        let rows = cache.rows_for(entries, &p, true, true, b0..b1);
         (rows, cache.cached_rows(), cache.cached_blocks())
     }
 
@@ -83,7 +83,7 @@ pub mod bench {
     ) -> (Vec<ratatui::text::Line<'static>>, usize, usize) {
         let p = crate::tui::theme::Palette::current();
         cache.sync(entries, 0, &p, true, true, width);
-        let (rows, _above) = cache.rows_for(entries, &p, true, true, b0..b1);
+        let rows = cache.rows_for(entries, &p, true, true, b0..b1);
         (rows, cache.cached_rows(), cache.cached_blocks())
     }
 

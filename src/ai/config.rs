@@ -188,6 +188,111 @@ impl Default for Cost {
     }
 }
 
+/// **config.yaml → `tools:`** — tool-layer knobs: how the executor runs, as
+/// opposed to model/provider configuration.
+///
+/// It lives in this module (not `agent::tools`) because the config layer must
+/// stay a **leaf**: it used to name `agent::tools::ToolsConfig` and
+/// `server::compaction::CompactConfig` directly, so the bottom layer depended
+/// on two layers above it. Consumers import these downward now.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolsConfig {
+    /// Cap on one `bash` command, in seconds. Default 600 (10 min).
+    /// Accepts `bashTimeoutSecs` (camelCase, the file's prevailing style)
+    /// or `bash_timeout_secs`.
+    #[serde(
+        default = "d_bash_timeout",
+        rename = "bashTimeoutSecs",
+        alias = "bash_timeout_secs"
+    )]
+    pub bash_timeout_secs: u64,
+}
+
+fn d_bash_timeout() -> u64 {
+    600
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            bash_timeout_secs: d_bash_timeout(),
+        }
+    }
+}
+
+/// **config.yaml → `browser:`** — which browser the web tools drive.
+///
+/// Only meaningful with the `web` feature compiled in; the section is inert
+/// otherwise. Environment variables still win over the file (they are the
+/// escape hatch for tests and for parallel sessions):
+/// `MYPI_BROWSER_BIN`, `MYPI_BROWSER_PORT`, `MYPI_BROWSER_PROFILE_DIR`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BrowserConfig {
+    /// Chromium-family executable to launch when nothing is listening.
+    /// None = `$MYPI_BROWSER_BIN`, else `/opt/helium/helium`.
+    #[serde(default)]
+    pub bin: Option<String>,
+    /// Attach to an already-running browser on this port instead of launching
+    /// one (the long-lived-session mode). None = reuse a live instance found
+    /// on the profile, else launch.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Persistent profile directory (cookies, logins, extensions survive
+    /// restarts). None = `$XDG_DATA_HOME/mypi/browser/profile`.
+    #[serde(default, rename = "profileDir")]
+    pub profile_dir: Option<std::path::PathBuf>,
+    /// Launch headless. Default true: nobody is watching a window.
+    #[serde(default = "d_headless")]
+    pub headless: bool,
+    /// Override the User-Agent of the launched browser. None = a plain
+    /// stable-channel desktop UA (the headless UA is the loudest automation
+    /// tell).
+    #[serde(default, rename = "userAgent")]
+    pub user_agent: Option<String>,
+    /// Extra argv appended to the launch command (`--proxy-server=…`, …).
+    #[serde(default, rename = "extraArgs")]
+    pub extra_args: Vec<String>,
+}
+
+fn d_headless() -> bool {
+    true
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self {
+            bin: None,
+            port: None,
+            profile_dir: None,
+            headless: d_headless(),
+            user_agent: None,
+            extra_args: Vec::new(),
+        }
+    }
+}
+
+/// **config.yaml → `compact:`** — context-compaction knobs (see
+/// `server::compaction` for what they do). Here for the same layering reason
+/// as [`ToolsConfig`].
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CompactConfig {
+    /// Verbatim tail budget (tokens, approximated). Small values make
+    /// debugging cheap; default is the full-fat 20k.
+    pub retain_tail: usize,
+    /// Optional external instruction file (read fresh at each compaction).
+    pub instruction_file: Option<std::path::PathBuf>,
+}
+
+impl Default for CompactConfig {
+    fn default() -> Self {
+        Self {
+            retain_tail: 20_000,
+            instruction_file: None,
+        }
+    }
+}
+
 /// Display currency: CNY (default, ¥) | USD | Credits. Configurable per model in models.yml.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub enum Currency {
@@ -225,10 +330,14 @@ pub struct AppConfig {
     #[serde(default)]
     pub theme: Theme,
     #[serde(default)]
-    pub compact: crate::server::compaction::CompactConfig,
-    /// Tool-layer knobs (`bash` timeout, ...). See `agent::tools::ToolsConfig`.
+    pub compact: CompactConfig,
+    /// Tool-layer knobs (`bash` timeout, ...). See [`ToolsConfig`].
     #[serde(default)]
-    pub tools: crate::agent::tools::ToolsConfig,
+    pub tools: ToolsConfig,
+    /// Which browser the web tools drive (only used with the `web` feature).
+    /// See [`BrowserConfig`].
+    #[serde(default)]
+    pub browser: BrowserConfig,
     /// Active system-prompt profile name (`/profile` switches it;
     /// restart returns to this default). None = `default`.
     #[serde(default)]
@@ -243,16 +352,18 @@ pub struct Config {
 }
 
 /// Connection details for one provider.
+///
+/// Note there is **no** `api:` key: it used to be required and fed a
+/// `Dialect` accessor that nothing called, so a hand-maintained models.yml
+/// without it could not start the program at all (the error was
+/// `missing field api`). Files that still carry the key keep loading — serde
+/// ignores unknown fields.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Provider {
     #[serde(alias = "baseUrl")]
     pub base_url: String,
     #[serde(default, alias = "apiKey")]
     pub api_key: String,
-    /// Wire dialect — **required** (copy it from the template). Values:
-    /// `openai-completions` (OpenAI-compatible) | `deepseek`.
-    #[serde(rename = "api")]
-    pub api: String,
     /// Models this provider serves — **nested inside the provider**, never
     /// a top-level flat list. The model id is provider-internal: the same
     /// gateway can expose `gpt-x`, DeepSeek's API exposes
@@ -261,36 +372,12 @@ pub struct Provider {
     pub models: Vec<ModelEntry>,
 }
 
-impl Provider {
-    /// Resolved dialect (the required `api` value).
-    pub fn dialect(&self) -> Dialect {
-        match self.api.trim() {
-            v if v.eq_ignore_ascii_case("deepseek") => Dialect::DeepSeek,
-            _ => Dialect::OpenAiCompatible,
-        }
-    }
-}
-
 /// A model plus the provider it lives under (the config nests models
 /// inside providers; callers always need both).
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
     pub provider_name: String,
     pub entry: ModelEntry,
-}
-
-/// Vendor-specific deltas over the OpenAI-compatible wire protocol.
-/// Not a protocol family — all of these still speak openai-completions;
-/// the variant only enables vendor quirks (e.g. DeepSeek's separate
-/// reasoning stream that gates the visible content).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Dialect {
-    /// Plain OpenAI protocol; reasoning arrives as `reasoning_content`-style
-    /// fields when the model offers it.
-    OpenAiCompatible,
-    /// DeepSeek: `reasoning_content` streams **before** `content`, and
-    /// content must not be rendered until the reasoning stream closes.
-    DeepSeek,
 }
 
 /// One callable model (a `- id: ...` entry in models.yml).
@@ -401,6 +488,7 @@ impl Config {
                     theme: Theme::default(),
                     compact: Default::default(),
                     tools: Default::default(),
+                    browser: Default::default(),
                     profile: None,
                 };
                 std::fs::create_dir_all(Self::config_dir()?)?;
@@ -412,7 +500,30 @@ impl Config {
         };
 
         let cfg = Config { models, app };
+        Self::finish_load(cfg)
+    }
+
+    /// Validate the loaded config and make a stale `default` survivable.
+    ///
+    /// models.yml is **hand-edited**, so renaming a provider or model there can
+    /// leave `config.yaml`'s persisted default pointing at something that no
+    /// longer exists. Refusing to start would be a dead end: the failure happens
+    /// before `/model` is reachable, so the only way out would be editing
+    /// config.yaml by hand. Instead: warn, fall back to the deterministic
+    /// alphabetical pick, and **leave the file alone** (`/model` is how the
+    /// choice becomes permanent).
+    fn finish_load(mut cfg: Config) -> anyhow::Result<Config> {
         cfg.validate()?;
+        if let Some(stale) = cfg.app.default.clone()
+            && let Err(e) = cfg.model_by_id(&stale)
+        {
+            let fallback = Self::alphabetical_default(&cfg.models);
+            eprintln!(
+                "mypi: 默认模型 {stale} 已无法解析（{e:#}）；本次改用 {}，用 /model 重新指定",
+                fallback.as_deref().unwrap_or("(无)")
+            );
+            cfg.app.default = fallback;
+        }
         Ok(cfg)
     }
 
@@ -451,10 +562,8 @@ impl Config {
                 "models.yml declares no models — add at least one `- id: ...` entry"
             ));
         }
-        // A persisted default must still address a declared model.
-        if let Some(d) = &self.app.default {
-            self.model_by_id(d)?;
-        }
+        // Structural only: a persisted default that no longer resolves is
+        // handled by `finish_load` (warn + fall back), never here.
         Ok(())
     }
 
@@ -553,6 +662,48 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_default_falls_back_instead_of_bricking_startup() {
+        // The failure this guards: models.yml gets a provider renamed by hand,
+        // config.yaml's persisted default still names the old one, and startup
+        // dies *before* /model is reachable — a dead end reachable only by
+        // editing the file by hand.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("mypi-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("models.yml"),
+            "providers:\n  local:\n    baseUrl: http://x/v1\n    models:\n      - id: m-alpha\n        name: Alpha\n",
+        )
+        .unwrap();
+        let cfg_path = dir.join("config.yaml");
+        std::fs::write(&cfg_path, "default: gone:whatever\n").unwrap();
+        unsafe {
+            std::env::set_var("MYPI_CONFIG", &cfg_path);
+            std::env::set_var("MYPI_MODELS", dir.join("models.yml"));
+        }
+
+        let cfg = Config::load().unwrap();
+        assert_eq!(
+            cfg.app.default.as_deref(),
+            Some("local:m-alpha"),
+            "必须回落到确定性的选择，而不是拒绝启动"
+        );
+        // The user's file is left exactly as they wrote it.
+        let text = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(
+            text.contains("gone:whatever"),
+            "不得回写用户的 default: {text}"
+        );
+
+        unsafe {
+            std::env::remove_var("MYPI_CONFIG");
+            std::env::remove_var("MYPI_MODELS");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn tools_config_reads_camel_and_snake_and_defaults() {
         // The file's prevailing key style is camelCase; both spellings are
         // accepted, and an absent block falls back to 10 minutes.
@@ -565,13 +716,50 @@ mod tests {
     }
 
     #[test]
+    fn browser_config_comes_from_config_yaml() {
+        // Which browser the web tools drive is a config-file decision, not a
+        // hardcoded path: executable, port, profile, headless, UA, argv.
+        let app: AppConfig = serde_yaml::from_str(
+            r#"
+browser:
+  bin: /usr/bin/chromium
+  port: 9222
+  profileDir: /tmp/mypi-profile
+  headless: false
+  userAgent: "UA/1"
+  extraArgs: ["--proxy-server=http://127.0.0.1:8080"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(app.browser.bin.as_deref(), Some("/usr/bin/chromium"));
+        assert_eq!(app.browser.port, Some(9222));
+        assert_eq!(
+            app.browser.profile_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/mypi-profile"))
+        );
+        assert!(!app.browser.headless, "显式 false 必须生效");
+        assert_eq!(app.browser.user_agent.as_deref(), Some("UA/1"));
+        assert_eq!(
+            app.browser.extra_args,
+            vec!["--proxy-server=http://127.0.0.1:8080"]
+        );
+
+        // Absent block: headless, nothing pinned — the launcher then falls
+        // back to $MYPI_BROWSER_BIN and the built-in UA.
+        let app: AppConfig = serde_yaml::from_str("theme: {}\n").unwrap();
+        assert!(app.browser.headless);
+        assert!(app.browser.bin.is_none());
+        assert!(app.browser.port.is_none());
+        assert!(app.browser.user_agent.is_none());
+    }
+
+    #[test]
     fn parses_nested_provider_models() {
         let models = parse_models(
             r#"
 providers:
   local:
     baseUrl: http://localhost:9999/v1
-    api: openai-completions
     apiKey: ""
     models:
       - id: vendor-a/model-x
@@ -597,6 +785,7 @@ providers:
                 theme: Theme::default(),
                 compact: Default::default(),
                 tools: Default::default(),
+                browser: Default::default(),
                 profile: None,
             },
         };
@@ -618,16 +807,37 @@ providers:
         assert!(cfg.model_by_id("nope:vendor-b/model-y").is_err());
     }
 
-    /// `api` is required — a provider without it fails to parse.
+    /// A provider needs only `baseUrl` (+ models) — no wire-dialect key.
     #[test]
-    fn api_field_is_required() {
-        let r = parse_models(
+    fn a_provider_without_the_wire_dialect_key_parses() {
+        // `api:` used to be required, which made a hand-maintained models.yml
+        // unable to start the program at all. It fed an accessor nothing called.
+        let models = parse_models(
             r#"
 providers:
-  local: { baseUrl: "http://x/v1" }
+  local: { baseUrl: "http://x/v1", models: [{ id: m1 }] }
 "#,
-        );
-        assert!(r.is_err(), "missing api must be rejected");
+        )
+        .unwrap();
+        assert_eq!(models.providers["local"].models.len(), 1);
+    }
+
+    /// Files that still carry the old `api:` key keep loading (unknown keys
+    /// are ignored) — including the `deepseek` value, which never had a
+    /// behavior behind it.
+    #[test]
+    fn a_legacy_wire_dialect_key_is_tolerated() {
+        let models = parse_models(
+            r#"
+providers:
+  local:
+    baseUrl: http://x/v1
+    api: deepseek
+    models: [{ id: m1 }]
+"#,
+        )
+        .unwrap();
+        assert_eq!(models.providers["local"].models[0].id, "m1");
     }
 
     /// A model id may itself contain colons (`global:x` — legacy vendor
@@ -640,7 +850,6 @@ providers:
 providers:
   local:
     baseUrl: http://x/v1
-    api: openai-completions
     models:
       - id: global:gpt-5.6-luna
         name: GPT5.6L
@@ -654,6 +863,7 @@ providers:
                 theme: Theme::default(),
                 compact: Default::default(),
                 tools: Default::default(),
+                browser: Default::default(),
                 profile: None,
             },
         };
@@ -670,7 +880,7 @@ providers:
         let models = parse_models(
             r#"
 providers:
-  local: { baseUrl: "http://x/v1", api: openai-completions, models: [{ id: m1 }] }
+  local: { baseUrl: "http://x/v1", models: [{ id: m1 }] }
 "#,
         )
         .unwrap();
@@ -692,7 +902,6 @@ providers:
 providers:
   local:
     baseUrl: http://x/v1
-    api: openai-completions
     models:
       - id: m-zeta
         name: Zeta
@@ -751,7 +960,6 @@ theme:
 providers:
   local:
     baseUrl: http://x/v1
-    api: openai-completions
     models:
       - id: a
       - id: b
@@ -765,6 +973,7 @@ providers:
                 theme: Theme::default(),
                 compact: Default::default(),
                 tools: Default::default(),
+                browser: Default::default(),
                 profile: None,
             },
         };
@@ -817,7 +1026,6 @@ providers:
 providers:
   local:
     baseUrl: http://x/v1
-    api: openai-completions
     models:
       - id: m2
         name: Beta
@@ -833,7 +1041,7 @@ providers:
         // Empty models list -> hard error.
         std::fs::write(
             dir.join("models.yml"),
-            "providers:\n  local:\n    baseUrl: http://x/v1\n    api: openai-completions\n",
+            "providers:\n  local:\n    baseUrl: http://x/v1\n",
         )
         .unwrap();
         let err = Config::load().unwrap_err().to_string();

@@ -311,15 +311,18 @@ impl App {
         // Popup open: try the common prefix first (only meaningful with
         // multiple candidates). In argument mode the word ends in a
         // space; use the whole line-start text instead, replacing from 0.
+        // The cursor is a **char** index (the editor is a `Vec<char>`), so the
+        // prefix is taken by characters. It used to be `l[..cursor]` — a byte
+        // slice indexed by a char count, which panicked the whole TUI the
+        // moment the first line held a CJK character ("end byte index 6 is not
+        // a char boundary").
+        let cursor = self.editor.cursor();
         let current = self
             .editor
             .text()
             .split('\n')
             .next()
-            .map(|l| {
-                let byte_end = self.editor.cursor().min(l.len());
-                l[..byte_end].to_string()
-            })
+            .map(|l| l.chars().take(cursor).collect::<String>())
             .unwrap_or_default();
         if let Some(action) = self.completion.accept_common_prefix(&current) {
             self.apply_completion(action);
@@ -724,5 +727,64 @@ pub(crate) fn display_name(app: &App) -> String {
                 _ => None,
             })
             .unwrap_or_else(|| "新会话".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::config::{Cost, Currency, ModelEntry};
+
+    // An App with no store and no network: enough for the input-path tests.
+    fn app_in(dir: &std::path::Path) -> App {
+        let (session, _rx) = crate::server::Session::new(
+            crate::server::SessionState::new(None),
+            crate::ai::client::Client::new("http://example.test/v1", "k", "m"),
+            crate::ai::types::Context::new(),
+            1024,
+            Cost::default(),
+            dir.to_path_buf(),
+            None,
+            Default::default(),
+            Default::default(),
+            None,
+        );
+        let model = ModelEntry {
+            id: "m".into(),
+            name: String::new(),
+            context_window: 0,
+            max_output_tokens: None,
+            currency: Currency::Cny,
+            cost: Cost::default(),
+        };
+        let mut app = App::new(session, std::rc::Rc::new(std::cell::RefCell::new(model)));
+        app.cwd = dir.to_path_buf();
+        app.home = dir.to_path_buf();
+        app
+    }
+
+    #[test]
+    fn tab_completion_survives_a_cjk_first_line() {
+        // The completion prefix was sliced by **byte** with a **char** index
+        // (`l[..cursor]`), which panicked the whole TUI the moment the first
+        // line held a CJK character and a popup was open ("end byte index 6 is
+        // not a char boundary; it is inside '中'").
+        let dir = std::env::temp_dir().join(format!("mypi-app-cjk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("中文")).unwrap();
+        std::fs::write(dir.join("中文/aa.txt"), "x").unwrap();
+        std::fs::write(dir.join("中文/ab.txt"), "x").unwrap();
+
+        let mut app = app_in(&dir);
+        app.editor.insert_str("看 中文/a");
+        app.refresh_completions();
+        assert!(app.completion.is_open(), "两个候选应当打开弹窗");
+        app.complete(); // must not panic
+        assert_eq!(
+            app.editor.text(),
+            "看 中文/aa.txt",
+            "补全应替换路径词，而不是崩掉"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

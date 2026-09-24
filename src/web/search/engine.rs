@@ -4,6 +4,8 @@
 use anyhow::anyhow;
 use serde::Deserialize;
 
+use crate::ai::config::BrowserConfig;
+
 use super::providers::{self};
 
 pub(super) const DEFAULT_LIMIT: usize = 8;
@@ -69,7 +71,7 @@ fn has_advanced_syntax(query: &str) -> bool {
     false
 }
 
-pub fn search(args: &SearchArgs) -> anyhow::Result<Vec<SearchHit>> {
+pub fn search(args: &SearchArgs, browser: &BrowserConfig) -> anyhow::Result<Vec<SearchHit>> {
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
     // Syntax-bearing queries bypass Bing entirely (CN egress drops every
@@ -82,7 +84,7 @@ pub fn search(args: &SearchArgs) -> anyhow::Result<Vec<SearchHit>> {
             return Ok(hits);
         }
     }
-    providers::via_browser(&args.query, limit)
+    providers::via_browser(&args.query, limit, browser)
 }
 
 /// Tool-facing text rendering: numbered rows, snippet on its own line. The

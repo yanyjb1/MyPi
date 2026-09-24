@@ -3,6 +3,13 @@ name = "mypi"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# 联网工具（fetch / search / browser）默认开启，`--no-default-features` 可整体剔除：
+# 那个构建不含 CDP 客户端、HTML→Markdown、URL 解析，也不会启动任何浏览器。
+# 会话本身（模型 API、bash、编辑、持久化）不需要它。
+default = ["web"]
+web = ["dep:tungstenite", "dep:html-to-markdown-rs", "dep:url"]
+
 [dependencies]
 # 同步 HTTP 客户端：极轻、无异步运行时依赖。rustls = 纯 Rust 的 TLS，不依赖系统 OpenSSL
 ureq = { version = "3", features = ["rustls", "json", "charset"] }
@@ -20,11 +27,33 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # Markdown → 事件流解析（pull 式迭代器，映射成 ratatui 的 Span/Line）
 pulldown-cmark = "0.13"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
-# WebSocket（CDP 用）：同步、无 tokio，与 ureq 的风格一致。只做帧协议，
-# CDP 的会话/配对逻辑在 src/cdp.rs 里手写
-tungstenite = "0.30"
 parking_lot = "0.12"
+# ---- web 特性专属（见 [features]）----
+# WebSocket（CDP 用）：同步、无 tokio，与 ureq 的风格一致。只做帧协议，
+# CDP 的会话/配对逻辑在 src/web/utils/cdp.rs 里手写
+tungstenite = { version = "0.30", optional = true }
 # HTML→Markdown：omp 同款 crate（纯 Rust，带 Aggressive 预处理去 nav/footer/form）
-html-to-markdown-rs = { version = "3.14", default-features = false }
+html-to-markdown-rs = { version = "3.14", default-features = false, optional = true }
 # URL 解析（fetch 的 scheme 校验）
-url = "2"
+url = { version = "2", optional = true }
+
+# 联网示例脚本：`cargo run --example tool_fetch` 之类只在带 web 时能编译
+[[example]]
+name = "tool_fetch"
+required-features = ["web"]
+
+[[example]]
+name = "fetch_e2e"
+required-features = ["web"]
+
+[[example]]
+name = "tool_search"
+required-features = ["web"]
+
+[[example]]
+name = "search_e2e"
+required-features = ["web"]
+
+[[example]]
+name = "tool_browser"
+required-features = ["web"]

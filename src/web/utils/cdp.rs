@@ -23,6 +23,16 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 use tungstenite::Message;
 
+use crate::ai::config::BrowserConfig;
+
+/// Fallback executable when neither `$MYPI_BROWSER_BIN` nor
+/// `config.yaml → browser.bin` names one.
+pub const DEFAULT_BROWSER_BIN: &str = "/opt/helium/helium";
+
+/// Plain stable-channel desktop UA. The `HeadlessChrome` UA is the loudest
+/// automation tell; keeping the engine segment truthful is the point.
+pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+
 // A browser handle: either a process we spawned (owned, killed on drop) or
 // one already running (attached; the owner keeps the lifecycle).
 pub struct Browser {
@@ -32,15 +42,25 @@ pub struct Browser {
 }
 
 impl Browser {
-    /// Launch headless Helium (or any Chromium-family binary) with a fresh
-    /// debugging port. The profile is **persistent** (see
+    /// Launch a Chromium-family binary with a fresh debugging port.
+    ///
+    /// Everything about *which* browser comes from `config.yaml → browser:`
+    /// (executable, headless, User-Agent, extra argv); the environment wins
+    /// over the file. The profile is **persistent** (see
     /// [`crate::xdg::browser_profile_dir`]) so logins/extensions survive
     /// restarts.
-    pub fn launch(profile: &Path) -> anyhow::Result<Browser> {
+    pub fn launch(cfg: &BrowserConfig, profile: &Path) -> anyhow::Result<Browser> {
         let exe = std::env::var_os("MYPI_BROWSER_BIN")
+            .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/opt/helium/helium"));
-        Self::launch_with(&exe, profile, &[])
+            .or_else(|| {
+                cfg.bin
+                    .as_deref()
+                    .filter(|b| !b.is_empty())
+                    .map(PathBuf::from)
+            })
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_BROWSER_BIN));
+        Self::launch_with(&exe, profile, cfg)
     }
 
     /// Attach to an already-running browser on a fixed debugging port.
@@ -58,7 +78,7 @@ impl Browser {
         })
     }
 
-    pub fn launch_with(exe: &Path, profile: &Path, extra_args: &[&str]) -> anyhow::Result<Browser> {
+    pub fn launch_with(exe: &Path, profile: &Path, cfg: &BrowserConfig) -> anyhow::Result<Browser> {
         std::fs::create_dir_all(profile)
             .with_context(|| format!("creating browser profile dir {}", profile.display()))?;
 
@@ -67,15 +87,18 @@ impl Browser {
             .arg("--remote-debugging-port=0")
             // Loopback only: never expose the debugger past the machine.
             .arg("--remote-debugging-address=127.0.0.1")
-            .args(["--no-first-run", "--no-default-browser-check"])
-            .arg("--headless=new")
-            // HeadlessChrome in the UA is the loudest automation tell; the
-            // stable channel version keeps the engine segment truthful.
-            .arg("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
-            .args(extra_args)
-            .arg("about:blank")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .args(["--no-first-run", "--no-default-browser-check"]);
+        if cfg.headless {
+            cmd.arg("--headless=new");
+        }
+        cmd.arg(format!(
+            "--user-agent={}",
+            cfg.user_agent.as_deref().unwrap_or(DEFAULT_USER_AGENT)
+        ))
+        .args(&cfg.extra_args)
+        .arg("about:blank")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
         let child = cmd
             .spawn()
@@ -323,7 +346,6 @@ impl Cdp {
             .context("ws send")?;
 
         let deadline = Instant::now() + timeout;
-        let acked = false;
         while Instant::now() < deadline {
             // A cross-document navigation can make Chromium tear the
             // per-target socket down; the pump exits and this channel
@@ -353,9 +375,6 @@ impl Cdp {
         }
         // Acked but no load event: the socket reset ate it. Don't burn the
         // full budget here — content polling is the real readiness signal.
-        if acked {
-            return Ok(());
-        }
         anyhow::bail!("timeout navigating to {url}")
     }
 

@@ -99,8 +99,10 @@ impl Store {
         }
         // Tree layout (append-only): entries point at their parent row;
         // sessions.leaf names the tip that the next append hangs from.
-        // NULL parent_seq on row seq=1 means "root"; on any later row it
-        // marks a legacy linear record and is backfilled below.
+        // NULL parent_seq on row seq=1 means "root"; on any later row it is
+        // a *deliberate* second root (set_leaf(None) + append), not a legacy
+        // record — the two are told apart by whether the column existed
+        // before this open.
         let has_parent: bool = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name = 'parent_seq'",
@@ -117,20 +119,28 @@ impl Store {
             )
             .map(|n| n > 0)
             .unwrap_or(false);
+        // A database missing either column predates the tree layout: its
+        // rows are one linear chain and must be backfilled.
+        let legacy_linear = !has_parent || !has_leaf;
         if !has_parent {
             conn.execute_batch("ALTER TABLE entries ADD COLUMN parent_seq INTEGER;")?;
         }
         if !has_leaf {
             conn.execute_batch("ALTER TABLE sessions ADD COLUMN leaf INTEGER;")?;
         }
-        // Legacy linear rows: every non-root entry's parent is the previous seq.
-        // Roots keep NULL. New rows always write parent_seq explicitly.
-        conn.execute_batch(
-            "UPDATE entries SET parent_seq = seq - 1
-             WHERE parent_seq IS NULL AND seq > 1;
-             UPDATE sessions SET leaf = COALESCE(
-                 (SELECT MAX(seq) FROM entries e WHERE e.session_id = sessions.id), NULL);",
-        )?;
+        // Backfill **once**, on the upgrade that added the columns. Running it
+        // on every open (as it did) destroyed user state two ways: a rewound
+        // `leaf` snapped back to MAX(seq) — the tip of the branch the user had
+        // just left — and every second root (parent_seq NULL, seq > 1) was
+        // welded onto the previous row, merging two branches into one chain.
+        if legacy_linear {
+            conn.execute_batch(
+                "UPDATE entries SET parent_seq = seq - 1
+                 WHERE parent_seq IS NULL AND seq > 1;
+                 UPDATE sessions SET leaf = (
+                     SELECT MAX(seq) FROM entries e WHERE e.session_id = sessions.id);",
+            )?;
+        }
         Ok(Self { conn })
     }
 
@@ -471,15 +481,18 @@ pub fn display_name(meta: &SessionMeta, first_user: Option<&str>) -> String {
         .map(|s| s.chars().take(7).collect::<String>())
         .unwrap_or_default();
     // started_at "2026-09-22 14:30:05" → "09-22:14-3005"
-    let t = &meta.started_at;
+    // Sliced by **characters**: the timestamp is our own ASCII, but a
+    // hand-edited or truncated row must not panic the picker.
+    let t: Vec<char> = meta.started_at.chars().collect();
+    let part = |a: usize, b: usize| t[a..b].iter().collect::<String>();
     if t.len() >= 19 {
         format!(
             "{}-{}:{}-{}{}+{}",
-            &t[5..7],
-            &t[8..10],
-            &t[11..13],
-            &t[14..16],
-            &t[17..19],
+            part(5, 7),
+            part(8, 10),
+            part(11, 13),
+            part(14, 16),
+            part(17, 19),
             prefix
         )
     } else {
@@ -778,6 +791,151 @@ mod tree_tests {
             .collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert_eq!(s.get_leaf(1).unwrap(), Some(2));
+    }
+
+    /// File-backed store + its path, so a test can close and reopen it.
+    fn file_store(tag: &str) -> (Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "mypi-reopen-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("t.db");
+        (Store::open(&db).unwrap(), db)
+    }
+
+    fn texts_of(s: &Store, id: i64) -> Vec<String> {
+        s.load_entries(id)
+            .unwrap()
+            .iter()
+            .map(|e| match e {
+                Entry::User { content } | Entry::Assistant { content, .. } => content.clone(),
+                _ => String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rewound_leaf_survives_a_reopen() {
+        // The bug this guards: `Store::open` re-ran the legacy backfill on
+        // every open, snapping `leaf` back to MAX(seq) — the tip of the very
+        // branch the user had rewound away from. The next append then hung off
+        // the wrong branch, resurrecting messages the user had left behind.
+        let (mut s, db) = file_store("leaf");
+        let id = s.create_session("t", "/").unwrap();
+        s.append(id, &[user("a")]).unwrap();
+        s.append(id, &[assistant("old-1"), user("old-2")]).unwrap();
+        s.set_leaf(id, Some(1)).unwrap();
+        assert_eq!(s.get_leaf(id).unwrap(), Some(1));
+        drop(s);
+
+        let mut s = Store::open(&db).unwrap();
+        assert_eq!(
+            s.get_leaf(id).unwrap(),
+            Some(1),
+            "rewound leaf must survive a restart"
+        );
+        // The next append forks off the rewound tip, not off the tail.
+        s.append(id, &[assistant("new-1")]).unwrap();
+        assert_eq!(texts_of(&s, id), vec!["a", "new-1"]);
+        // Nothing was deleted: the abandoned branch is still stored.
+        assert_eq!(s.load_tree(id).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn a_null_leaf_means_root_and_survives_a_reopen() {
+        let (mut s, db) = file_store("nullleaf");
+        let id = s.create_session("t", "/").unwrap();
+        s.append(id, &[user("a")]).unwrap();
+        s.set_leaf(id, None).unwrap();
+        drop(s);
+
+        let s = Store::open(&db).unwrap();
+        assert_eq!(
+            s.get_leaf(id).unwrap(),
+            None,
+            "a restart must not resurrect the newest row over a rewound-to-root leaf"
+        );
+        assert!(s.load_entries(id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_deliberate_second_root_is_not_welded_on_reopen() {
+        // Same root cause, second symptom: `UPDATE ... SET parent_seq = seq - 1
+        // WHERE parent_seq IS NULL AND seq > 1` turned every deliberate second
+        // root into a child of the previous row, merging two branches into one
+        // linear chain (and making the abandoned branch replay into the model).
+        let (mut s, db) = file_store("root");
+        let id = s.create_session("t", "/").unwrap();
+        s.append(id, &[user("a")]).unwrap();
+        s.set_leaf(id, None).unwrap();
+        s.append(id, &[user("b")]).unwrap();
+        assert_eq!(s.load_tree(id).unwrap()[1].parent_seq, None);
+        drop(s);
+
+        let s = Store::open(&db).unwrap();
+        let tree = s.load_tree(id).unwrap();
+        assert_eq!(
+            tree[1].parent_seq, None,
+            "a second root must stay a root across a restart"
+        );
+        assert_eq!(
+            texts_of(&s, id),
+            vec!["b"],
+            "the projection is the new root only"
+        );
+    }
+
+    #[test]
+    fn a_stored_round_replays_byte_identically_after_a_reopen() {
+        // The database's whole contract: reopen the file and the conversation
+        // comes back as the exact bytes the model saw — no drift from the
+        // migration path.
+        let (mut s, db) = file_store("bytes");
+        let id = s.create_session("t", "/").unwrap();
+        let round = vec![
+            Entry::User {
+                content: "问一下".into(),
+            },
+            Entry::Reasoning {
+                content: "先想\n再想".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                args: r#"{"command":"ls"}"#.into(),
+                intent: "列目录".into(),
+                text: "我看看".into(),
+                first: true,
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                ok: true,
+                result: "a.txt".into(),
+            },
+            Entry::Assistant {
+                content: "好了".into(),
+                usage: None,
+            },
+        ];
+        s.append(id, &round).unwrap();
+        drop(s);
+
+        let s = Store::open(&db).unwrap();
+        let back = s.load_entries(id).unwrap();
+        assert_eq!(back, round, "reopen must be byte-identical");
+        let ctx = crate::server::turn::entries_to_context("sys", &back);
+        let wire = serde_json::to_string(&ctx.messages).unwrap();
+        assert!(wire.contains(r#"{\"command\":\"ls\"}"#), "{wire}");
+        assert!(
+            !wire.contains("先想"),
+            "reasoning stays out of the protocol"
+        );
     }
 }
 

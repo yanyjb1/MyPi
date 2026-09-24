@@ -188,9 +188,20 @@ impl Editor {
         true
     }
 
-    // If `pos` falls inside a marker (endpoints included), return it.
-    fn marker_at(&self, pos: usize) -> Option<paste::Marker> {
-        paste::marker_spanning(&self.chars, pos, true, true)
+    // The marker a **backward** action acts on at `pos`: the one holding the
+    // character to the left — strictly inside it, or exactly at its right edge.
+    // At the seam between two adjacent markers that is the left-hand one.
+    fn marker_left(&self, pos: usize) -> Option<paste::Marker> {
+        paste::marker_spanning(&self.chars, pos, false, true)
+    }
+
+    // The marker a **forward** action acts on at `pos`: the one holding the
+    // character under the cursor — strictly inside it, or exactly at its left
+    // edge. At the seam between two adjacent markers that is the right-hand
+    // one (the old loose predicate matched the left-hand one, so forward
+    // delete removed the marker *before* the cursor).
+    fn marker_right(&self, pos: usize) -> Option<paste::Marker> {
+        paste::marker_spanning(&self.chars, pos, true, false)
     }
 
     // Expand `[start, end)` to cover every marker it touches.
@@ -321,14 +332,20 @@ impl Editor {
             return Effect::Nothing;
         }
         // First check whether the cursor hugs a marker on its left (cursor at marker end or inside)
+        //
+        // The second lookup covers the character right after the marker (the
+        // trailing space `insert_paste` adds): one press still removes the
+        // whole marker rather than eating that space first.
         if let Some(m) = self
-            .marker_at(self.cursor)
-            .or_else(|| self.marker_at(self.cursor - 1))
+            .marker_left(self.cursor)
+            .or_else(|| self.marker_left(self.cursor - 1))
         {
             self.checkpoint(EditKind::Other);
             self.chars.drain(m.start..m.end);
             self.cursor = m.start;
-            return Effect::Nothing;
+            // Content, not Nothing: the epilogue (leave history-browse mode,
+            // refresh completions, drop goal_col) keys off the footprint.
+            return Effect::Content;
         }
         self.checkpoint(EditKind::Other);
         self.cursor -= 1;
@@ -343,11 +360,11 @@ impl Editor {
         if self.cursor >= self.chars.len() {
             return Effect::Nothing;
         }
-        if let Some(m) = self.marker_at(self.cursor) {
+        if let Some(m) = self.marker_right(self.cursor) {
             self.checkpoint(EditKind::Other);
             self.chars.drain(m.start..m.end);
             self.cursor = m.start;
-            return Effect::Nothing;
+            return Effect::Content; // see backspace: the footprint drives the epilogue
         }
         self.checkpoint(EditKind::Other);
         self.chars.remove(self.cursor);
@@ -442,12 +459,14 @@ impl Editor {
     // Move left one step. At the right edge of a marker, **jump across the whole marker**.
     pub fn left(&mut self) -> Effect {
         // Cursor at the marker right edge -> jump to the marker left edge in one step
-        if let Some(m) = self.marker_at(self.cursor)
+        if let Some(m) = self.marker_left(self.cursor)
             && m.end == self.cursor
         {
             self.cursor = m.start;
             self.note_cursor_move();
-            return Effect::Nothing;
+            // Motion, not Nothing: the cursor did move, so the epilogue must
+            // refresh completions and clear the ↑↓ target column.
+            return Effect::Motion;
         }
         self.cursor = self.cursor.saturating_sub(1);
         self.note_cursor_move();
@@ -456,12 +475,12 @@ impl Editor {
 
     // Move right one step. At the left edge of a marker, **jump across the whole marker**.
     pub fn right(&mut self) -> Effect {
-        if let Some(m) = self.marker_at(self.cursor)
+        if let Some(m) = self.marker_right(self.cursor)
             && m.start == self.cursor
         {
             self.cursor = m.end;
             self.note_cursor_move();
-            return Effect::Nothing;
+            return Effect::Motion; // see left(): a real move needs the motion epilogue
         }
         if self.cursor < self.chars.len() {
             self.cursor += 1;
@@ -1073,6 +1092,52 @@ mod tests {
 
         e.left();
         assert_eq!(e.cursor(), start, "左移应一步跨回标记左端");
+    }
+
+    #[test]
+    fn a_seam_between_two_markers_deletes_the_expected_side() {
+        // Two adjacent markers with the cursor exactly at the seam: the
+        // character before the cursor belongs to the left marker, the one
+        // under it to the right marker. The old loose predicate matched the
+        // left marker for **both** directions, so forward Delete removed the
+        // marker behind the cursor.
+        let text = "[paste #1 +35 lines][paste #2 +40 lines]";
+        let seam = "[paste #1 +35 lines]".chars().count();
+
+        let mut e = Editor::from_text(text);
+        e.cursor = seam;
+        assert_eq!(e.delete(), Effect::Content);
+        assert_eq!(e.text(), "[paste #1 +35 lines]", "Delete 必须删右边那个");
+
+        let mut e = Editor::from_text(text);
+        e.cursor = seam;
+        assert_eq!(e.backspace(), Effect::Content);
+        assert_eq!(e.text(), "[paste #2 +40 lines]", "Backspace 必须删左边那个");
+    }
+
+    #[test]
+    fn marker_edits_report_their_footprint() {
+        // `Effect` decides the epilogue (leave history-browse mode, refresh
+        // completions, drop the ↑↓ target column). The marker branches used to
+        // report `Nothing` even though they had deleted content or moved the
+        // cursor, silently skipping all of it.
+        let mut e = Editor::new();
+        e.insert_paste(&big_paste());
+        e.end();
+        assert_eq!(e.backspace(), Effect::Content, "删掉标记是内容变更");
+
+        let mut e = Editor::new();
+        e.insert_paste(&big_paste());
+        e.cursor = 0;
+        assert_eq!(e.delete(), Effect::Content, "正向删掉标记也是内容变更");
+
+        let mut e = Editor::new();
+        e.insert_str("a");
+        e.insert_paste(&big_paste());
+        let start = e.text().find("[paste").unwrap();
+        e.cursor = start;
+        assert_eq!(e.right(), Effect::Motion, "跨过标记是光标移动");
+        assert_eq!(e.left(), Effect::Motion, "跨回标记也是光标移动");
     }
 
     #[test]

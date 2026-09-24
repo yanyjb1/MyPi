@@ -20,15 +20,27 @@
 use anyhow::{Context as _, anyhow};
 use parking_lot::Mutex;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::cdp::{Browser, Cdp, Target};
+use crate::ai::config::BrowserConfig;
 use crate::xdg::browser_profile_dir;
 
 pub(crate) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) const RENDER_WAIT: Duration = Duration::from_secs(15);
 pub(crate) const POLL_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The profile directory to use: `$MYPI_BROWSER_PROFILE_DIR` wins (tests and
+/// parallel sessions), then `config.yaml → browser.profileDir`, then the XDG
+/// data default.
+fn profile_dir(cfg: &BrowserConfig) -> PathBuf {
+    if let Some(d) = std::env::var_os("MYPI_BROWSER_PROFILE_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(d);
+    }
+    cfg.profile_dir.clone().unwrap_or_else(browser_profile_dir)
+}
 
 /// One connected page, pinned to a specific tab. Clones share the socket
 /// behind a mutex; navigation resets that socket and the next call heals
@@ -181,7 +193,7 @@ fn discover_live_browser(profile: &std::path::Path) -> Option<u16> {
     Browser::port_alive(port).then_some(port)
 }
 
-fn ensure_browser() -> anyhow::Result<u16> {
+fn ensure_browser(cfg: &BrowserConfig) -> anyhow::Result<u16> {
     let mut guard = SESSION.lock();
     if let Some(s) = guard.as_ref() {
         if Browser::port_alive(s.browser.port) {
@@ -190,18 +202,20 @@ fn ensure_browser() -> anyhow::Result<u16> {
         // Dead browser: drop it (kills our child if any) and respawn.
         *guard = None;
     }
-    let profile = browser_profile_dir();
-    // Rendezvous: another mypi in another directory may already run a
-    // Chromium on this very profile (the default profile is shared via
-    // XDG_DATA_HOME, which does not vary with cwd). Attaching keeps one
+    let profile = profile_dir(cfg);
+    // Attach-or-launch, in order: `$MYPI_BROWSER_PORT`, `browser.port` from
+    // config.yaml, a live instance already running on this profile, else
+    // launch. Rendezvous matters because the default profile is shared via
+    // XDG_DATA_HOME (which does not vary with cwd): attaching keeps one
     // browser serving every session; launch is the fallback, not the norm.
     let browser = match std::env::var("MYPI_BROWSER_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
+        .or(cfg.port)
         .or_else(|| discover_live_browser(&profile))
     {
         Some(port) => Browser::attach(&profile, port).context("attaching to shared browser")?,
-        None => Browser::launch(&profile).context("launching browser")?,
+        None => Browser::launch(cfg, &profile).context("launching browser")?,
     };
     let port = browser.port;
     *guard = Some(Session {
@@ -238,10 +252,11 @@ fn close_page(port: u16, target_id: &str) {
 /// so a fresh tab keeps all of it and costs only one createTarget round
 /// trip.
 pub(crate) fn with_transient<T>(
+    cfg: &BrowserConfig,
     url: &str,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let port = ensure_browser()?;
+    let port = ensure_browser(cfg)?;
     let page = open_page(port, url)?;
     let result = f(&page);
     close_page(port, &page.target_id);
@@ -255,11 +270,12 @@ pub(crate) fn with_transient<T>(
 /// the same page. Stale entries (tab closed externally) are evicted and
 /// re-created on the next call.
 pub(crate) fn with_tab<T>(
+    cfg: &BrowserConfig,
     name: &str,
     url: Option<&str>,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let port = ensure_browser()?;
+    let port = ensure_browser(cfg)?;
     let page = {
         let mut guard = SESSION.lock();
         let Some(session) = guard.as_mut() else {
@@ -296,6 +312,9 @@ fn recreate_tab(
 }
 
 /// The browser tool's persistent page: same tab across open/act/read.
-pub(crate) fn with_work<T>(f: impl FnOnce(&Page) -> anyhow::Result<T>) -> anyhow::Result<T> {
-    with_tab("work", None, f)
+pub(crate) fn with_work<T>(
+    cfg: &BrowserConfig,
+    f: impl FnOnce(&Page) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    with_tab(cfg, "work", None, f)
 }

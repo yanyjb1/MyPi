@@ -477,4 +477,23 @@ mod tests {
         assert!(marker_spanning(&c, m.end, false, false).is_none());
         assert!(marker_spanning(&c, m.start, false, false).is_none());
     }
+
+    #[test]
+    fn the_seam_between_two_markers_belongs_to_one_side_each() {
+        // `find` returns the first match, so at a seam the loose predicate
+        // (`include_start` AND `include_end`) handed the *left* marker to both
+        // directions. The strict forms used by the editor resolve it: a
+        // backward query wants the marker whose right edge is here, a forward
+        // query the one whose left edge is.
+        let c = chars("[paste #1 +30 lines][paste #2 +40 lines]");
+        let ms = find_markers(&c);
+        assert_eq!(ms.len(), 2);
+        let seam = ms[0].end;
+        assert_eq!(seam, ms[1].start, "两个标记必须紧挨着");
+
+        let back = marker_spanning(&c, seam, false, true).unwrap();
+        assert_eq!(back.id, 1, "向后删要拿左边那个");
+        let fwd = marker_spanning(&c, seam, true, false).unwrap();
+        assert_eq!(fwd.id, 2, "向前删要拿右边那个");
+    }
 }

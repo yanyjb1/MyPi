@@ -1,4 +1,5 @@
 // 端到端：search() 直连 tier → 兜底 tier（真实 Bing + Helium CDP）
+use mypi::ai::config::BrowserConfig;
 use mypi::web::{SearchArgs, render, search};
 
 fn main() -> anyhow::Result<()> {
@@ -10,7 +11,7 @@ fn main() -> anyhow::Result<()> {
         limit: Some(5),
     };
     let t0 = std::time::Instant::now();
-    let hits = search(&args)?;
+    let hits = search(&args, &BrowserConfig::default())?;
     eprintln!(
         "[elapsed {:.1}s, {} hits]",
         t0.elapsed().as_secs_f32(),

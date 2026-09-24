@@ -1,110 +1,191 @@
-# MyPi 架构与耦合度报告
+# MyPi 架构
 
-日期：2026-09-23 · 代码规模：~11.3k 行 Rust · 测试 317 全绿 · clippy 0
+一个终端编程 agent：会话服务（`server`）+ agent 循环（`agent`）+ TUI（`tui`）。
+规模：`src/` 约 2.64 万行 / 90 个文件；单 crate，edition 2024；`cargo test` 495 项全绿。
 
-## 1. 分层与依赖边
+本文只写**现在成立的事实与规则**。规则由 `src/lib.rs` 里的 `mod architecture`
+测试强制：写错一条依赖，`cargo test` 直接红。
 
-```
-   ┌──────────────────────────────────────────────┐
-   │  tui/  （纯订阅端：事件 → Change → 画一帧）   │   tui → {server, ai, store, git}
-   │   app ── keys ── editor ── path               │   app 持有 SessionState，但不碰轮数据
-   │   layout ── view ── components/*              │   completion/leaf 独立状态机
-   └───────────────┬──────────────────────────────┘
-                   │ SessionEvent（协议输入）/ Change（协议输出）+ StreamView
-                   ▼
-   ┌──────────────────────────────────────────────┐
-   │  server/  （服务端：会话服务，终端无关）      │   server → {agent, ai, store, entry}
-   │   events    协议：SessionEvent / Change /     │   server → tui：0 条（刚扫描验证）
-   │             StreamView                       │
-   │   session   SessionState：按序消费事件，      │   无头可跑（headless 就绪）
-   │             拥有流式槽/转录/pending/存储      │
-   │   turn      轮线程机器：spawn_turn/           │   回调 → SessionEvent 翻译
-   │             collect_turn/entries_to_context   │
-   └──────┬──────────────┬──────────────┬─────────┘
-          ▼              ▼              ▼
-   ┌────────┐     ┌─────────┐    ┌────────┐
-   │ agent  │ ──► │   ai    │    │ store  │ ──► entry（数据模型，叶子层）
-   │ loop   │     │ client  │    │ sqlite │
-   │ tools  │     │ config  │    └────────┘
-   └────────┘     │ pricing │    git ── (无依赖)
-     agent → ai   └─────────┘
-     ai → 无（叶子层）
+---
+
+## 1. 构建矩阵
+
+```bash
+cargo build                    # 默认：含联网工具（fetch / search / browser）
+cargo build --no-default-features   # 剔除整个 web 域（无 CDP、无 HTML→MD、无 URL 解析、不起浏览器）
+cargo test                     # 默认特性
+cargo test --no-default-features    # 联网相关测试随之消失（少 28 个）
 ```
 
-协议化后的数据流（单向）：
+`web` 是唯一的功能开关，管三件事：`src/web/` 模块、`tungstenite` /
+`html-to-markdown-rs` / `url` 三个依赖、以及名册里的三个联网工具。
+关掉之后模型看不到 `fetch`/`browser`/`search`，硬调也会得到
+`tool ... is not compiled in` 而不是静默成功。
+
+---
+
+## 2. 分层（唯一的硬规则：只许向下依赖）
 
 ```
-   键盘/粘贴/CLI ─┐
-                  ├─► SessionEvent ─► SessionState::handle() ─► Change
-   轮线程 (turn) ─┘                                       │
+        ┌────────────────────────────────────────────┐
+        │ tui/   表面：事件 → Change → 画一帧          │  tui → 任何
+        │ app keys editor view layout completion/     │
+        │ transcript/ components/ theme/              │
+        └───────────────┬────────────────────────────┘
+                        │ SessionEvent（进）/ Change（出）+ StreamView
+                        ▼
+        ┌────────────────────────────────────────────┐
+        │ server/  服务：会话状态机，终端无关           │  server ↛ tui
+        │ events session turn compaction profile      │
+        └──────┬──────────────┬───────────────────────┘
+               ▼              ▼
+        ┌───────────┐   ┌──────────┐   ┌───────────┐
+        │ agent/    │──▶│ ai/      │   │ web/      │  agent → web（工具派发）
+        │ loop tools│   │ client   │   │ fetch     │  web ↛ agent/server/tui
+        │ guard art.│   │ config   │   │ search    │
+        └───────────┘   │ types    │   │ browser   │
+                        │ pricing  │   └───────────┘
+                        └──────────┘
+        ┌──────────────────────────────────────────────────────────┐
+        │ 叶子：entry（数据模型）store（SQLite）grouping ansi git xdg │  谁也不许指向上层
+        └──────────────────────────────────────────────────────────┘
+```
+
+规则表（`src/lib.rs::architecture::FORBIDDEN`，逐条是「该模块**不得**出现
+`crate::<这些>`」）：
+
+| 模块 | 禁止指向 |
+|---|---|
+| entry / grouping / ansi / git / xdg / store / ai | agent, cli, server, tui, web |
+| agent | cli, server, tui |
+| web | agent, cli, server, tui |
+| server | **tui** |
+
+**为什么 server ↛ tui 是要害**：`server` 是服务，不是终端的一部分。它只认
+`SessionEvent`（输入）/ `Change`（输出）这套协议，所以第二个订阅端（Telegram
+桥接、无头驱动）只要会收发协议就能接进来，不需要碰会话内脏，也不需要动 `tui`
+一行。这条边一旦破，桥接就得跟着 TUI 的类型走——所以它单独有一条测试
+`the_server_never_learns_about_the_terminal`。
+
+测试怎么判：扫 `src/**/*.rs` 的 `crate::` 引用；剔除 `#[cfg(test)] mod` 块
+（测试代码跨层是合法的）与整行注释（文档里**提到**别的层不算依赖）。
+
+---
+
+## 3. 会话协议
+
+```
+键盘/粘贴/CLI ─┐
+               ├─▶ SessionEvent ─▶ SessionState::handle() ─▶ Change
+轮线程 (turn) ─┘                                          │
                                                           ▼
-                                TUI 读 Change + stream_view()/snapshot() → 画一帧
+                            TUI 读 Change + stream_view()/transcript() → 画一帧
 ```
 
-实测边（`crate::` 引用扫描）：
+- `SessionEvent`：`Delta` / `ReasoningDelta` / `ToolStart` / `ToolFinish` /
+  `Error` / `TurnDone` / `Done` / `Submit` / `NameMarker` / `SetCwd` / `Compaction`
+- `Change`：`Transcript` / `Stream` / `TurnDone` / `ToolActivity` / `Session` / `None`
 
-| 源 | 目标 | 边数 | 评价 |
-|---|---|---|---|
-| ai / entry | — | 0 | 叶子层，干净 |
-| agent | ai | 2 文件（loop_rs/tools） | 单向，正确 |
-| store | entry | 1 | 数据模型依赖，正确（瑕疵 A 已随 entry 抽取消解） |
-| server | agent/ai/store/entry | 各 1–2 | 服务端汇聚点，0 条指向 tui |
-| tui | server/ai/store/git | 各 1–4 | 订阅端，经协议消费服务端 |
+轮线程（`server::turn::spawn_turn`）只回传事件，不碰 DB；DB 只有主线程写。
 
-**关键改进（本轮）**：`AppEvent` 升级为 `server::events::SessionEvent` 协议；流式缓冲
-（streaming/reasoning_buf/streaming_active/reasoning_done）从 App 字段迁入
-SessionState；`drain_events` 退化为"事件泵进 session + TurnDone 时记价"。App 不再
-直接改任何会话内脏——它只认 `Change` 和 `StreamView`。
+---
 
-## 2. 斜杠命令：单表驱动（本轮重构）
+## 4. 落盘契约：逐字节复现
 
-唯一权威源 `tui/path.rs::COMMANDS`（`CommandSpec{name, detail, args: ArgKind}`）：
+数据库的唯一职责是**把当时的对话原样复现**：
 
-- **注册**：新命令 = 表里加一行 + `App::run_command` 加一个 `cmd_*` 分支（编译器强制穷尽）
-- **补全**：`ArgKind::{None, ModelId, Path}` 决定弹窗行为；`/cdp` 的 `Path` 参数已接线到文件路径补全
-- **调度**：`submit` 按完整词查表（`lookup`），前缀不再误触发（修了 `/name` 吃掉 `/namexyz` 的旧 bug）；编辑器清理（clear/popup/goal_col/scroll）收敛到一处
-- 原来散落的 `ARG_COMMANDS`、`PATH_ARG_COMMANDS`、200 行 if 链全部删除
+- 一轮的条目在 `TurnDone` 时**一次性**写入（`sessions` + `entries`，树形
+  `parent_seq` + `leaf` 指针）；
+- `entries_to_context` 由条目重建协议消息，与模型当时收到的 wire 形状逐字节一致
+  （多调用合成一条 assistant、`args` 原样回放、reasoning 不进协议）；
+- 空回复有唯一占位符 `entry::EMPTY_REPLY`：**落盘与实时上下文共用同一个字符串**，
+  否则重启后回放的字节就与当时发出去的不同（前缀缓存全冷，模型看到的是一份它没发过的历史）；
+- `leaf` 是用户状态（回溯、`set_leaf(None)` = 回到根），**跨重启存活**；
+  迁移只在列刚被 `ALTER` 加上的那一次执行，不重复回填。
 
-## 3. 线程与共享状态模型
+覆盖这些的测试：`store::tree_tests::*`（含 `a_stored_round_replays_byte_identically_after_a_reopen`）、
+`server::turn::tests::a_whole_conversation_replays_byte_identically`。
+
+---
+
+## 5. 联网域（feature = "web"）
+
+```
+agent/tools.rs ──dispatch──▶ web/{fetch,search,browser}/engine.rs ──▶ providers/ ──▶ utils/session.rs ──▶ utils/cdp.rs
+```
+
+- 每个工具一个目录：`engine.rs` 路由 + `providers/` 实现；
+- 浏览器进程与标签页由 `utils/session.rs` 统一持有（attach 优先、launch 兜底，
+  `work` 标签跨调用存活，search/fetch 用一次性标签）；
+- CDP 的 socket、重连、`dom_html` 兜底都在 `utils/cdp.rs`。
+
+**选哪个浏览器由 config.yaml 决定**（环境变量优先，便于测试与并行会话）：
+
+```yaml
+browser:
+  bin: /usr/bin/chromium        # 留空 → $MYPI_BROWSER_BIN → /opt/helium/helium
+  port: 9222                    # 接已在跑的实例；留空 → 发现同 profile 的活实例 → 启动
+  profileDir: ~/.local/share/mypi/browser/profile   # 登录态、扩展
+  headless: true
+  userAgent: ""                 # 留空 → 内置的稳定版桌面 UA
+  extraArgs: ["--proxy-server=http://127.0.0.1:8080"]
+```
+
+生效时机：`bin`/`headless`/`userAgent`/`extraArgs` 在下一次**启动**浏览器时生效；
+`port` 每次 ensure 都读。浏览器进程活着时改配置不会热重启它。
+
+---
+
+## 6. 模块地图（行数，2026-09-24）
+
+| 模块 | 行数 | 内容 |
+|---|---|---|
+| `tui/` | 13,747 | `app`（状态+循环）、`keys`、`editor/{mod,paste,undo,history}`、`view`、`layout`、`completion/{engine,controller,leaf,popup}`、`transcript/{blocks,cache,components}`、`components/*`、`theme/`、`chat/{commands,tree}`、`session/{loop,db,signal}`、`zones*` |
+| `agent/` | 3,201 | `loop_rs`（纯循环）、`tools`（read/edit/mass_edit/bash/cd/context + 联网派发）、`bash_guard`（许可区分类器）、`artifacts`（巨物 #N） |
+| `server/` | 2,718 | `events`（协议）、`session`（状态机 + facade）、`turn`（轮线程 + 上下文重建）、`compaction`、`profile` |
+| `web/` | 2,317 | `fetch` / `search` / `browser` 三域 + `utils/{cdp,session,html,url}` |
+| `ai/` | 2,277 | `client`（SSE）、`types`（wire 类型）、`config`（models.yml + config.yaml 的**全部** schema）、`pricing` |
+| `store` `entry` `grouping` `xdg` `git` `ansi` `cli` | 1,846 | 叶子层 |
+
+config.yaml 的 schema（含 `tools` / `browser` / `compact` / `theme` / `profile`）
+**只在 `ai::config` 定义**：配置层是叶子，它不认上层类型，消费方向下 import。
+
+---
+
+## 7. 线程与共享状态
 
 ```
 主线程（TUI 循环）                 后台轮线程
   App{...}                          spawn_turn:
-  ├─ store（唯一写者，无锁）          ├─ Client clone（不可变）
-  ├─ chat: Arc<Mutex<ChatContext>>   ├─ 读 cwd 快照 → BuiltinTools::new(cwd)
-  ├─ cwd:  Arc<RwLock<PathBuf>> ◄───┤─ cd 工具写回槽（状态栏下一帧可见）
-  ├─ cfg:  Rc<RefCell<Config>>       └─ 定稿后写回 chat，发 Commit 事件
-  └─ client: RefCell<Client>
+  ├─ session: Session               ├─ Client clone（不可变）
+  │   ├─ store（唯一写者，无锁）      ├─ cwd 快照 → BuiltinTools::new(cwd)
+  │   ├─ chat: Arc<Mutex<Ctx>>  ◀───┤─ cd 工具写回 cwd 槽
+  │   ├─ cwd:  Arc<RwLock<PathBuf>>  ├─ 工具事件 → SessionEvent
+  │   └─ client: RefCell<Client>     └─ 定稿后写回 chat
+  └─ block_cache / completion / editor
 ```
 
-单写者纪律：DB 只在主线程写；轮线程只回传 entries。`Rc` 不出线程、`Arc` 才共享——编译器把关。
+`Rc` 不出线程、`Arc` 才共享——编译器把关。轮线程只发事件，落盘在主线程。
 
-## 4. 意大利面评分（主观：耦合度 1-5，5 最面）
+---
 
-| 模块 | 分 | 说明 |
-|---|---|---|
-| ai/* | 1 | 叶子层；client 纯协议翻译 |
-| agent/loop_rs | 1 | 纯循环 + trait 抽象，不认工具不认 UI |
-| agent/tools | 2 | 自包含；与 ai 仅 types.rs 一处契约 |
-| tui/path, keys, editor, layout, text, undo, history, paste | 1 | 全纯函数/纯状态机，零终端依赖，单测密集 |
-| tui/components/* | 2 | 无状态渲染函数；chat 轻度依赖 ai::types |
-| **tui/app** | **4** | 上帝对象：~1550 行、30+ 字段、触达全部下层（见瑕疵 B） |
-| store | 3 | 本身简单，但反向依赖 Entry（瑕疵 A） |
+## 8. 测试约定
 
-## 5. 遗留瑕疵与建议（按优先级）
+- 全部离线：网络层用假域名（`example.test`），测试里没有真实端点/密钥；
+- 断言**可观察行为**（协议字节、落盘内容、渲染出的行），不钉实现细节；
+- 渲染类测试用 `ratatui::backend::TestBackend` 画真帧再读缓冲
+  （注意宽字符会占两格，比较前去掉填充空格）；
+- 交互语义（如「光标贴着标记时一次退格删整块」）写进对应模块的测试；
+- `cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 应当是绿的。
 
-A. **store → tui 反向边**：`Entry` 是会话领域模型却住在 `tui::components::chat`。建议上提为独立模块（如 `src/entries.rs`），存储层即与 UI 解耦，未来做无头模式/CLI 时直接复用。
+---
 
-B. **app.rs 上帝对象**：命令分发已拆分（`cmd_*`），剩余三块仍可下沉：`CompletionController`（popup 状态+refresh/apply/tab 状态机）、`EventDrain`（AppEvent→transcript 映射，与 collect_turn 高度内聚）、`Resume` 流程。拆分后 app.rs 可回到"状态+循环"本职。
+## 9. 已知取舍
 
-C. **`Entry::Error` 语义过载**：所有命令回显（`/model` 列表、`已命名`、`已恢复会话`）都借 Error 变体当"信息通道"。建议加 `Entry::Status{ text }`（渲染同 Error 但落库 kind 不同），resume 重建时不再把信息当错误。
-
-D. **保留区三消费者手排优先级**：`App::reserved_height` 里 resume > popup > 空行的 if 链。当前规模可接受；若再加第四个浮层，改成 `[&dyn ReservedSource]` 优先级表。
-
-E. **resume 重建只走协议消息**，UI 卡片（Entry）与协议消息（Message）各自从 entries 派生，同一数据源双向对称（collect_turn 为其逆）——设计成立，保持现状。
-
-## 6. 测试与仓库卫生
-
-- 全部测试不联网：网络层用假域名（example.test），无真实端点/密钥/模型名
-- `.env`（含 API key）与 `models.yml`（本机端点）已从 git 历史彻底清除（孤儿提交重建），`.gitignore` 拦截；**旧 key 建议作废重发**
-- 注释全英文；工具信息/报错/反馈全英文；过时叙述注释已删
+- **bash 许可区是分类器，不是沙箱**：它按命令位置（而非子串）判定 `rm`/`mv`/`find -delete`/
+  凭据写入/关机类，误杀已收敛，但挡不住铁了心的对手。
+- **聊天流没有 body 级超时**：只有 connect / 等响应两个超时。长回答不能被总时长砍断，
+  代价是「响应头到了之后卡死」仍会挂住轮线程（Esc 只在收到 delta 时轮询）。
+- **工具能写任意路径**：`browser read/screenshot` 的 `path` 不受许可区约束，
+  与 bash 的区外禁令不一致。
+- **无 CI**：`clippy 0 警告` 是手跑出来的结论。

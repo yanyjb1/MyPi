@@ -166,6 +166,103 @@ pub fn normalize(command: &str) -> String {
     out
 }
 
+// ---- token stream analysis ----------------------------------------------
+
+/// Shell separators. They are tokenized as **their own tokens** so that glued
+/// forms (`x&&rm`, `a|b`) still expose the verb of every segment.
+fn is_sep(c: char) -> bool {
+    matches!(c, ';' | '&' | '|' | '(' | ')' | '`')
+}
+
+/// Split a command into shell-ish tokens: words, with separators standing
+/// alone. Positions are byte offsets, so lowercasing the string first keeps
+/// the two streams index-aligned (see the callers).
+fn tokenize(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in s.char_indices() {
+        if is_sep(c) || c.is_ascii_whitespace() {
+            if let Some(st) = start.take() {
+                out.push(&s[st..i]);
+            }
+            if is_sep(c) {
+                out.push(&s[i..i + c.len_utf8()]);
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(st) = start {
+        out.push(&s[st..]);
+    }
+    out
+}
+
+fn is_sep_token(t: &str) -> bool {
+    t.chars().next().is_some_and(is_sep) && t.chars().count() == 1
+}
+
+/// Words that may stand **in front of** the real verb without being it.
+/// `sudo rm -rf /` must still be classified as an rm, while `echo rm -rf /`
+/// must not — the difference is position, not the presence of the token.
+const WRAPPERS: &[&str] = &[
+    "sudo", "doas", "env", "nohup", "command", "exec", "builtin", "time", "nice", "ionice",
+    "setsid", "stdbuf", "xargs", "busybox", "eval", "sh", "bash", "zsh", "dash",
+];
+
+/// The token's text without a path prefix (`/bin/rm` → `rm`).
+fn verb_text(token: &str) -> &str {
+    token.rsplit('/').next().unwrap_or(token)
+}
+
+/// Does token `i` begin a command segment? (i.e. it is a word whose
+/// predecessor is a separator, or the very first token)
+fn starts_segment(tokens: &[&str], i: usize) -> bool {
+    !is_sep_token(tokens[i]) && (i == 0 || is_sep_token(tokens[i - 1]))
+}
+
+/// End (exclusive) of the segment that starts at `start`.
+fn segment_end(tokens: &[&str], start: usize) -> usize {
+    let mut i = start + 1;
+    while i < tokens.len() && !is_sep_token(tokens[i]) {
+        i += 1;
+    }
+    i
+}
+
+/// Indices of the **verbs** in the token stream: for every command segment,
+/// its first token that is not a wrapper, a `VAR=value` assignment or a flag.
+///
+/// This is what keeps the classifier from reading a *quoted string* as a
+/// command: `echo 'rm -rf /'` has `echo` as its verb, so no rule fires on the
+/// text being printed, while `sudo rm -rf /` still reports `rm`.
+fn verbs(tokens: &[&str]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if starts_segment(tokens, i) {
+            let end = segment_end(tokens, i);
+            let mut j = i;
+            while j < end {
+                let t = tokens[j];
+                if WRAPPERS.contains(&t)
+                    || t.starts_with('-')
+                    || (t.contains('=') && !t.starts_with('-'))
+                {
+                    j += 1;
+                    continue;
+                }
+                out.push(j);
+                break;
+            }
+            i = end;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
 // ---- rules ---------------------------------------------------------------
 
 /// rm targeting outside the workspace, or any system root. Matches the
@@ -174,19 +271,18 @@ pub fn normalize(command: &str) -> String {
 /// trash my stuff" is not limited to directories).
 fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
-    let orig: Vec<&str> = normalized.split_ascii_whitespace().collect();
-    // `sudo rm ...`, `env rm ...`, `nohup rm ...` — prefix wrappers must
-    // not launder the verb, so match rm anywhere in the token stream
-    // (not just as argv[0]).
-    let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
-    let pos = tokens.iter().position(|t| *t == "rm")?;
-    // Targets: everything after the verb that is not flag-looking. Flags
-    // may also come after targets (`rm foo -rf`), so anything not
-    // starting with `-` and not `--` is a target. Targets keep ORIGINAL
-    // case: canonicalize()/starts_with() are case-sensitive, and a
-    // lowercased path can miss the licensed zone on case-sensitive
-    // filesystems (`/home/Arisha` vs `/home/arisha`).
-    let targets: Vec<&str> = orig[pos + 1..]
+    let orig: Vec<&str> = tokenize(normalized);
+    let tokens: Vec<&str> = tokenize(&lower);
+    // The verb has to be in **command position**: `echo 'rm -rf /'` prints the
+    // text, it does not delete anything. Wrappers (`sudo`, `env`, `xargs`…)
+    // and leading flags do not consume the position, so they cannot launder it.
+    let pos = *verbs(&tokens)
+        .iter()
+        .find(|i| verb_text(tokens[**i]) == "rm")?;
+    // Targets: the rest of **this segment** (a following `&& cd /etc` is not an
+    // rm argument), minus flags.
+    let end = segment_end(&tokens, pos);
+    let targets: Vec<&str> = orig[pos + 1..end]
         .iter()
         .copied()
         .filter(|t| *t != "--" && !t.starts_with('-'))
@@ -217,11 +313,14 @@ fn classify_rm(normalized: &str, zone: &Path) -> Option<RuleHit> {
 /// zone to a scratch dir is still losing the user's file.
 fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
-    let orig: Vec<&str> = normalized.split_ascii_whitespace().collect();
-    let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
-    let pos = tokens.iter().position(|t| *t == "mv")?;
+    let orig: Vec<&str> = tokenize(normalized);
+    let tokens: Vec<&str> = tokenize(&lower);
+    let pos = *verbs(&tokens)
+        .iter()
+        .find(|i| verb_text(tokens[**i]) == "mv")?;
+    let end = segment_end(&tokens, pos);
     // Sources keep original case — see classify_rm.
-    let rest: Vec<&str> = orig[pos + 1..]
+    let rest: Vec<&str> = orig[pos + 1..end]
         .iter()
         .copied()
         .filter(|t| !t.starts_with('-'))
@@ -247,21 +346,20 @@ fn classify_mv_out_of_zone(normalized: &str, zone: &Path) -> Option<RuleHit> {
 /// told to prefer `fd` — same rules either way.
 fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
     let lower = normalized.to_ascii_lowercase();
-    let orig: Vec<&str> = normalized.split_ascii_whitespace().collect();
-    let tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
-    // Same anti-laundering: find/fd may follow sudo/env/nohup.
-    let pos = tokens
-        .iter()
-        .position(|t| *t == "find" || *t == "fd" || *t == "fdfind")?;
+    let orig: Vec<&str> = tokenize(normalized);
+    let tokens: Vec<&str> = tokenize(&lower);
+    // Same anti-laundering and same command-position rule as rm: `find` must be
+    // the verb of its segment, not a word inside someone else's argument.
+    let pos = *verbs(&tokens).iter().find(|i| {
+        let v = verb_text(tokens[**i]);
+        v == "find" || v == "fd" || v == "fdfind"
+    })?;
+    let end = segment_end(&tokens, pos);
     // Search roots keep original case — see classify_rm. Actions are
     // matched on the lowercased stream (-delete/-exec rm are lowercase
     // spellings).
-    let rest: Vec<&str> = orig[pos + 1..].to_vec();
-    let actions_lower: Vec<String> = lower
-        .split_ascii_whitespace()
-        .skip(pos + 1)
-        .map(String::from)
-        .collect();
+    let rest: Vec<&str> = orig[pos + 1..end].to_vec();
+    let actions_lower: Vec<&str> = tokens[pos + 1..end].to_vec();
     // fd takes the search root as a positional argument (defaults to
     // `.`); find takes start-point(s) right after the path list. Both:
     // roots are the positionals before any flag.
@@ -275,7 +373,7 @@ fn classify_bulk_delete(normalized: &str, zone: &Path) -> Option<RuleHit> {
         .any(|r| escapes_zone(r, zone) || *r == "~" || r.starts_with("~/"));
     let delete_action = actions_lower
         .iter()
-        .any(|t| t == "-delete" || t == "-execrm" || t == "-execdirrm" || t == "-xrm");
+        .any(|t| matches!(*t, "-delete" | "-execrm" | "-execdirrm" | "-xrm"));
     // find -exec rm ... : look for the exec + rm pair across tokens.
     let exec_rm = actions_lower.windows(2).any(|w| {
         (w[0] == "-exec" || w[0] == "-execdir" || w[0] == "-x")
@@ -338,7 +436,16 @@ fn classify_reverse_shell(lower: &str) -> bool {
     let bash_rev = lower.contains("/dev/tcp/") && lower.contains("bash");
     let nc_rev = (lower.contains("nc ") || lower.contains("ncat ") || lower.contains("netcat "))
         && lower.contains("-e ");
-    let py_rev = lower.contains("socket") && lower.contains("connect") && lower.contains("sh");
+    // A socket shell needs the **call shapes**, not the bare words: matching
+    // "socket"+"connect"+"sh" as substrings fired on ordinary prose — a commit
+    // message like "fix socket connect in push" contains all three ("push" has
+    // an "sh" in it) and was refused outright.
+    let py_rev = lower.contains("socket")
+        && (lower.contains("connect(") || lower.contains("create_connection"))
+        && (lower.contains("system(")
+            || lower.contains("pty.spawn")
+            || lower.contains("/bin/sh")
+            || lower.contains("os.exec"));
     bash_rev || nc_rev || py_rev
 }
 
@@ -392,11 +499,22 @@ fn classify_process_termination(lower: &str) -> bool {
     let force = lower.contains("kill -9") || lower.contains("kill -kill");
     let critical = lower.contains("pkill")
         && (lower.contains("init") || lower.contains("systemd") || lower.contains("sshd"));
-    let killall = lower.starts_with("killall") || lower.contains(" killall");
+    // Command position again: `killall` is a verb, not a word being printed.
+    let tokens: Vec<&str> = tokenize(lower);
+    let killall = verbs(&tokens)
+        .iter()
+        .any(|v| verb_text(tokens[*v]) == "killall");
     (pid1 && force) || critical || killall
 }
 
 /// Writing to /etc/passwd|shadow|sudoers|sshd_config.
+///
+/// Direction matters: `cp /etc/passwd /tmp/x` only *reads* the file, while
+/// `cp /tmp/x /etc/passwd` overwrites it. The old form matched the path
+/// anywhere plus a `cp ` token anywhere, so every backup of those files was
+/// refused. Each shape is now checked where it can actually write:
+/// redirection targets, `tee`/`sed -i` arguments, and the destination of
+/// `cp` (or either side of `mv`, which also clears the source's directory).
 fn classify_credential_write(lower: &str) -> bool {
     const FILES: &[&str] = &[
         "/etc/passwd",
@@ -404,27 +522,96 @@ fn classify_credential_write(lower: &str) -> bool {
         "/etc/sudoers",
         "/etc/ssh/sshd_config",
     ];
-    const WRITES: &[&str] = &["tee ", "cat >", "echo >", "sed -i", "cp ", "mv "];
-    FILES
-        .iter()
-        .any(|f| lower.contains(f) && WRITES.iter().any(|w| lower.contains(w)))
+    // A token names a protected file when it *is* one — possibly glued to a
+    // redirection (`>/etc/passwd`). `/etc/passwd.bak` and a path mentioned
+    // inside a longer argument stay allowed.
+    let protected = |t: &str| {
+        let t = t.trim_start_matches('>');
+        FILES.contains(&t)
+    };
+
+    let tokens: Vec<&str> = tokenize(lower);
+    for (i, raw) in tokens.iter().enumerate() {
+        let t = raw.trim_start_matches('>');
+        if !protected(t) {
+            continue;
+        }
+        // Redirection target: the path itself carries `>`, or the previous
+        // token is the operator (`echo x > /etc/passwd`).
+        if raw.len() != t.len() || (i > 0 && tokens[i - 1].ends_with('>')) {
+            return true;
+        }
+        // `tee /etc/shadow`
+        if i > 0 && verb_text(tokens[i - 1]) == "tee" {
+            return true;
+        }
+    }
+
+    // `cp` / `mv` / `sed -i`, resolved per segment so the verb is real.
+    for v in verbs(&tokens) {
+        let verb = verb_text(tokens[v]);
+        let end = segment_end(&tokens, v);
+        let args: Vec<&str> = tokens[v + 1..end]
+            .iter()
+            .copied()
+            .filter(|t| !t.starts_with('-'))
+            .collect();
+        match verb {
+            // Only the destination is written.
+            "cp" => {
+                if args.last().is_some_and(|d| protected(d)) {
+                    return true;
+                }
+            }
+            // Both sides: the destination is written, the source's directory
+            // loses the file.
+            "mv" => {
+                if args.iter().any(|a| protected(a)) {
+                    return true;
+                }
+            }
+            // In-place edit: any argument can be the file.
+            "sed"
+                if tokens[v + 1..end].iter().any(|t| t.starts_with("-i"))
+                    && args.iter().any(|a| protected(a)) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Shutdown family — critical: the agent has no business turning the
 /// machine off; every hit is a mistake or worse.
+///
+/// The verb has to be in command position: a commit message or a document
+/// that merely *mentions* "shutdown" is not a shutdown.
 fn classify_system_shutdown(lower: &str) -> bool {
-    for c in ["shutdown", "reboot", "halt", "poweroff"] {
-        if lower.starts_with(c)
-            || lower.contains(&format!(" {c}"))
-            || lower.contains(&format!(";{c}"))
-        {
+    let tokens: Vec<&str> = tokenize(lower);
+    for v in verbs(&tokens) {
+        // A shutdown *reading a pipe* is meaningless (it takes no stdin), and
+        // that is exactly the shape a quoted alternation takes after
+        // `normalize` strips the quotes: `rg 'shutdown|reboot'` looks like
+        // `rg shutdown | reboot`. Piping in cannot turn the machine off, so
+        // skip that segment rather than refuse a grep.
+        if v > 0 && tokens[v - 1] == "|" {
+            continue;
+        }
+        let verb = verb_text(tokens[v]);
+        if ["shutdown", "reboot", "halt", "poweroff"].contains(&verb) {
             return true;
         }
+        // `init 0` / `init 6` — the runlevel forms.
+        if verb == "init" {
+            let end = segment_end(&tokens, v);
+            if tokens[v + 1..end].iter().any(|t| *t == "0" || *t == "6") {
+                return true;
+            }
+        }
     }
-    lower.contains(" init 0")
-        || lower.starts_with("init 0")
-        || lower.contains(" init 6")
-        || lower.starts_with("init 6")
+    false
 }
 
 /// Broad permission grants — high tier.
@@ -689,6 +876,81 @@ mod tests {
             "grep -r foo .",
         ] {
             assert_eq!(classify(cmd, &z), Verdict::Allow, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn prose_that_mentions_a_disaster_is_not_a_disaster() {
+        // All of these were refused outright: the rules matched substrings
+        // anywhere in the line instead of the **command position**, so quoting
+        // or merely naming a dangerous string looked like running it.
+        let z = zone();
+        for cmd in [
+            "echo 'rm -rf /'",
+            "echo \"rm -rf /etc\"",
+            "git commit -m \"fix socket connect in push\"",
+            "git commit -m \"handle shutdown gracefully\"",
+            "rg 'shutdown|reboot' src/",
+            "grep -rn killall docs/",
+            "echo 'the find ~ -delete example is dangerous'",
+        ] {
+            assert_eq!(classify(cmd, &z), Verdict::Allow, "不该拦: {cmd}");
+        }
+    }
+
+    #[test]
+    fn reading_a_credential_file_is_not_writing_it() {
+        let z = zone();
+        for cmd in [
+            "cp /etc/passwd /tmp/x",
+            "cat /etc/passwd",
+            "grep root /etc/passwd",
+            "diff /etc/passwd /tmp/x",
+            "cp /etc/passwd.bak /tmp/x",
+        ] {
+            assert_eq!(classify(cmd, &z), Verdict::Allow, "读不是写: {cmd}");
+        }
+        // Writing it still blocks, from every direction.
+        for cmd in [
+            "cp /tmp/x /etc/passwd",
+            "mv /etc/passwd /tmp/",
+            "echo x > /etc/passwd",
+            "echo x >> /etc/shadow",
+            "sed -i 's/a/b/' /etc/sudoers",
+            "tee /etc/ssh/sshd_config",
+            "echo x | tee /etc/shadow",
+        ] {
+            assert!(!classify(cmd, &z).allows(), "写必须拦: {cmd}");
+        }
+    }
+
+    #[test]
+    fn rm_targets_stop_at_the_segment_boundary() {
+        // The rm rule read every following token as a target, so a chained
+        // unrelated command looked like an out-of-zone delete.
+        let z = zone();
+        assert_eq!(classify("rm foo.txt && cd /etc", &z), Verdict::Allow);
+        assert_eq!(classify("rm foo.txt; ls /etc", &z), Verdict::Allow);
+        // …while a real delete in the second segment is still caught, glued
+        // separators included.
+        assert!(!classify("cd /tmp && rm -rf /etc", &z).allows());
+        assert!(!classify("x&&rm -rf /etc", &z).allows());
+        assert!(!classify("ls /tmp|rm -rf /etc", &z).allows());
+        assert!(!classify("(rm -rf /etc)", &z).allows());
+    }
+
+    #[test]
+    fn wrappers_and_paths_do_not_launder_the_verb() {
+        let z = zone();
+        for cmd in [
+            "/bin/rm -rf /etc",
+            "command rm -rf /etc",
+            "xargs rm -rf /etc",
+            "bash -c \"rm -rf /etc\"",
+            "sh -c 'shutdown -h now'",
+            "FOO=1 rm -rf /etc",
+        ] {
+            assert!(!classify(cmd, &z).allows(), "必须拦: {cmd}");
         }
     }
 }

@@ -42,6 +42,12 @@ pub struct SessionState {
     // Last turn's usage snapshot, parked for `Commit` to fold into the reply
     // entry the runner assembles (which carries no usage of its own).
     pending_usage: Option<Usage>,
+    // Whether the current round's buffers have already been committed to the
+    // transcript. Set by `finalize_round`, cleared by `start_turn` and by every
+    // event that puts new data into the buffers — that is what makes a second
+    // finalize for the *same* round a no-op while still letting a round that
+    // received more data after an error be stored.
+    round_finalized: bool,
 }
 
 impl SessionState {
@@ -57,6 +63,7 @@ impl SessionState {
             stream: StreamView::default(),
             last_usage: None,
             pending_usage: None,
+            round_finalized: false,
         }
     }
 
@@ -73,6 +80,7 @@ impl SessionState {
     pub fn handle(&mut self, ev: SessionEvent) -> Change {
         match ev {
             SessionEvent::Delta(d) => {
+                self.round_finalized = false; // new data: the round is live again
                 self.stream.reasoning_done = true; // content started; reasoning frozen
                 self.stream.text.push_str(&d);
                 // Content is arriving: it occupies the live row itself.
@@ -80,6 +88,7 @@ impl SessionState {
                 Change::Stream
             }
             SessionEvent::ReasoningDelta(r) => {
+                self.round_finalized = false; // new data: the round is live again
                 // First reasoning chunk of this turn means the server has
                 // started talking — and it is talking about its own thoughts
                 // rather than answering. That is exactly "thinking".
@@ -97,6 +106,7 @@ impl SessionState {
                 text,
                 first,
             } => {
+                self.round_finalized = false; // new data: the round is live again
                 self.stream.live = LiveActivity::Tool {
                     intent: intent.clone(),
                 };
@@ -125,6 +135,7 @@ impl SessionState {
                 ok,
                 result,
             } => {
+                self.round_finalized = false; // new data: the round is live again
                 // The call this row described has landed; the next event
                 // (another tool, or the reply) decides what replaces it.
                 self.stream.live = LiveActivity::Idle;
@@ -217,10 +228,21 @@ impl SessionState {
     /// `usage` is `None` on the error path (the stream died before the
     /// final usage chunk arrived); the reply entry is still written, just
     /// without a stats line.
+    ///
+    /// **Idempotent per round**: the round-limit brake sends `Error` and then
+    /// `TurnDone` for the same round, so this runs twice. The second pass would
+    /// find the buffers already drained and append a phantom `EMPTY_REPLY`
+    /// reply — stored in the DB, so the user would see a bogus bubble after
+    /// every brake. Any event that puts new data in the buffers re-opens the
+    /// round (see `round_finalized`).
     fn finalize_round(&mut self, usage: Option<Usage>) {
+        if self.round_finalized {
+            return;
+        }
+        self.round_finalized = true;
         let content = std::mem::take(&mut self.stream.text);
         let content = if content.is_empty() {
-            "(无输出)".into()
+            crate::entry::EMPTY_REPLY.into()
         } else {
             content
         };
@@ -270,6 +292,7 @@ impl SessionState {
     /// streaming slots. Called by the surface right before spawning the
     /// turn runner — one protocol action instead of three field pokes.
     pub fn start_turn(&mut self, user_text: &str) -> Change {
+        self.round_finalized = false; // a fresh round: nothing committed yet
         let e = Entry::User {
             content: user_text.to_string(),
         };
@@ -455,7 +478,9 @@ pub struct Session {
     tool_filter: Option<Vec<String>>,
     // Tool-layer knobs from config.yaml (`tools:`). Snapshotted per turn;
     // a config edit takes effect on the next turn.
-    tools: crate::agent::tools::ToolsConfig,
+    tools: crate::ai::config::ToolsConfig,
+    // Browser settings for the web tools (config.yaml → `browser:`).
+    browser: crate::ai::config::BrowserConfig,
     // Session DB path (file-backed store): the turn thread opens its
     // own connection from here to spill/fetch artifacts.
     artifact_db: Option<std::path::PathBuf>,
@@ -475,7 +500,8 @@ impl Session {
         cost: crate::ai::config::Cost,
         cwd: std::path::PathBuf,
         tool_filter: Option<Vec<String>>,
-        tools: crate::agent::tools::ToolsConfig,
+        tools: crate::ai::config::ToolsConfig,
+        browser: crate::ai::config::BrowserConfig,
         db_path: Option<std::path::PathBuf>,
     ) -> (Self, std::sync::mpsc::Receiver<SessionEvent>) {
         let (tx, rx) = std::sync::mpsc::channel::<SessionEvent>();
@@ -491,6 +517,7 @@ impl Session {
             tx,
             tool_filter,
             tools,
+            browser,
             artifact_db: db_path,
         };
         (s, rx)
@@ -511,11 +538,7 @@ impl Session {
     ///
     /// Returns false when a turn is already streaming (compaction shares
     /// the busy gate — two writers on one context is a torn read).
-    pub fn run_compact(
-        &mut self,
-        focus: &str,
-        ccfg: &crate::server::compaction::CompactConfig,
-    ) -> bool {
+    pub fn run_compact(&mut self, focus: &str, ccfg: &crate::ai::config::CompactConfig) -> bool {
         if self.state.busy() {
             return false;
         }
@@ -617,6 +640,7 @@ impl Session {
                 ),
                 tool_filter: self.tool_filter.clone(),
                 tools: self.tools.clone(),
+                browser: self.browser.clone(),
                 // Session-scoped artifact store: the turn thread gets its
                 // own WAL-mode connection; a failed open degrades to None
                 // (oversized output then stays verbatim in the context).
@@ -1097,6 +1121,52 @@ mod tests {
         assert_eq!(s.session_name(), Some("branch-name"));
         s.navigate_to(vec![], None);
         assert_eq!(s.session_name(), Some("branch-name"));
+    }
+
+    #[test]
+    fn a_brake_error_followed_by_turn_done_finalizes_once() {
+        // The runner sends Error and then TurnDone for the same round when the
+        // tool-round ceiling fires. The second finalize used to find the
+        // buffers drained and append — and persist — a phantom "(无输出)"
+        // reply, so the user saw a bogus bubble after every brake.
+        let mut s = st();
+        let _ = s.start_turn("问");
+        let _ = s.handle(SessionEvent::Delta("答案".into()));
+        let _ = s.handle(SessionEvent::Error("工具调用轮数撞上限".into()));
+        let _ = s.handle(SessionEvent::TurnDone(
+            Usage::default(),
+            crate::ai::types::StopReason::Stop,
+        ));
+        let replies: Vec<String> = s
+            .transcript()
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Assistant { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(replies, vec!["答案".to_string()], "一轮只应有一条回复");
+    }
+
+    #[test]
+    fn an_empty_reply_persists_the_shared_placeholder() {
+        // The other half of the byte-fidelity contract: whatever the loop puts
+        // in the live context for an empty reply, the entry says the same.
+        let mut s = st();
+        let _ = s.start_turn("问");
+        let _ = s.handle(SessionEvent::TurnDone(
+            Usage::default(),
+            crate::ai::types::StopReason::Stop,
+        ));
+        let reply = s
+            .transcript()
+            .iter()
+            .find_map(|e| match e {
+                Entry::Assistant { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(reply, crate::entry::EMPTY_REPLY);
     }
 
     #[test]

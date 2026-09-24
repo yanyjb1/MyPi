@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use super::super::engine::SearchHit;
 use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
-use crate::web::utils::url::urlencoded;
+use crate::web::utils::url::{percent_decode, urlencoded};
 
 pub(super) const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 const SEARCH_URL: &str = "https://www.bing.com/search";
@@ -46,26 +46,6 @@ fn unwrap_tracking_href(href: &str) -> String {
         return percent_decode(&rest[..end]);
     }
     href
-}
-
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = (bytes[i + 1] as char).to_digit(16);
-            let lo = (bytes[i + 2] as char).to_digit(16);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn base64url_decode(s: &str) -> Option<Vec<u8>> {

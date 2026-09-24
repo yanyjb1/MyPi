@@ -18,6 +18,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 use super::providers::cmd_act;
+use crate::ai::config::BrowserConfig;
 use crate::web::utils::session::Page;
 
 pub(crate) const ACT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -102,8 +103,8 @@ fn cmd_screenshot(page: &Page, args: &BrowserArgs) -> anyhow::Result<String> {
 
 // --- Tool entry --------------------------------------------------------------
 
-pub fn browser(args: &BrowserArgs) -> anyhow::Result<String> {
-    super::super::utils::session::with_work(|page| match args.command.as_str() {
+pub fn browser(args: &BrowserArgs, cfg: &BrowserConfig) -> anyhow::Result<String> {
+    super::super::utils::session::with_work(cfg, |page| match args.command.as_str() {
         "open" => cmd_open(page, args.url.as_deref()),
         "act" => cmd_act(page, args),
         "read" => cmd_read(page, args),

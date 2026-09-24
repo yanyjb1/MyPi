@@ -1,3 +1,4 @@
+use mypi::ai::config::BrowserConfig;
 use mypi::web::fetch::{FetchArgs, fetch};
 fn main() -> anyhow::Result<()> {
     let args = FetchArgs {
@@ -6,7 +7,7 @@ fn main() -> anyhow::Result<()> {
         raw: None,
     };
     let t = std::time::Instant::now();
-    let out = fetch(&args)?;
+    let out = fetch(&args, &BrowserConfig::default())?;
     eprintln!(
         "[elapsed {:.1}s, {} chars]",
         t.elapsed().as_secs_f32(),

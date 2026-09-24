@@ -146,6 +146,32 @@ fn extract_intent(call: &ToolCall) -> String {
         .and_then(|v| v.get("intent").and_then(|i| i.as_str()).map(String::from))
         .unwrap_or_default()
 }
+
+// The reply as it goes into the context — built so that it matches, byte for
+// byte, the entry the session will persist for the same reply.
+//
+// Two deliberate differences from `AssistantMessage::to_message`:
+//  * an empty reply becomes `entry::EMPTY_REPLY` (the session's placeholder),
+//    not `content: null`;
+//  * `drop_calls` strips the tool calls, for replies whose calls are **not
+//    executed** (the round brake). A `tool_calls` message with no matching
+//    `tool` result is rejected outright by strict gateways, and the persisted
+//    entries never carried those calls either — so keeping them would both
+//    break the next request and desynchronize live context from replay.
+fn recorded_message(m: &AssistantMessage, drop_calls: bool) -> Message {
+    Message::Assistant {
+        content: Some(if m.content.is_empty() {
+            crate::entry::EMPTY_REPLY.to_string()
+        } else {
+            m.content.clone()
+        }),
+        tool_calls: if drop_calls {
+            Vec::new()
+        } else {
+            m.tool_calls.clone()
+        },
+    }
+}
 // Run one full turn (see [`ToolEvent`] for the event contract).
 //
 // More than 7 parameters is deliberate: the three callbacks (content /
@@ -191,7 +217,7 @@ pub fn run(
             // projects the persisted entries out of this very context — so
             // without this push, model replies were never persisted at all
             // (the DB held user/tool rows and nothing the model said).
-            ctx.messages.push(assistant.to_message());
+            ctx.messages.push(recorded_message(&assistant, false));
             return Ok(TurnOutcome {
                 message: assistant,
                 tool_calls_made,
@@ -250,13 +276,19 @@ pub fn run(
             // ceiling was hit. The UI must surface this explicitly —
             // otherwise the user just sees a reply that mysteriously
             // stops mid-thought.
+            //
+            // This reply's calls are **never executed** (the brake exists
+            // precisely because the model keeps asking), so they are stripped
+            // from the recorded message: a `tool_calls` message without its
+            // `tool` results is a protocol violation that would make the *next*
+            // turn fail on strict gateways.
             let last = client.stream(
                 ctx,
                 cfg.effective_max_tokens(ctx),
                 &mut on_delta,
                 &mut on_reasoning,
             )?;
-            ctx.messages.push(last.to_message());
+            ctx.messages.push(recorded_message(&last, true));
             return Ok(TurnOutcome {
                 message: last,
                 tool_calls_made,
@@ -374,5 +406,52 @@ mod tests {
         let ctx = Context::new().tool(ToolDef::function("read_file", "读文件", json!({})));
         assert_eq!(ctx.tools.len(), 1);
         assert_eq!(ctx.tools[0].function.name, "read_file");
+    }
+
+    #[test]
+    fn unexecuted_calls_are_stripped_from_the_recorded_reply() {
+        // The round brake: the model asked for a tool, the call was never
+        // executed. Recording it anyway puts a `tool_calls` message with no
+        // matching `tool` result into the history — the next request is then
+        // rejected outright by strict gateways.
+        let m = AssistantMessage {
+            content: "还得再查".into(),
+            tool_calls: vec![ToolCall::new("c9", "bash", "{}")],
+            stop_reason: StopReason::ToolCalls,
+            ..Default::default()
+        };
+        match recorded_message(&m, true) {
+            Message::Assistant {
+                content,
+                tool_calls,
+            } => {
+                assert_eq!(content.as_deref(), Some("还得再查"), "文本必须保留");
+                assert!(tool_calls.is_empty(), "未执行的调用不得进上下文");
+            }
+            other => panic!("{other:?}"),
+        }
+        // An executed round keeps its calls.
+        match recorded_message(&m, false) {
+            Message::Assistant { tool_calls, .. } => assert_eq!(tool_calls.len(), 1),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_empty_reply_is_recorded_as_the_persisted_placeholder() {
+        // Byte fidelity: the session stores `EMPTY_REPLY` for a reply that
+        // arrived empty, so the live context must carry the same string —
+        // otherwise a restart replays different bytes than the request that
+        // produced them (cold prefix cache, and the model sees a history it
+        // never sent).
+        let m = AssistantMessage::default();
+        match recorded_message(&m, false) {
+            Message::Assistant { content, .. } => assert_eq!(
+                content.as_deref(),
+                Some(crate::entry::EMPTY_REPLY),
+                "空回复必须与落盘内容一致"
+            ),
+            other => panic!("{other:?}"),
+        }
     }
 }

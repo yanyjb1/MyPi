@@ -48,7 +48,9 @@ pub struct TurnRequest {
     // output flows into the context verbatim (the pre-artifact behavior).
     pub artifacts: Option<crate::agent::artifacts::ArtifactStore>,
     // Tool-layer knobs (bash timeout, ...) from config.yaml.
-    pub tools: crate::agent::tools::ToolsConfig,
+    pub tools: crate::ai::config::ToolsConfig,
+    // Which browser the web tools drive (config.yaml → `browser:`).
+    pub browser: crate::ai::config::BrowserConfig,
 }
 
 // The background thread runs one turn. Owns its client and message replica.
@@ -67,6 +69,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             tool_filter,
             artifacts,
             tools: tools_cfg,
+            browser,
         } = req;
         let send = |ev: SessionEvent| -> bool { tx.send(ev).is_ok() };
         let chat_arc = chat.clone();
@@ -75,6 +78,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             .with_history(history, cwd_trail)
             .with_artifacts_opt(artifacts)
             .with_bash_timeout(tools_cfg.bash_timeout_secs)
+            .with_browser(browser)
             .with_enabled(tool_filter);
         // Snapshot for this turn: the lock is held only for the clone, never during network I/O
         let mut chat = chat.lock().expect("chat 锁中毒").clone();

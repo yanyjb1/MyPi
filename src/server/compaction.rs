@@ -25,6 +25,7 @@
 
 use anyhow::{Context as _, bail};
 
+use crate::ai::config::CompactConfig;
 use crate::ai::types::Message;
 use crate::entry::Entry;
 
@@ -230,7 +231,7 @@ pub fn compact(
     // The replay request: prefix + compacted region + instruction.
     let live = super::turn::entries_to_context(system, entries);
     let mut req = replay_context(&live);
-    let instruction = render_instruction(&load_instruction(cfg.instruction_file()), focus);
+    let instruction = render_instruction(&load_instruction(cfg.instruction_file.as_deref()), focus);
     // Fill the placeholder user turn.
     let last = req.messages.last_mut().expect("placeholder exists");
     *last = Message::User {
@@ -286,32 +287,6 @@ pub fn compact(
             tail / 4 + summary_chars / 4
         },
     })
-}
-
-/// Knobs, read from `config.yaml → compact`.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(default)]
-pub struct CompactConfig {
-    /// Verbatim tail budget (tokens, approximated). Small values make
-    /// debugging cheap; default is the full-fat 20k.
-    pub retain_tail: usize,
-    /// Optional external instruction file (read fresh at each compaction).
-    pub instruction_file: Option<std::path::PathBuf>,
-}
-
-impl CompactConfig {
-    fn instruction_file(&self) -> Option<&std::path::Path> {
-        self.instruction_file.as_deref()
-    }
-}
-
-impl Default for CompactConfig {
-    fn default() -> Self {
-        Self {
-            retain_tail: 20_000,
-            instruction_file: None,
-        }
-    }
 }
 
 /// The outcome: new live context + the marker to persist + display stats.

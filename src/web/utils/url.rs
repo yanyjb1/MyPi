@@ -17,15 +17,20 @@ pub fn urlencoded(s: &str) -> String {
 }
 
 /// Percent-decode (case-insensitive hex); invalid escapes pass through.
+///
+/// Byte-wise on purpose: an earlier version sliced `&s[i + 1..i + 3]`, which
+/// panics when a `%` is followed by a multi-byte character (the slice lands
+/// inside it) — and search-result URLs are exactly where that happens.
 pub fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &s[i + 1..i + 3];
-            if let Ok(v) = u8::from_str_radix(hex, 16) {
-                out.push(v);
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
                 i += 3;
                 continue;
             }
@@ -107,6 +112,16 @@ mod tests {
     fn percent_decode_case_insensitive() {
         assert_eq!(percent_decode("http%3a%2F%2Fx.y"), "http://x.y");
         assert_eq!(percent_decode("100%"), "100%");
+    }
+
+    #[test]
+    fn percent_decode_survives_multibyte_neighbours() {
+        // A `%` right before a CJK character used to slice through it and panic.
+        assert_eq!(percent_decode("%中"), "%中");
+        assert_eq!(percent_decode("中文%41"), "中文A");
+        assert_eq!(percent_decode("50%25 折扣"), "50% 折扣");
+        // Truncated escape: passes through untouched.
+        assert_eq!(percent_decode("abc%4"), "abc%4");
     }
 
     #[test]

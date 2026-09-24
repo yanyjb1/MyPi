@@ -226,8 +226,28 @@ impl Client {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
-            http: ureq::agent(),
+            http: Self::agent(),
         }
+    }
+
+    // The shared HTTP agent.
+    //
+    // Timeouts are set **only** where they cannot hurt a long generation:
+    //  * connect — a black-holed gateway fails in 30 s instead of hanging;
+    //  * receive-response — headers must arrive within 120 s, which also
+    //    bounds the "gateway accepted but never answered" case that used to
+    //    block the turn thread forever (the interrupt flag is only polled
+    //    from `on_delta`, which never runs while the read is stuck).
+    // There is deliberately **no** body/global timeout: a reply may
+    // legitimately stream for minutes, and a total-body deadline would cut it
+    // off mid-sentence. A stall *after* the headers therefore still blocks the
+    // turn until the socket dies — accepted, documented tradeoff.
+    fn agent() -> ureq::Agent {
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(30)))
+            .timeout_recv_response(Some(std::time::Duration::from_secs(120)))
+            .build()
+            .into()
     }
 
     // Full chat/completions URL.

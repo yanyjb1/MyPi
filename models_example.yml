@@ -23,15 +23,13 @@
 #     hides the spend column entirely.
 
 # ---- Providers -----------------------------------------------------------
-# api is REQUIRED. All providers speak an OpenAI-compatible wire protocol;
-# the value selects vendor-specific deltas on top:
-#   openai-completions — plain OpenAI protocol (default for most gateways)
-#   deepseek           — DeepSeek: reasoning_content streams before content
+# Every provider speaks an OpenAI-compatible wire protocol: baseUrl, api_key,
+# models. (Older files carry an `api: openai-completions` line — it is ignored
+# now; it used to be required for no behavior, so it is no longer asked for.)
 # baseUrl may be written `base_url` — both spellings are accepted.
 # api_key: literal string, or a ${ENV_VAR} reference (resolved at load).
 providers:
   local:
-    api: openai-completions
     baseUrl: http://localhost:7863/v1
     apiKey: ""                       # empty = no auth header
     # Models this provider serves — nested, ids are provider-internal.
@@ -59,7 +57,6 @@ providers:
           cacheWrite: 0.0
 
   vendor:
-    api: openai-completions
     baseUrl: https://gateway.example.com:4000/v1
     apiKey: ${VENDOR_API_KEY}        # reference the env var, never commit keys
     models:

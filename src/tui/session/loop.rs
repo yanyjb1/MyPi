@@ -199,6 +199,7 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
         cwd.clone(),
         tool_filter,
         cfg.borrow().app.tools.clone(),
+        cfg.borrow().app.browser.clone(),
         Some(db_path()),
     );
     let mut app = App::new(session, current_model);
