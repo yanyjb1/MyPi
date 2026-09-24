@@ -76,6 +76,13 @@ impl Store {
                 ts          TEXT NOT NULL,
                 cwd         TEXT NOT NULL,
                 PRIMARY KEY (session_id, seq)
+            );
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id          INTEGER PRIMARY KEY,
+                session_id  INTEGER NOT NULL REFERENCES sessions(id),
+                name        TEXT NOT NULL,
+                total_lines INTEGER NOT NULL,
+                content     TEXT NOT NULL
             );",
         )?;
         // Schema upgrade: add the cwd column to old databases (NULL = unrecorded)
@@ -176,7 +183,11 @@ impl Store {
         // advances to the last appended row — one transaction makes
         // "where is the tip" and "what was appended" atomic.
         let leaf: Option<i64> = tx
-            .query_row("SELECT leaf FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+            .query_row(
+                "SELECT leaf FROM sessions WHERE id = ?1",
+                [session_id],
+                |r| r.get(0),
+            )
             .context("failed to query leaf")?;
         let next: i64 = tx
             .query_row(
@@ -196,7 +207,10 @@ impl Store {
             )?;
             parent = Some(next + i as i64);
         }
-        tx.execute("UPDATE sessions SET leaf = ?1 WHERE id = ?2", rusqlite::params![parent, session_id])?;
+        tx.execute(
+            "UPDATE sessions SET leaf = ?1 WHERE id = ?2",
+            rusqlite::params![parent, session_id],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -204,10 +218,7 @@ impl Store {
     // Load the projected path (root → leaf) of a session. The tree is
     // append-only, so "the conversation" is whatever chain the leaf
     // pointer currently names; abandoned branches stay stored but off-path.
-    pub fn load_entries(
-        &self,
-        session_id: i64,
-    ) -> Result<Vec<crate::entry::Entry>> {
+    pub fn load_entries(&self, session_id: i64) -> Result<Vec<crate::entry::Entry>> {
         let mut stmt = self.conn.prepare(
             "WITH RECURSIVE path(seq) AS (
                  SELECT leaf FROM sessions WHERE id = ?1
@@ -276,7 +287,12 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (seq, parent_seq, kind, payload) = row?;
-            out.push(TreeNode { seq, parent_seq, kind, payload });
+            out.push(TreeNode {
+                seq,
+                parent_seq,
+                kind,
+                payload,
+            });
         }
         Ok(out)
     }
@@ -292,14 +308,22 @@ impl Store {
             }
         }
         self.conn
-            .query_row("SELECT name FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+            .query_row(
+                "SELECT name FROM sessions WHERE id = ?1",
+                [session_id],
+                |r| r.get(0),
+            )
             .map_err(Into::into)
     }
 
     // Current tip row of a session.
     pub fn get_leaf(&self, session_id: i64) -> Result<Option<i64>> {
         self.conn
-            .query_row("SELECT leaf FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+            .query_row(
+                "SELECT leaf FROM sessions WHERE id = ?1",
+                [session_id],
+                |r| r.get(0),
+            )
             .map_err(Into::into)
     }
 
@@ -363,12 +387,63 @@ impl Store {
 
     // The session cwd migration history (seq ascending). seq 0 = session origin.
     pub fn cwd_history(&self, session_id: i64) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT seq, cwd FROM cwd_history WHERE session_id = ?1 ORDER BY seq",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, cwd FROM cwd_history WHERE session_id = ?1 ORDER BY seq")?;
         let rows = stmt.query_map([session_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    // ---- artifacts: oversized tool outputs stored out-of-band ----
+    //
+    // A tool result above the threshold is stored here whole; the context
+    // gets a one-line placeholder with the artifact id, and the model pulls
+    // content back through `#id` virtual files in bash. Sessions delete
+    // their artifacts with them.
+
+    /// Store an oversized tool output; returns its artifact id.
+    pub fn put_artifact(&mut self, session_id: i64, name: &str, content: &str) -> Result<i64> {
+        let lines = content.lines().count() as i64;
+        self.conn.execute(
+            "INSERT INTO artifacts (session_id, name, total_lines, content) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![session_id, name, lines, content],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Fetch one artifact (whole content + metadata). Caller checks the
+    /// session id owns it before handing bytes to anyone.
+    pub fn get_artifact(&self, id: i64, session_id: i64) -> Result<Option<(String, i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, total_lines, content FROM artifacts WHERE id = ?1 AND session_id = ?2",
+        )?;
+        let mut rows = stmt.query_map([id, session_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Delete a session and everything hanging off it (entries, cwd
+    /// history, artifacts). Returns whether a session row was removed.
+    pub fn delete_session(&mut self, session_id: i64) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        for table in ["entries", "cwd_history", "artifacts"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE session_id = ?1"),
+                [session_id],
+            )?;
+        }
+        let n = tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        tx.commit()?;
+        Ok(n > 0)
     }
 }
 
@@ -400,7 +475,12 @@ pub fn display_name(meta: &SessionMeta, first_user: Option<&str>) -> String {
     if t.len() >= 19 {
         format!(
             "{}-{}:{}-{}{}+{}",
-            &t[5..7], &t[8..10], &t[11..13], &t[14..16], &t[17..19], prefix
+            &t[5..7],
+            &t[8..10],
+            &t[11..13],
+            &t[14..16],
+            &t[17..19],
+            prefix
         )
     } else {
         format!("?+{prefix}")
@@ -422,15 +502,26 @@ mod tests {
         let mut s = mem_store();
         let id = s.create_session("2026-09-22 14:30:05", "/tmp").unwrap();
         let entries = vec![
-            Entry::User { content: "你好\n世界".into() },
-            Entry::ToolRequest { call_id: "c1".into(), name: "edit".into(), args: r#"{"path":"./a.txt"}"#.into(), intent: String::new() },
+            Entry::User {
+                content: "你好\n世界".into(),
+            },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "edit".into(),
+                args: r#"{"path":"./a.txt"}"#.into(),
+                intent: String::new(),
+            },
             Entry::ToolResult {
                 call_id: "c1".into(),
                 name: "edit".into(),
                 ok: true,
                 result: "已替换：./a.txt".into(),
             },
-            Entry::Assistant { content: "改好了".into(), usage: None, reasoning: None },
+            Entry::Assistant {
+                content: "改好了".into(),
+                usage: None,
+                reasoning: None,
+            },
         ];
         s.append(id, &entries).unwrap();
         let back = s.load_entries(id).unwrap();
@@ -441,14 +532,36 @@ mod tests {
     fn seq_is_monotonic_across_turns() {
         let mut s = mem_store();
         let id = s.create_session("t", "/tmp").unwrap();
-        s.append(id, &[Entry::User { content: "一".into() }]).unwrap();
-        s.append(id, &[Entry::User { content: "二".into() }]).unwrap();
-        let n: i64 = s.conn
-            .query_row("SELECT COUNT(*) FROM entries WHERE session_id = ?1", [id], |r| r.get(0))
+        s.append(
+            id,
+            &[Entry::User {
+                content: "一".into(),
+            }],
+        )
+        .unwrap();
+        s.append(
+            id,
+            &[Entry::User {
+                content: "二".into(),
+            }],
+        )
+        .unwrap();
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM entries WHERE session_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 2);
-        let max: i64 = s.conn
-            .query_row("SELECT MAX(seq) FROM entries WHERE session_id = ?1", [id], |r| r.get(0))
+        let max: i64 = s
+            .conn
+            .query_row(
+                "SELECT MAX(seq) FROM entries WHERE session_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(max, 2, "seq must increment contiguously across rounds");
     }
@@ -466,10 +579,22 @@ mod tests {
 
     #[test]
     fn display_name_follows_the_spec() {
-        let m = SessionMeta { cwd: None, id: 1, name: None, started_at: "2026-09-22 14:30:05".into() };
-        assert_eq!(display_name(&m, Some("红鲤鱼与绿鲤鱼")),
-                   "09-22:14-3005+红鲤鱼与绿鲤鱼");
-        let named = SessionMeta { cwd: None, id: 1, name: Some("正式名".into()), started_at: "2026-09-22 14:30:05".into() };
+        let m = SessionMeta {
+            cwd: None,
+            id: 1,
+            name: None,
+            started_at: "2026-09-22 14:30:05".into(),
+        };
+        assert_eq!(
+            display_name(&m, Some("红鲤鱼与绿鲤鱼")),
+            "09-22:14-3005+红鲤鱼与绿鲤鱼"
+        );
+        let named = SessionMeta {
+            cwd: None,
+            id: 1,
+            name: Some("正式名".into()),
+            started_at: "2026-09-22 14:30:05".into(),
+        };
         assert_eq!(display_name(&named, None), "正式名");
     }
 
@@ -477,7 +602,13 @@ mod tests {
     fn unknown_kind_is_skipped_not_fatal() {
         let mut s = mem_store();
         let id = s.create_session("t", "/tmp").unwrap();
-        s.append(id, &[Entry::User { content: "x".into() }]).unwrap();
+        s.append(
+            id,
+            &[Entry::User {
+                content: "x".into(),
+            }],
+        )
+        .unwrap();
         // Insert an unknown kind by hand (simulating a future version's write)
         s.conn
             .execute(
@@ -509,7 +640,9 @@ mod tests {
         let mut s = mem_store();
         let a = s.create_session("t", "/home/u/projA").unwrap();
         let _b = s.create_session("t", "/home/u/projB").unwrap();
-        let under_a = s.list_sessions_under(std::path::Path::new("/home/u/projA")).unwrap();
+        let under_a = s
+            .list_sessions_under(std::path::Path::new("/home/u/projA"))
+            .unwrap();
         assert_eq!(under_a.len(), 1, "only sessions created under projA");
         assert_eq!(under_a[0].id, a);
     }
@@ -521,13 +654,28 @@ mod tree_tests {
     use crate::entry::Entry;
 
     fn mem() -> Store {
-        let dir = std::env::temp_dir().join(format!("mypi-tree-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
+        let dir = std::env::temp_dir().join(format!(
+            "mypi-tree-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         Store::open(&dir.join("t.db")).unwrap()
     }
 
-    fn user(t: &str) -> Entry { Entry::User { content: t.into() } }
-    fn assistant(t: &str) -> Entry { Entry::Assistant { content: t.into(), usage: None, reasoning: None } }
+    fn user(t: &str) -> Entry {
+        Entry::User { content: t.into() }
+    }
+    fn assistant(t: &str) -> Entry {
+        Entry::Assistant {
+            content: t.into(),
+            usage: None,
+            reasoning: None,
+        }
+    }
 
     #[test]
     fn append_hangs_off_leaf_and_advances_it() {
@@ -540,9 +688,9 @@ mod tree_tests {
         let tree = s.load_tree(id).unwrap();
         assert_eq!(leaf, Some(3));
         assert_eq!(tree.len(), 3);
-        assert_eq!(tree[0].parent_seq, None);     // root has no parent
-        assert_eq!(tree[1].parent_seq, Some(1));  // b hangs off a
-        assert_eq!(tree[2].parent_seq, Some(2));  // c hangs off b
+        assert_eq!(tree[0].parent_seq, None); // root has no parent
+        assert_eq!(tree[1].parent_seq, Some(1)); // b hangs off a
+        assert_eq!(tree[2].parent_seq, Some(2)); // c hangs off b
     }
 
     #[test]
@@ -556,20 +704,28 @@ mod tree_tests {
         s.append(id, &[assistant("new-1")]).unwrap();
         // Projected path: a, new-1. Old branch rows still exist on disk.
         let entries = s.load_entries(id).unwrap();
-        let texts: Vec<&str> = entries.iter().map(|e| match e {
-            Entry::User { content } | Entry::Assistant { content, .. } => content.as_str(),
-            _ => "",
-        }).collect();
+        let texts: Vec<&str> = entries
+            .iter()
+            .map(|e| match e {
+                Entry::User { content } | Entry::Assistant { content, .. } => content.as_str(),
+                _ => "",
+            })
+            .collect();
         assert_eq!(texts, vec!["a", "new-1"]);
         let tree = s.load_tree(id).unwrap();
-        assert_eq!(tree.len(), 4);            // nothing deleted
+        assert_eq!(tree.len(), 4); // nothing deleted
         assert_eq!(tree[3].parent_seq, Some(1)); // new-1 forks from a
         // Old branch still fully loadable by pointing back at it.
         s.set_leaf(id, Some(3)).unwrap();
-        let texts_old: Vec<String> = s.load_entries(id).unwrap().iter().map(|e| match e {
-            Entry::User { content } | Entry::Assistant { content, .. } => content.clone(),
-            _ => String::new(),
-        }).collect();
+        let texts_old: Vec<String> = s
+            .load_entries(id)
+            .unwrap()
+            .iter()
+            .map(|e| match e {
+                Entry::User { content } | Entry::Assistant { content, .. } => content.clone(),
+                _ => String::new(),
+            })
+            .collect();
         assert_eq!(texts_old, vec!["a", "old-1", "old-2"]);
     }
 
@@ -584,10 +740,13 @@ mod tree_tests {
         assert_eq!(tree.len(), 2);
         assert_eq!(tree[1].parent_seq, None); // second root — pi's resetLeaf semantic
         let entries = s.load_entries(id).unwrap();
-        let texts: Vec<&str> = entries.iter().map(|e| match e {
-            Entry::User { content } => content.as_str(),
-            _ => "",
-        }).collect();
+        let texts: Vec<&str> = entries
+            .iter()
+            .map(|e| match e {
+                Entry::User { content } => content.as_str(),
+                _ => "",
+            })
+            .collect();
         assert_eq!(texts, vec!["b"]);
     }
 
@@ -609,11 +768,14 @@ mod tree_tests {
         let s = Store::open(&db).unwrap();
         // Projection over backfilled parents yields the original linear order.
         let entries = s.load_entries(1).unwrap();
-        let texts: Vec<&str> = entries.iter().map(|e| match e {
-            Entry::User { content } => content.as_str(),
-            Entry::Assistant { content, .. } => content.as_str(),
-            _ => "",
-        }).collect();
+        let texts: Vec<&str> = entries
+            .iter()
+            .map(|e| match e {
+                Entry::User { content } => content.as_str(),
+                Entry::Assistant { content, .. } => content.as_str(),
+                _ => "",
+            })
+            .collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert_eq!(s.get_leaf(1).unwrap(), Some(2));
     }
@@ -626,17 +788,47 @@ mod name_tests {
 
     #[test]
     fn name_marker_round_trips_and_resolves() {
-        let dir = std::env::temp_dir().join(format!("mypi-name-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
+        let dir = std::env::temp_dir().join(format!(
+            "mypi-name-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let mut s = Store::open(&dir.join("n.db")).unwrap();
         let id = s.create_session("t", "/").unwrap();
-        s.append(id, &[Entry::User { content: "a".into() }]).unwrap();
-        s.append(id, &[Entry::Name { name: "我的分支".into() }]).unwrap();
-        s.append(id, &[Entry::Assistant { content: "b".into(), usage: None, reasoning: None }]).unwrap();
+        s.append(
+            id,
+            &[Entry::User {
+                content: "a".into(),
+            }],
+        )
+        .unwrap();
+        s.append(
+            id,
+            &[Entry::Name {
+                name: "我的分支".into(),
+            }],
+        )
+        .unwrap();
+        s.append(
+            id,
+            &[Entry::Assistant {
+                content: "b".into(),
+                usage: None,
+                reasoning: None,
+            }],
+        )
+        .unwrap();
         // Projection skips name in protocol; effective_name picks the nearest marker.
         assert_eq!(s.effective_name(id).unwrap().as_deref(), Some("我的分支"));
         // Round-trip through payload
         let (kind, payload) = Entry::Name { name: "x".into() }.to_payload();
-        assert_eq!(Entry::from_payload(kind, &payload).unwrap(), Entry::Name { name: "x".into() });
+        assert_eq!(
+            Entry::from_payload(kind, &payload).unwrap(),
+            Entry::Name { name: "x".into() }
+        );
     }
 }

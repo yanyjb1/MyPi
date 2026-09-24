@@ -48,7 +48,10 @@ fn resolve_file(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBuf> 
         return Err(anyhow!("file not found: {}", p.display()));
     }
     if p.is_dir() {
-        return Err(anyhow!("{} is a directory; only files can be edited", p.display()));
+        return Err(anyhow!(
+            "{} is a directory; only files can be edited",
+            p.display()
+        ));
     }
     Ok(p)
 }
@@ -128,14 +131,39 @@ fn parse_bash_args(raw: &str) -> Result<String> {
 // deletes and classic disasters (see agent/bash_guard.rs).
 
 // Gatekeeper and executor for the bash tool.
-fn bash(cwd: &std::path::Path, command: &str) -> Result<String> {
+//
+// `artifacts` (when attached) powers the #N virtual-file syntax: every
+// standalone `#N` token is rewritten to a temp file holding artifact N's
+// content, and the command may itself produce a new artifact if its
+// output overflows the spill threshold.
+fn bash(
+    cwd: &std::path::Path,
+    command: &str,
+    artifacts: Option<&crate::server::artifacts::ArtifactStore>,
+) -> Result<String> {
     let cmd = command.trim();
     anyhow::ensure!(!cmd.is_empty(), "empty command");
     anyhow::ensure!(!cmd.contains('\n'), "one command at a time (no newlines)");
 
-    // Guard before spawn. The zone is canonicalized cwd.
+    // #N virtual files: rewrite before the guard (rewritten paths are
+    // read-only temp files in a private dir; the guard reads them like
+    // any other path).
+    let (cmd, tmp_dir) = match artifacts {
+        Some(a) => {
+            let (c, dir) = crate::server::artifacts::resolve_refs(cmd, a)?;
+            (c, dir) // dir: Option<PathBuf> — None when no refs resolved
+        }
+        None => (cmd.to_string(), None),
+    };
+    debug_assert!(
+        tmp_dir
+            .as_deref()
+            .map(|d| d != std::env::temp_dir())
+            .unwrap_or(true),
+        "temp dir must be a dedicated subdir, never /tmp itself"
+    );
     let zone = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    match crate::agent::bash_guard::classify(cmd, &zone) {
+    let result = match crate::agent::bash_guard::classify(&cmd, &zone) {
         crate::agent::bash_guard::Verdict::Block(hits) => {
             let ids: Vec<&str> = hits.iter().map(|h| h.rule_id).collect();
             anyhow::bail!("denied: {}", ids.join("+"));
@@ -143,11 +171,26 @@ fn bash(cwd: &std::path::Path, command: &str) -> Result<String> {
         crate::agent::bash_guard::Verdict::Warn(hits) => {
             // High-tier: run, but tag the output so the model sees it.
             let tags: Vec<&str> = hits.iter().map(|h| h.rule_id).collect();
-            let out = run_shell(cwd, cmd)?;
+            let out = run_shell(cwd, &cmd)?;
             Ok(format!("[warn: {}]\n{}", tags.join("+"), out))
         }
-        crate::agent::bash_guard::Verdict::Allow => run_shell(cwd, cmd),
+        crate::agent::bash_guard::Verdict::Allow => run_shell(cwd, &cmd),
+    };
+    if let Some(dir) = tmp_dir {
+        let _ = std::fs::remove_dir_all(dir); // temp materializations die with the command
     }
+    let out = result?;
+    // Spill: an overflowing output becomes an artifact; the context gets
+    // the placeholder (which itself references #id for further use).
+    if let Some(a) = artifacts
+        && crate::server::artifacts::over_threshold(&out)
+    {
+        let (id, total) = a.spill("bash", &out)?;
+        return Ok(crate::server::artifacts::placeholder(
+            id, "bash", total, &out,
+        ));
+    }
+    Ok(out)
 }
 
 // bash -c execution with captured output. One command, no newlines —
@@ -188,7 +231,7 @@ fn parse_cd_args(raw: &str) -> Result<String> {
 
 impl BuiltinTools {
     // cd tool: temporary migration. Writes back to the shared slot (when
-// attached) and returns a result description.
+    // attached) and returns a result description.
     fn tool_cd(&mut self, path: &str) -> Result<String> {
         let p = path.trim();
         anyhow::ensure!(!p.is_empty(), "empty path");
@@ -304,7 +347,8 @@ pub fn parse_mass_edit_args(arguments: &str) -> Result<MassEditArgs> {
             .map(|l| {
                 let line = l
                     .as_u64()
-                    .ok_or_else(|| anyhow!("non-numeric entry in `lines`"))? as usize;
+                    .ok_or_else(|| anyhow!("non-numeric entry in `lines`"))?
+                    as usize;
                 if line == 0 {
                     return Err(anyhow!("行号从 1 开始，收到 0"));
                 }
@@ -348,7 +392,10 @@ pub fn mass_edit(cwd: &std::path::Path, args: &MassEditArgs) -> Result<String> {
         }
     }
     if let Some(e) = edits.last().filter(|e| e.line > total) {
-        return Err(anyhow!("line {} does not exist; file has {total} lines", e.line));
+        return Err(anyhow!(
+            "line {} does not exist; file has {total} lines",
+            e.line
+        ));
     }
 
     let mut changed = 0usize;
@@ -379,17 +426,33 @@ pub struct BuiltinTools {
     // statusline and the next turn's tools).
     // None = not attached (unit tests); migration then affects only this turn.
     cwd_slot: Option<std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>>,
+    // Oversized tool outputs spill here. None = artifact mode off (unit
+    // tests, or no DB): results pass through untruncated as before.
+    artifacts: Option<crate::server::artifacts::ArtifactStore>,
 }
 
 impl BuiltinTools {
     pub fn new(cwd: std::path::PathBuf) -> Self {
-        Self { cwd, cwd_slot: None }
+        Self {
+            cwd,
+            cwd_slot: None,
+            artifacts: None,
+        }
     }
 
     // Attach the shared cwd slot: cd migrations become visible to the
     // TUI and subsequent turns immediately.
-    pub fn with_cwd_slot(mut self, slot: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>) -> Self {
+    pub fn with_cwd_slot(
+        mut self,
+        slot: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+    ) -> Self {
         self.cwd_slot = Some(slot);
+        self
+    }
+
+    // Attach the artifact spill store (session-scoped, DB-backed).
+    pub fn with_artifacts(mut self, store: crate::server::artifacts::ArtifactStore) -> Self {
+        self.artifacts = Some(store);
         self
     }
 
@@ -541,7 +604,11 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
         match call.name() {
             "edit" => edit(&self.cwd, &parse_edit_args(&call.function.arguments)?),
             "mass_edit" => mass_edit(&self.cwd, &parse_mass_edit_args(&call.function.arguments)?),
-            "bash" => bash(&self.cwd, &parse_bash_args(&call.function.arguments)?),
+            "bash" => bash(
+                &self.cwd,
+                &parse_bash_args(&call.function.arguments)?,
+                self.artifacts.as_ref(),
+            ),
             "read" => read(&self.cwd, &parse_read_args(&call.function.arguments)?),
             "cd" => self.tool_cd(&parse_cd_args(&call.function.arguments)?),
             "fetch" => {
@@ -564,8 +631,8 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::loop_rs::ToolExecutor as _;
+    use super::*;
     use serde_json::json;
     use std::path::Path;
 
@@ -627,7 +694,11 @@ mod tests {
         let err = format!("{:#}", edit(&d, &args).unwrap_err());
         assert!(err.contains("2 times"), "{err}");
         assert!(err.contains("mass_edit"), "要把出路指给模型: {err}");
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "红鲤鱼与红鲤鱼\n", "不能改");
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "红鲤鱼与红鲤鱼\n",
+            "不能改"
+        );
     }
 
     #[test]
@@ -690,13 +761,22 @@ mod tests {
         let args = MassEditArgs {
             path: "a.txt".into(),
             edits: vec![
-                LineEdit { line: 1, text: "绿鲤鱼".into() },
-                LineEdit { line: 3, text: "绿鲤鱼".into() },
+                LineEdit {
+                    line: 1,
+                    text: "绿鲤鱼".into(),
+                },
+                LineEdit {
+                    line: 3,
+                    text: "绿鲤鱼".into(),
+                },
             ],
         };
         mass_edit(&d, &args).unwrap();
         // Whole-line replacement: overwrite regardless of the previous content
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "绿鲤鱼\n绿鲤鱼\n绿鲤鱼\n");
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "绿鲤鱼\n绿鲤鱼\n绿鲤鱼\n"
+        );
     }
 
     #[test]
@@ -709,8 +789,14 @@ mod tests {
         let args = MassEditArgs {
             path: "a.txt".into(),
             edits: vec![
-                LineEdit { line: 5, text: "E".into() },
-                LineEdit { line: 2, text: "B".into() },
+                LineEdit {
+                    line: 5,
+                    text: "E".into(),
+                },
+                LineEdit {
+                    line: 2,
+                    text: "B".into(),
+                },
             ],
         };
         mass_edit(&d, &args).unwrap();
@@ -726,8 +812,14 @@ mod tests {
         let args = MassEditArgs {
             path: "a.txt".into(),
             edits: vec![
-                LineEdit { line: 2, text: "x".into() },
-                LineEdit { line: 2, text: "y".into() },
+                LineEdit {
+                    line: 2,
+                    text: "x".into(),
+                },
+                LineEdit {
+                    line: 2,
+                    text: "y".into(),
+                },
             ],
         };
         let err = format!("{:#}", mass_edit(&d, &args).unwrap_err());
@@ -735,7 +827,10 @@ mod tests {
 
         let args = MassEditArgs {
             path: "a.txt".into(),
-            edits: vec![LineEdit { line: 9, text: "x".into() }],
+            edits: vec![LineEdit {
+                line: 9,
+                text: "x".into(),
+            }],
         };
         let err = format!("{:#}", mass_edit(&d, &args).unwrap_err());
         assert!(err.contains("9"), "{err}");
@@ -744,14 +839,26 @@ mod tests {
     #[test]
     fn mass_edit_parses_both_argument_shapes() {
         let a = parse_mass_edit_args(r#"{"path":"p","edits":[{"line":3,"text":"t"}]}"#).unwrap();
-        assert_eq!(a.edits, vec![LineEdit { line: 3, text: "t".into() }]);
+        assert_eq!(
+            a.edits,
+            vec![LineEdit {
+                line: 3,
+                text: "t".into()
+            }]
+        );
 
         let b = parse_mass_edit_args(r#"{"path":"p","lines":[1,2],"text":"x"}"#).unwrap();
         assert_eq!(
             b.edits,
             vec![
-                LineEdit { line: 1, text: "x".into() },
-                LineEdit { line: 2, text: "x".into() },
+                LineEdit {
+                    line: 1,
+                    text: "x".into()
+                },
+                LineEdit {
+                    line: 2,
+                    text: "x".into()
+                },
             ]
         );
 
@@ -775,9 +882,14 @@ mod tests {
         std::fs::write(d.join("a.txt"), "红鲤鱼\n").unwrap();
         let mut t = BuiltinTools::new(d.clone());
 
-        let call = ToolCall::new("c1", "edit", json!({
-            "path": "a.txt", "old": "红鲤鱼", "new": "绿鲤鱼"
-        }).to_string());
+        let call = ToolCall::new(
+            "c1",
+            "edit",
+            json!({
+                "path": "a.txt", "old": "红鲤鱼", "new": "绿鲤鱼"
+            })
+            .to_string(),
+        );
         let out = t.execute(&call).unwrap();
         assert!(out.contains("replaced"));
 
@@ -793,7 +905,14 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "read", "edit", "cd", "bash", "mass_edit", "fetch", "browser", "search"
+                "read",
+                "edit",
+                "cd",
+                "bash",
+                "mass_edit",
+                "fetch",
+                "browser",
+                "search"
             ]
         );
         // The schema must declare required fields, or the model omits arguments
@@ -836,7 +955,7 @@ mod tests {
             "ls\nrm -rf /",
             "",
         ] {
-            assert!(bash(&cwd, bad).is_err(), "应拒绝: {bad:?}");
+            assert!(bash(&cwd, bad, None).is_err(), "应拒绝: {bad:?}");
         }
     }
 
@@ -850,11 +969,14 @@ mod tests {
         // From zone_a, deleting into zone_b is out of zone.
         let p = other.join("victim.txt");
         std::fs::write(&p, "x").unwrap();
-        assert!(bash(&d, &format!("rm {}", p.display())).is_err());
+        assert!(bash(&d, &format!("rm {}", p.display()), None).is_err());
         // cd into zone_b: now licensed there.
         t.tool_cd(other.to_str().unwrap()).unwrap();
         let cwd = t.cwd.clone();
-        assert!(bash(&cwd, &format!("rm {}", p.display())).is_ok(), "cd 后新许可区应放行");
+        assert!(
+            bash(&cwd, &format!("rm {}", p.display()), None).is_ok(),
+            "cd 后新许可区应放行"
+        );
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::remove_dir_all(&other);
     }
@@ -863,13 +985,13 @@ mod tests {
     fn bash_real_shell_inside_zone() {
         let cwd = std::env::temp_dir();
         // Pipes/redirects run free inside the zone.
-        let out = bash(&cwd, "echo hello | tr a-z A-Z").unwrap();
+        let out = bash(&cwd, "echo hello | tr a-z A-Z", None).unwrap();
         assert!(out.contains("HELLO"), "管道可用: {out:?}");
         // grep with no match -> exit 1, reported verbatim
-        let out = bash(&cwd, "grep zzzz /dev/null").unwrap();
+        let out = bash(&cwd, "grep zzzz /dev/null", None).unwrap();
         assert!(out.contains("[exit"), "非零退出要标注: {out:?}");
         // High tier warns but executes.
-        let out = bash(&cwd, "echo ok").unwrap_or_default();
+        let out = bash(&cwd, "echo ok", None).unwrap_or_default();
         assert_eq!(out, "ok");
     }
 
@@ -885,7 +1007,10 @@ mod tests {
         let call = ToolCall {
             id: "1".into(),
             kind: "function".into(),
-            function: crate::ai::types::FunctionCall { name: "cd".into(), arguments: arg },
+            function: crate::ai::types::FunctionCall {
+                name: "cd".into(),
+                arguments: arg,
+            },
         };
         let r = crate::agent::loop_rs::ToolExecutor::execute(&mut t, &call).unwrap();
         assert!(r.contains("changed to"), "结果说明: {r:?}");

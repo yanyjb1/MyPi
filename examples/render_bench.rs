@@ -52,14 +52,15 @@ fn main() {
         let n = bench::block_count(&entries);
         let t1 = Instant::now();
         // First frame: bottom window (what a launched TUI paints).
-        let (rows, cached_rows, cached_blocks) =
+        let (rows, _cached_rows, cached_blocks) =
             bench::window_bottom(&mut cache, &entries, 0, VIEWPORT, WIDTH);
         let t_first = t1.elapsed();
         println!(
-            "cold:        load {:>7.2} ms + first-frame {:>7.2} ms  ({} blocks, {} rows painted)",
+            "cold:        load {:>7.2} ms + first-frame {:>7.2} ms  ({} blocks, {} cached, {} rows painted)",
             t_load.as_secs_f64() * 1e3,
             t_first.as_secs_f64() * 1e3,
             n,
+            cached_blocks,
             rows.len()
         );
     }
@@ -132,7 +133,6 @@ fn main() {
     if only.is_none() || only == Some("typing") {
         let entries = load_entries();
         let mut cache = bench::BlockCache::new_public();
-        let n = bench::block_count(&entries);
         let _ = bench::window_bottom(&mut cache, &entries, 0, VIEWPORT, WIDTH);
 
         // A keystroke re-renders the bottom window (cache hits). The input
