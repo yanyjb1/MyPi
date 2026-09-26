@@ -1,16 +1,18 @@
-use mypi::agent::loop_rs::ToolExecutor;
-use mypi::agent::tools::BuiltinTools;
+use mypi::server::agent::loop_rs::ToolExecutor;
+use mypi::server::agent::tools::BuiltinTools;
 use serde_json::json;
 
 fn call(tools: &mut BuiltinTools, name: &str, args: serde_json::Value) -> anyhow::Result<String> {
-    tools.execute(&mypi::ai::types::ToolCall {
-        id: "e".into(),
-        kind: "function".into(),
-        function: mypi::ai::types::FunctionCall {
-            name: name.into(),
-            arguments: args.to_string(),
-        },
-    })
+    Ok(tools
+        .execute(&mypi::server::ai::types::ToolCall {
+            id: "e".into(),
+            kind: "function".into(),
+            function: mypi::server::ai::types::FunctionCall {
+                name: name.into(),
+                arguments: args.to_string(),
+            },
+        }, &mut |_| {})?
+        .text)
 }
 
 fn main() -> anyhow::Result<()> {

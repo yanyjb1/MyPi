@@ -10,8 +10,8 @@
 //!   renderer reacts (redraw, scroll pin) without learning *how* the
 //!   state mutated internally.
 
-use crate::ai::types::{StopReason, Usage};
-use crate::entry::Entry;
+use crate::server::ai::types::{StopReason, Usage};
+use crate::server::entry::Entry;
 
 /// Events the session service consumes, in order.
 ///
@@ -38,12 +38,34 @@ pub enum SessionEvent {
         text: String,
         first: bool,
     },
+    /// A running tool reported something (see `loop_rs::ToolProgress`).
+    ///
+    /// Unlike the reply deltas this is **not** reply text: it is the tool's own
+    /// narration of what it is doing right now (a command's output so far, a
+    /// wait's reason). It reaches the live row / the pending card, never the
+    /// transcript, and it is never sent to the model.
+    ToolProgress {
+        call_id: String,
+        chunk: String,
+    },
+    /// The `todo` tool changed the list. The session records it as an
+    /// [`Entry::Todo`] — the state the model's own memo lives in, which is why
+    /// it is persisted rather than derived from the tool result.
+    Todo { phases: Vec<crate::server::entry::TodoPhase> },
     /// A tool finished executing.
+    ///
+    /// `result` is the model-facing text. `details` is the tool's structured
+    /// payload for front ends — the data a renderer draws from instead of
+    /// re-parsing prose (see `loop_rs::ToolOutput`); `None` when the tool had
+    /// nothing structured to say. `duration_ms` is measured by the loop, so
+    /// it is present for every tool whether or not the tool tracks time.
     ToolFinish {
         call_id: String,
         name: String,
         ok: bool,
         result: String,
+        details: Option<serde_json::Value>,
+        duration_ms: u64,
     },
     /// An error occurred. If a turn is streaming, this is a mid-flight
     /// death (network drop, malformed stream): whatever the turn produced
@@ -69,12 +91,28 @@ pub enum SessionEvent {
     /// /cd landed: persist the migrated working directory under `seq`.
     /// Pure bookkeeping — no transcript change.
     SetCwd { seq: i64, path: String },
+    /// The request header of the round that is about to start: everything the
+    /// gateway will see that is **not** part of the transcript — model id,
+    /// protocol, endpoint, system prompt, tool manuals, token ceiling.
+    ///
+    /// Sent by the turn runner *before* the first request of the round, so a
+    /// round that dies mid-flight still has a header to be stored with its
+    /// partial reply. The session parks it and writes it inside the same
+    /// transaction as the round's entries.
+    RequestMeta {
+        model: String,
+        protocol: String,
+        base_url: String,
+        system: String,
+        tools_json: String,
+        max_tokens: u32,
+    },
     /// Compaction finished on the background thread: apply the fork.
     /// `entries` is the marker to persist; `ctx` replaces the live chat
     /// replica; the token stats are display-only.
     Compaction {
         entries: Vec<Entry>,
-        ctx: crate::ai::types::Context,
+        ctx: crate::server::ai::types::Context,
         tokens_before: usize,
         tokens_after: usize,
     },
@@ -110,7 +148,8 @@ pub enum Change {
 /// A dedicated type (rather than a bare string) so the renderer can style
 /// each state differently — and so future ones can be added without the
 /// transcript learning a new special case.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LiveActivity {
     /// Nothing in flight (or the reply's text has already started, which
     /// needs no placeholder — the text itself occupies the row).
@@ -139,10 +178,59 @@ pub struct StreamView {
     pub reasoning_done: bool,
     /// What the user is waiting on (drives the live row).
     pub live: LiveActivity,
+    /// Output the **running** tool has produced so far (see
+    /// [`SessionEvent::ToolProgress`]). Bounded to the tail: while a command
+    /// runs the interesting part is what it just printed, and the final result
+    /// carries the whole thing anyway.
+    pub tool_output: String,
 }
 
 impl StreamView {
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.reasoning.is_empty() && !self.active
+        self.text.is_empty()
+            && self.reasoning.is_empty()
+            && self.tool_output.is_empty()
+            && !self.active
     }
+
+    /// Fold the streaming slots into one coarse state (see [`RunState`]).
+    pub fn run_state(&self) -> RunState {
+        if !self.active {
+            return RunState::Idle;
+        }
+        match &self.live {
+            LiveActivity::Tool { intent } => RunState::Tool {
+                intent: intent.clone(),
+            },
+            LiveActivity::Idle | LiveActivity::Thinking => {
+                if self.text.is_empty() {
+                    RunState::Thinking
+                } else {
+                    RunState::Replying
+                }
+            }
+        }
+    }
+}
+
+/// The coarse "what is the backend doing right now" — one value, no payload
+/// parsing.
+///
+/// For clients that cannot render a transcript (a chat bridge, a status LED,
+/// a web header): they need to say "思考中" / "正在调用工具" without decoding
+/// deltas or tool arguments. Derived from the streaming slots, so it costs
+/// nothing and cannot drift from what the rich clients show.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    /// Nothing in flight.
+    Idle,
+    /// A request is in flight or reasoning is arriving — nothing to show yet
+    /// but "it is working".
+    Thinking,
+    /// Reply text is arriving.
+    Replying,
+    /// A tool is executing. `intent` is the model's own one-liner (empty when
+    /// it offered none).
+    Tool { intent: String },
 }

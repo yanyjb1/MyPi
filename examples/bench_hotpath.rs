@@ -16,8 +16,8 @@ fn db_path() -> std::path::PathBuf {
     )
 }
 
-fn load_entries() -> Vec<mypi::entry::Entry> {
-    let store = mypi::store::Store::open(&db_path()).expect("open bench db");
+fn load_entries() -> Vec<mypi::server::entry::Entry> {
+    let store = mypi::server::store::Store::open(&db_path()).expect("open bench db");
     // The bench DB has one session (id 1) with a linear chain.
     store.load_entries(1).expect("load entries")
 }
@@ -33,7 +33,7 @@ fn main() {
     let t = Instant::now();
     let mut acc = 0usize;
     for _ in 0..ITERS {
-        acc += mypi::tui::transcript::blocks::blocks(&entries).len();
+        acc += mypi::tui::zone::main::history::render::blocks::blocks(&entries).len();
     }
     let per = t.elapsed().as_secs_f64() * 1e3 / ITERS as f64;
     println!("blocks::blocks()   : {per:>8.4} ms/call  ({acc} blocks total)");

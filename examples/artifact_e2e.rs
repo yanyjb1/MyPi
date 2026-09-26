@@ -4,9 +4,9 @@
 //!
 //! Usage: cargo run --release --example artifact_e2e
 
-use mypi::agent::artifacts::ArtifactStore;
-use mypi::agent::loop_rs::ToolExecutor as _;
-use mypi::agent::tools::BuiltinTools;
+use mypi::server::agent::artifacts::ArtifactStore;
+use mypi::server::agent::loop_rs::ToolExecutor as _;
+use mypi::server::agent::tools::BuiltinTools;
 use std::sync::{Arc, Mutex};
 
 fn main() {
@@ -15,7 +15,7 @@ fn main() {
     // Real DB in /tmp, session 1.
     let db = std::env::temp_dir().join("mypi-artifact-e2e.db");
     let _ = std::fs::remove_file(&db);
-    let mut store = mypi::store::Store::open(&db).expect("db");
+    let mut store = mypi::server::store::Store::open(&db).expect("db");
     store.create_session("e2e", "/tmp").expect("session");
     let arc = Arc::new(Mutex::new(store));
     let art = ArtifactStore::new(arc.clone(), 1);
@@ -47,8 +47,10 @@ fn main() {
                 }
             }))
             .unwrap(),
+            &mut |_| {},
         )
-        .expect("tree run");
+        .expect("tree run")
+        .text;
     let dt = t0.elapsed();
     println!(
         "  tool returned {} bytes in {:.1} ms",
@@ -79,18 +81,19 @@ fn main() {
                 }
             }))
             .unwrap(),
+            &mut |_| {},
         )
         .expect("reference run");
     let dt2 = t1.elapsed();
     println!(
         "  {} bytes in {:.1} ms",
-        out2.len(),
+        out2.text.len(),
         dt2.as_secs_f64() * 1e3
     );
-    for l in out2.lines().take(6) {
+    for l in out2.text.lines().take(6) {
         println!("  > {l}");
     }
-    assert!(out2.contains("branch_7"), "引用结果必须包含 grep 命中");
+    assert!(out2.text.contains("branch_7"), "引用结果必须包含 grep 命中");
 
     // ---- step 3: second-order artifact (no filter = spill again) ----
     println!("== step 3: cat #id (no filter) — must spill again ==");
@@ -105,10 +108,11 @@ fn main() {
                 }
             }))
             .unwrap(),
+            &mut |_| {},
         )
         .expect("cat run");
-    assert!(out3.contains("已存为巨物 #"), "无过滤取用必须再次巨物化");
-    let id2: i64 = out3
+    assert!(out3.text.contains("已存为巨物 #"), "无过滤取用必须再次巨物化");
+    let id2: i64 = out3.text
         .split('#')
         .nth(1)
         .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())

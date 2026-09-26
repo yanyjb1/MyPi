@@ -5,7 +5,7 @@
 //! same code path the TUI runs, so colors/wrapping/cards are exactly what
 //! the terminal draws. Only the rasterization is synthetic.
 
-use mypi::entry::{Align, Entry};
+use mypi::server::entry::{Align, Entry};
 use mypi::tui::theme;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -17,6 +17,7 @@ fn main() -> anyhow::Result<()> {
         Entry::System {
             text: "已命名：渡鸦（主题 dark）".into(),
             align: Align::Center,
+                    pin: false,
         },
         Entry::User {
             content: "帮我看下这个项目的渲染实现？重点 markdown 列表和代码高亮喵".into(),
@@ -67,6 +68,8 @@ pub fn rotate_for_seed(seed: &str) {
             name: "bash".into(),
             ok: true,
             result: "test result: ok. 423 passed; 0 failed\nFinished `dev` profile".into(),
+            details: Some(serde_json::json!({"kind":"shell","exit_code":0,"interrupted":false,"warned":[],"artifact":null})),
+            duration_ms: 12_400,
         },
         Entry::ToolRequest {
             call_id: "c2".into(),
@@ -81,10 +84,13 @@ pub fn rotate_for_seed(seed: &str) {
             name: "edit".into(),
             ok: false,
             result: "error[E0308]: mismatched types\n  --> src/tui/session/loop.rs:226:45".into(),
+            details: None,
+            duration_ms: 240,
         },
         Entry::System {
             text: "会话已压缩，上下文回收 42k tokens".into(),
             align: Align::Center,
+                    pin: false,
         },
     ];
 

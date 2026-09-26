@@ -23,7 +23,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 use tungstenite::Message;
 
-use crate::ai::config::BrowserConfig;
+use crate::server::ai::config::BrowserConfig;
 
 /// Fallback executable when neither `$MYPI_BROWSER_BIN` nor
 /// `config.yaml → browser.bin` names one.
@@ -38,6 +38,9 @@ pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKi
 pub struct Browser {
     child: Option<Child>,
     profile: PathBuf,
+    /// A profile this process invented (see `session::is_ephemeral_profile`):
+    /// reaped with the browser, so a throwaway session leaves no cookies behind.
+    ephemeral: bool,
     pub port: u16,
 }
 
@@ -74,6 +77,8 @@ impl Browser {
         Ok(Browser {
             child: None,
             profile: profile.to_path_buf(),
+            // Attached: the profile belongs to whoever started that browser.
+            ephemeral: false,
             port,
         })
     }
@@ -107,6 +112,7 @@ impl Browser {
         let browser = Browser {
             child: Some(child),
             profile: profile.to_path_buf(),
+            ephemeral: crate::web::utils::session::is_ephemeral_profile(profile),
             port: 0,
         };
         browser.wait_for_devtools()
@@ -206,6 +212,12 @@ impl Drop for Browser {
         if let Some(child) = self.child.as_mut() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+        // A throwaway profile is ours to remove: nothing outside this process
+        // knows the directory exists, and leaving it behind would accumulate a
+        // signed-in browser profile per run.
+        if self.ephemeral {
+            let _ = std::fs::remove_dir_all(&self.profile);
         }
     }
 }

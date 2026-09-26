@@ -25,9 +25,9 @@
 
 use anyhow::{Context as _, bail};
 
-use crate::ai::config::CompactConfig;
-use crate::ai::types::Message;
-use crate::entry::Entry;
+use crate::server::ai::config::CompactConfig;
+use crate::server::ai::types::Message;
+use crate::server::entry::Entry;
 
 /// The compaction plan, computed from the live context + transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,7 +104,9 @@ pub(crate) fn entry_chars(e: &Entry) -> usize {
         Entry::ToolResult { result, .. } => result.len(),
         Entry::Compaction { summary, .. } => summary.len(),
         Entry::Error { text } | Entry::System { text, .. } => text.len(),
-        Entry::Name { .. } => 0,
+        // Markers: they cost nothing in the context (the todo list is
+        // re-injected as a note, see `entries_to_context`).
+        Entry::Name { .. } | Entry::Todo { .. } => 0,
     }
 }
 
@@ -116,34 +118,13 @@ pub(crate) fn entry_chars(e: &Entry) -> usize {
 /// shape; `{{focus}}` carries the user's `/compact <focus>` emphasis.
 /// Overridable via `config.yaml → compact.instruction_file` (a plain
 /// file read at compaction time — edits take effect immediately).
-pub const DEFAULT_INSTRUCTION: &str = r#"你是一名上下文压缩助手。上方的对话即将被压缩：你的任务是把整段历史浓缩成一份结构化检查点，供一个新的上下文在没有任何额外背景的情况下继续工作。
-
-直接输出检查点正文（Markdown），按以下八节组织。某一节没有内容就写 "(none)"，不要编造。不要提及"压缩"或本次指令本身——检查点读起来应该像一份工作交接文档。
-
-# 主要请求与意图
-用户最初的请求，以及过程中明确表达的目标变化。
-
-# 关键技术概念
-工作中反复出现的技术名词、约定、决策（含理由）。
-
-# 文件与代码
-涉及过的文件路径及各自的改动要点。不需要整段代码，写"哪个文件干了什么"。
-
-# 错误与修复
-踩过的坑和最终有效的修法。没修的问题单独标注。
-
-# 待办
-用户提出但尚未完成的事项。
-
-# 当前工作
-被压缩前最后正在做的事：目标、做到哪一步、下一个动作。
-
-# 下一步
-明确的、可执行的下一步。
-
-# 关键上下文
-前面放不进去但新上下文必需的事实。巨物引用（#N 形式的工具输出占位符）在此原样登记一行即可——只需保证 id 正确，细节模型可用 context 工具自查，不要展开内容。
-{{focus}}"#;
+/// The default compaction instruction.
+///
+/// omp's `compaction-summary.md`, verbatim (plus the untrusted-data guard from
+/// its `summarization-system.md`, folded in because we send this as the last
+/// **user** turn of the untouched prefix — see the module doc). `{{focus}}`
+/// carries the user's `/compact <focus>` emphasis.
+pub const DEFAULT_INSTRUCTION: &str = crate::server::prompts::COMPACT_INSTRUCTION;
 
 /// Render the instruction: substitute `{{focus}}` (empty → drop the line).
 pub fn render_instruction(template: &str, focus: &str) -> String {
@@ -178,8 +159,8 @@ pub fn load_instruction(instruction_file: Option<&std::path::Path>) -> String {
 /// This is dsh's prefix-replay: everything except the appended turn is
 /// byte-identical to the last real request, so the gateway's prefix
 /// cache answers it without re-billing the history.
-pub fn replay_context(ctx: &crate::ai::types::Context) -> crate::ai::types::Context {
-    let mut req = crate::ai::types::Context::new();
+pub fn replay_context(ctx: &crate::server::ai::types::Context) -> crate::server::ai::types::Context {
+    let mut req = crate::server::ai::types::Context::new();
     // System + tools ride along: they were part of the cached prefix.
     req.tools = ctx.tools.clone();
     // The live context is the finalized transcript's protocol mapping
@@ -210,7 +191,7 @@ pub fn compact(
     entries: &[Entry],
     cfg: &CompactConfig,
     focus: &str,
-    summarize: &mut dyn FnMut(&crate::ai::types::Context) -> anyhow::Result<String>,
+    summarize: &mut dyn FnMut(&crate::server::ai::types::Context) -> anyhow::Result<String>,
 ) -> anyhow::Result<Compacted> {
     if entries.is_empty() {
         bail!("空会话无需压缩");
@@ -263,12 +244,12 @@ pub fn compact(
 
     // New protocol context: system + summary as an opening user turn +
     // the kept region's protocol messages.
-    let mut new_ctx = crate::ai::types::Context::new();
+    let mut new_ctx = crate::server::ai::types::Context::new();
     new_ctx.messages.push(Message::System {
         content: system.to_string(),
     });
     new_ctx.messages.push(Message::User {
-        content: format!("以下是之前工作的压缩检查点。直接从此处继续：\n\n{summary}"),
+        content: format!("{}\n\n<summary>\n{summary}\n</summary>", crate::server::prompts::COMPACT_CONTEXT),
     });
     let kept = &entries[cut.first_kept..];
     let mut kept_ctx = super::turn::entries_to_context(system, kept);
@@ -292,7 +273,7 @@ pub fn compact(
 /// The outcome: new live context + the marker to persist + display stats.
 #[derive(Debug, Clone)]
 pub struct Compacted {
-    pub ctx: crate::ai::types::Context,
+    pub ctx: crate::server::ai::types::Context,
     pub marker: Entry,
     /// Approx tokens reclaimed (display only; never persisted).
     pub tokens_before: usize,
@@ -351,6 +332,8 @@ mod tests {
                 name: "bash".into(),
                 ok: true,
                 result: "out".into(),
+                details: None,
+                duration_ms: 0,
             },
             user("newest"),
         ];
@@ -383,7 +366,7 @@ mod tests {
         };
         let fat = "z".repeat(2000); // bigger than the region
         let mut summarize =
-            |_: &crate::ai::types::Context| -> anyhow::Result<String> { Ok(fat.clone()) };
+            |_: &crate::server::ai::types::Context| -> anyhow::Result<String> { Ok(fat.clone()) };
         let r = compact("sys", &es, &cfg, "", &mut summarize);
         assert!(r.is_err());
         assert!(r.err().unwrap().to_string().contains("shrink"));
@@ -396,7 +379,7 @@ mod tests {
             retain_tail: 10,
             ..Default::default()
         };
-        let mut summarize = |_: &crate::ai::types::Context| -> anyhow::Result<String> {
+        let mut summarize = |_: &crate::server::ai::types::Context| -> anyhow::Result<String> {
             Ok("## 当前工作\n\n无".into())
         };
         let out = compact("sys", &es, &cfg, "", &mut summarize).unwrap();
@@ -419,7 +402,7 @@ mod tests {
     /// compacted region (the old `replay_context`) billed the region twice.
     #[test]
     fn summarize_request_never_duplicates_the_region() {
-        use crate::ai::types::{Context, Message};
+        use crate::server::ai::types::{Context, Message};
         use std::cell::RefCell;
         let es: Vec<Entry> = (0..3)
             .map(|_i| Entry::User {

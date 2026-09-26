@@ -13,7 +13,7 @@
 
 use std::time::Instant;
 
-use mypi::entry::Entry;
+use mypi::server::entry::Entry;
 use mypi::tui::bench;
 
 const DB: &str = "/tmp/mypi-bench/sessions.db";
@@ -25,7 +25,7 @@ const WIDTH: usize = 120;
 const VIEWPORT: usize = 40;
 
 fn load_entries() -> Vec<Entry> {
-    let store = mypi::store::Store::open(std::path::Path::new(&db())).expect("open bench db");
+    let store = mypi::server::store::Store::open(std::path::Path::new(&db())).expect("open bench db");
     let t = Instant::now();
     let entries = store.load_entries(1).expect("load");
     println!(

@@ -4,7 +4,7 @@
 use anyhow::anyhow;
 use serde::Deserialize;
 
-use crate::ai::config::BrowserConfig;
+use crate::server::ai::config::BrowserConfig;
 
 use super::providers::{self};
 

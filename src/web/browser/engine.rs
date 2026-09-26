@@ -18,7 +18,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 use super::providers::cmd_act;
-use crate::ai::config::BrowserConfig;
+use crate::server::ai::config::BrowserConfig;
 use crate::web::utils::session::Page;
 
 pub(crate) const ACT_TIMEOUT: Duration = Duration::from_secs(10);

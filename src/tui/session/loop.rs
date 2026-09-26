@@ -1,444 +1,461 @@
 //! Session lifecycle — process-level setup and the main event loop.
 //!
-//! Split from the `App` state machine (app.rs): that file answers "what
-//! does this keypress mean"; this one owns the terminal session — opening
-//! the store (with legacy-DB migration), driving the signal pump, calling
-//! the renderer, and placing the hardware cursor.
+//! APP 是 Router：接入信号、归一化、下发所有权、登记交接。
+//! 渲染是 Zone 的事，这里只把 Frame 交出去。
 
-use crate::ai::client::Client;
-use crate::ai::config::Config;
-use crate::ai::types::{Context as ChatContext, Message};
-use crate::tui::app::{App, SPIN_INTERVAL};
-use crate::tui::keys::Action;
-use crate::tui::keys::translate_with;
-use crate::tui::layout as tlayout;
-use crate::tui::theme::Palette;
-use crate::tui::view::{self, ViewState};
+use crate::server::ai::config::Config;
+use crate::tui::app::App;
+// 本地叙述（未知命令、未接线的本地命令）走 `SessionView` 的 `on_notice`。
+use crate::tui::session::view::SessionView as _;
+use crate::tui::zone::TermSize;
 use std::sync::mpsc;
 
 use anyhow::Result;
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyEventKind, KeyboardEnhancementFlags, MouseEventKind,
+    Event, KeyEventKind, KeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 
-use super::{db_path, migrate_legacy_db};
-use crate::tui::app::display_name;
 
-// Render one frame: sizes, scroll correction, widget drawing, hardware
-// cursor placement. Shared by the pre-loop first paint and the signal
-// pump — a stale first frame (or none at all) is how "blank until a
-// keystroke" bugs happen.
+// Render one frame: APP 把整个屏幕交给当前所有者 Zone 自渲染。
+/// 前端自己的命令：退出这类不经过服务端的事。
+///
+/// 表里 `scope == local` 的命令归这里；服务端只提供元数据让它认识名字。
+fn local_command(
+    view: &mut crate::tui::session::view::MainSessionView,
+    app: &mut App,
+    spec: &crate::server::commands::CommandSpec,
+    args: &str,
+    quit: &mut bool,
+) {
+    let _ = args;
+    match spec.name {
+        "/q" => *quit = true,
+        // `/resume` 是纯前端页面：它不认识会话的"内容"，只认识列表与
+        // id（列表来自服务端，附着请求发回去）。
+        "/resume" => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            app.open_resume(cwd);
+        }
+        // 还没接线的本地命令：说清楚，别装作办了。
+        other => {
+            view.zone_for(&mut app.main)
+                .on_notice(format!("{other} 还没接线（本地侧，下一轮）"));
+        }
+    }
+}
+
+/// 补全要用的模型候选：`provider:id` + 灰色那行的显示名。
+fn model_candidates(
+    cfg: &Config,
+) -> Vec<crate::tui::zone::main::reserved::completion::controller::ModelCandidate> {
+    cfg.models()
+        .map(
+            |(provider, m)| crate::tui::zone::main::reserved::completion::controller::ModelCandidate {
+                provider: provider.to_string(),
+                id: m.id.clone(),
+                detail: Config::display_name(m).to_string(),
+            },
+        )
+        .collect()
+}
+
+/// 把选择器排队的事发出去：拉列表 / 附着 / 删除。
+///
+/// 附着之后所有权已经交回主区（Zone 自己交的），这里只管把消息发上路。
+/// 启动路径与主循环都调它——`--resume` 的第一帧不能是空白。
+fn send_resume_requests(app: &mut App, req: &mut crate::server::wire::ConnWriter) {
+    for r in app.take_resume_requests() {
+        match r {
+            crate::tui::zone::resume::Request::List { under } => {
+                req.request(&crate::server::wire::ClientMsg::ListSessions { under })
+                    .ok();
+            }
+            crate::tui::zone::resume::Request::Attach(id) => {
+                req.request(&crate::server::wire::ClientMsg::Attach { id }).ok();
+            }
+            crate::tui::zone::resume::Request::Delete(id) => {
+                req.request(&crate::server::wire::ClientMsg::DeleteSession { id })
+                    .ok();
+            }
+        }
+    }
+}
+
 fn draw_frame(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
-    palette: &mut Palette,
-    ctx_limit: u64,
-    currency_symbol: &'static str,
-    show_cost: bool,
-) -> Result<crate::tui::layout::Layout> {
-    // Per-frame snapshot: a /theme-style runtime switch lands on the next
-    // frame with zero plumbing (omp's "bump epoch, repaint" contract).
-    *palette = Palette::current();
-    let size = terminal.size()?;
-    let wrapped = app.wrapped(size.width);
-    let cwd_str = app.session.cwd().display().to_string();
-    let cursor_char = app.editor.cursor();
-    let spinner = app.spinner();
-
-    // Viewport scrolling: minimal-displacement correction based on the
-    // previous frame's viewport start. The height must be the one
-    // **after subtracting the reserved area**, matching view's layout,
-    // or the two sides disagree and the scroll window misaligns.
-    let ch = tlayout::container_height(
-        size.height.saturating_sub(app.reserved_height(size.height)),
-        wrapped.len(),
-    );
-    let cursor_row = wrapped.locate(cursor_char).0;
-    app.scroll = tlayout::adjust_scroll(app.scroll, wrapped.len(), ch, cursor_row);
-
-    // Layout is computed once: `app` and `view` share the same sizes.
-    let l = tlayout::compute(
-        size.height,
-        &wrapped,
-        app.scroll,
-        app.reserved_height(size.height),
-        crate::tui::components::reserved::DEFAULT_MAX as u16,
-    );
-    let mut cursor_pos = (0u16, 0u16);
-    let model_name = Config::display_name(&app.current_model.borrow()).to_string();
-    let session_name = display_name(app);
+) -> Result<()> {
     terminal.draw(|f| {
-        // Modal takeover: the tree navigator draws over the whole
-        // screen; base zones and the hardware cursor are skipped.
-        if let Some(tp) = app.tree_pick.as_ref() {
-            let lines =
-                crate::tui::components::tree_picker::render(tp, size.width, size.height, palette);
-            f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
-            return;
-        }
-        let mut vs = ViewState {
-            history: app.session.transcript(),
-            transcript_generation: app.session.transcript_generation(),
-            block_cache: &mut app.block_cache,
-            chat_scroll: app.history.chat_scroll,
-            scroll_pinned: app.history.scroll_pinned,
-            show_reasoning: !app.history.reasoning_folded,
-            tools_expanded: app.history.tools_expanded,
-            // The live row is driven by the session, the only party that knows
-            // whether the server is thinking or a tool is running.
-            live: &app.session.stream_view().live,
-            streaming: {
-                let sv = app.session.stream_view();
-                if sv.text.is_empty() {
-                    None
-                } else {
-                    Some(sv.text.as_str())
-                }
-            },
-            wrapped: &wrapped,
-            cursor_char,
-            spinner,
-            model_name: &model_name,
-            session_name: &session_name,
-            cwd: &cwd_str,
-            git: app.git.as_ref(),
-            ctx_tokens: app.tracker.last_prompt_tokens,
-            ctx_limit,
-            cost: app.tracker.total,
-            currency_symbol,
-            show_cost,
-            palette: *palette,
-            popup: app.completion.popup(),
-            resume_pick: app.resume_pick.as_ref().map(|(v, i)| (&v[..], *i)),
+        // Zone 自渲染：行高仲裁、子区布局、内容全部 Zone 内部完成。
+        use crate::tui::zone::Zone as _;
+        let owner = app.current_owner();
+        let lines = match owner {
+            crate::tui::zone::ZoneId::Main => app.main.render(),
+            crate::tui::zone::ZoneId::Resume => app.resume.render(),
+            crate::tui::zone::ZoneId::Tree => Vec::new(), // 会话树 Zone 未实现
         };
-        cursor_pos = view::draw(f, &mut vs, &l);
+        f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
+        // 硬件光标：输入区报容器内的位置，主区换算成终端坐标（带钳制）。
+        // 不设置就是隐藏——ratatui 每帧默认藏光标，除非这一帧明确要位置。
+        // 只有主区的输入区会要光标；选择器的搜索框不放硬件光标
+        // （那一页自己画 `> ` 提示）。
+        if owner == crate::tui::zone::ZoneId::Main
+            && let Some((x, y)) = app.main.cursor_position()
+        {
+            f.set_cursor_position((x, y));
+        }
     })?;
-
-    // ---- hardware cursor ----
-    // `Layout::cursor_y` guarantees the cursor stays inside the input
-    // container and never tramples the reserved area; ratatui/crossterm
-    // do no boundary checks, so this is the only gate.
-    terminal.set_cursor_position(ratatui::layout::Position {
-        x: cursor_pos.1.min(size.width.saturating_sub(1)),
-        y: l.cursor_y(size.height, cursor_pos.0),
-    })?;
-    terminal.show_cursor()?;
-    Ok(l)
+    Ok(())
 }
 
 // Run the TUI (blocking; Esc / Ctrl+C exits).
-pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
-    // Session-scoped mutable config: /model and /switch both change the
-    // current model, hence RefCell. Main thread only (Rc is not Send);
-    // the background turn thread gets its own cloned Client.
-    let cfg = std::rc::Rc::new(std::cell::RefCell::new(cfg));
-    let rm = cfg.borrow().default_model()?;
-    let provider = cfg
-        .borrow()
-        .models
-        .providers
-        .get(&rm.provider_name)
-        .ok_or_else(|| anyhow::anyhow!("provider {} 未定义", rm.provider_name))?
-        .clone();
-    let model = rm.entry.clone();
-    let api_key = cfg.borrow().resolve_key(&provider);
-    let client = Client::new(&provider.base_url, &api_key, &model.id);
-    let cost_cfg = model.cost;
-    let currency_symbol = model.currency.symbol();
-    // Theme init: config.yaml 的 theme.name 指定 JSON 主题（内置 titanium/dark
-    // 或 ~/.config/mypi/themes/<name>.json）；未配置时用内置 titanium。
-    // models.yml 的 accent/gold 覆盖仅在其偏离默认值时生效（旧配置兼容）。
-    let cfg_theme = cfg.borrow().app.theme.clone();
+pub fn run_tui(
+    cfg: Config,
+    cli: crate::cli::Cli,
+    spec: crate::server::hub::SessionSpec,
+) -> Result<()> {
+    let _ = (&cli, &spec); // the spec built the daemon's session factory
+    // Theme init: config.yaml 的 theme.name 指定 JSON 主题。
+    let cfg_theme = cfg.app.theme.clone();
     crate::tui::theme::init_from_config(cfg_theme.name.as_deref(), Some(&cfg_theme));
-    let mut palette = Palette::current();
-    // Cost is computed **locally**: the gateway only reports token counts
-    // (prompt/completion/cached), the program multiplies by the unit
-    // prices the user wrote in models.yml. All-zero prices = "no price
-    // sheet for this model" -> hide the spend column (there is nothing
-    // meaningful to compute, not "the gateway didn't quote").
-    let show_cost =
-        (cost_cfg.input + cost_cfg.output + cost_cfg.cache_read + cost_cfg.cache_write) > 0.0;
-    let current_model = std::rc::Rc::new(std::cell::RefCell::new(model.clone()));
 
-    // Session start is the first legal profile switch point: resolve the
-    // system prompt (and tool roster) from the configured profile. A
-    // broken/unreachable profile dir degrades to the built-in prompt —
-    // never block startup on cosmetics.
-    let profile_name = crate::server::profile::active_name(&cfg.borrow());
-    let (system_prompt, tool_filter) =
-        crate::server::profile::resolve(&cfg.borrow(), &profile_name).unwrap_or_else(|e| {
-            eprintln!("profile 警告：{e:#}——使用内置提示词");
-            (crate::server::profile::BUILTIN_SYSTEM.into(), None)
-        });
-    let chat = ChatContext::new().push(Message::System {
-        content: system_prompt,
-    });
-    // Workspace license: launching from $HOME would license the whole
-    // home directory for rm/mv — exactly what the guard exists to
-    // prevent. Degrade to /tmp instead; the user can /cd out of it.
-    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    let cwd = match std::env::current_dir() {
-        Ok(d) if d == home => std::env::temp_dir(),
-        Ok(d) => d,
-        Err(_) => std::env::temp_dir(),
-    };
-    // Session service facade: owns turn resources + SessionState + the
-    // event channel. The TUI holds it and the rx.
-    let max_tokens = model.max_output_tokens.unwrap_or(4096) as u32;
-    let (session, rx) = crate::server::Session::new(
-        {
-            migrate_legacy_db(&crate::xdg::data_dir());
-            crate::server::SessionState::new(crate::store::Store::open(&db_path()).ok())
-        },
-        client,
-        chat,
-        max_tokens,
-        cost_cfg,
-        cwd.clone(),
-        tool_filter,
-        cfg.borrow().app.tools.clone(),
-        cfg.borrow().app.browser.clone(),
-        Some(db_path()),
-    );
-    let mut app = App::new(session, current_model);
-    app.cfg = Some(cfg.clone());
-    // `--resume`: open the session picker before the first frame (the
-    // same surface /resume shows; Esc here simply starts a fresh session).
-    if cli.resume
-        && let Some(st) = app.session.store()
-        && let Ok(items) = App::build_resume_items(st, &app.session.cwd())
-        && !items.is_empty()
-    {
-        // No store / no sessions: fall through to a fresh session.
-        app.resume_pick = Some((items, 0));
+    // ---- server-first cutover: the TUI owns ZERO session state ----
+    // The connection lives in the reader thread below; its drop (when the
+    // loop dies) detaches us — the daemon's cue to stop a running round
+    // (SERVER.md §4).
+    let mut conn = connect_daemon(&spec)?;
+    // Attach from the CLI (`mypi attach <id>`), else stay in the draft
+    // state: no session row until the first submit.
+    if let Some(id) = cli.attach {
+        conn.request(&crate::server::wire::ClientMsg::Attach { id })?;
+        // The reply carries the whole transcript: bound it by a deadline that
+        // fits a long session, not by the socket's poll interval.
+        let attached = conn.wait_for_within(
+            |m| matches!(m, crate::server::wire::ServerMsg::Attached { .. }),
+            crate::server::wire::SNAPSHOT_DEADLINE,
+        )?;
+        if let crate::server::wire::ServerMsg::Attached { session_id } = attached {
+            eprintln!("attached to session {session_id}");
+        }
     }
-    let ctx_limit = model.context_window;
 
+    // ---- terminal setup ----
     let mut terminal = ratatui::init();
-    // `ratatui::init` installs a panic hook that only disables raw mode
-    // and leaves the alternate screen — it knows nothing about the three
-    // modes **we** enable below (mouse capture, bracketed paste, the
-    // Kitty keyboard protocol). Without this chain a panic leaves the
-    // terminal reporting every mouse move as an escape sequence pasted
-    // into the shell. Restore order: undo our modes *first*, then defer
-    // to ratatui's hook (raw mode / alt screen).
-    let restore_full = |prev: Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send>| {
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(
-                std::io::stdout(),
-                ratatui::crossterm::event::PopKeyboardEnhancementFlags
-            );
-            let _ = execute!(std::io::stdout(), DisableMouseCapture);
-            let _ = execute!(std::io::stdout(), DisableBracketedPaste);
-            prev(info);
-        }));
-    };
-    restore_full(std::panic::take_hook());
-    // Kitty keyboard protocol: ask the terminal to disambiguate escape
-    // sequences so **Shift+Enter** arrives as Enter+SHIFT (newline) and
-    // bare Enter as plain Enter (submit). Terminals without the
-    // protocol silently ignore the escape codes — the pre-existing
-    // fallbacks (Alt+Enter / Ctrl+J) keep working there.
     let _ = execute!(
         std::io::stdout(),
         ratatui::crossterm::event::PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS,
         )
     );
-    // Enable bracketed paste: the terminal wraps pasted content in
-    // \x1b[200~ ... \x1b[201~, so we get Event::Paste instead of every
-    // line arriving as keystrokes.
     let _ = execute!(std::io::stdout(), EnableBracketedPaste);
-    // Enable mouse capture: wheel events scroll the history area. Side
-    // effect: native text selection usually needs Shift+drag.
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
 
-    let result = (|| -> Result<()> {
-        // Last frame's layout, for mouse zone hit-testing.
-        let mut last_layout: Option<crate::tui::layout::Layout> = None;
+    // 启动尺寸契约：量一次，交给 Zone，之后只在 resize 时广播。
+    let size = terminal.size()?;
+    // 启动就进哪一页由命令行定：`mypi --resume` 直接开选择器，否则主区。
+    // 两个 Zone 都在 `App` 里建好（都拿到启动尺寸），交接只是换账本。
+    let startup = if cli.resume {
+        crate::tui::zone::ZoneId::Resume
+    } else {
+        crate::tui::zone::ZoneId::Main
+    };
+    let mut app = App::new(
+        TermSize {
+            cols: size.width,
+            rows: size.height,
+        },
+        startup,
+    );
+    // 补全服务上岗：保留区的第一个住户。cwd/home 是会话层注入的
+    // 最后一项（之后路径解析全在服务内部）。
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    app.main
+        .reserved
+        .attach_completion(std::env::current_dir().unwrap_or_else(|_| home.clone()), home);
+    // 命令表来自握手（`hello_ok`）：前端不再自己存一份。补全服务上岗之后再喂。
+    app.main.reserved.set_commands(conn.commands().to_vec());
+    // 参数的**合法值**：命令表只说形状（`model_id` / `profile_name`），
+    // 名字得有人送。它们都是运行时配置事实（不是会话状态），而配置这一份
+    // 进程已经加载了——状态栏的模型名读的就是它。
+    app.main
+        .reserved
+        .set_candidates(model_candidates(&cfg), crate::server::profile::list(&cfg));
 
-        // Paint the first frame **before** blocking: the loop below is
-        // signal-driven, and without an initial draw the user stares at
-        // a blank screen until the first keystroke arrives.
-        draw_frame(
-            &mut terminal,
-            &mut app,
-            &mut palette,
-            ctx_limit,
-            currency_symbol,
-            show_cost,
-        )?;
+    // 状态栏自初始化（TUI 本地事实，不烦服务器）：默认模型显示名从
+    // 进程启动已加载的 Config 解析（name 字段，缺省回退 id），cwd 就是
+    // 进程启动目录。首个服务端 State 帧（submit 后）到达时以活值覆盖。
+    {
+        use crate::tui::zone::main::input::statusline::StatusEvent;
+        let model_name = cli
+            .model
+            .as_deref()
+            .and_then(|id| cfg.model_by_id(id).ok())
+            .map(|rm| rm.entry.display_name().to_string())
+            .or_else(|| {
+                cfg.app
+                    .default
+                    .as_deref()
+                    .and_then(|id| cfg.model_by_id(id).ok())
+                    .map(|rm| rm.entry.display_name().to_string())
+            })
+            .unwrap_or_default();
+        // 还没有 session id 的草稿态：先叫「新会话」。**只在内存里**——
+        // 服务端要到第一次 submit 才建行，这个名字不落任何盘。真实名字
+        // （`/name` 或由首条消息合成）随第一个 State 帧覆盖它。
+        app.main
+            .input
+            .notify(&StatusEvent::SessionRenamed("新会话"));
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        app.main.input.notify(&StatusEvent::ModelChanged(&model_name));
+        app.main
+            .input
+            .notify(&StatusEvent::WorkspaceChanged(&cwd));
+    }
 
-        // ---- signal pump: input thread + session events ----
-        //
-        // The loop is **signal-driven, not polled**: it blocks on
-        // `sig_rx.recv()` and only wakes when something actually
-        // happened. Two producers feed the loop:
-        //   input thread  — forwards raw crossterm events as `Signal`s
-        //   session drain — SessionEvents drained below, between signals
-        // A burst of deltas marks the dirty bit repeatedly but repaints
-        // once — coalescing is free because dirty is idempotent.
-        let (sig_tx, sig_rx) = mpsc::channel::<crate::tui::session::signal::Signal>();
-        // A second Sender handle for the session-event forwarder below.
-        let sig_tx2 = sig_tx.clone();
+    // `--resume`：启动就站在选择器上，并且**立刻**去拉列表——不然第一帧
+    // 是一片空白，要等用户敲个键才有内容。
+    if cli.resume {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        app.open_resume(cwd);
+    }
 
-        // Producer 1: raw terminal input, forwarded as signals.
-        std::thread::spawn(move || {
-            while let Ok(ev) = event::read() {
-                let fwd = match ev {
-                    Event::Key(k) if k.kind == KeyEventKind::Press => {
-                        Some(crate::tui::session::signal::Signal::Key(k))
+    // ---- signal pump ----
+    let (sig_tx, sig_rx) = mpsc::channel::<crate::tui::session::signal::Signal>();
+
+    // Producer 3: the workspace git poller (session view 层的约定：分支是
+    // 外部实时事实，前端组件自己算——SERVER.md §0)。5s 一拍；快照作为
+    // 信号进主循环，语义（消费/隐藏/着色）全在 git 组件。
+    let sig_tx_git = sig_tx.clone();
+    let git_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    std::thread::spawn(move || loop {
+        let snap = crate::git::snapshot(&git_dir);
+        if sig_tx_git
+            .send(crate::tui::session::signal::Signal::Git(snap))
+            .is_err()
+        {
+            return; // main loop gone
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    });
+
+    // Writer handle for the main loop: issued BEFORE the connection moves
+    // into the reader thread. Both share one socket (see the request-site
+    // comment below for why there is exactly one connection).
+    let mut req = conn.writer();
+
+    // Producer 2: the daemon's pushes (socket reader thread). The connection
+    // handle lives in this thread only; the main loop receives signals.
+    let sig_tx_server = sig_tx.clone();
+    let mut server_conn = Some(conn);
+    std::thread::spawn(move || {
+        if let Some(mut c) = server_conn.take() {
+            loop {
+                match c.read_msg() {
+                    Ok(msg) => {
+                        if sig_tx_server
+                            .send(crate::tui::session::signal::Signal::Server(msg))
+                            .is_err()
+                        {
+                            return; // main loop gone
+                        }
                     }
-                    Event::Paste(s) => Some(crate::tui::session::signal::Signal::Paste(s)),
-                    Event::Mouse(m) => Some(crate::tui::session::signal::Signal::Mouse(m)),
-                    Event::Resize(_, _) => Some(crate::tui::session::signal::Signal::Resized),
-                    _ => None,
-                };
-                if let Some(s) = fwd
-                    && sig_tx.send(s).is_err()
-                {
-                    break; // main loop gone
+                    Err(e) if crate::server::wire::is_read_timeout(&e) => {
+                        // Poll interval expired on an idle connection: not a
+                        // hangup. Keep waiting; the daemon stays silent when
+                        // nothing happens.
+                        continue;
+                    }
+                    Err(e) => {
+                        // Two different failures wear the same face here. A
+                        // hangup means the daemon is gone; a decode failure
+                        // means the daemon said something this build cannot
+                        // read (an oversized line, a protocol drift). Saying
+                        // "连接已断开" for the second one sends the reader
+                        // hunting for a dead process that is alive and well.
+                        let what = match e.kind() {
+                            std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::ConnectionReset => "与 daemon 的连接已断开",
+                            _ => "收到无法解析的消息，已停止接收",
+                        };
+                        let _ = sig_tx_server.send(
+                            crate::tui::session::signal::Signal::Server(
+                                crate::server::wire::ServerMsg::Error {
+                                    code: crate::server::wire::ErrorCode::Internal,
+                                    message: format!("{what}：{e}"),
+                                },
+                            ),
+                        );
+                        return;
+                    }
                 }
             }
-        });
+        }
+    });
 
-        // Producer 2: session events (deltas, tool calls, commits).
-        // Forwarding them through the SAME channel is what makes the
-        // loop truly signal-driven: a delta arriving wakes the loop and
-        // repaints the live slot. (An earlier draft kept a separate
-        // `rx` and drained it only after *keyboard* signals — the
-        // stream never reached the screen unless the user typed.)
-        std::thread::spawn(move || {
-            for ev in rx {
-                if sig_tx2
-                    .send(crate::tui::session::signal::Signal::Session(ev))
-                    .is_err()
-                {
-                    break; // main loop gone
+    // Producer 1: keyboard/mouse signals.
+    let sig_tx_p1 = sig_tx.clone();
+    std::thread::spawn(move || {
+        while let Ok(ev) = event::read() {
+            let fwd = match ev {
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    Some(crate::tui::session::signal::Signal::Key(k))
                 }
+                Event::Paste(s) => Some(crate::tui::session::signal::Signal::Paste(s)),
+                Event::Mouse(m) => Some(crate::tui::session::signal::Signal::Mouse(m)),
+                Event::Resize(_w, _h) => Some(crate::tui::session::signal::Signal::Resized),
+                _ => None,
+            };
+            if let Some(s) = fwd
+                && sig_tx_p1.send(s).is_err()
+            {
+                break; // main loop gone
             }
-        });
+        }
+    });
 
+
+    // SessionView 的实例状态（busy 边沿检测的记忆）。规范在
+    // `SessionView` trait，实例在 `MainSessionView::zone_for`——主循环
+    // 只搬运消息，语义全部下沉到 view 与组件。
+    let mut view = crate::tui::session::view::MainSessionView::new();
+
+    let result = (|| -> Result<()> {
+        // 进循环之前先把选择器（`--resume`）的请求发掉：第一帧要有内容，
+        // 而主循环要等到有信号才会走到发送那一步。
+        send_resume_requests(&mut app, &mut req);
+        // Initial paint.
+        draw_frame(&mut terminal, &mut app)?;
         let mut quit = false;
         while !quit {
-            // Block until *something* happens. During streaming the
-            // deltas themselves are the wake-ups; no POLL interval, no
-            // idle wake-ups. Everything already queued behind the first
-            // signal is folded into the same batch: N queued deltas =
-            // one repaint, not N (coalescing for free).
-            // The wait doubles as the spinner's heartbeat: while a turn
-            // is streaming (including silent thinking phases, which
-            // produce no deltas) wake at SPIN_INTERVAL to keep it
-            // spinning; when idle block forever — no timers, no CPU.
-            let first = if app.session.busy() {
-                match sig_rx.recv_timeout(SPIN_INTERVAL) {
-                    Ok(s) => Some(s),
-                    Err(mpsc::RecvTimeoutError::Timeout) => None,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-                }
-            } else {
-                Some(sig_rx.recv()?)
-            };
+            // Block until something happens; coalesce queued signals.
+            let first = sig_rx.recv()?;
             let mut batch = Vec::new();
-            if let Some(s) = first {
-                batch.push(s);
-                // Fold everything already queued behind the first signal:
-                // N queued deltas = one repaint, not N (coalescing free).
-                while let Ok(more) = sig_rx.try_recv() {
-                    batch.push(more);
-                }
+            batch.push(first);
+            while let Ok(more) = sig_rx.try_recv() {
+                batch.push(more);
             }
 
-            // ---- route the batch ----
-            let mut batch_tools_ran = false;
-            for sig in batch {
+            'outer: for sig in batch {
                 match sig {
                     crate::tui::session::signal::Signal::Key(k) => {
-                        let term_w = terminal.size()?.width;
-                        let action = translate_with(k, app.key_context(term_w));
-                        quit = !app.apply(action, term_w);
+                        app.deliver(crate::tui::keys::normalize(k));
                     }
                     crate::tui::session::signal::Signal::Paste(s) => {
-                        // Paste also goes through `apply`.
-                        //
-                        // This used to be a **second** path: a direct
-                        // `app.editor.insert_paste()` plus two lines of
-                        // hand-copied epilogue, bypassing `apply`. It
-                        // missed `input_history.on_edit()` — pasting
-                        // while browsing history stuck in browse mode,
-                        // and the next ↑ jumped to the entry before last
-                        // instead of saving a draft. The two paths
-                        // agreeing was pure luck; unified now, no drift
-                        // possible.
-                        let term_w = terminal.size()?.width;
-                        quit = !app.apply(Action::Paste(s), term_w);
+                        app.deliver(crate::tui::zone::RawEvent::Paste(s));
                     }
                     crate::tui::session::signal::Signal::Mouse(m) => {
-                        // Hit-test the pointer row against the last frame's
-                        // layout: only the history area scrolls (input and
-                        // reserved ignore the wheel). Up unpin; back at 0
-                        // re-pins. A modal turns the wheel into list scroll.
-                        let chat_h = last_layout
-                            .as_ref()
-                            .map(|l: &crate::tui::layout::Layout| l.chat_height)
-                            .unwrap_or(0);
-                        if crate::tui::zones_impl::wheel_zone(
-                            m.row,
-                            chat_h,
-                            app.resume_pick.is_some(),
-                        ) == Some(crate::tui::zones::ZoneId::History)
-                        {
-                            match m.kind {
-                                MouseEventKind::ScrollUp => {
-                                    crate::tui::zones_impl::wheel_step(&mut app.history, true, 3)
+                        // 只归一化滚轮；其余鼠标输入丢弃（keys::normalize_mouse）。
+                        if let Some(ev) = crate::tui::keys::normalize_mouse(&m) {
+                            app.deliver(ev);
+                        }
+                    }
+                    crate::tui::session::signal::Signal::Resized => {
+                        let s = terminal.size()?;
+                        app.on_resize(TermSize {
+                            cols: s.width,
+                            rows: s.height,
+                        });
+                    }
+                    crate::tui::session::signal::Signal::Server(msg) => {
+                        // 会话列表是**选择器**的输入，不是主区的：谁持有
+                        // 所有权就归谁（APP 只认账本，不认消息类型）。
+                        if app.current_owner() == crate::tui::zone::ZoneId::Resume {
+                            match msg {
+                                crate::server::wire::ServerMsg::Sessions { sessions } => {
+                                    app.resume.on_sessions(sessions);
+                                    continue;
                                 }
-                                MouseEventKind::ScrollDown => {
-                                    crate::tui::zones_impl::wheel_step(&mut app.history, false, 3)
+                                crate::server::wire::ServerMsg::Error { message, .. } => {
+                                    app.resume.on_error(message);
+                                    continue;
                                 }
                                 _ => {}
                             }
                         }
+                        {
+                            // 服务端推送 → SessionView（规范）→ zone 调用（实例）。
+                            // 规范/实例分离见 view.rs 模块注释。
+                            // Ownership passes straight through: reader thread →
+                            // signal → here → view, no copy of the transcript.
+                            crate::tui::session::view::dispatch(
+                                msg,
+                                &mut view.zone_for(app.main_mut()),
+                            );
+                        }
                     }
-                    crate::tui::session::signal::Signal::Resized => {
-                        // Widths changed: every cached wrap is invalid. The
-                        // recompute below always reads terminal.size(), so
-                        // nothing else to do — the repaint below is
-                        // unconditional after any signal.
+                    crate::tui::session::signal::Signal::Git(snap) => {
+                        // 外部实时事实 → 状态栏广播。借用所有权随信号移动，
+                        // 组件自己决定克隆与隐藏。
+                        app.main_mut()
+                            .input
+                            .notify(&crate::tui::zone::main::input::statusline::StatusEvent::Git(
+                                snap.as_ref(),
+                            ));
                     }
-                    crate::tui::session::signal::Signal::Session(ev) => {
-                        if app.session.ingest(ev) == crate::server::events::Change::ToolActivity {
-                            batch_tools_ran = true;
+                }
+                // 出口请求：编辑器声明"要出去"，这里执行。
+                for x in app.take_outcomes() {
+                    match x {
+                        crate::tui::zone::main::input::ExitRequest::Quit => {
+                            quit = true;
+                            break 'outer;
+                        }
+                        crate::tui::zone::main::input::ExitRequest::Submit(text) => {
+                            // 斜杠命令在**这里**只做识别：表来自服务端（`hello_ok`
+                            // 带下来），去向按表的 `scope` 分——会话命令走 wire，
+                            // 本地命令当场办。以前整串文本无条件当用户消息发给
+                            // 模型，十个命令一个都不生效。
+                            match crate::server::commands::split(&text) {
+                                Some((spec, args)) => {
+                                    match spec.scope {
+                                        crate::server::commands::Scope::Session => {
+                                            req.request(&crate::server::wire::ClientMsg::Command {
+                                                name: spec.name.to_string(),
+                                                args: args.to_string(),
+                                            })
+                                            .ok();
+                                        }
+                                        crate::server::commands::Scope::Local => {
+                                            local_command(&mut view, &mut app, spec, args, &mut quit)
+                                        }
+                                    }
+                                }
+                                // 未知的 `/xxx`：明确告知，不静默发给模型
+                                // （那既浪费 token，又让模型对着一句它执行不了的
+                                // 指令瞎猜）。
+                                None if text.trim_start().starts_with('/') => {
+                                    let word = text.split_whitespace().next().unwrap_or("");
+                                    view.zone_for(&mut app.main)
+                                        .on_notice(format!("未知命令 {word}（Tab 补全可看全部）"));
+                                }
+                                None => {
+                                    // Draft submit: the daemon creates the session
+                                    // row and answers `attached` (SERVER.md §1).
+                                    req.request(&crate::server::wire::ClientMsg::Submit {
+                                        text: text.clone(),
+                                    })
+                                    .ok();
+                                }
+                            }
+                        }
+                        crate::tui::zone::main::input::ExitRequest::Interrupt => {
+                            req.request(&crate::server::wire::ClientMsg::Interrupt).ok();
                         }
                     }
                 }
+                // 选择器要主循环替它做的事（见函数）。
+                send_resume_requests(&mut app, &mut req);
             }
 
-            // Environment checkpoint (event-driven): a tool result just
-            // landed (tools are the only things that can move the working
-            // tree — plain speech never triggers a refresh) or the cwd
-            // moved. The 2s rate limit inside `refresh_env` absorbs
-            // multi-tool bursts in a single round.
-            if batch_tools_ran || app.env_cwd != app.session.cwd() {
-                app.refresh_env();
-            }
-
-            // One spinner frame per loop pass: delta batches repaint
-            // anyway, and SPIN_INTERVAL timeouts keep it alive through
-            // silent thinking phases.
-            app.advance_spinner();
-
-            // ---- render one frame (shared with the pre-loop first draw) ----
-            let l = draw_frame(
-                &mut terminal,
-                &mut app,
-                &mut palette,
-                ctx_limit,
-                currency_symbol,
-                show_cost,
-            )?;
-            last_layout = Some(l);
+            // One repaint per coalesced batch.
+            draw_frame(&mut terminal, &mut app)?;
         }
         Ok(())
     })();
@@ -453,5 +470,29 @@ pub fn run_tui(cfg: Config, cli: crate::cli::Cli) -> Result<()> {
     result
 }
 
-// Turn machinery (spawn runner, collect_turn, entries_to_context) lives
-// in `crate::server::turn` now — the TUI is only a subscriber.
+
+/// Connect to the daemon, spawning one when no daemon answers. Blocking;
+/// the TUI calls this once, before the first frame.
+fn connect_daemon(
+    spec: &crate::server::hub::SessionSpec,
+) -> Result<crate::server::wire::ClientConn> {
+    let _ = spec;
+    let path = crate::server::socket_path();
+    if let Ok(c) = crate::server::wire::ClientConn::connect(&path) {
+        return Ok(c);
+    }
+    // Spawn a detached daemon (our own binary in --server mode) and retry.
+    let exe = std::env::current_exe()?;
+    std::process::Command::new(exe)
+        .arg("--server")
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("无法拉起 mypi daemon: {e}"))?;
+    for _ in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        if let Ok(c) = crate::server::wire::ClientConn::connect(&path) {
+            return Ok(c);
+        }
+    }
+    anyhow::bail!("daemon 未就绪：{}", path.display())
+}

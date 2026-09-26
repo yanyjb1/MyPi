@@ -178,7 +178,7 @@ pub fn init(default_name: Option<&str>) {
 /// Startup from the legacy models.yml `theme:` block: `accent`/`gold`/
 /// `black`/`muted` overrides layered onto the bundled base theme. Keeps
 /// existing configs working while JSON themes become the primary path.
-pub fn init_from_config(default_name: Option<&str>, cfg_theme: Option<&crate::ai::config::Theme>) {
+pub fn init_from_config(default_name: Option<&str>, cfg_theme: Option<&crate::server::ai::config::Theme>) {
     init(default_name);
     let Some(cfg) = cfg_theme else { return };
     // Only override when the user actually customized (defaults in
@@ -220,15 +220,15 @@ fn theme_colors_mut(
 // Palette — legacy façade over the global theme
 // ===========================================================================
 
-/// Legacy four-slot view of the active theme.
+/// Legacy view of the active theme.
 ///
-/// Statusline / completion / input were built against this API; a fresh
-/// copy is taken from the global theme every frame, so a mid-session
-/// theme switch restyles them with zero re-plumbing.
+/// Completion / input / transcript were built against this API; a fresh copy
+/// is taken from the global theme every frame, so a mid-session theme switch
+/// restyles them with zero re-plumbing. The statusline no longer uses it — it
+/// has its own, wider surface (`crate::tui::zone::main::input::statusline::StatusTheme`).
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub accent: Color,
-    pub gold: Color,
     /// The card background. titanium: `#0f1216` (darkTitanium) — omp's
     /// user-message/tool background, not pure black.
     pub black: Color,
@@ -247,14 +247,13 @@ impl Palette {
         let t = theme();
         Self {
             accent: t.color(T::Accent),
-            gold: t.color(T::Warning),
             black: t.color(T::UserMessageBg),
             muted: t.color(T::Muted),
         }
     }
 
     /// Kept for call-site stability.
-    pub fn from_config(_cfg: &crate::ai::config::Config) -> Self {
+    pub fn from_config(_cfg: &crate::server::ai::config::Config) -> Self {
         Self::current()
     }
 
@@ -263,26 +262,6 @@ impl Palette {
     /// Accent text, transparent background.
     pub fn accent_span(&self, text: impl Into<String>) -> Span<'static> {
         Span::styled(text.into(), Style::new().fg(self.accent))
-    }
-
-    /// Money-colored text, transparent background.
-    pub fn gold_span(&self, text: impl Into<String>) -> Span<'static> {
-        Span::styled(text.into(), Style::new().fg(self.gold))
-    }
-
-    /// Capsule body (card background + given foreground).
-    pub fn pill(&self, text: impl Into<String>, fg: Color) -> Span<'static> {
-        Span::styled(text.into(), Style::new().bg(self.black).fg(fg))
-    }
-
-    /// Card background, default foreground (breathing room inside capsules).
-    pub fn on_black(&self, text: impl Into<String>) -> Span<'static> {
-        Span::styled(text.into(), Style::new().bg(self.black))
-    }
-
-    /// Card background + money color.
-    pub fn gold_on_black(&self, text: impl Into<String>) -> Span<'static> {
-        Span::styled(text.into(), Style::new().bg(self.black).fg(self.gold))
     }
 
     /// Transparent background, default foreground (placeholder dashes).
@@ -301,23 +280,6 @@ impl Palette {
             text.into(),
             Style::new().fg(self.muted).add_modifier(Modifier::ITALIC),
         )
-    }
-
-    /// First character: π when idle (gray), a spinner frame while waiting (accent).
-    pub fn symbol(&self, spinner: Option<char>) -> Span<'static> {
-        match spinner {
-            Some(c) => Span::styled(c.to_string(), Style::new().bg(self.black).fg(self.accent)),
-            None => Span::styled("π", Style::new().bg(self.black).fg(self.muted)),
-        }
-    }
-    /// Theme-defined clean git branch color.
-    pub fn git_clean(&self) -> Color {
-        theme().color(T::StatusLineGitClean)
-    }
-
-    /// Theme-defined dirty git branch color.
-    pub fn git_dirty(&self) -> Color {
-        theme().color(T::StatusLineGitDirty)
     }
 }
 

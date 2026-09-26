@@ -2,7 +2,7 @@
 //! session and pull the DOM that survives anti-bot pages.
 
 use super::super::engine::{html_to_markdown, is_js_shell};
-use crate::ai::config::BrowserConfig;
+use crate::server::ai::config::BrowserConfig;
 use std::time::Duration;
 
 const RENDER_WAIT: Duration = Duration::from_secs(12);

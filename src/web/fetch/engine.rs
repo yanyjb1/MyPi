@@ -16,7 +16,7 @@
 use anyhow::{Context as _, anyhow};
 use html_to_markdown_rs::convert;
 
-use crate::ai::config::BrowserConfig;
+use crate::server::ai::config::BrowserConfig;
 use html_to_markdown_rs::options::{ConversionOptions, PreprocessingOptions, PreprocessingPreset};
 use serde::Deserialize;
 

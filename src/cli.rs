@@ -1,18 +1,28 @@
 //! CLI argument parsing — hand-rolled, no clap (dep policy).
 //!
-//! Supported flags:
-//!   --help / -h        usage text, exit 0
-//!   --version / -V     version string, exit 0
-//!   --resume           open the session-resume picker before the first frame
-//!   --model <spec>     override the default model for this launch
-//!                      (`<provider>:<id>`; not persisted — /model does that)
+//! Two forms:
+//!   mypi [options]            the TUI (connects to the daemon, spawning one
+//!                             if none is running)
+//!   mypi --server             run the daemon in the foreground and exit
+//!                             on idle / quit
+//!   mypi attach <id>          attach the TUI to a stored session
+//!   mypi sessions             list sessions (script-friendly; goes through
+//!                             the daemon's socket, never touches the db)
+//!   mypi replay <id> <round>  rebuild one stored round's request (audit)
 //!
-//! Anything else is a hard error (no positional args by design: the TUI
-//! is the only surface).
+//! Flags: --help/-h, --version/-V, --resume, --model <spec>.
 
 /// Parsed command line.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Cli {
+    /// Run the daemon only (--server).
+    pub server: bool,
+    /// Attach to this session id (`attach <id>`).
+    pub attach: Option<i64>,
+    /// One-shot `sessions` listing (no TUI).
+    pub sessions: bool,
+    /// One-shot `replay <id> <round>` (no TUI).
+    pub replay: Option<(i64, i64)>,
     /// Open the resume picker immediately (--resume).
     pub resume: bool,
     /// Model override for this session (`provider:id`).
@@ -20,9 +30,14 @@ pub struct Cli {
 }
 
 const USAGE: &str = "\
-mypi — TUI coding agent
+mypi — coding agent (daemon + TUI front end)
 
-Usage: mypi [options]
+Usage:
+  mypi [options]             new session in the TUI
+  mypi attach <id>           attach the TUI to a stored session
+  mypi sessions              list sessions (through the daemon socket)
+  mypi replay <id> <round>   rebuild a stored round's request (read-only)
+  mypi --server              run the daemon in the foreground
 
 Options:
   -h, --help        Print this help and exit
@@ -31,7 +46,8 @@ Options:
   --model <p:id>    Session model override (provider:id, not persisted)
 
 Configuration: ~/.config/mypi/config.yaml (see models_example.yml in the repo).
-Sessions:      ~/.local/share/mypi/sessions.db";
+Sessions:      ~/.local/share/mypi/sessions.db
+Daemon socket: $XDG_RUNTIME_DIR/mypi.sock (auto-started by the TUI)";
 
 impl Cli {
     /// Parse argv (excluding argv[0]). Unknown flags and stray positionals
@@ -49,6 +65,7 @@ impl Cli {
                     println!("mypi {}", env!("CARGO_PKG_VERSION"));
                     std::process::exit(0);
                 }
+                "--server" => cli.server = true,
                 "--resume" => cli.resume = true,
                 "--model" => {
                     let v = it.next().ok_or_else(|| {
@@ -59,10 +76,40 @@ impl Cli {
                     }
                     cli.model = Some(v);
                 }
+                "attach" => {
+                    let v = it.next().ok_or_else(|| {
+                        anyhow::anyhow!("attach needs a session id: mypi attach <id>")
+                    })?;
+                    cli.attach = Some(v.parse().map_err(|_| {
+                        anyhow::anyhow!("attach expects a numeric session id, got `{v}`")
+                    })?);
+                }
+                "sessions" => cli.sessions = true,
+                "replay" => {
+                    let v = it.next().ok_or_else(|| {
+                        anyhow::anyhow!("replay needs: mypi replay <session id> <round>")
+                    })?;
+                    let id: i64 = v
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("replay expects a numeric session id, got `{v}`"))?;
+                    let v = it.next().ok_or_else(|| {
+                        anyhow::anyhow!("replay needs a round number: mypi replay <id> <round>")
+                    })?;
+                    let round: i64 = v
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("replay expects a numeric round, got `{v}`"))?;
+                    cli.replay = Some((id, round));
+                }
                 other => anyhow::bail!("unknown argument `{other}` — see `mypi --help`"),
             }
         }
         Ok(cli)
+    }
+
+    /// True when this invocation is a one-shot query (no TUI, no daemon
+    /// spawn unless one is needed to answer).
+    pub fn is_oneshot(&self) -> bool {
+        self.server || self.sessions || self.replay.is_some()
     }
 }
 
@@ -98,5 +145,36 @@ mod tests {
     fn unknown_arg_is_error() {
         assert!(parse(&["--resune"]).is_err());
         assert!(parse(&["extra-positional"]).is_err());
+    }
+
+    #[test]
+    fn server_flag() {
+        assert!(parse(&["--server"]).unwrap().server);
+        assert!(parse(&["--server"]).unwrap().is_oneshot());
+        assert!(!parse(&[]).unwrap().is_oneshot());
+    }
+
+    #[test]
+    fn attach_takes_a_numeric_id() {
+        let c = parse(&["attach", "42"]).unwrap();
+        assert_eq!(c.attach, Some(42));
+        assert!(!c.is_oneshot(), "attach is a TUI mode, not a one-shot");
+        assert!(parse(&["attach"]).is_err(), "missing id rejected");
+        assert!(parse(&["attach", "abc"]).is_err(), "non-numeric rejected");
+    }
+
+    #[test]
+    fn sessions_is_a_oneshot() {
+        assert!(parse(&["sessions"]).unwrap().sessions);
+        assert!(parse(&["sessions"]).unwrap().is_oneshot());
+    }
+
+    #[test]
+    fn replay_takes_two_numbers() {
+        let c = parse(&["replay", "7", "3"]).unwrap();
+        assert_eq!(c.replay, Some((7, 3)));
+        assert!(c.is_oneshot());
+        assert!(parse(&["replay", "7"]).is_err(), "missing round rejected");
+        assert!(parse(&["replay", "a", "3"]).is_err());
     }
 }

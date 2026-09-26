@@ -1,5 +1,5 @@
 // 端到端：search() 直连 tier → 兜底 tier（真实 Bing + Helium CDP）
-use mypi::ai::config::BrowserConfig;
+use mypi::server::ai::config::BrowserConfig;
 use mypi::web::{SearchArgs, render, search};
 
 fn main() -> anyhow::Result<()> {

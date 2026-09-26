@@ -8,7 +8,7 @@
 use anyhow::anyhow;
 
 use super::super::engine::SearchHit;
-use crate::ai::config::BrowserConfig;
+use crate::server::ai::config::BrowserConfig;
 use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
 use crate::web::utils::session::{self, RENDER_WAIT};
 use crate::web::utils::url::{percent_decode, urlencoded};

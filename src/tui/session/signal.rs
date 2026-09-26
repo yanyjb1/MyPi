@@ -1,18 +1,20 @@
 //! Signal protocol — everything that can dirty a region, on one channel.
 //!
-//! The main loop is **signal-driven, not polled**: an input thread
-//! forwards crossterm events, the server facade forwards `SessionEvent`s,
-//! and the loop blocks on `recv()` until something arrives. Zero CPU
-//! while idle. A dirty region is marked idempotently — a burst of
-//! deltas coalesces into one repaint — and ratatui's internal double
+//! The main loop is **signal-driven, not polled**: the input thread
+//! forwards crossterm events and the socket reader thread forwards wire
+//! messages, and the loop blocks on `recv()` until something arrives. Zero
+//! CPU while idle. A dirty region is marked idempotently — a burst of
+//! frames coalesces into one repaint — and ratatui's internal double
 //! buffer diff means only changed cells reach the terminal.
-
-use crate::server::events::SessionEvent;
 
 /// One unit of "something happened". Regions decide for themselves
 /// whether a signal dirties them; the loop never inspects the payload.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // ServerMsg 天然大：Box 化徒增分配，信号即弃，无实害
 pub enum Signal {
+    // clippy::large_enum_variant: ServerMsg 携带转录条目，天然比按键事件大
+    // 一个量级。Box 化会让每条消息多一次分配；信号通道在本循环内、批量
+    // 处理后即弃，大小差异无实际代价，故保留未装箱。
     /// A semantic action translated from keyboard/paste input (input
     /// thread → main loop; translation needs the current KeyContext,
     /// which only the main thread can build).
@@ -26,19 +28,15 @@ pub enum Signal {
     Paste(String),
     /// Mouse event; routed by hit-testing the last frame's layout.
     Mouse(ratatui::crossterm::event::MouseEvent),
+    /// A fresh workspace git snapshot from the poller thread. Borrowed: the
+    /// poller owns the value; components clone what they keep (the git
+    /// segment already does). `None` = outside a repository (segment hides).
+    Git(Option<crate::git::GitStatus>),
     /// Terminal resized: all width-dependent caches are invalid.
     Resized,
-    /// The turn runner produced an event (delta / tool / commit / done).
-    Session(SessionEvent),
-}
-
-impl Signal {
-    /// True when the signal is a keyboard or paste action — the loop
-    /// routes these through `App::apply`, everything else is advisory
-    /// (mark dirty + collect cascades).
-    pub fn is_action(&self) -> bool {
-        matches!(self, Signal::Key(_) | Signal::Paste(_))
-    }
+    /// A message pushed by the daemon (socket reader thread → main loop).
+    /// Dispatched to the `SessionView`, which maps it onto zone calls.
+    Server(crate::server::wire::ServerMsg),
 }
 
 #[cfg(test)]
@@ -46,12 +44,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn actions_are_keys_and_pastes() {
+    fn signal_enum_covers_all_sources() {
+        // 信号源完整性：键/粘贴/鼠标/resize/服务端推送 五路都必须能构造。
         use ratatui::crossterm::event::{KeyCode, KeyEvent as K, KeyModifiers};
         let k = K::new(KeyCode::Char('a'), KeyModifiers::NONE);
-        assert!(Signal::Key(k).is_action());
-        assert!(Signal::Paste("x".into()).is_action());
-        assert!(!Signal::Resized.is_action());
-        assert!(!Signal::Session(SessionEvent::Done).is_action());
+        let _ = Signal::Key(k);
+        let _ = Signal::Paste("x".into());
+        let _ = Signal::Resized;
+        let _ = Signal::Server(crate::server::wire::ServerMsg::HelloOk {
+            proto: 1,
+            commands: Vec::new(),
+        });
     }
 }

@@ -1,4 +1,4 @@
-use mypi::ai::config::BrowserConfig;
+use mypi::server::ai::config::BrowserConfig;
 use mypi::web::fetch::{FetchArgs, fetch};
 fn main() -> anyhow::Result<()> {
     let args = FetchArgs {

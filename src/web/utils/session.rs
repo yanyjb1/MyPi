@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::cdp::{Browser, Cdp, Target};
-use crate::ai::config::BrowserConfig;
+use crate::server::ai::config::BrowserConfig;
 use crate::xdg::browser_profile_dir;
 
 pub(crate) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -35,11 +35,52 @@ pub(crate) const POLL_TIMEOUT: Duration = Duration::from_secs(8);
 /// The profile directory to use: `$MYPI_BROWSER_PROFILE_DIR` wins (tests and
 /// parallel sessions), then `config.yaml → browser.profileDir`, then the XDG
 /// data default.
+/// Where this process's browser keeps its profile.
+///
+/// Three answers, in order:
+///
+/// 1. an explicit directory — `$MYPI_BROWSER_PROFILE_DIR` or
+///    `config.yaml → browser.profileDir` (naming a directory *is* the request
+///    for the logins in it, so this wins over the toggle);
+/// 2. `browser.persistProfile: false` — a throwaway directory, one per process,
+///    removed when the browser we launched is reaped;
+/// 3. otherwise the shared `$XDG_DATA_HOME/mypi/browser/profile`, so logins,
+///    cookies and extensions survive restarts.
 fn profile_dir(cfg: &BrowserConfig) -> PathBuf {
     if let Some(d) = std::env::var_os("MYPI_BROWSER_PROFILE_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
     }
-    cfg.profile_dir.clone().unwrap_or_else(browser_profile_dir)
+    if let Some(d) = &cfg.profile_dir {
+        return d.clone();
+    }
+    if !cfg.persist_profile {
+        return ephemeral_profile_dir().to_path_buf();
+    }
+    browser_profile_dir()
+}
+
+/// The throwaway profile for this process: created once, reused by every call
+/// in the same process (so two tool calls in one session still see one browser
+/// with one set of cookies), and deleted when that browser is reaped.
+fn ephemeral_profile_dir() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("mypi-browser-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    })
+}
+
+/// Is this profile one we made up for a single process (and must clean up)?
+///
+/// Compares the file name, not a path prefix: `starts_with` works on path
+/// *components*, and the last component here is `mypi-browser-<pid>`.
+pub(crate) fn is_ephemeral_profile(dir: &std::path::Path) -> bool {
+    dir.parent() == Some(std::env::temp_dir().as_path())
+        && dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("mypi-browser-"))
 }
 
 /// One connected page, pinned to a specific tab. Clones share the socket
@@ -317,4 +358,32 @@ pub(crate) fn with_work<T>(
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     with_tab(cfg, "work", None, f)
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn the_profile_dir_answers_three_ways() {
+        // An explicit directory is a request for the logins in it, so it wins
+        // over the toggle…
+        let cfg = BrowserConfig {
+            profile_dir: Some(PathBuf::from("/tmp/mypi-explicit-profile")),
+            persist_profile: false,
+            ..Default::default()
+        };
+        assert_eq!(profile_dir(&cfg), PathBuf::from("/tmp/mypi-explicit-profile"));
+
+        // …and with the toggle off and nothing named, the profile is one we
+        // invent, reuse across calls, and delete with the browser.
+        let cfg = BrowserConfig {
+            persist_profile: false,
+            ..Default::default()
+        };
+        let dir = profile_dir(&cfg);
+        assert!(is_ephemeral_profile(&dir), "{}", dir.display());
+        assert_eq!(profile_dir(&cfg), dir, "同一进程内必须复用同一个目录");
+        assert!(dir.exists(), "目录必须真的建出来");
+    }
 }

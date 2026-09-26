@@ -2,9 +2,8 @@
 //! the frame pump. app.rs answers "what does this keypress mean"; this
 //! domain owns everything from process start to cursor placement.
 
-mod db;
 mod r#loop;
 pub mod signal;
+pub mod view;
 
-pub(crate) use db::{db_path, migrate_legacy_db};
 pub use r#loop::run_tui;

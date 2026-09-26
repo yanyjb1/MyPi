@@ -25,11 +25,25 @@
 use anyhow::{Context as _, bail};
 use std::path::{Path, PathBuf};
 
-use crate::ai::config::Config;
+use crate::server::ai::config::Config;
 
 /// The built-in prompt every profile replaces. Also the fallback when
 /// no profiles dir exists.
 pub const BUILTIN_SYSTEM: &str = "你是一个简洁的编程助手。用中文回答。";
+
+/// 内置的 `oh-my-pi`：omp 的系统提示词（去掉工具清单那几节，见
+/// [`crate::server::prompts`]）。它不依赖任何文件——没有 profiles 目录
+/// 也挑得到。
+pub const OMP_PROFILE: &str = "oh-my-pi";
+
+/// 按名字找内置 profile 的系统提示词。
+fn builtin_system(name: &str) -> Option<&'static str> {
+    match name {
+        OMP_PROFILE => Some(crate::server::prompts::OH_MY_PI_SYSTEM),
+        "default" => Some(BUILTIN_SYSTEM),
+        _ => None,
+    }
+}
 
 /// One discovered profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,15 +142,22 @@ pub fn active_name(cfg: &Config) -> String {
 /// profile *names* never fail silently here — the caller surfaces the
 /// "not found" before reaching this.
 pub fn resolve(cfg: &Config, name: &str) -> anyhow::Result<(String, Option<Vec<String>>)> {
+    // 内置身份优先：`oh-my-pi` 是随二进制发的提示词，不靠用户的文件系统。
+    // 用户若在 profiles 目录里建了同名目录，那就是他显式的**覆盖**——所以
+    // 这一支只在目录里没有同名 profile 时生效。
     let base = profiles_dir(cfg)?;
+    if let Some(builtin) = builtin_system(name)
+        && !discover(&base).iter().any(|p| p.name == name)
+    {
+        return Ok((builtin.into(), None));
+    }
     let found = discover(&base);
     if !found.is_empty() || base.is_dir() {
         if let Some(p) = found.iter().find(|p| p.name == name) {
             return Ok((p.load_system()?, p.load_tools()?));
         }
-        if name == "default" && found.iter().all(|p| p.name != "default") {
-            // No explicit default dir: fall through to the built-in prompt.
-            return Ok((BUILTIN_SYSTEM.into(), None));
+        if let Some(builtin) = builtin_system(name) {
+            return Ok((builtin.into(), None));
         }
         let names = found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
         bail!("未知 profile：{name}。可用：{}", names.join(", "));
@@ -154,6 +175,9 @@ pub fn list(cfg: &Config) -> Vec<String> {
         .collect::<Vec<_>>();
     if !names.iter().any(|n| n == "default") {
         names.insert(0, "default".into());
+    }
+    if !names.iter().any(|n| n == OMP_PROFILE) {
+        names.push(OMP_PROFILE.into());
     }
     names
 }
@@ -194,6 +218,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// 内置 profile 不依赖文件系统：`oh-my-pi` 随二进制发出去，
+    /// 用户没建 profiles 目录时它照样在花名册里、照样解析得出来。
+    #[test]
+    fn builtin_profiles_exist_without_any_directory() {
+        let omp = builtin_system(OMP_PROFILE).expect("oh-my-pi 是内置的");
+        assert!(omp.contains("§ Role"), "抄的是 omp 那份");
+        assert!(omp.contains("§ Delivery"), "交付契约那几节要在");
+        assert!(
+            !omp.contains("{{"),
+            "模板标记一个都不许留（抄的是渲染后的成品）"
+        );
+        assert!(builtin_system("default").unwrap().contains("编程助手"));
+        assert!(builtin_system("没有这个").is_none());
+    }
+
     #[test]
     fn dir_without_system_md_is_not_a_profile() {
         let base = scratch("empty");
@@ -215,7 +254,7 @@ mod tests {
     fn tool_gate_hides_and_refuses() {
         // Gate one: the roster the model sees drops disabled tools but
         // always keeps `context` (the compressed-session escape hatch).
-        let mut t = crate::agent::tools::BuiltinTools::new(std::env::temp_dir())
+        let mut t = crate::server::agent::tools::BuiltinTools::new(std::env::temp_dir())
             .with_enabled(Some(vec!["read".into()]));
         let roster = t.definitions_for();
         let names: Vec<&str> = roster.iter().map(|d| d.function.name.as_str()).collect();
@@ -223,15 +262,15 @@ mod tests {
         assert!(!names.contains(&"bash") && !names.contains(&"browser"));
 
         // Gate two: execute refuses a hallucinated call.
-        let call = crate::ai::types::ToolCall::new("c1", "bash", "{}");
+        let call = crate::server::ai::types::ToolCall::new("c1", "bash", "{}");
         let err = format!(
             "{:#}",
-            crate::agent::loop_rs::ToolExecutor::execute(&mut t, &call).unwrap_err()
+            crate::server::agent::loop_rs::ToolExecutor::execute(&mut t, &call, &mut |_| {}).unwrap_err()
         );
         assert!(err.contains("disabled by the active profile"), "{err}");
 
         // `context` itself passes the gate despite not being listed.
-        let call = crate::ai::types::ToolCall::new(
+        let call = crate::server::ai::types::ToolCall::new(
             "c2",
             "context",
             r##"{"intent":"查历史","anchor":"#1"}"##,
@@ -240,22 +279,22 @@ mod tests {
         // *lookup* error, not the gate error.
         let err = format!(
             "{:#}",
-            crate::agent::loop_rs::ToolExecutor::execute(&mut t, &call).unwrap_err()
+            crate::server::agent::loop_rs::ToolExecutor::execute(&mut t, &call, &mut |_| {}).unwrap_err()
         );
         assert!(err.contains("历史里没有"), "{err}");
     }
 
     #[test]
     fn tool_gate_none_is_pass_through() {
-        let mut t = crate::agent::tools::BuiltinTools::new(std::env::temp_dir());
+        let mut t = crate::server::agent::tools::BuiltinTools::new(std::env::temp_dir());
         assert!(
-            t.definitions_for().len() == crate::agent::tools::BuiltinTools::definitions().len()
+            t.definitions_for().len() == crate::server::agent::tools::BuiltinTools::definitions().len()
         );
-        let call = crate::ai::types::ToolCall::new(
+        let call = crate::server::ai::types::ToolCall::new(
             "c1",
             "bash",
             "{\"command\":\"echo hi\",\"intent\":\"x\"}",
         );
-        let _ = crate::agent::loop_rs::ToolExecutor::execute(&mut t, &call); // runs or fails naturally — not gate-rejected
+        let _ = crate::server::agent::loop_rs::ToolExecutor::execute(&mut t, &call, &mut |_| {}); // runs or fails naturally — not gate-rejected
     }
 }

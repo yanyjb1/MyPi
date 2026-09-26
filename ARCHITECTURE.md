@@ -1,6 +1,6 @@
 # MyPi 架构
 
-一个终端编程 agent：会话服务（`server`）+ agent 循环（`agent`）+ TUI（`tui`）。
+一个终端编程 agent：会话服务（`server`，含网关 `ai`、执行引擎 `agent`、持久化 `store`）+ TUI（`tui`）。
 规模：`src/` 约 2.64 万行 / 90 个文件；单 crate，edition 2024；`cargo test` 495 项全绿。
 
 本文只写**现在成立的事实与规则**。规则由 `src/lib.rs` 里的 `mod architecture`
@@ -136,19 +136,25 @@ browser:
 
 ---
 
-## 6. 模块地图（行数，2026-09-24）
+## 6. 模块地图（行数，2026-09-25）
+
+> 服务端要拆成 daemon、前端走 socket 的设计见 **[SERVER.md](SERVER.md)**（一页纸，未动代码）。
 
 | 模块 | 行数 | 内容 |
 |---|---|---|
-| `tui/` | 13,747 | `app`（状态+循环）、`keys`、`editor/{mod,paste,undo,history}`、`view`、`layout`、`completion/{engine,controller,leaf,popup}`、`transcript/{blocks,cache,components}`、`components/*`、`theme/`、`chat/{commands,tree}`、`session/{loop,db,signal}`、`zones*` |
-| `agent/` | 3,201 | `loop_rs`（纯循环）、`tools`（read/edit/mass_edit/bash/cd/context + 联网派发）、`bash_guard`（许可区分类器）、`artifacts`（巨物 #N） |
-| `server/` | 2,718 | `events`（协议）、`session`（状态机 + facade）、`turn`（轮线程 + 上下文重建）、`compaction`、`profile` |
-| `web/` | 2,317 | `fetch` / `search` / `browser` 三域 + `utils/{cdp,session,html,url}` |
-| `ai/` | 2,277 | `client`（SSE）、`types`（wire 类型）、`config`（models.yml + config.yaml 的**全部** schema）、`pricing` |
-| `store` `entry` `grouping` `xdg` `git` `ansi` `cli` | 1,846 | 叶子层 |
+| `server/` | 11,006 | **服务端全部**：`events`（协议）、`session`（状态机 + facade）、`turn`（轮线程 + 上下文重建）、`hub`（多会话宿主）、`compaction`、`profile`、`log`（内存日志）、`store`（SQLite + 回合请求头）、`entry`（协议数据模型）、`ai/`（网关：client/types/config/pricing）、`agent/`（执行引擎：loop/tools/artifacts/bash_guard） |
+| `tui/` | 16,188 | 前端：`app`、`keys`、`zone/main/{history,input,reserved}`、`input/editor`、`statusline`、`theme`、`session/{loop,signal}` |
+| `web/` | 2,319 | `fetch` / `search` / `browser` 三域 + `utils/{cdp,session,html,url}` |
+| `grouping` `xdg` `git` `ansi` `cli` | 668 | 叶子层（块分组、平台目录、git 状态、ANSI 剥离、命令行） |
 
-config.yaml 的 schema（含 `tools` / `browser` / `compact` / `theme` / `profile`）
-**只在 `ai::config` 定义**：配置层是叶子，它不认上层类型，消费方向下 import。
+**2026-09-25 搬家**：`entry` / `store` / `ai` / `agent` 从 crate 根目录收进 `server/`。
+前端（含 TUI）只认 `mypi::server`，服务端换内部结构不再牵动别人调用点。
+分层规则同时改成**路径前缀对**（`lib.rs` 的 `architecture` 测试），
+所以文件搬进子模块后规则仍然指得准（例如 `server::agent` 不许引用 `server::session`）；
+另有一条兜底：`server/` 下任何文件都不许点名 `tui`。
+
+config.yaml 的 schema（含 `tools` / `browser` / `compact` / `theme` / `profile` / `streaming`）
+**只在 `server::ai::config` 定义**：它不认上层类型，消费方向下 import。
 
 ---
 
@@ -166,6 +172,13 @@ config.yaml 的 schema（含 `tools` / `browser` / `compact` / `theme` / `profil
 ```
 
 `Rc` 不出线程、`Arc` 才共享——编译器把关。轮线程只发事件，落盘在主线程。
+
+**多会话（`SessionHub`）**：一个进程开 N 个会话，每个会话**自己一条 SQLite 连接**
+（WAL：读不阻塞、写排队），自己的转录、cwd、模型、流式槽、事件通道。
+数据隔离是结构性的——每张表都以 `session_id` 为主键的一部分，没有代码路径能跨过去。
+并发来自「一个回合一个线程」：两个会话可以同时生成，各自的事件只能回到自己的 id。
+宿主本身**不是线程**：它和会话一样由**一个线程**独占驱动（今天就是主线程），
+所以不需要锁；SQLite 负责把写者排好队。
 
 ---
 
