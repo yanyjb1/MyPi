@@ -18,6 +18,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::blocks::Deferred;
 use super::highlight;
 use super::theme::{HistoryTheme, Token};
 
@@ -36,10 +37,20 @@ impl Row {
 }
 
 /// Render markdown text into rows. Empty text yields nothing.
-pub fn render_markdown(text: &str, t: &HistoryTheme) -> Vec<Line<'static>> {
+///
+/// `defer` 时**代码围栏按纯文本出图**，并把每个围栏的位置与源码一并交回
+/// （[`Deferred`]），由调用方决定何时补色。围栏之间是独立的渲染单元
+/// （每个围栏一个 fresh `ParseState`），所以"先出哪个围栏的颜色"是自由的。
+pub fn render_markdown(
+    text: &str,
+    t: &HistoryTheme,
+    defer: bool,
+) -> (Vec<Line<'static>>, Vec<Deferred>) {
     // Colors read from the global theme (fresh per call): runtime theme
     // switches recolor the next render with no signature churn.
     let mut out: Vec<Line<'static>> = Vec::new();
+    // 推迟上色的段（只在新 `defer` 时非空）。
+    let mut deferred: Vec<Deferred> = Vec::new();
     // Current row being assembled (paragraph / list item text).
     let mut row: Option<Row> = None;
     // Inline style state.
@@ -140,8 +151,22 @@ pub fn render_markdown(text: &str, t: &HistoryTheme) -> Vec<Line<'static>> {
                 } else {
                     Some(lang.as_str())
                 };
-                for line in highlight::highlight(&code_buf, hint, t) {
-                    out.push(line);
+                if defer {
+                    // 纯文本出图 + 登记这一段：行数与颜色无关，几何照旧。
+                    let before = out.len();
+                    let plain = highlight::plain(&code_buf);
+                    let count = plain.len();
+                    out.extend(plain);
+                    deferred.push(Deferred {
+                        before,
+                        count,
+                        code: std::mem::take(&mut code_buf),
+                        lang: hint.map(str::to_string),
+                    });
+                } else {
+                    for line in highlight::highlight(&code_buf, hint, t) {
+                        out.push(line);
+                    }
                 }
                 out.push(Line::from(
                     t.fg("```".to_string(), Token::MdCodeBlockBorder),
@@ -263,7 +288,13 @@ pub fn render_markdown(text: &str, t: &HistoryTheme) -> Vec<Line<'static>> {
     if out.last().is_some_and(|l| l.spans.is_empty()) {
         out.pop();
     }
-    out
+    (out, deferred)
+}
+
+/// 测试用的便捷入口：不推迟上色，只要行。
+#[cfg(test)]
+fn render_markdown_at(text: &str, t: &HistoryTheme) -> Vec<Line<'static>> {
+    render_markdown(text, t, false).0
 }
 
 #[cfg(test)]
@@ -291,7 +322,7 @@ mod tests {
 
     #[test]
     fn bold_and_plain_mix() {
-        let lines = render_markdown("**bold** plain", &t());
+        let lines = render_markdown_at("**bold** plain", &t());
         assert_eq!(lines.len(), 1);
         assert!(lines[0].spans[0].style.has_modifier(Modifier::BOLD));
         assert!(!lines[0].spans[1].style.has_modifier(Modifier::BOLD));
@@ -299,7 +330,7 @@ mod tests {
 
     #[test]
     fn code_block_is_fenced_and_indented() {
-        let lines = render_markdown("```rust\nlet x = 1;\n```", &t());
+        let lines = render_markdown_at("```rust\nlet x = 1;\n```", &t());
         let all = text_of(&lines);
         assert!(all.starts_with("```"), "{all}");
         assert!(all.trim_end().ends_with("```"), "{all}");
@@ -308,7 +339,7 @@ mod tests {
 
     #[test]
     fn heading_is_bold_accent() {
-        let lines = render_markdown("## 标题", &t());
+        let lines = render_markdown_at("## 标题", &t());
         assert_eq!(lines.len(), 1);
         assert!(lines[0].spans[0].style.has_modifier(Modifier::BOLD));
         assert_eq!(
@@ -319,20 +350,20 @@ mod tests {
 
     #[test]
     fn h3_keeps_hash_prefix() {
-        let lines = render_markdown("### 深层", &t());
+        let lines = render_markdown_at("### 深层", &t());
         assert_eq!(lines[0].spans[0].content, "### ");
     }
 
     #[test]
     fn quote_gets_bar_prefix() {
-        let lines = render_markdown("> 引用一句", &t());
+        let lines = render_markdown_at("> 引用一句", &t());
         assert_eq!(lines[0].spans[0].content, "▏ ");
     }
 
     #[test]
     fn ordered_list_keeps_numbers() {
         let md = "1. first\n2. second\n3. third";
-        let all = text_of(&render_markdown(md, &t()));
+        let all = text_of(&render_markdown_at(md, &t()));
         assert!(all.contains("1. first"), "{all}");
         assert!(all.contains("2. second"), "{all}");
         assert!(all.contains("3. third"), "{all}");
@@ -340,7 +371,7 @@ mod tests {
 
     #[test]
     fn unordered_list_uses_dash() {
-        let all = text_of(&render_markdown("- a\n- b", &t()));
+        let all = text_of(&render_markdown_at("- a\n- b", &t()));
         assert!(all.contains("- a"), "{all}");
         assert!(all.contains("- b"), "{all}");
     }
@@ -348,7 +379,7 @@ mod tests {
     #[test]
     fn nested_list_indents() {
         let md = "- top\n  - inner";
-        let all = text_of(&render_markdown(md, &t()));
+        let all = text_of(&render_markdown_at(md, &t()));
         let inner = all.lines().find(|l| l.contains("inner")).expect("row");
         assert!(inner.starts_with("  - "), "{all}"); // omt: 每级 2 格，恰好对齐上级文本
     }
@@ -358,7 +389,7 @@ mod tests {
         // Continuation of a wrapped item aligns past the bullet; here the
         // item is one row, so just verify the prefix exists and the bullet
         // is list-bullet colored.
-        let lines = render_markdown("- item", &t());
+        let lines = render_markdown_at("- item", &t());
         assert_eq!(
             lines[0].spans[0].style.fg,
             Some(HistoryTheme::resolve().get(Token::MdListBullet))
@@ -368,7 +399,7 @@ mod tests {
 
     #[test]
     fn inline_code_stays_inline() {
-        let lines = render_markdown("改 `main.rs` 和 `lib.rs`", &t());
+        let lines = render_markdown_at("改 `main.rs` 和 `lib.rs`", &t());
         assert_eq!(lines.len(), 1, "行内 code 不能断行");
         let t = HistoryTheme::resolve();
         assert_eq!(
@@ -379,13 +410,13 @@ mod tests {
 
     #[test]
     fn softbreak_breaks_row() {
-        let lines = render_markdown("一行\n二行", &t());
+        let lines = render_markdown_at("一行\n二行", &t());
         assert_eq!(lines.len(), 2);
     }
 
     #[test]
     fn empty_input_gives_empty_output() {
-        assert!(render_markdown("", &t()).is_empty());
+        assert!(render_markdown_at("", &t()).is_empty());
     }
 
     #[test]
@@ -402,13 +433,13 @@ mod tests {
 
     #[test]
     fn link_autolink_renders_plain() {
-        let all = text_of(&render_markdown("<https://example.com>", &t()));
+        let all = text_of(&render_markdown_at("<https://example.com>", &t()));
         assert!(all.contains("https://example.com"), "{all}");
     }
 
     #[test]
     fn rule_is_mdhr_colored() {
-        let lines = render_markdown("---\n\n正文", &t());
+        let lines = render_markdown_at("---\n\n正文", &t());
         assert_eq!(
             lines[0].spans[0].style.fg,
             Some(HistoryTheme::resolve().get(Token::MdHr))

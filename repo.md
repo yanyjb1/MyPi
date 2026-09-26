@@ -2047,6 +2047,999 @@ Tab/Enter → `Confirm`、↑↓/Esc → 原样借出去；`KeyContext::for_inpu
 
 ---
 
+## 27. 第十七轮：死代码普查 + 三个性能改动（顺带挖出一个真回归）
+
+用户点名：集中砍死代码、做性能，发现"旧接口/旧做法"直接扔，扔了说一声。
+
+### 27.1 普查方法（因为 `pub` 项编译器不管）
+
+`src/lib.rs` 是 `pub mod` 全开，所以"没人用的 `pub fn`"**不会**触发 dead_code
+警告——`cargo clippy` 全绿不代表没有死代码。做法：脚本把所有 `pub(…)` 定义
+（fn/struct/enum/trait/const/type/mod）抠出来，把 `#[cfg(test)] mod tests` 整段
+挖空后按**词元**计数，`prod ≤ 1`（只有定义那一行）即候选。968 个 pub 项 →
+**14 个零引用** + **22 个只有测试引用**。
+
+### 27.2 扔掉（13 处，共 24 个符号）
+
+| 扔掉的 | 为什么是死的 |
+|---|---|
+| `Config::save_profile` / `save_default` | 整份 YAML 往返重写（**会吃掉用户注释**），已被逐行的 `write_default_key` / `set_default_model` 取代 |
+| `SessionState::extend_pending` / `set_pending` / `clear_pending` | pending 字段有人用，这三个写口没有 |
+| `Session::rebuild_chat` | 与 `hub::resume` 里那行 `entries_to_context` 完全重复 |
+| `Store::list_sessions_under` | 被 `list_session_rows`（多带首条消息 + 字节数）取代，其测试的断言新接口已有 |
+| `Theme::fg_on_bg`、`Theme::muted_span`、`ColorToken::is_background`、`HistoryTheme::on_bg_style` | 四个没人调用的取样式器 |
+| `SeparatorTable::is_separator` | 注释自己写着"兼容旧语义" |
+| `SeparatorTable::with_overrides` | 写着"config 注入口"，但没有任何 config 键喂它 |
+| `trait SubZoneHandle` | 没有任何实现者 |
+| `struct HeightNotice` | 没有任何产出口/消费口 |
+| `xdg::config_base` | 与 `ai::config::xdg_config_base` 重复 |
+| `Cli::is_oneshot` | 零调用（`main.rs` 自己按 `server`/`sessions`/`replay` 分派），测试里那 5 条断言是在测一个没人用的谓词 |
+| `ReservedArea::release` | 占用靠"沉默自过期"（`resolve` 每帧重算），显式释放没人调 |
+
+测试数 692 → 693（删了 4 个测死代码的、加了 2 个 config + 2 个迁移 + 1 个流式去重）。
+
+### 27.3 挖出来的真回归：老库迁移掉了调用点
+
+`store::migrate_legacy_db` 在 `684a1d2`/`3bd8130` 是**启动时调用**的
+（`src/tui/app.rs:183` / `src/tui/session/loop.rs:168`），`abec133` 那次大重构把它
+搬进了 `server/store.rs`，**调用点丢了**。后果：`$XDG_DATA_HOME/mypi` 还是老
+**文件**布局的用户，升级后老会话直接"消失"（谁也读不到），而且不报错。
+
+- 修法：`main()` 里、任何模式打开数据库之前调一次（`--server` 建库、
+  `sessions`/`replay` 直接读库，漏一个都不行），幂等。
+- 测试：`legacy_migration_tests`（老文件 + WAL 一起搬、幂等、已是目录时一个
+  字节不动）。
+
+### 27.4 性能：做了三件，量了两件，劝退一件
+
+**a) daemon 横幅不再漏进 TUI（§8-20）**：spawn 时 stdout 也接 null（stderr 一起，
+daemon 的诊断本来就走内存 ring，不写终端）。真机 `banner_check.py`（新脚本）：
+原始字节流里没有 `listening on`、socket 起来、状态栏画出来了——三项全过。
+
+**b) 画面没变的流式快照不再发（§8-16）**：`Change::Stream` 只说明会话碰了流式
+槽位，**不等于**画面变了；而每一帧 `Stream` 都要前端付一次整帧重绘。现在按
+**逐字段**比（不是比长度——工具输出的尾巴是滑动窗口，长度可以不变而内容是
+新的）：和上一帧一样就不发。长跑命令的进度尾巴正好是这种"很多 delta、同一
+画面"的场景。测试 `an_unchanged_stream_snapshot_is_not_shipped` 钉住"比内容不
+比长度"；真机 `stream_check.py` 证明真 delta 照旧上屏（三块间隔 0.102 s）。
+
+**c) 顺手**：`shipped`（按 (会话,连接) 记，连接号只增不减）与新增的
+`last_stream` 在会话关掉后清理，不再只长不缩。
+
+**没做，理由写在这里**：
+
+- **§8-14 每 watcher 各切一份块**：省下来的前提是"多个前端在同一代、同一偏移
+  上同时要全量"——缓存那份切片等于再存一份转录（32k 条约 35 MB），比省下的
+  CPU 贵。不值得。
+- **§8-15 / §8-17 内存 3.7× / 双份转录**：结构性，动它等于动契约。
+- **§8-18 / §8-21 冷走查尖峰**：见 27.5，根因找到但不是"变体失效"，也不是能
+  靠一行改掉的东西。
+
+### 27.5 §8-21 的归因是错的：尖峰是**冷走查**，不是变体失效
+
+`tui_scale_bench` 复现（8000 条）：`mean 4.07 / p99 11.37 / max 48.85 ms`，
+最差帧全部落在 ctrl-T/ctrl-O 上——和 §8-21 记的一致。但插桩之后：
+
+```
+TRACE sync=0us walk=38671us rows=9us      ← 一次冷走查 38 ms
+TRACE sync=0us walk=83us    rows=8us      ← 之后同区段 83 µs
+WALK crossed=4720 misses=1 miss_us=95     ← 走查 4720 块只补量 1 块
+DRAW total=41779us zone=38509us other=3270us   ← 尖峰在 Zone 渲染，不在终端 diff
+RENDER history=38427us                    ← 全在历史区
+```
+
+- 尖峰是 `window_from_bottom` 的**反向走查**：它要从转录底部走到视口，沿途每
+  一块都要高度；**没有高度备忘**的块就得现渲染（一次 ~130-180 µs），一帧补量
+  几百块就是 40-50 ms。
+- 为什么切换折叠会触发：Ctrl-T/Ctrl-O 改变**文档总高**，同一个行偏移现在落在
+  别的区段上——那片块的备忘是冷的。**不是**"变体失效"：`admit` 一次就把两档
+  高度都写进备忘（`[h, h_on]`），所以变体从来没失效过。
+- 这是**一次性**的：走查过的区段再走就是 µs 级（`misses=1`）。所以 §8-18 的
+  "0-1 帧冷缓存尖峰"和 §8-21 是**同一个**现象，只是触发方式不同（滚进新区段 /
+  切换折叠把视口挪进新区段）。
+- 试过"走查补量的块不进行缓存"（避免冲掉视口那几块的行缓存）：8000 条
+  `over-budget 13/2665`（改前 10-17）、32000 条 `64/10694`（改前 61-64）——
+  **在噪声里**，没有收益，已回退。根因是"高度要靠渲染算出来"，要真解决得给
+  渲染层加一条只算高度的快路径（改设计，不在本轮）。
+
+### 27.6 本轮基线
+
+`cargo test` **693**、`clippy --all-targets` **0 警告**、`cargo build --release`
+干净。真机：`banner_check.py`（3/3）、`stream_check.py`（间隔 0.102 s）、
+`resume_check.py`（12/12）、`tool_check.py`（工具卡 + 分页提示 + 终稿上屏；
+该脚本的探针字符串原先是从 `stream_check.py` 抄来的旧文案，一并改正）。
+
+---
+
+## 28. 第十八轮：清掉全部兼容/迁移代码 + 历史渲染到底在不在重渲染
+
+### 28.1 兼容代码清零（用户明确要求：没发布、没有老用户、不迁移）
+
+| 删掉的 | 原用途 |
+|---|---|
+| `store` 的 schema 升级：`cwd` 列的 `ALTER`、tree 的 `parent_seq`/`leaf` `ALTER` + 一次性回填 | 老库补列 |
+| `store::migrate_legacy_db`（老单文件库搬成目录）+ 上一轮加的调用与两个测试 | 老数据目录布局 |
+| `entry::from_payload` 的 `object`→`args` 回退、`view`→`result` 回退（`legacy_view_text` 整函数） | 重构前的 payload 形状 |
+| `legacy_tool_request_without_args_still_loads` 等三个"老 payload 也能读"的测试 | 同上 |
+
+tree 的两列现在**直接写在 `CREATE TABLE` 里**（`sessions.leaf`、`entries.parent_seq`），
+不再靠 open 时补列。测试 693 → 689（删掉的正是测老格式的那些）。
+
+命名里还剩的 "legacy" 是主题 `Palette`（legacy façade，活代码）与 `cd` 的"临时迁移"
+（`/cd` 的语义），都不是迁移代码。
+
+### 28.2 历史渲染：实测（32000 条，120×40，60 fps 输入）
+
+`tui_scale_bench` 现在永久打印**帧的两个半场**（子区出行 vs ratatui 差分/ANSI）和
+**块行命中 vs 现渲染**：
+
+```
+[mixed] 600 帧   mean 3.07 ms
+        frame split: zone 0.30 ms + diff/ansi 2.77 ms
+        block rows: 1287 from cache / 37 rendered   ← 600 帧只现渲染 37 块
+[full]  10694 帧 mean 4.01 ms
+        frame split: zone 1.15 ms + diff/ansi 2.86 ms
+        block rows: 16244 rendered / 10694 帧 = 1.5 块/帧（一直在进新区段）
+```
+
+- **真实滚动（连续小步）几乎全是缓存命中**（600 帧 37 次现渲染，命中率 97%），
+  我们自己的渲染只占 **0.30 ms/帧**。→ "历史反复渲染"这件事，缓存是管用的。
+- 一帧 3 ms 里 **2.77 ms 是 ratatui 的差分 + 逐格 ANSI**（bench 的 Sink 只计数，
+  所以这是纯 CPU），不是我们的代码。
+- 全量遍历时每帧 1.5 块要现渲染（因为一直在进没量过的区段），我们的渲染涨到 1.15 ms。
+
+### 28.3 尖峰（40-60 ms）的真因与触发方式
+
+- 真因：`window_from_bottom` 的冷走查——走查要给沿途每一块高度，**没有高度备忘**
+  的块只能现渲染（~130-180 µs/块），一帧补几百块就是几十毫秒；之后同区段 83 µs。
+- 触发方式：滚进没去过的老历史；**或按 Ctrl-T/Ctrl-O**——折叠改变文档总高，
+  同一个行偏移落到别的区段上，那一片是冷的。§8-21 记的就是后者。
+- 上一轮我说"一帧滑几百块"是 bench 的随机大跳，不是真实输入——用户指出得对；
+  但折叠开关那个尖峰是真实场景。
+- 预算实验：`BLOCK_BUDGET` 256 → 1024（4×）只换来 mean -5~8%、p95 -15%，
+  代价 RSS +13~15 MB → 不值，已回退到 256。
+
+### 28.4 待选方案（按推荐顺序）
+
+- **A 预热**：滚动时把视口上下各多量 ~200 行，把冷尖峰摊平成几个小帧。改动小
+  （`window_from_bottom` 里多量几块），代价是静止时也会多渲染一点（可只在连续
+  滚动时预热）。
+- **C 折叠锚定**：切换 Ctrl-T/Ctrl-O 时按高度差挪 `chat_scroll`，让视口留在热区。
+  直击那个尖峰，但精确高度差只有量过的块知道，只能近似。
+- **B 只算高度的快路径**：直击根因，但每种块要维护两套渲染、高度必须与真渲染
+  逐行一致——最容易出 bug，不推荐。
+- **E 绕开 ratatui 差分**（自己发 ANSI + 滚动指令只重画新行）：能砍掉那 2.77 ms，
+  复杂且脆，不建议先做。
+
+---
+
+## 29. 第十九轮：块口径重测 + 方案 A 的实测结论（负收益，已回退）
+
+### 29.1 口径统一：规模 = **块**
+
+用户口径：规模按**块**（一条消息 / 一条回复 / 一次工具往返），不是条目、不是行、
+不是字节。`tui_scale_bench` 现在接受块数：先按经验比例生成条目，再用真实的
+`blocks()` 校正到正好 target 块（截到块边界），并同时报块数/条目数/载荷。
+`gen` 子命令同样按块（`gen <blocks> <db> [dirty]`），真机测量用它铺库。
+
+对照（合成转录）：8k 块 = 12 491 条目 / 13.6 MB；32k 块 = 50 165 条目 / 55.5 MB。
+
+### 29.2 方案 A（滚动预热）：实测负收益，已回退
+
+做法：`window_from_bottom` 里在视口上沿之上再量 2 屏（块数上限 64），
+把"下一步要进的块"提前量好。
+
+A/B（32 000 块，真实滚动档 = 一帧 1~4 个滚轮刻度 + 随机展开/折叠）：
+
+| | mean | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| 有预热 | 3.46 | 3.64 | 4.78 | 5.69 | 6.65 ms |
+| 无预热 | **3.10** | 3.07 | 4.41 | 5.29 | 6.78 ms |
+
+原因：真实滚动一帧只走 3~12 行（≈0.2 块），而反向走查本来就从转录底部量到视口，
+冷块只剩"刚露出来的那一块"——一帧 0.2 块现渲染 ≈ 0.04 ms。预热把同样的活提前做，
+等于每帧白多做功。**用户关于"一帧几百块不成立"的判断是对的**：40~71 ms 的尖峰
+是 bench 的极端遍历档（一帧 60 行）造出来的，不是真实输入。
+
+### 29.3 重测：块口径全档（120×40，release，60 fps 输入）
+
+| 规模 | 条目 | 载荷 | 冷帧 | 脏帧 | 真实滚动 mean/p99/max | 极端遍历 max |
+|---|---|---|---|---|---|---|
+| 8k 块 | 12 491 | 13.6 MB | 3.3 | 9.0 | 3.21 / 5.06 / 6.11 ms | 42.4 ms |
+| 12k 块 | 18 720 | 20.6 MB | 4.2 | 7.9 | 3.28 / 5.14 / 5.74 ms | 61.0 ms |
+| 16k 块 | 25 201 | 27.8 MB | 3.7 | 6.9 | 3.21 / 5.28 / 6.32 ms | 43.2 ms |
+| 24k 块 | 37 565 | 41.7 MB | 4.9 | 3.4 | 3.26 / 5.47 / 8.05 ms | 70.1 ms |
+| 32k 块 | 50 165 | 55.5 MB | 4.3 | 10.5 | 3.46 / 5.69 / 6.65 ms | 71.4 ms |
+
+- **真实滚动档**（一帧 3~12 行 + 随机展开/折叠，从底部往上读）：每档 max ≤ 8 ms，
+  没有尖峰；一帧只有 0.2 块需要现渲染。
+- **脏帧**：同一块数、内容换成最坏情况（不可断长 token、无空格 CJK、制表符、ANSI、
+  emoji/组合符/零宽、每 16 块一条 10k 单行、未闭合围栏）——冷启动第一帧 3.4~10.5 ms。
+- **帧内构成**：我们的渲染 0.26~0.48 ms，ratatui 差分 + ANSI 2.68~2.98 ms。
+  也就是说一帧的时间几乎全在框架层，不在"历史渲染"。
+
+### 29.4 真机两进程（daemon + TUI，本地伪网关在跑，只算这两个进程）
+
+内容同样是"脏消息"（最坏情况），规模按块。`round18_mem.py`（新脚本）：
+真起 daemon、真开 pty 跑 TUI `attach 1`，从 `/proc/<pid>/status` 读 VmRSS/VmHWM。
+
+| 规模 | 条目 | 载荷 | daemon 就绪 | 冷启动第一帧 | 转录上屏 | daemon RSS/峰值 | TUI RSS/峰值 | 两者合计 |
+|---|---|---|---|---|---|---|---|---|
+| 8k 块 | 12 478 | 19.2 MB | 23 ms | 116 ms | — | 71.4 / 74.6 MB | 54.6 MB | 126.0 / 129.2 MB |
+| 12k 块 | 18 796 | 28.8 MB | 21 ms | 179 ms | — | 98.6 / 102.9 MB | 63.2 MB | 161.8 / 166.1 MB |
+| 16k 块 | 25 051 | 38.3 MB | 21 ms | 221 ms | 339 ms | 126.4 / 131.0 MB | 73.5 MB | 199.9 / 204.5 MB |
+| 24k 块 | 37 646 | 57.7 MB | 21 ms | 333 ms | 467 ms | 182.7 / 188.9 MB | 93.3 MB | 276.0 / 282.2 MB |
+| 32k 块 | 50 195 | 77.1 MB | 21 ms | 419 ms | 556 ms | 238.6 / 246.3 MB | 113.0 MB | 351.6 / 359.3 MB |
+
+- **daemon 就绪恒定 21~23 ms**（库是懒打开的，启动不读转录）。
+- **冷启动第一帧 116~419 ms**：随转录线性增长，主要是 daemon 读条目 + 重建上下文
+  + 分块发快照，加上 TUI 首帧。
+- **内存**：daemon 常驻 ≈ 载荷的 **3.1 倍**（32k 块：77 MB 载荷 → 239 MB），
+  与 §8-15 记的 3.7× 同量级；TUI 另持一份转录（113 MB）。两者合计 352 MB。
+  峰值与常驻几乎相等（差 <7 MB）——没有瞬时尖峰。
+- release 产物：**16.9 MB**（带符号）/ **13.3 MB**（strip 后）。
+
+### 29.5 与用户对齐：块缓存的设计本来就该这样
+
+用户口径：消息以**块**为基本单元渲染；块天生带"折叠/展开"两种状态，所以不存在
+"算两遍行高"的问题（那是早期按行高排版时的毛病）。现状正是如此：
+
+- 缓存单位是块（`BlockCache`，256 块 LRU），每块存**渲染好的行**，折叠/展开两种
+  变体各存一份（`variants[1..2]`），高度是从渲染结果里顺手记下的（`heights[idx]`
+  两档），**没有**任何"为折叠单独再排一遍版"的路径。
+- 反向走查只需要高度，备忘命中时不渲染（这是 §8-9 那次修复的核心）。
+
+---
+
+## 30. 冷启动 419 ms 的归因（32k 块脏内容）
+
+用户问：冷启动第一帧那 400 ms 是哪来的？是不是 256 的块缓存画得太多？改 32 会不会好？
+
+### 30.1 块缓存不是原因（实测否定）
+
+| BLOCK_BUDGET | 冷启动第一帧 |
+|---|---|
+| 256 | 4.3 ~ 4.9 ms |
+| 32 | 5.0 ms |
+
+第一帧只画视口那 2 块；第一帧里唯一 O(条目) 的活是 `blocks()` 分组 = **0.9 ms**。
+预算改成 32 一个字节都不省。缓存是**滚动深度**旋钮，不是启动成本旋钮。
+
+### 30.2 真因：daemon 在 attach 时把整条转录读进来、解析、再编码发出去
+
+`tui_scale_bench load <db>`（32k 块脏库：50 195 条目 / 77.1 MB 载荷 / 91.5 MB 文件）：
+
+| 阶段 | 耗时 |
+|---|---|
+| `Store::open` | 0.4 ms |
+| **`load_entries`** | **276 ms** |
+| └ SQLite 读 50 195 行（76 MB，不解析） | 81 ms |
+| └ JSON 解析成 `Entry` | 81 ms |
+| └ 递归 CTE 路径走查 + `IN` + `ORDER BY` | ~114 ms |
+| `entries_to_context`（重建模型上下文） | 41 ms |
+| wire encode（77.1 MB，分块） | ~101 ms |
+| **daemon 小计** | **~420 ms** |
+| 前端 wire decode（同一份 JSON 再解析一遍） | 74 ms |
+| `blocks()` 分组 | 0.9 ms |
+| 首帧渲染 | 4.3 ms |
+
+与真机对得上：冷启动第一帧 419 ms（状态栏先上屏）＋ 转录上屏 +137 ms。
+
+### 30.3 能优化的地方（按收益排序）
+
+1. **尾巴优先 attach**：第一帧只需要最后那一屏——先 `ORDER BY seq DESC LIMIT n` 读尾巴
+   （不走 CTE）、发出去、画出来，其余按需（向上滚）或后台补。预计 419 ms → **40~60 ms**。
+   结构改动：wire 要能表达"这是尾巴，还有 N 条在后头"。
+2. **leaf 就是末端时别走 CTE**：常见情况整条会话是一条线性链，递归 CTE 白走 50 000 步
+   （约 100 ms）。判一下 `leaf = MAX(seq)` 就退化成 `ORDER BY seq`。改动小、收益大。
+3. **daemon 不要"解析完再编码"**：库里存的就是 JSON，直接把 `(kind, payload)` 发过去，
+   前端解析一次而不是两次（省 daemon 那 81 ms；前端本来就要解析）。
+4. **`entries_to_context` 推迟到第一回合**：attach 时不需要模型上下文（省 41 ms）。
+5. 微优化：`load_entries` 每行少一次 `String` 中间分配。
+
+2+3+4 合计约省 220 ms（419 → 约 200 ms）；再加 1 则到 40~60 ms。
+
+---
+
+## 31. 线性链捷径（冷启动 -57 ms）+ 块缓存预算到底买了什么
+
+### 31.1 `load_path` 的线性链捷径
+
+`load_path` 一直用递归 CTE 从 `leaf` 沿 `parent_seq` 往回走（树形布局的通用做法）。
+但**绝大多数会话是一条线性链**——5 万行上递归 5 万步纯属白走（实测 ~114 ms）。
+
+判据（一次不读 payload 的扫描，~15 ms）：除根以外每一行都满足 `parent_seq = seq - 1`。
+成立就用 `WHERE seq <= COALESCE(leaf, ...) ORDER BY seq` 直读；不成立（回退后再追加
+的会话）照旧走 CTE。**判据是精确的**，不是启发式——分支过的会话一定走慢路。
+
+| 32k 块脏库（50 195 条目 / 77 MB 载荷） | `load_entries` |
+|---|---|
+| 改前 | 261 ~ 286 ms（三次） |
+| 改后 | **210 ~ 227 ms** |
+
+测试 `a_rewound_linear_session_loads_only_up_to_its_leaf`：线性但末端被回退过的会话，
+只能读到 `leaf` 及之前（快路若忽略 leaf 必失败）。
+
+### 31.2 块缓存预算（`BLOCK_BUDGET`）到底买了什么
+
+用户问：256 这个数有什么用？调到多少最好？机制到底有没有用？
+判据：真实滚动档（一帧 1~4 个滚轮刻度 + 随机展开/折叠），32 000 块，600 帧。
+
+| 预算 | mean | p95 | p99 | 600 帧里现渲染 | 命中 | RSS |
+|---|---|---|---|---|---|---|
+| 8 | 3.25 | 4.50 | 5.51 | **237** | 1190 | 171.5 MB |
+| 16 | 3.12 | 4.52 | 5.74 | — | — | 171.3 MB |
+| 32 | 3.41 | 5.81 | 7.00 | — | — | 171.5 MB |
+| 64 | 3.13 | 4.25 | 5.23 | **61** | 1366 | 171.2 MB |
+| 128 | 3.02 | 4.11 | 4.76 | — | — | 171.5 MB |
+| 256 | 3.06 | 4.05 | 5.27 | **0** | 1427 | 171.2 MB |
+| 512 | 3.11 | 4.05 | 4.93 | — | — | 171.6 MB |
+| 1024 | 3.11 | 4.17 | 5.64 | — | — | 171.3 MB |
+
+- **机制确实有用**：它的唯一职责就是让"滚回去"不再重排——预算 8 时 600 帧里重排
+  237 块，64 时 61 块，256 时**一块都不用**。
+- **对帧时间影响很小**（mean -6%、p95 -10%）：这块转录的块很大，重排一块 ≈ 0.2 ms，
+  摊到每帧是 0.02 ms 级。
+- **内存是平的**：8 → 1024 全程 171 MB。行缓存本身 ~1 MB，转录（77 MB 载荷 →
+  171 MB 常驻）才是大头。所以调大预算**不花内存**。
+- **拐点在 64 左右**：64 已经拿到 p95 4.25 / 61 次重排；256 是 4 倍余量、零额外成本。
+- **它挡不住冷区段跳跃**：35~40 ms 的尖峰在**每个预算下都一样**（600 帧里 1 帧，
+  固定落在某个 Ctrl-T 上）——那是走查要现量一片新块，不是缓存的问题。
+
+结论：预算是**回滚深度**旋钮（缓存已渲染好的块，避免滚回去重排），不是内存旋钮、
+也不是启动旋钮。256 是安全值；要更"有依据"可以取 64（≈ 两屏典型块 + 余量），
+收益差在噪声内。真要治尖峰得做折叠锚定（见 §28.4 的方案 C）。
+
+---
+
+## 32. 折叠尖峰的真机制（实测）+ 256 到底买到了什么（大白话）
+
+### 32.1 惰性传输
+
+**没有做**（用户自己认领）。`hub::resume` 仍然 `store.load_entries(id)` 一次性读全量。
+
+### 32.2 尖峰的真机制：折叠把视口甩进了"没量过的地方"
+
+之前只猜到"折叠改变文档总高"这一半。今天插桩量到完整链条（32000 块，真实滚动档，
+预算 256，600 帧，最差帧固定是 `ctrl-T at scroll=3399`）：
+
+```
+CUT walk=32732us                      ← 尖峰全在反向走查里
+WALKSPIKE offset=3399 crossed=169 misses=5 renders=189 render_us=73837 top_found=true
+```
+
+- 滚动位置记的是**行号**（离转录底部多少行），不是"我在哪一块"。
+- 按 Ctrl-T/Ctrl-O 后内容变矮，行号没动 → 同一个行号落在**别的块**上，而那些块
+  **从来没被量过** → 这一帧现排 **189 块**（73.8 ms 的排版工作，这一帧等其中 25 ms）。
+- 和预算无关（每个预算下一样）、也不是"变体失效"（两种状态都缓存着）。
+
+**锚定**：按折叠键时先记下"视口最上面那行属于哪一块、块内第几行"，折叠后按新高度
+把同一位置换算成新的行号 → 视口停在同一块内容上 → 不会碰任何没量过的块 → 那 189 次
+排版不会发生。尖峰的唯一来源是"视口跳到没量过的地方"，锚定让视口不跳，来源消失。
+
+诚实的两个代价：精确高度差只有量过的块知道（视口附近刚滚过，误差很小）；手动滚过头顶
+时那次"从头算总高"仍会发生（那是主动滚到底，一次而已）。
+
+### 32.3 256 买到了什么（大白话）
+
+- 排版一块（一条消息/一次工具调用 → 带颜色折行的几行）**有点贵**；缓存把"最近排好版
+  的 N 块"留着，滚回去直接拿现成的行。
+- 实测（32000 块，600 帧真实滚动）：留 8 块 → 重排 **237** 次；留 64 块 → **61** 次；
+  留 256 块 → **0** 次。
+- **内存是平的**：8 → 1024 全程 171 MB（行缓存自己 ~1 MB，内存大头是 77 MB 的转录）。
+  所以这个数字给大给小几乎没代价，拐点在 64 附近，256 是 4 倍余量。
+- **它不管启动**：第一帧只排 2 块，256 → 32 实测无差别。
+
+---
+
+## 33. 折叠锚定：那个 30~40 ms 尖峰没了
+
+### 33.1 做法
+
+滚动位置是"离转录底部多少行"的行号。折叠改变内容高度，行号不动 → 同一个行号落到
+别的块上，而那些块没量过 → 一帧现排上百块（§32.2 实测 189 块 / 74 ms 排版）。
+
+锚定 = 按键前后把**视口上沿那一块内容**钉住：
+
+1. 按键前：`viewport_top()` 记下"上沿落在哪一块（`Range`）+ 离它底边多少行
+   （`skip_rows`）"。**注意上沿块是 `b0`，不是 `b1 - 1`**——`b1` 排他，`b1 - 1` 是
+   视口**下沿**那一块（下沿更新、序号更大）。第一版就栽在这里：拿错块，算出来的
+   偏移差两块。
+2. 翻转折叠开关。
+3. `offset_for_top()`：从最新一块往上走到锚块，累计它下面的行数（含块间空行），
+   再按 `below + h - skip - viewport` 换算回行号。走查与 `window_from_bottom` 同源
+   （备忘命中时每块只多一次比较），所以代价是 O(视口下方的块数)，不是"现排一屏"。
+   两个入口都先 `sync`——第一版没同步，`ranges`/`heights` 与当前状态不一致，走查
+   两次算出不同的和（同一个块 `below + h` 一次 93、一次 65）。
+4. Ctrl+T 会把思考块整块藏掉：那种情况下"同一块"不存在，改锚到它下面第一个还占
+   行的块的上沿——要钉住的是读者看到的内容起点。
+
+### 33.2 效果（32000 块，真实滚动档 600 帧）
+
+| | mean | p95 | p99 | max | over-budget | 现渲染 |
+|---|---|---|---|---|---|---|
+| 改前 | 3.06 | 4.05 | 5.27 | **32~40 ms** | 1~2/600 | 0 |
+| 改后 | 2.94 | 3.95 | 4.47 | **4.74 ms** | **0/600** | 0 |
+
+最差帧从"某个 Ctrl-T"变成了普通滚动帧——那个固定出现的 30~40 ms 尖峰**不再触发**
+（不是变小，是不发生）。测试 `folding_keeps_the_reader_on_the_same_block`：滚到
+视口上沿正好是工具卡时按 Ctrl+O，那一块必须还在上沿。
+
+---
+
+## 34. 惰性传输：冷启动第一帧不再等整条转录
+
+### 34.1 问题（§30 的账）
+
+`hub::resume` 一次性 `load_entries`：32k 块脏库上 **261 ms**（SQLite 读 81 + JSON
+解析 81 + 路径走查 ~100）+ 建上下文 41 + wire 编码 ~101 ≈ **420 ms**，而第一帧真正
+要画的只有最后那一屏。
+
+### 34.2 做法（五步，每步都能单独编译测试）
+
+1. **store**：`load_tail(id, n)` / `load_before(id, seq, n)`——降序取 `n+1` 条判
+   "还有没有"，翻成升序返回，并给出**最老那条的 seq** 作为翻页游标。线性链走
+   `seq <= leaf` 直读，分支过的才用递归 CTE（和 `load_path` 同一判据）。
+   参数编号按各条 SQL 自己来（CTE 占用了 `?1`/`?2`，它的 LIMIT 得让到 `?3`）。
+2. **wire**：新消息 `OlderEntries { entries }`（**前置**追加），`PROTO_VERSION` 1 → 2。
+3. **hub**：`resume` 只读 `HISTORY_TAIL = 400` 条；**上下文先不建**（用尾巴建出来
+   的上下文会静默丢掉更老的一切），只放系统提示词，并登记 `history_pending` +
+   游标 `history_head`。
+4. **daemon**：快照发完起一个后台线程按页（`HISTORY_PAGE = 2000`）往前读，每读一页
+   丢回命令队列，主循环发给正在看这个会话的前端。**迟到的页会作废**：会话补齐
+   （第一回合）之后 `history_pending` 为假，`ship_older` 直接丢掉——否则前端会收到
+   重复内容。
+5. **TUI**：`HistoryZone::prepend_entries`（前置 + 代 +1 让缓存丢旧行）。**滚动偏移
+   不用补偿**：位置是"离转录底部多少行"，往顶部前置不动下面任何一行。
+
+第一回合之前 `Session::ensure_full_history` 把完整转录读回来并重建上下文副本
+（前端会收到一次整体快照，代变了）。
+
+### 34.3 测试
+
+- `tail_paging_reassembles_the_transcript`：逐页拼起来 == 整读。
+- `tail_paging_follows_the_current_branch`：分支过的会话，尾巴页只含当前分支。
+- `a_resumed_tail_is_completed_before_the_first_turn`（hub）：resume 只装尾巴；
+  第一回合的**请求体里必须出现最老那条**（网关记请求）——只喂尾巴是最难查的一类 bug。
+- `lazy_history_ships_the_tail_then_the_older_pages`（daemon 端到端）：真 socket +
+  真 daemon，尾巴先到、后台页补齐到 500 条、顺序正确。
+
+### 34.4 真机效果（`round18_mem.py`，脏内容，daemon + TUI 两个进程）
+
+| | 8k 块 | 32k 块 |
+|---|---|---|
+| 冷启动第一帧 改前 | 116 ms | 419 ms |
+| 冷启动第一帧 **改后** | **46 ms** | **165 ms** |
+| daemon RSS 改前 | 71.4 MB | 238.6 MB |
+| daemon RSS **改后** | **25.7 MB** | **24.9 MB** |
+| 两者合计 改前 | 126.0 MB | 351.6 MB |
+| 两者合计 **改后** | **64.4 MB** | **123.6 MB** |
+
+- daemon 不再持有整条转录（只持尾巴 + 后台按页发完就丢），32k 块常驻从 239 MB 掉到
+  **25 MB**。
+- 第一帧 32k 块 419 → 165 ms（‑61%）。尾巴仍是 400 条**脏**条目（几 MB），读 + 解析 +
+  编码 + 传输 + 解码还在那条路上；要再快就调小 `HISTORY_TAIL`。
+- **诚实的边界**：第一回合 `ensure_full_history` 会把完整转录读回来，daemon 的内存
+  那时回到"整条 + 上下文"的量级（§30 的 3.1× 仍在回合期成立）。省下来的是**启动**
+  与**不说话的会话**。
+
+### 34.5 顺带修的
+
+`Store::open` 没设 `busy_timeout`：WAL 下多个连接（daemon 写 + 一次性命令读 +
+并行测试）撞上写锁会立刻 `SQLITE_BUSY`（并行跑测试时表现为随机"database is locked"）。
+现在 5 秒忙等。
+
+---
+
+## 35. 按需历史：不滚到上沿就不读
+
+### 35.1 问题（§34 之后剩下的浪费）
+
+§34 的惰性传输只懒到"第一帧"为止：附着之后 daemon 会起一个后台线程**一直补到
+全量**（32k 块 = 25 页 × 2000 条），TUI 把它全留着（98.7 MB）。而读者往往只看最后
+几屏——补来的页多数永远没被看过。
+
+### 35.2 做法：把 pager 从"for 循环补到底"改成"要了才给"
+
+1. **wire**：`ClientMsg::NeedOlder`（不带参数——游标在服务端，只有它知道发到哪儿了）。
+   `PROTO_VERSION` 2 → 3。
+2. **daemon**：删掉 attach 里的预热线程。收到 `NeedOlder` 才起一个**一次性**线程读
+   一页（`HISTORY_PAGE = 2000`），读完丢回命令队列。三道闸：
+   - `older_inflight: HashSet<i64>`——同一会话同时只允许一页在飞（读者滚到上沿会
+     连着发好几次请求，没有它就是同一个区间读两遍、前端收到重复内容）；
+   - 页到了先推进会话的游标（`set_history_tail`），**会话已补齐就作废**（迟到的页
+     是重复内容）；
+   - 上面没有了 → 当场回一页**空的**当终止符（前端据此闩死，不再白问）。
+3. **TUI**：触发点不是"滚轮事件"，而是**渲染里的一次夹偏移**——画布总高只有渲染算得
+   出来，而且 resize 也会走到夹偏移那一支。所以：
+   - `wheel_step(up)` 只记一个 `scrolled_up`；渲染开头 `take` 走，夹偏移那一支若
+     `pushed_up && !no_more_above` 就置 `want_older`；
+   - 事件循环**画完一帧之后**单独收一次 `take_want_older()` 发 `NeedOlder`（不走
+     `deliver` 那条出口请求路：这个判定发生在渲染里，不在事件里）；
+   - 空的一页 → `no_more_above` 闩死；`replace_transcript`（resume / 树跳转）重置
+     ——"上面还有没有"是**每条转录各自的事实**，不能继承上一条的答案。
+4. **视口不动**：要来的页是前置的，位置是"离画布底部多少行"，前置不动下面任何一行。
+   所以读者留在原地，下一次滚轮才进到新内容里——不会"一补页画面就跳走"。
+
+### 35.3 测试
+
+- `scrolling_up_at_the_ceiling_asks_for_the_next_page`：中间往上滚不要页；推到上沿
+  才要，而且一次滚动只要一页。
+- `an_empty_page_stops_the_asking` / `a_new_transcript_forgets_the_terminator`：闩锁
+  与它的重置。
+- `prepending_older_entries_does_not_move_the_reader`：前置之后 `chat_scroll` 不变、
+  **屏幕上一个字符都不动**（这是"敢在读者正滚的时候补页"的前提）。
+- `lazy_history_ships_the_tail_then_the_older_pages_on_demand`（daemon 端到端）：
+  快照里**没有**任何自己冒上来的历史页；要一次给一页；最后一页是空的；拼起来
+  正好 500 条、顺序正确。
+
+### 35.4 真机（`probe_demand.py`，32k 块脏库，真 daemon + 真 TUI，pty 里发 SGR 滚轮）
+
+| | 改前（后台全量补） | 改后（按需） |
+|---|---|---|
+| 附着后 TUI RSS | 98.7 MB | **13.5 MB** |
+| TUI 内存增长 | 无条件 +85 MB | 滚到上沿才 **+5.2 MB / 页** |
+| 附着后 daemon RSS | 24.9 MB | **13.6 MB** |
+| 第一帧 | 155 ms | 152 ms（按需不改善首帧，见 §35.5） |
+
+（一页 = 2000 条脏条目 ≈ 3.1 MB 载荷，解析后 +5.2 MB RSS；daemon 全程 13.6 MB 不动
+——它读一页发一页就丢。）
+
+### 35.5 剩下的账：首帧 152 ms 跟按需无关
+
+同一份库上分段计时（daemon 侧）：`Store::open` 0.7 ms、`is_linear` **38 ms**、
+读尾巴 + JSON 解析 **2.3 ms**、`effective_name` **100.8 ms**、wire 编码 + 发
+**0.23 ms**、TUI 侧 ~13 ms。
+
+**两个"全表扫"就是首帧的全部**：`is_linear` 的 `COUNT(*) = COUNT(CASE WHEN
+parent_seq = seq - 1 …)` 要读全表每一行；`effective_name` 为了拿"最近一次改的名字"
+走了**整棵树**的递归查询。两个都是"跟规模无关的小查询"，改成线性会话直读就没了
+（选项 1，用户要求先汇报库设计再动）。
+
+## 36. 库重设计：块是单位，分支是区间
+
+### 36.1 问题（§35.5 那两笔账 + 三个"用扫描推导本可写下来的事实"）
+
+1. **首帧 152 ms 的两个全表扫**：`is_linear` 38.2 ms（`COUNT(*) = COUNT(CASE WHEN
+   parent_seq = seq - 1 …)` 要读每一行，且 `parent_seq` 不在 PK 索引里，每行还要回表）、
+   `effective_name` 100.8 ms（递归 CTE 走完整棵树才过滤 `kind = 'name'`）。
+2. **会话列表 69.2 ms**，其中体积列 `SUM(LENGTH(payload))` 66.6 ms——每列一遍全表。
+3. **每行背一个 `parent_seq` + 一个 `leaf` 指针 + 两处递归 CTE**：树形布局的通用做法，
+   但**现实中树不可达**——`set_leaf`/`navigate_to`/`ZoneId::Tree` 全都没有生产调用点，
+   唯一写 `leaf` 的是 `append` 自己。也就是说每天在重推一个恒为真的形状。
+
+共同病根：**形状、名字、体积都该写下来，却在读的时候现算**。
+
+### 36.2 新形状
+
+```sql
+sessions(id, uuid, name, started_at, cwd,
+         parent_id, fork_block_id, tip_block_id, bytes, deleted_at)
+blocks(block_id INTEGER PRIMARY KEY,   -- 全局自增 = 时序键
+       session_id, ts, kind, payload, kind2, payload2)
+turns(session_id, seq, ts, model, protocol, base_url, system, tools_json,
+      max_tokens, stop_reason, first_block, last_block)
+cwd_history(session_id, block_id, entry_index, ts, cwd)
+artifacts(id, session_id, block_id, name, total_lines, content)
+```
+
+1. **块是存储单位**。`grouping::chunks`（时序分组，**不重排**）写一行一块：一次工具
+   往返是**一行两列**（`kind`/`payload` + `kind2`/`payload2`）。pin 的置顶留在渲染侧
+   （`grouping::blocks` = `chunks` + 置顶重排）——存序 = 时序，块号不因前端怎么画而变。
+   32000 块脏库：32000 行，条目 50195 条。
+2. **分支是区间，不是行指针**。分叉只写一行（`parent_id` + `fork_block_id`，继承
+   `<= fork_block_id` 的前缀），一个块都不复制。读分支 = 沿若干 `(会话, 上界)` 段做
+   索引区间扫；`block_id` 全局自增使"父前缀 + 自己的块"**一条 ORDER BY 排对**，
+   翻页也能跨过分叉点。分叉深度是几就几跳，没有递归。
+3. **删除 = 截断 + 墓碑**。`keep = max(活着的分支的 fork_block_id)`（"活着"按**后代**
+   算：中间分支即使被删，只要孙子还读它就算持有者），`DELETE … block_id > keep`，
+   行留成 `deleted_at` 墓碑——子分支的 `parent_id` 必须还能解析。**没有任何 UPDATE 会
+   重写一批 payload 行**（用户的"只留被需要的部分"就是这个）。
+4. **巨物跟着回合的第一块**。回合是分叉的边界，所以"跟着哪一块"等价于"跟着哪一回合"：
+   写回合时把该会话还没归属的 artifact 挂到 `first_block`，截断时同区间删。取回**不再
+   按 session 过滤**（分叉读的是父的巨物）。
+5. `user_version` 对不上就**整库重建**（无用户、无历史、不留迁移代码）；旧表
+   `entries`/`rounds` 删除。SQLite 默认开着外键，所以重建按"先子后父"删表。
+
+### 36.3 删掉的东西（干净切换）
+
+- 表/列：`entries`、`rounds`、`parent_seq`、`leaf`。
+- 代码：`PATH_CTE`、`is_linear`、`load_path`、`set_leaf`/`get_leaf`/`load_tree`/`TreeNode`。
+- `SessionState.cwd_seq` + `bump_cwd_seq`/`set_cwd_seq` + `SessionEvent::SetCwd.seq`：
+  存储自己知道当前 tip，调用方不必再镜像一个游标（`record_cwd(sid, cwd)`）。
+- `SessionState::navigate_to`（树导航，只有测试在调）。
+- `Entry::Compaction.first_kept_seq` → `first_kept_entry`：它一直是**条目下标**，不是 seq。
+- `artifacts.get_artifact(id, session_id)` 的 session 过滤。
+- `examples/gen_bench_db.py`、`examples/gen_compact_dbg.py`：手写旧 schema 的生成器，
+  被 `tui_scale_bench gen`（走真 `Store`，不会跟 schema 漂）取代。
+- `cwd_trail` 的**条目下标**在写入时算好（`cwd_history.entry_index`）：只有存储知道一块
+  是一条还是两条；放在读路径上就是每次开回合扫一遍全库（32k 块实测 16 ms）。
+
+### 36.4 测试（702 通过，clippy 0 警告）
+
+新增/重写（`store::tests`）：`a_tool_exchange_is_one_block`（一次往返一行，且同批块共享
+时间戳——所以时间戳定不了序）、`a_dangling_request_is_its_own_block`、
+`block_ids_are_global_across_branches`、`a_page_never_splits_a_tool_exchange`、
+`a_fork_reads_its_parents_prefix`、`a_fork_pages_across_the_fork_point`、
+`a_fork_name_marker_is_inherited`、`deleting_a_parent_truncates_to_what_its_forks_need`、
+`deleting_a_leaf_forgets_it_entirely`、`a_grandchild_keeps_a_middle_branch_alive`、
+`the_cwd_trail_counts_entries_not_blocks`、`a_fork_inherits_the_cwd_trail_positions`、
+`uuid_is_unique_per_session`。保留：`tail_paging_reassembles_the_transcript`、
+`a_stored_round_replays_byte_identically_after_a_reopen`、picker/age/name 那几组。
+`session.rs` 的"回退后复现"改成"**老回合按自己的 tip 复现**"（钳到 `last_block`，
+不再需要回退才能测）。
+
+### 36.5 真机（32k 块脏库 / 50195 条）
+
+| | 改前 | 改后 |
+|---|---|---|
+| 首帧（`probe_cold.py`，真 daemon + 真 TUI） | 152~165 ms | **20 ms** |
+| `effective_name` | 100.8 ms | **0.1 ms** |
+| `is_linear` | 38.2 ms | 不存在 |
+| 读尾巴 400 块 | ~140 ms（含上面两个扫） | **3.8 ms** |
+| 会话列表（体积列） | 69.2 ms | **0.1 ms** |
+| 整读 50195 条（`load_entries`） | 261 ms | 192~208 ms |
+| 附着后 RSS | daemon 13.6 / TUI 13.5 MB | daemon 13.2 / TUI 14.1 MB |
+| 一页（400 块 / 615 条） | +5.2 MB | +5.2 MB |
+| 分叉会话首帧（`fork_block_id` 16001 + 500 自有块） | — | **19 ms**（多一跳段） |
+| 库文件 | 87.3 MB | 91.9 MB（多两列 + 两个索引） |
+| 二进制 | 17.0 / strip 13.4 MB | 17.0 / strip 13.4 MB |
+
+**分叉端到端**（`fork_check.py`：真 daemon + 真网关 + 真 TUI，pty 读屏，12 项全过）：
+分叉上屏就带着**继承来的第一回合**、看不见被抛弃的第二回合、自己的新回合接在后面；
+删父之后父变墓碑（`deleted_at` 有值、`tip_block_id` 截到分叉点、自己只剩 2 块）、
+列表里父消失、**分叉照旧读得到前缀**。另：`stream_check.py` 流式接线、`resume_check.py`
+12 项（列表/筛选/附着/Esc/两段式删除）在真机全过。
+
+### 36.6 剩下的账
+
+- TUI 仍把请求来的页全留着（每页 +5.2 MB，§35 的按需没变）。
+- 帧时间 2.8~3.0 ms 在 ratatui 差分 + 逐格 ANSI（自家渲染只 0.17~0.48 ms，§28.4 方案 E）。
+- 回合期内存：`ensure_full_history` 之后 daemon 回到"整条 + 上下文副本"量级
+  （§30 量过 ≈ 载荷 3.1×，本轮未重测）。
+- `fork_session` 存储层与测试齐了，但**还没有 UI 入口**（树 Zone 仍未实现）——和
+  之前的 `set_leaf` 一样属于"设计落地、界面未接"。
+- 分叉会话的 `turns` 只覆盖**自己**的块；要复现一个继承来的回合，得沿链取父的请求头
+  （未做，没有调用方）。
+
+---
+
+## 37. 前端窗口化：只留看得见的那一段
+
+### 37.1 问题（§36.6 第一笔账：TUI 把要来的页全留着）
+
+1. **条目线性增长**。前端手里的 `entries: Vec<Entry>` 只增不减：滚过的每一页都留在
+   里面（§35 的按需只做到"不滚不读"，读到就常驻）。一页 400 块 ≈ 5 MB，滚一晚上
+   就是几十上百 MB。
+2. **坐标是"离画布底部多少行"**。要把它钉住，必须知道视口**下方每一块**的高度；
+   resize 让所有高度作废，重算又需要那些块的条目——**正好是被丢掉的**。所以"有界
+   窗口"和"离底坐标"在数学上互斥：这就是"resize 之后画面回落"的根，不是实现没写好。
+3. **渲染行缓存按"块序号"认块**，序号会因置顶重排整体漂移——窗口一滑，同一块的下标
+   就换了，缓存里那些行会挂到别的块上。
+
+### 37.2 做法
+
+1. **块带着 id 走线**。`ServerMsg::{Transcript,Blocks,OlderBlocks,NewerBlocks}` 传
+   `WireBlock { id, entries }`；`PROTO_VERSION` 4→5。前端按 **block_id** 点名要区间
+   （`ClientMsg::NeedOlder { before, count }` / `NeedNewer { after, count }`），服务端
+   不再持有游标——同一会话几个前端各看各的窗口，谁也不碍谁。
+2. **两张账本，一条尾巴**。窗口 = **已落盘**的连续块（`VecDeque<WindowBlock>`，键是
+   `block_id`）；`live` = 还没落盘的那截（回合在飞 + 永不落盘的回声）。落盘那一刻
+   服务端发 `Blocks { blocks, live }`——`live` 是**整段替换**，因为只有它同时看着
+   两边，知道哪几条变成了块（`SessionState::note_persisted`，一回合一摘，顺序不干净
+   时改发整体快照）。
+3. **坐标换成内容锚**：视口上沿记的是 `(block_id, 块内第几行)`。resize 只会让行宽
+   变、块变矮，锚不动；锚块变矮就把它顶到第一行（用户拍板），整块不画了（Ctrl+T 藏
+   思考）就挪到下面第一个还占行的块。顺带白拿一条：**往末尾追加内容不会推动读者**，
+   §35.3 那条"前置不移动读者"从"要小心维持"变成结构上不可能错。
+4. **窗口两头都是"要一段"，不是"下一页"**：锚点上面留 `preload` 块（触发线），实际
+   留 `preload + renderMargin`（迟滞：滚 64 块才发一次请求）；下面不够 `renderMargin`
+   就问 `need_newer`；滚到窗口上沿时把没兑现的滚动行数留着，等页回来接着滚（换方向
+   就丢掉——读者要的是回到他离开的地方）。
+5. **两个旋钮进 config**（`tui.renderMargin` / `tui.preload`，默认 64 / 128），渲染行
+   缓存的预算 = `renderMargin`（不单独配，省得配出"缓存大于边距"这种坏组合）。
+6. **走查只画视口那几块**：为了缓存预热可以多量 `renderMargin` 块，但**行只克隆**
+   视口里那几块——每帧把 64 块的行抄一遍是白烧（真机上就是这笔把内存顶起来）。
+7. **任务清单是状态**：只认最后一条 `Todo`，而且是**黏住的**——它不随窗口滑走而丢，
+   只占自己那几行（视口相应变矮）。
+8. **键盘也滚动**：PageUp/PageDown 与 Ctrl+↑/↓ 同义（一屏），触发点不再只在滚轮上。
+9. **走查只量视口 + 少量预看**（`WALK_AHEAD = 8` 块，且预看只花备忘里已有的高度）：
+   `renderMargin` 是**缓存容量**，不是"每帧预先排版多少块"——照后者冷启动一帧要排
+   64 块，脏内容上实测 280 ms（改成只量视口那几块之后首帧 7 ms）。
+
+### 37.3 删掉的东西（干净切换）
+
+- `ServerMsg::{Transcript.entries, OlderEntries}`、`ClientMsg::NeedOlder`（无参）。
+- 服务端游标：`SessionState.history_head` / `set_history_tail`（按 id 点名就不需要它；
+  `history_pending` 留着，它管的是"只装了尾巴、第一回合前要补齐"）。
+- `SNAPSHOT_CHUNK` / `chunk_transcript`（快照只发尾巴那一截 ≈ 1 MB，切什么块）。
+- 前端：`chat_scroll`（离底行数）、`Anchor`（尾巴增长补偿）、`BlockCache` 的
+  `Range` 键 / `ranges` / `window_from_bottom` / `viewport_top` / `offset_for_top` /
+  `total_height`、`HistoryZone::{push_entry, replace_transcript(entries), prepend_entries}`。
+- `TuiConfig` 之前没有：现在 `tui:` 一节进 `AppConfig`。
+
+### 37.4 测试（702 通过，clippy 0 警告）
+
+新增（`history::tests`，21 条，其中滚动的都从"画出来的行"读数）：
+`older_blocks_are_only_asked_for_at_the_window_edge`（走完"要页→补页"直到不再要）、
+`newer_blocks_are_asked_for_when_the_window_lost_the_tail`、`the_window_stays_bounded_
+while_walking_ancient_history`（窗口 + 行缓存都封顶）、`a_width_change_keeps_the_same_
+block_at_the_top`（40/61/100 三档宽度）、`a_shrunken_anchor_block_is_pulled_to_the_top_row`、
+`the_viewport_slices_the_canvas_exactly`（§7.7 那条属性测试的锚点版：底下一窗与往上 N 行
+都必须逐行等于整篇画布切的对应片）、`the_todo_pins_to_the_bottom_and_survives_the_window_
+sliding_away`、`scrolling_back_down_re_follows_the_tail`、`window_margins_are_clamped`、
+`prepending_older_blocks_does_not_move_the_reader`（锚和屏幕都不许动）。
+`cache::tests` 重写为键口径：`a_sliding_window_never_crosses_rows_between_blocks`（滑窗
+后同一块的行不许串）、`cold_start_renders_only_the_requested_window`、
+`heights_outlive_evicted_rows`、`the_window_bounds_the_cache`、`keys_that_leave_the_window_
+take_their_heights`。
+`store::tests`：`newer_paging_mirrors_the_older_one`、`newer_paging_crosses_the_fork_point`。
+`wire::tests` / `daemon::tests`：消息形状改块口径；`lazy_history_ships_the_tail_then_the_
+older_pages_on_demand` 改成"点名边界 → 一段一段要，末段空的收尾"。
+
+### 37.5 真机（32k 块脏库）
+
+| | 改前（§36） | 改后 |
+|---|---|---|
+| 首帧（`probe_cold.py`） | 20 ms | **14 ms** |
+| 附着后 RSS | daemon 13.2 / TUI 14.1 MB | daemon 13.4 / TUI 12.3~14.4 MB |
+| **前端留着的块**（`MYPI_WINDOW_DEBUG` 实测） | 全长（滚多少留多少） | **≤ 216 块**（preload 128 + margin 64 + 一屏） |
+| **渲染行缓存** | ≤ 256 块 | **≤ 64 块 / ~2750 行** |
+| 深滚 60000 行（`probe_window.py`，真 daemon + 真 TUI） | 线性涨 | **预热后再涨 +1.9 MB**（上界 2）、daemon +1.2 MB |
+| 二进制 | 17.0 / strip 13.4 MB | 17.08 / strip 13.46 MB |
+
+**回归**：`fork_check.py` 12 项全过（分叉继承/截断/墓碑）、`resume_check.py` PASS（列表/
+筛选/附着/两段式删除）、`stream_check.py`（流式那半句定稿前后逐行一致、回复只出现一次）。
+`probe_window.py` 是新的真机探针：深滚 RSS 平台化（O(1)）+ 画面一直有内容。
+
+### 37.6 剩下的账
+
+- 深滚的**一次性高水位**：预热那一段 RSS 从 ~13 MB 顶到 ~33 MB 就不再涨（平台化 = O(1)）。
+  实测与旋钮有关但关系不大（`renderMargin/preload` = 8/16 → +16.4 MB，64/128 → +21 MB），
+  剩下的账在"每帧几百块渲染 + 页到达的瞬态"这一片分配器高水位上，没归到具名结构——
+  下次要查就从这里查。
+- 终端差分在卡片正文行尾偶尔留残格（`]` / 少一个 `|`）：那是 ratatui 差分那一层
+  （用户明令本轮不碰），滚动后的行宽由 `style_sweep_holds_all_render_invariants` 的
+  滚动新增检查钉住（宽度逐行精确），所以不是渲染层少画了一格。
+- 键盘滚动已绑：PageUp/PageDown 与 Ctrl+↑/↓ 同义（一次一屏），所以没有滚轮的终端
+  也够得着窗口化的取数触发点。
+- `probe_demand.py`（§35 那支）的"跳一页"预期不再成立：窗口化之后不再有整页常驻，
+  新的验收是 `probe_window.py` 的平台化。
+
+---
+
+### 37.7 规模报告（8k → 128k 块，用户口径的滑动）
+
+口径：每次滑动 ≤10 个**块**，随机穿插 Ctrl+O / Ctrl+T（各 ~18% 的概率），1500 帧；
+内容含用户/回复/思考/工具往返/巨物溢出/todo（todo 随机穿插、状态随机变化）。脏库 =
+真工具输出 + 大概率的超大输出（1/3 溢出成巨物，其余仍是大块正文）。
+跑法：`/tmp/mypi-fake/scale_report.py 1500`（造库 → 真 daemon → 真 TUI pty 附着 →
+进程内 `tui_scale_bench user`）。
+
+**冷启动 / 附着**
+
+| 块数 | 库 MB | 造库 s | daemon 冷启动 ms | 附着首帧 ms | 附着后 TUI MB |
+|---|---|---|---|---|---|
+| 8000 | 19.4 | 0.3 | 6 | 25 | 30.4 |
+| 12000 | 29.0 | 0.5 | 6 | 16 | 19.9 |
+| 24000 | 58.3 | 1.0 | 6 | 14 | 20.3 |
+| 32000 | 77.5 | 1.4 | 6 | 21 | 30.4 |
+| 64000 | 154.7 | 2.7 | 6 | 22 | 30.3 |
+| 128000 | 310.0 | 5.3 | 11 | 26 | 31.3 |
+
+数据翻 16 倍，冷启动 6→11 ms、附着首帧 14~26 ms、附着后 TUI 19.9~31.3 MB
+（那 10 MB 的差是**内容**：这一屏里有没有一张巨型卡，跟会话多长无关）。
+
+**滑动（1500 帧，脏内容）**
+
+| 块数 | 首帧 ms | mean | p50 | p95 | p99 | max | 取页×ms | 常驻 MB | 峰值 MB | 窗口块 | 缓存块/行 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 8000 | 25.0 | 28.6 | 5.3 | 204.9 | 269.7 | 613.6 | 212×165 | 29.9 | 19.0 | 261 | 64/2642 |
+| 12000 | 3.3 | 32.7 | 5.9 | 212.8 | 242.7 | 578.4 | 240×201 | 30.2 | 19.1 | 272 | 64/2943 |
+| 24000 | 25.4 | 31.9 | 5.8 | 215.3 | 393.2 | 443.6 | 228×198 | 30.3 | 19.2 | 271 | 64/2935 |
+| 32000 | 5.8 | 30.1 | 6.4 | 213.2 | 259.8 | 591.3 | 249×209 | 30.3 | 19.1 | 270 | 64/3337 |
+| 64000 | 30.4 | 26.6 | 6.5 | 206.4 | 398.6 | 470.3 | 221×185 | 30.4 | 18.9 | 255 | 64/2727 |
+| 128000 | 221.4 | 27.3 | 5.1 | 205.8 | 232.4 | 616.2 | 201×168 | 29.9 | 19.0 | 260 | 51/2138 |
+
+**键位的两个真机问题**（用户报的，都修了）：
+
+1. **流式期间滚不动**：尾巴里有内容时上沿可能落在**尾巴内部**——`anchor_at`
+   的原样返回 `None`，`scroll_by` 拿到 `None` 就 `return 0`，整帧放弃滚动。
+   尾巴长过一屏（一大段流式正文）时，读者往上滚的第一段路全在这段里，于是
+   "按键/滑动都不行"。修法：`Anchor` 分成 `Block { key, row }` 与
+   `Tail { off }` 两种——尾巴永远贴在显示最下面，那里记"离底多少行"就够；
+   滚动先走尾巴段（纯行数），出了尾巴再进块走查，滚回来照样重新贴底。
+   单元测试 `scrolling_inside_a_long_live_tail_works`，真机复现脚本
+   `/tmp/mypi-fake/keybug_check.py`（长文本流 + pty 读屏）。
+2. **Ctrl+↑/↓ 一次按键两个效果**：事件是**广播**给各子区的（`MainZone::deliver`
+   不做路由），于是历史区滚转录、输入区同时又动光标/输入历史。修法：Ctrl+↑/↓
+   归历史区，`semantics::translate_with` 对这两个组合返回 `Action::None`
+   （编辑器不碰），纯 ↑/↓ 的输入历史行为原样。测试
+   `ctrl_arrows_do_nothing_in_the_editor`。
+
+真机键位验收（pty 里报文，不是单元测试）：`\x1b[5~`（PageUp）连按 4 下画面往上走、
+`\x1b[1;5A`（Ctrl+↑）继续往上、`\x1b[6~`（PageDown）连按回到底部——回程只差 4 行，
+且都是探针把 CJK 宽字符网格重建成文本时的格子漂移（同一个 `]`、同一个行尾），
+内容逐字一致。
+
+**窗口、行缓存、常驻、峰值全部与规模无关**（16 倍数据下：窗口 255~272 块、缓存 64 块、
+常驻 ~30 MB、分配器峰值 ~19 MB、取页 0.2 ms/次）。
+
+**那条 p95 ≈ 210 ms 的尾巴是内容，不是窗口**：`BENCH_TRACE=1` 打出来的是
+"这一帧只出图 1 块、却花 200 ms"——第一次排版一张**首页 3000 行的工具卡**
+（脏生成器里 2/3 的大输出没有溢出成巨物，仍按整张卡排版）。同样的口径换**干净内容**
+（32k 块、同样 1500 帧、同样键位混插）：首帧 2.84 ms、mean 3.46、p50 3.00、p95 5.97、
+p99 9.60、max 38.12 ms——60 fps 富余。所以脏库上的尖峰是"给巨卡排版"这一笔（老代码
+一样要付，`renderMargin` 调大就是拿内存换更深的回访缓存）。
+
+## 38. 首帧那一笔 3 秒：不是 resume 在等，是 syntect 在首帧里算
+
+### 38.1 问题（用户报的）
+
+从 TUI 里 `/resume` 一个 14 KB 的小会话，肉眼可见地等约 3 秒才全部出现。
+
+### 38.2 归因（全部实测，release，用户的库 + 用户的 config）
+
+先说**不是**什么：attach 这条路上没有任何"等"。
+
+| 阶段 | 时间 |
+|---|---|
+| daemon 收到 attach → 回 `attached` | 1.2 ms |
+| 整条 transcript 上线（一条 `Transcript`，6 块 / 29 KB JSON） | 2.0 ms |
+| TUI 第一帧出现（输入框/状态行） | 34 ms |
+| **一个渲染帧**（进程内基准，会话 2，649 行） | **253.9 ms** |
+| 第 2 帧起 | 2.6 ms |
+
+把这一帧拆开（每一步都单独改一遍源码量过，量完还原）：
+
+| 实验 | 首帧 |
+|---|---|
+| 原样 | 253.9 ms |
+| 围栏只排纯文本、不上色（**文本一字不改**） | **3.52 ms** |
+| 折行整段不做 | 253.6 ms（→ 折行只占 ~4 ms） |
+| 折行不再逐字符分配 String | 255.8 ms（噪声内，原先的猜测错了） |
+| 首帧前先预热语法集 + 那 12 种语言的上下文 | 90.6 ms |
+
+结论：**markdown 结构 + 折行 + 分配合计约 4 ms（12 KB）**，钱全在 syntect：
+冷加载（`SyntaxSet` 解包 + 每个语法自己那份上下文表）**~163 ms**、23 个围栏的
+上色 **~90 ms**。debug 构建把这一帧整体放大 8.9 倍 = 2.2 s，终端再高一点就是
+用户看到的"大概 3 秒"。
+
+**为什么"块内从底下往回排"不是解法**：排版本来只要 4 ms，反向排省的是这 4 ms；
+而 syntect 的解析需要前向状态、markdown 的 setext/紧松列表也跨行，真要反向排
+得先造一个结构扫描器 + 让几何容忍"高度未知"，收益却接近零。
+
+### 38.3 做法：推迟上色 + 只补看得见的段 + 启动预热
+
+三条事实让"先出纯文本、颜色随后补"是**几何零风险**的：
+
+1. 上色只改样式，**不改行数与任何一行文本**（`highlight.rs` 的
+   `every_line_survives_roundtrip` 就是这条的断言）；
+2. 折行只看字符宽度（`blocks::wrap_rows`），与颜色无关；
+3. 围栏之间是独立的渲染单元（`markdown.rs` 每个围栏一个 fresh `ParseState`），
+   所以"先补哪一段"是自由的。
+
+具体：
+
+- `render_group(..., defer)`：缓存那一路**推迟上色**。围栏按 `highlight::plain`
+  出图，并把 `(行区间, 源码, 语言)` 记进 `Block::pending`（`render/blocks.rs`
+  的 `Deferred` / `Pending`）。
+- **按段折行**：`render_group` 把行序列按段的边界分开折行——折行逐行独立，所以
+  结果与整段一次折行逐行相同，分段只为拿到"这一段落在哪几行"。
+- `HistoryZone::color_visible`：一帧里先按高度算出各块在本帧缓冲区里的行区间
+  （`buffer_layout`，偏移可预测），再**只给落在视口里的段补色**，**从下往上**。
+  补色发生在"克隆行之前"，所以颜色与内容同一帧出。补过的段留在块缓存里，下一帧
+  直接读（`Block::color_rows` 上完就把段从待办里摘掉）。
+- 白捡的两处：**用户卡**与**思考链**的每个 span 颜色都会被外层覆盖成统一色，
+  在这里高亮本来就是白烧的钱——它们永远按"推迟"渲染，且不需要谁补色。
+
+**没有预热**。一开始加过"启动时后台线程先把语法集摸一遍"，后来按用户的要求撤掉了：
+那笔冷加载现在落在**第一次上色的那一帧**上，而它只对**看得见的那一两个语言**付费，
+实测 release 首帧 3.2 → 24.2 ms、debug 真机 52 → 192 ms。撤掉之后代码少一个信号
+（`Signal::Repaint`）、少一道"预热完没完"的闸门，启动期也不多干一件活——这笔账更划算。
+
+### 38.4 数字（改前 → 改后）
+
+| 口径 | 改前 | 改后 |
+|---|---|---|
+| 进程内基准首帧（release） | 253.9 ms | **24.18 ms**（含冷加载 + 可见段上色） |
+| 同上，若只排纯文本、完全不上色 | — | 3.20 ms |
+| 真机 `attach` 到内容出现（release） | 277 ms | **81 ms** |
+| 真机 `attach` 到内容出现（debug） | 2197 ms | **192 ms** |
+| 冷启动常驻内存（首帧后，基准） | 74.8 MB | **15.1 MB** |
+| 颜色 | 与内容同帧，但整块算完才出 | 与内容同帧，只算视口里那一两段 |
+
+（另有"启动时预热语法集"的版本：release 真机 41 ms、debug 真机 52 ms、基准首帧
+6.81 ms。按用户要求撤掉了，见上。）
+
+### 38.5 测试
+
+- `render::blocks::deferring_then_coloring_equals_coloring_immediately`：
+  推迟 + 补色 ≡ 一开始就上色，**高度、逐行文本、每一格的样式**逐格相同。
+- `render::blocks::coloring_one_row_range_leaves_the_other_fences_pending`
+- `cache::coloring_through_the_cache_touches_only_the_given_rows`：
+  只碰给出行区间里的段，高度不变。
+- `history::the_first_frame_colors_only_what_the_viewport_shows`：
+  长消息首帧之后仍有待上色段，且视口里确实出现了 keyword 色。
+
+### 38.6 剩下的账
+
+- 首帧里还剩的那笔冷加载（`SyntaxSet` 解包 + 用到的语言各解一次上下文表）：
+  落在第一次上色的那一帧，release ~20 ms / debug ~140 ms，一次性。
+
+**两条明确不做的方向**（用户拍板，都是量过之后拍的）：
+
+- **工具卡**（`tools.rs` 的逐行高亮）：机制上可以做，但要重画"一整行"——
+  工具卡的一行是"行号栏 + 前缀（`$ ` / `+ ` / `- `）+ 高亮片段"拼起来的，
+  不像围栏那样"一段源码 ↔ 一段行"能直接对换，所以那 5 个站点各自需要一个
+  "重画第 i 行"的入口。收益也不够：造了极端样本实测（`bash` 卡，3000 行折叠态）
+  首帧 48.3 ms、**500 行（现实上限）首帧 29.0 ms**，稳定帧 2.6~3.5 ms——
+  比 markdown 那个 254 ms 低一个量级，而且**巨物机制 + 折叠**已经把行数钉住了。
+  不做。
+- **单块超大文本**：按用户的判断（AI 的语言习惯不会产出巨块，且有巨物机制兜底）
+  不再往"从底下开始排"那个方向走。真要处理才需要结构扫描器 + 高度未知的几何；
+  这里记一笔，不做。
+
+## 39. 本次大提交：改动清单（工作树里的全部未提交变更）
+
+工作树一共 **44 条**：40 个改动、2 个删除、2 个新增（新测试文件）。它们对应
+repo.md 的 **§27、§30–§38** —— 也就是说这次提交不是一件事，是连续几轮
+（死代码普查 → 库重设计 → 惰性传输/按需历史 → 前端窗口化 → 首帧上色切段）
+攒在一起的一次性落地。
+
+### 39.1 按模块
+
+| 文件 | 一句话 | 详述 |
+|---|---|---|
+| `src/server/store.rs` (+2018/-…) | 库重设计：块是单位、分支是区间、分页按 `block_id` 点名取数 | §36 |
+| `src/server/hub.rs` | 会话按 id 装配；`load_tail/load_before/load_after` 三条分页入口 | §36/§37 |
+| `src/server/daemon/mod.rs` | 增量账本 `Ship`；`NeedOlder{before}` / `NeedNewer{after}`；`transcript_msgs_for` 分 live 与落盘两路 | §34/§35/§37 |
+| `src/server/wire.rs` | `WireBlock{id, entries}`、`Transcript/Blocks/OlderBlocks/NewerBlocks`、`PROTO_VERSION 5` | §37 |
+| `src/server/session.rs` | 活尾巴账本 `live` + `blocks_clean`；`note_persisted` 判定顺序是否干净 | §37 |
+| `src/server/entry.rs`、`src/grouping.rs` | 条目/分组的精简与对齐（块口径） | §36 |
+| `src/server/{events,turn,compaction,agent/artifacts}.rs` | 随上面的口径改动同步 | §36 |
+| `src/server/ai/config.rs` | `TuiConfig{renderMargin, preload}`；清掉不再用的配置助手 | §37/§27 |
+| `src/tui/zone/main/history/mod.rs` (+2114/-…) | 窗口化核心：`window`/`live_blocks` + 内容锚 `Block{key,row}`/`Tail{off}`；`scroll_by` 先走尾巴再进块 | §37 |
+| `src/tui/zone/main/history/cache/mod.rs` | 渲染缓存换键：`block_id` → 变体（行 + 高度），预算 64 块 | §37 |
+| `src/tui/zone/main/history/render/{blocks,markdown,mod,cards,tools,chat}.rs` | 首帧推迟上色：围栏登记成段、纯文本先出图、按段折行 | §38 |
+| `src/tui/zone/main/input/semantics/mod.rs` | Ctrl+↑/↓ 归历史区（编辑器一律返回 `Action::None`） | §37 |
+| `src/tui/zone/main/mod.rs` | 行高仲裁与子区布局跟着窗口走 | §37 |
+| `src/tui/session/{loop,view}.rs` | 按值分发（不再克隆整条转录）；`tui.preload/renderMargin` 接进历史区 | §37 |
+| `src/tui/mod.rs`、`src/tui/theme/*`、`src/tui/zone/mod.rs`、`src/cli.rs`、`src/xdg.rs`、`src/tui/zone/main/{input/editor/separators.rs,reserved/area.rs}`、`src/tui/zone/main/history/render/theme.rs` | 死代码普查的删除（`fg_on_bg`/`muted_span`/`is_background`/`HeightNotice`/`is_oneshot`/`config_base`/`release` 等） | §27 |
+| `examples/tui_scale_bench.rs` (+613) | 进程内全帧压测：`user <db> [会话] [帧] [种子]`、`BENCH_TRACE`；生成器覆盖 Todo 档 | §37/§38 |
+| `ARCHITECTURE.md` | 模块地图（tui 行数、`tui` 配置节） | §37 |
+
+### 39.2 删除与新增
+
+- 删 `examples/gen_bench_db.py`、`examples/gen_compact_dbg.py`（已被 `tui_scale_bench gen` 取代）。
+- 新 `src/tui/zone/main/history/tests.rs`（36 条窗口/锚/滚动/尾巴行为测试）
+  与 `src/tui/zone/main/history/cache/tests.rs`（缓存键、预算、变体）。
+
+### 39.3 提交前的基线（本次实跑）
+
+```
+cargo test        710 通过
+cargo clippy --all-targets   0 警告
+cargo build --release        干净（二进制 ~17.1 MB）
+```
+真机（隔离 socket/库、真 daemon、pty 真 TUI）：resume 14 KB 会话到内容出现
+release 81 ms / debug 192 ms（改动前 277 ms / 2197 ms）；深滚 6 万行 RSS 上界 2 MB。
+
+### 39.4 建议的提交信息
+
+```
+TUI 窗口化 + 首帧上色切段；服务端按块分页；清兼容与死代码
+
+- 服务端：块是单位（分页按 block_id 点名取数、live 整段替换）        repo.md §36
+- 前端：窗口只留看得见的一段，锚 = (block_id, 块内行)                §37
+- 键位：PageUp/Down 与 Ctrl+↑/↓ 一屏；Ctrl+↑/↓ 归历史区
+        （修「流式期间滚不动」「一次按键两个效果」两个根因）          §37
+- 首帧：上色切成围栏段、只补视口里那几段、从下往上、补完进缓存
+        （12 KB markdown 首帧 253.9 → 24.2 ms，真机 debug 2197 → 192 ms） §38
+- 清理：删死代码、删两支生成脚本、删兼容路径                        §27
+- 校验：710 测试通过 / clippy 0 警告 / release 干净
+```
+
 ## 14. 附：本次新增/未改动说明
 
 **新增（测试装置）**：

@@ -94,17 +94,20 @@ cargo test --no-default-features    # 联网相关测试随之消失（少 28 �
 
 数据库的唯一职责是**把当时的对话原样复现**：
 
-- 一轮的条目在 `TurnDone` 时**一次性**写入（`sessions` + `entries`，树形
-  `parent_seq` + `leaf` 指针）；
+- 一个回合的条目在 `TurnDone` 时**一次性**写入，落成**块**（`blocks`：一块 = 一个显示
+  节点，一次工具往返是一行，两半各占一列），同时写入这个回合的**请求头**（`turns`：
+  model / protocol / endpoint / system / tools / max_tokens / stop_reason + 块的区间）。
+  `block_id` 是全局自增，所以顺序键同时是"时序、唯一、跨会话可比"；
+- **分支是一段区间，不是一串行指针**：分叉只写一行（`parent_id` + `fork_block_id`），
+  读分支 = 沿若干 `(会话, 上界)` 段做索引区间扫。删除 = 截断到"活着的分支还需要的最后
+  一块"，行留成墓碑（`deleted_at`），于是没有任何 `UPDATE` 会重写一批 payload 行；
 - `entries_to_context` 由条目重建协议消息，与模型当时收到的 wire 形状逐字节一致
   （多调用合成一条 assistant、`args` 原样回放、reasoning 不进协议）；
 - 空回复有唯一占位符 `entry::EMPTY_REPLY`：**落盘与实时上下文共用同一个字符串**，
-  否则重启后回放的字节就与当时发出去的不同（前缀缓存全冷，模型看到的是一份它没发过的历史）；
-- `leaf` 是用户状态（回溯、`set_leaf(None)` = 回到根），**跨重启存活**；
-  迁移只在列刚被 `ALTER` 加上的那一次执行，不重复回填。
+  否则重启后回放的字节就与当时发出去的不同（前缀缓存全冷，模型看到的是一份它没发过的历史）。
 
-覆盖这些的测试：`store::tree_tests::*`（含 `a_stored_round_replays_byte_identically_after_a_reopen`）、
-`server::turn::tests::a_whole_conversation_replays_byte_identically`。
+覆盖这些的测试：`store::tests::*`（含 `a_stored_round_replays_byte_identically_after_a_reopen`、
+分叉/截断那一组）、`server::turn::tests::a_whole_conversation_replays_byte_identically`。
 
 ---
 
@@ -136,14 +139,14 @@ browser:
 
 ---
 
-## 6. 模块地图（行数，2026-09-25）
+## 6. 模块地图（行数，2026-09-27）
 
 > 服务端要拆成 daemon、前端走 socket 的设计见 **[SERVER.md](SERVER.md)**（一页纸，未动代码）。
 
 | 模块 | 行数 | 内容 |
 |---|---|---|
 | `server/` | 11,006 | **服务端全部**：`events`（协议）、`session`（状态机 + facade）、`turn`（轮线程 + 上下文重建）、`hub`（多会话宿主）、`compaction`、`profile`、`log`（内存日志）、`store`（SQLite + 回合请求头）、`entry`（协议数据模型）、`ai/`（网关：client/types/config/pricing）、`agent/`（执行引擎：loop/tools/artifacts/bash_guard） |
-| `tui/` | 16,188 | 前端：`app`、`keys`、`zone/main/{history,input,reserved}`、`input/editor`、`statusline`、`theme`、`session/{loop,signal}` |
+| `tui/` | 21,069 | 前端：`app`、`keys`、`zone/main/{history,input,reserved}`、`input/editor`、`statusline`、`theme`、`session/{loop,signal}`。历史区**窗口化**：只留一段已落盘的块窗口（`tui.preload` + `tui.renderMargin`）+ 一段还没落盘的活尾巴，视口位置记的是内容锚 `(block_id, 块内行)`，翻页按 id 点名要区间——见 `repo.md` §37 |
 | `web/` | 2,319 | `fetch` / `search` / `browser` 三域 + `utils/{cdp,session,html,url}` |
 | `grouping` `xdg` `git` `ansi` `cli` | 668 | 叶子层（块分组、平台目录、git 状态、ANSI 剥离、命令行） |
 
@@ -153,7 +156,7 @@ browser:
 所以文件搬进子模块后规则仍然指得准（例如 `server::agent` 不许引用 `server::session`）；
 另有一条兜底：`server/` 下任何文件都不许点名 `tui`。
 
-config.yaml 的 schema（含 `tools` / `browser` / `compact` / `theme` / `profile` / `streaming`）
+config.yaml 的 schema（含 `tools` / `browser` / `compact` / `theme` / `profile` / `streaming` / `tui`）
 **只在 `server::ai::config` 定义**：它不认上层类型，消费方向下 import。
 
 ---

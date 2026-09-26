@@ -18,20 +18,6 @@ pub fn data_base() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-/// `$XDG_CONFIG_HOME` (default `~/.config`): user-authored configuration.
-/// Kept next to `data_base` for symmetry even though `ai::config` grew its
-/// own copy first — that one migrates here when it next changes anyway.
-pub fn config_base() -> std::path::PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .map(|h| h.join(".config"))
-        })
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-}
-
 /// mypi's slice of the data home: `$XDG_DATA_HOME/mypi`.
 pub fn data_dir() -> std::path::PathBuf {
     data_base().join("mypi")

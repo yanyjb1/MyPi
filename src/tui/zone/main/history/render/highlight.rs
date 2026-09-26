@@ -374,7 +374,9 @@ fn spans_for(t: &HistoryTheme, cat: usize, text: &str) -> Span<'static> {
     t.fg(text.to_string(), category_token(cat))
 }
 
-fn plain(code: &str) -> Vec<Line<'static>> {
+/// 不上色的同一份文本：行数与文本与 [`highlight`] 完全一致（上色只改样式，
+/// 折行只依赖文本宽度），所以"先出纯文本、颜色随后补"不会动几何。
+pub(crate) fn plain(code: &str) -> Vec<Line<'static>> {
     code.lines().map(|l| Line::from(l.to_string())).collect()
 }
 

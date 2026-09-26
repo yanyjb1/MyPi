@@ -54,23 +54,6 @@ impl SeparatorTable {
     pub fn is_connector(&self, c: char) -> bool {
         self.connector.contains(&c)
     }
-
-    /// 兼容旧语义："是分隔符" = 硬边界或连接符（都停下滑动）。
-    /// 注意：词删除的"一删一块"只看 [`Self::is_hard`]。
-    pub fn is_separator(&self, c: char) -> bool {
-        self.is_hard(c) || self.is_connector(c)
-    }
-
-    /// config 注入口：在默认表基础上覆盖某一档。
-    pub fn with_overrides(
-        mut hard_extra: Vec<char>,
-        mut connector_extra: Vec<char>,
-    ) -> Self {
-        let mut t = Self::default();
-        t.hard.extend(hard_extra.drain(..));
-        t.connector.extend(connector_extra.drain(..));
-        t
-    }
 }
 
 #[cfg(test)]
@@ -93,12 +76,5 @@ mod tests {
         assert!(t.is_hard('，'));
         assert!(t.is_hard('。'));
         assert!(!t.is_connector('，'), "CJK 标点不是连接符");
-    }
-
-    #[test]
-    fn overrides_extend_default() {
-        let t = SeparatorTable::with_overrides(vec!['§'], vec!['~']);
-        assert!(t.is_hard('§'));
-        assert!(t.is_connector('~'));
     }
 }

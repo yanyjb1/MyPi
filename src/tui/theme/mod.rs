@@ -269,11 +269,6 @@ impl Palette {
         Span::styled(text.into(), Style::new())
     }
 
-    /// Muted gray text, transparent background.
-    pub fn muted_span(&self, text: impl Into<String>) -> Span<'static> {
-        Span::styled(text.into(), Style::new().fg(self.muted))
-    }
-
     /// Muted gray + italic: helper text such as completion descriptions and thinking blocks.
     pub fn muted_italic(&self, text: impl Into<String>) -> Span<'static> {
         Span::styled(

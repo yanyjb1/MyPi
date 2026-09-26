@@ -149,14 +149,6 @@ impl ReservedArea {
     pub fn holder(&self) -> Option<&'static str> {
         self.holder.map(|(id, _)| id)
     }
-
-    /// Explicit release by identity. Idempotent; a non-holder cannot drop
-    /// someone else's claim.
-    pub fn release(&mut self, id: &str) {
-        if self.holder.as_ref().is_some_and(|(h, _)| *h == id) {
-            self.holder = None;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -231,7 +223,8 @@ mod tests {
         let mut r = ReservedArea::default();
         r.resolve(&mut [&mut f]); // max() default 6
         assert_eq!(r.rows(24), 6, "超过服务 max 时按 max 冻结");
-        r.release("t");
+        f.want.set(None);
+        r.resolve(&mut [&mut f]);
         f.want.set(Some(50));
         r.resolve(&mut [&mut f]);
         assert_eq!(r.rows(3), 3, "冻结行数装不进终端时按终端裁");
@@ -247,19 +240,6 @@ mod tests {
         r.resolve(&mut [&mut f]);
         assert_eq!(r.rows(24), 1, "占用者沉默 -> 回到空闲空行");
         assert_eq!(r.holder(), None);
-    }
-
-    #[test]
-    fn release_is_idempotent_and_identity_scoped() {
-        let mut f = Fake::new("t", Some(3));
-        let mut r = ReservedArea::default();
-        r.resolve(&mut [&mut f]);
-        r.release("other");
-        assert_eq!(r.rows(24), 3, "别人不能替持有者放手");
-        r.release("t");
-        assert_eq!(r.rows(24), 1);
-        r.release("t");
-        assert_eq!(r.rows(24), 1);
     }
 
     #[test]

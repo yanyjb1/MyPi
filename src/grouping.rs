@@ -8,8 +8,9 @@
 //!
 //! Lives outside `tui` on purpose. The grouping is pure domain logic — it
 //! reads entries and returns index ranges, touching nothing graphical — so
-//! both the renderer (`tui`) and the compactor (`server`) share it without
-//! the server layer having to depend on the terminal layer.
+//! the renderer (`tui`), the compactor (`server`) and the store (which writes
+//! one block per node, [`chunks`]) share it without the server layer having to
+//! depend on the terminal layer.
 
 use crate::server::entry::Entry;
 
@@ -24,24 +25,17 @@ pub struct Range {
     pub end: usize,
 }
 
-/// Group transcript entries into renderable nodes.
+/// Group transcript entries into nodes, in **arrival order** — the storage
+/// shape. One range per node; request+result pairs glue, everything else stands
+/// alone (the only place that knows what "one node" is, so grouping, storage
+/// and rendering can never disagree).
 ///
-/// The only place that knows a request+result pair is one visual node, so
-/// grouping and rendering can never disagree about what "one node" is.
-///
-/// **Pinned notices**: a pinned `Entry::System` (the only kind allowed to
-/// declare pinning) is hoisted to the head of the returned list, in arrival
-/// order among themselves. Everything else keeps arrival order. The hoist
-/// is a *slot*, not a freeze: the pinned block is an ordinary node in the
-/// array — wheeling up scrolls past it like any other; it simply always
-/// renders first whenever the viewport covers the array top.
-pub fn blocks(entries: &[Entry]) -> Vec<Range> {
-    // Pass 1: group in arrival order, remembering which nodes are pinned.
-    struct Node {
-        range: Range,
-        pinned: bool,
-    }
-    let mut nodes: Vec<Node> = Vec::new();
+/// This is what a block is on disk: written where it happened, with no
+/// reordering. Pinned notices keep their arrival position here; hoisting them
+/// is a display act ([`blocks`]), never something storage should freeze — a
+/// stored block id must not depend on how a later front end decides to draw.
+pub fn chunks(entries: &[Entry]) -> Vec<Range> {
+    let mut out: Vec<Range> = Vec::with_capacity(entries.len());
     let mut i = 0;
     while i < entries.len() {
         // A result immediately following its request, same id: one exchange.
@@ -56,38 +50,35 @@ pub fn blocks(entries: &[Entry]) -> Vec<Range> {
             && call_id == rid
             && name == rname
         {
-            nodes.push(Node {
-                range: Range {
-                    start: i,
-                    end: i + 2,
-                },
-                pinned: false,
+            out.push(Range {
+                start: i,
+                end: i + 2,
             });
             i += 2;
             continue;
         }
-        let pinned = matches!(
-            &entries[i],
-            Entry::System { pin: true, .. }
-        );
-        nodes.push(Node {
-            range: Range {
-                start: i,
-                end: i + 1,
-            },
-            pinned,
+        out.push(Range {
+            start: i,
+            end: i + 1,
         });
         i += 1;
     }
-    // Pass 2: stable partition — pinned first (their relative arrival
-    // order preserved by the stable drain), then the unpinned queue.
-    let mut out: Vec<Range> = Vec::with_capacity(nodes.len());
-    let mut rest: Vec<Range> = Vec::with_capacity(nodes.len());
-    for n in nodes {
-        if n.pinned {
-            out.push(n.range);
+    out
+}
+
+/// [`chunks`] in **render order**: pinned notices hoisted to the head, in
+/// arrival order among themselves. The hoist is a *slot*, not a freeze: the
+/// pinned block is an ordinary node in the array — wheeling up scrolls past it
+/// like any other; it simply always renders first whenever the viewport covers
+/// the array top.
+pub fn blocks(entries: &[Entry]) -> Vec<Range> {
+    let mut out: Vec<Range> = Vec::with_capacity(entries.len());
+    let mut rest: Vec<Range> = Vec::with_capacity(entries.len());
+    for r in chunks(entries) {
+        if matches!(entries[r.start], Entry::System { pin: true, .. }) {
+            out.push(r);
         } else {
-            rest.push(n.range);
+            rest.push(r);
         }
     }
     out.extend(rest);

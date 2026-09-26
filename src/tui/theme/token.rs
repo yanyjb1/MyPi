@@ -207,16 +207,4 @@ impl ColorToken {
             ColorToken::StatusLineSubagents => "statusLineSubagents",
         }
     }
-
-    /// Background tokens get `bg()` styling; everything else is foreground.
-    pub fn is_background(self) -> bool {
-        matches!(
-            self,
-            ColorToken::UserMessageBg
-                | ColorToken::ToolPendingBg
-                | ColorToken::ToolSuccessBg
-                | ColorToken::ToolErrorBg
-                | ColorToken::StatusLineBg
-        )
-    }
 }

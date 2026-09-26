@@ -217,11 +217,6 @@ impl HistoryTheme {
         Style::new().fg(self.get(tok))
     }
 
-    /// 前景 + 背景，只要样式。
-    pub fn on_bg_style(&self, tok: Token, bg: Token) -> Style {
-        Style::new().fg(self.get(tok)).bg(self.get(bg))
-    }
-
     /// 前景 + 修饰（粗体/斜体）。
     pub fn fg_mod(
         &self,

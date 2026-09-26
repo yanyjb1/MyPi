@@ -46,7 +46,7 @@ Options:
   --model <p:id>    Session model override (provider:id, not persisted)
 
 Configuration: ~/.config/mypi/config.yaml (see models_example.yml in the repo).
-Sessions:      ~/.local/share/mypi/sessions.db
+Sessions:      ~/.local/share/mypi/sessions.db3
 Daemon socket: $XDG_RUNTIME_DIR/mypi.sock (auto-started by the TUI)";
 
 impl Cli {
@@ -105,12 +105,6 @@ impl Cli {
         }
         Ok(cli)
     }
-
-    /// True when this invocation is a one-shot query (no TUI, no daemon
-    /// spawn unless one is needed to answer).
-    pub fn is_oneshot(&self) -> bool {
-        self.server || self.sessions || self.replay.is_some()
-    }
 }
 
 #[cfg(test)]
@@ -150,15 +144,12 @@ mod tests {
     #[test]
     fn server_flag() {
         assert!(parse(&["--server"]).unwrap().server);
-        assert!(parse(&["--server"]).unwrap().is_oneshot());
-        assert!(!parse(&[]).unwrap().is_oneshot());
     }
 
     #[test]
     fn attach_takes_a_numeric_id() {
         let c = parse(&["attach", "42"]).unwrap();
         assert_eq!(c.attach, Some(42));
-        assert!(!c.is_oneshot(), "attach is a TUI mode, not a one-shot");
         assert!(parse(&["attach"]).is_err(), "missing id rejected");
         assert!(parse(&["attach", "abc"]).is_err(), "non-numeric rejected");
     }
@@ -166,14 +157,12 @@ mod tests {
     #[test]
     fn sessions_is_a_oneshot() {
         assert!(parse(&["sessions"]).unwrap().sessions);
-        assert!(parse(&["sessions"]).unwrap().is_oneshot());
     }
 
     #[test]
     fn replay_takes_two_numbers() {
         let c = parse(&["replay", "7", "3"]).unwrap();
         assert_eq!(c.replay, Some((7, 3)));
-        assert!(c.is_oneshot());
         assert!(parse(&["replay", "7"]).is_err(), "missing round rejected");
         assert!(parse(&["replay", "a", "3"]).is_err());
     }

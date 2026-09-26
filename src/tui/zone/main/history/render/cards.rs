@@ -295,7 +295,9 @@ pub(super) fn user_card(content: &str, t: &HistoryTheme, width: usize) -> Vec<Li
         width,
         bg,
     ));
-    for line in super::markdown::render_markdown(content, t) {
+    // 用户卡的每个 span 颜色都会被下面覆盖成统一的黑底白字：在这里高亮是
+    // 白烧的钱。纯文本出图，且不需要谁来补色。
+    for line in super::markdown::render_markdown(content, t, true).0 {
         // Force the card's own foreground/background: markdown may have
         // decided on a color for a code span, but a user message is
         // uniformly black-on-… white-on-black.

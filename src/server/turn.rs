@@ -1316,7 +1316,7 @@ mod tests {
                 usage: None,
             },
             Entry::Compaction {
-                first_kept_seq: 2,
+                first_kept_entry: 2,
                 summary: "【摘要】".into(),
             },
             Entry::User {

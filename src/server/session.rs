@@ -35,14 +35,17 @@ pub struct SessionState {
     transcript_generation: u64,
     // Entries produced this round; verified/persisted at TurnDone (Commit).
     pending: Vec<Entry>,
+    /// 惰性历史：resume 只装了尾巴，完整转录还没读进来（见 `hub::resume`）。
+    /// 第一回合之前必须补齐——否则模型看到的上下文只有尾巴。
+    history_pending: bool,
+    /// 见 [`Self::blocks_clean`]。
+    blocks_clean: bool,
     // Storage. None = DB unavailable (degrades to in-memory session).
     store: Option<Store>,
     // Current session id; None until the first turn (session created lazily).
     session_id: Option<i64>,
     // Name set explicitly via /name; None = statusline synthesizes one.
     session_name: Option<String>,
-    // Sequence for persisted migrations (cwd_history.seq; 0 = origin).
-    cwd_seq: i64,
     // ---- streaming slots (owned here; the TUI only reads StreamView) ----
     stream: StreamView,
     // Last turn's usage (TurnDone), consumed by the caller's cost tracker.
@@ -65,6 +68,13 @@ pub struct SessionState {
     // How the round in flight ended (`StopReason::as_str`); None while it is
     // live or when it died before the gateway answered. Written with the round.
     round_stop: Option<&'static str>,
+    /// 转录**还没落盘**的那截尾巴：正在跑的那个回合（`pending` 里的那些）加上
+    /// 永远不落盘的回声（通知、命名标记、落盘失败报告）。
+    ///
+    /// 它是前端窗口的对侧账本：前端只留一个有界的块窗口，所以"哪些还是活的、
+    /// 没有块 id"必须由这里说了算。不变量：`live` 就是 `transcript` 的尾巴，
+    /// 顺序一致（每个 push 都成对走 [`Self::push_live`]）。
+    live: Vec<Entry>,
 }
 
 impl SessionState {
@@ -73,17 +83,54 @@ impl SessionState {
             transcript: Vec::new(),
             transcript_generation: 0,
             pending: Vec::new(),
+            history_pending: false,
+            blocks_clean: true,
             store,
             session_id: None,
             session_name: None,
-            cwd_seq: 0,
             stream: StreamView::default(),
             last_usage: None,
             pending_usage: None,
             round_finalized: false,
             round_meta: None,
             round_stop: None,
+            live: Vec::new(),
         }
+    }
+
+    /// 推一条**还没落盘**的转录尾巴：入 `transcript` 也入 `live`。
+    ///
+    /// 只有两种条目走这里：这个回合正在攒的（`pending` 的同一份）和永远不落盘
+    /// 的回声。落盘的条目在写成功后由 [`Self::note_persisted`] 从 `live` 里摘掉。
+    fn push_live(&mut self, e: Entry) -> Change {
+        self.live.push(e.clone());
+        self.transcript.push(e);
+        Change::Transcript
+    }
+
+    /// 落盘成功后：把这批条目从 `live` 里摘掉（按顺序做子序列匹配，不是比长度
+    /// ——回合中间可能夹着回声）。
+    ///
+    /// 返回**顺序是否干净**：真 = 被摘掉的恰好是 `live` 的前缀，剩下的都排在
+    /// 它们后面，前端可以拿"整段替换 live"来对齐；假 = 有回声夹在中间，前端
+    /// 必须改收一次整体快照（daemon 那边据此决定发哪条消息）。
+    ///
+    /// 匹配用相等判断就够：落盘的条目只有 User/Assistant/Reasoning/Tool*/Todo，
+    /// 回声只有 System/Error/Name，两边的 `kind` 不相交，不会摘错。
+    fn note_persisted(&mut self, written: &[Entry]) -> bool {
+        let mut j = 0;
+        let mut prefix = true;
+        let mut kept: Vec<Entry> = Vec::with_capacity(self.live.len());
+        for e in self.live.drain(..) {
+            if j < written.len() && written[j] == e {
+                j += 1;
+            } else {
+                prefix = prefix && j >= written.len();
+                kept.push(e);
+            }
+        }
+        self.live = kept;
+        prefix && j == written.len()
     }
 
     // ---- event intake (the protocolized write side) ----
@@ -123,8 +170,7 @@ impl SessionState {
                 // branch switch, and the context note all read it that way).
                 let e = Entry::Todo { phases };
                 self.pending.push(e.clone());
-                self.transcript.push(e);
-                Change::Transcript
+                self.push_live(e)
             }
             SessionEvent::ToolProgress { call_id, chunk } => {
                 // `call_id` is not used for routing: only one tool runs at a
@@ -174,7 +220,7 @@ impl SessionState {
                     if !reasoning.is_empty() {
                         let r = Entry::Reasoning { content: reasoning };
                         self.pending.push(r.clone());
-                        self.transcript.push(r);
+                        self.push_live(r);
                     }
                 }
                 let e = Entry::ToolRequest {
@@ -186,8 +232,7 @@ impl SessionState {
                     first,
                 };
                 self.pending.push(e.clone());
-                self.transcript.push(e);
-                Change::Transcript
+                self.push_live(e)
             }
             SessionEvent::ToolFinish {
                 call_id,
@@ -216,7 +261,7 @@ impl SessionState {
                     duration_ms,
                 };
                 self.pending.push(e.clone());
-                self.transcript.push(e);
+                self.push_live(e);
                 Change::ToolActivity
             }
             SessionEvent::Error(e) => {
@@ -229,8 +274,7 @@ impl SessionState {
                 if self.stream.active {
                     self.finalize_round(None);
                 }
-                self.transcript.push(Entry::Error { text: e });
-                Change::Transcript
+                self.push_live(Entry::Error { text: e })
             }
             SessionEvent::TurnDone(u, stop) => {
                 // The single assembly point: whatever the event stream built
@@ -261,14 +305,14 @@ impl SessionState {
                 // Marker entry (tree semantics) + best-effort legacy column.
                 self.session_name = Some(name.clone());
                 let marker = Entry::Name { name: name.clone() };
-                self.transcript.push(marker.clone());
+                self.push_live(marker.clone());
                 // Borrow discipline: store writes in scoped blocks; error
                 // echoes go into the transcript only after the borrow ends.
                 let write_err = self
                     .persistence()
                     .and_then(|(st, sid)| st.append(sid, std::slice::from_ref(&marker)).err());
                 if let Some(e) = write_err {
-                    self.transcript.push(Entry::Error {
+                    self.push_live(Entry::Error {
                         text: format!("命名写入失败：{e:#}"),
                     });
                 }
@@ -298,10 +342,11 @@ impl SessionState {
                 });
                 Change::None
             }
-            SessionEvent::SetCwd { seq, path } => {
-                // Bookkeeping only: nothing to draw.
+            SessionEvent::SetCwd { path } => {
+                // Bookkeeping only: nothing to draw. Storage keys the migration
+                // on the session's current tip block.
                 if let Some((st, sid)) = self.persistence() {
-                    let _ = st.record_cwd(sid, seq, &path);
+                    let _ = st.record_cwd(sid, &path);
                 }
                 Change::None
             }
@@ -344,14 +389,14 @@ impl SessionState {
         if !reasoning.is_empty() {
             let r = Entry::Reasoning { content: reasoning };
             self.pending.push(r.clone());
-            self.transcript.push(r);
+            self.push_live(r);
         }
         let e = Entry::Assistant {
             content,
             usage: usage.map(|u| Entry::usage_summary(&u)),
         };
         self.pending.push(e.clone());
-        self.transcript.push(e);
+        self.push_live(e);
         self.stream.active = false;
 
         // Take the round out before persisting: `persistence()` borrows
@@ -370,9 +415,17 @@ impl SessionState {
                 // the entries anyway rather than lose the round.
                 None => st.append(sid, &round),
             };
-            if let Err(e) = res {
-                let msg = format!("落盘失败：{e:#}");
-                self.transcript.push(Entry::Error { text: msg });
+            match res {
+                // 写进去了：这些条目从"还没落盘"变成块（id 下来了，daemon 那边
+                // 据 `blocks_clean` 决定是发块增量还是整体快照）。
+                Ok(_) => {
+                    let clean = self.note_persisted(&round);
+                    self.blocks_clean = self.blocks_clean && clean;
+                }
+                Err(e) => {
+                    let msg = format!("落盘失败：{e:#}");
+                    self.push_live(Entry::Error { text: msg });
+                }
             }
         }
     }
@@ -427,7 +480,7 @@ impl SessionState {
         let e = Entry::User {
             content: user_text.to_string(),
         };
-        self.transcript.push(e.clone());
+        self.push_live(e.clone());
         self.pending.push(e);
         self.stream = StreamView {
             active: true,
@@ -456,10 +509,6 @@ impl SessionState {
         self.session_id
     }
 
-    pub fn cwd_seq(&self) -> i64 {
-        self.cwd_seq
-    }
-
     /// Rebuild one stored round's request **from the database alone**.
     ///
     /// This is the contract that makes a session reproducible from storage:
@@ -485,15 +534,14 @@ impl SessionState {
             .round(session_id, round_seq)
             .map_err(|e| format!("读请求头失败：{e:#}"))?
             .ok_or_else(|| format!("会话 {session_id} 没有第 {round_seq} 回合的请求头"))?;
-        // The chain as of *that* round's tip: replaying after a rewind must
+        // The branch as of *that* turn's tip: replaying after a fork must
         // rebuild the conversation that was live then, not today's branch.
-        let leaf = row.last_seq;
         let (entries, unreadable) = store
-            .load_path(session_id, leaf)
+            .load_branch(session_id, row.last_block)
             .map_err(|e| format!("读条目失败：{e:#}"))?;
         if !unreadable.is_empty() {
             return Err(format!(
-                "有 {} 条条目读不出来（seq {:?}），无法逐字节复现",
+                "有 {} 块读不出来（block {:?}），无法逐字节复现",
                 unreadable.len(),
                 unreadable
             ));
@@ -538,18 +586,12 @@ impl SessionState {
 
     /// Append an echo/status entry to the transcript (never persisted).
     pub fn echo(&mut self, e: Entry) -> Change {
-        self.transcript.push(e);
-        Change::Transcript
+        self.push_live(e)
     }
 
     /// Queue a round entry into `pending` (persisted at TurnDone).
     pub fn stage(&mut self, e: Entry) {
         self.pending.push(e);
-    }
-
-    /// Queue several round entries.
-    pub fn extend_pending(&mut self, es: impl IntoIterator<Item = Entry>) {
-        self.pending.extend(es);
     }
 
     /// Commit a finalized round: replace the transcript with `entries`
@@ -565,17 +607,37 @@ impl SessionState {
     /// path that assigns `transcript` — one place to forget the bump.
     fn replace_transcript(&mut self, entries: Vec<Entry>) {
         self.transcript = entries;
+        // 整体替换来的条目全部是**库里读出来的**（resume / 补齐 / 分支跳转），
+        // 所以"还没落盘的尾巴"清空；块顺序也重来（各前端都会收到整体快照）。
+        self.live.clear();
+        self.blocks_clean = true;
         self.transcript_generation = self.transcript_generation.wrapping_add(1);
     }
 
-    /// Set the pending entries wholesale (TurnDone verification path).
-    pub fn set_pending(&mut self, es: Vec<Entry>) {
-        self.pending = es;
+    /// 把一条**已经落盘**的条目推进转录（不走 `live`）。
+    ///
+    /// 只有压缩用：分隔标记是先写库、再上屏的，进 `live` 的话它会被当成"还没
+    /// 落盘的尾巴"再发一遍，和 daemon 随后按块 id 发的那份撞成两条。
+    fn push_stored(&mut self, e: Entry) -> Change {
+        self.transcript.push(e);
+        Change::Transcript
     }
 
-    /// Drop the pending entries (they were persisted via Commit).
-    pub fn clear_pending(&mut self) {
-        self.pending.clear();
+    /// 还没落盘的那截尾巴（daemon 发块增量时一并带给前端）。
+    pub fn live(&self) -> &[Entry] {
+        &self.live
+    }
+
+    /// 自上次整体快照以来，每次落盘是不是都"顺序干净"（被写掉的条目恰好排在
+    /// 剩余条目的前面）。假的含义：有一声回声夹在回合中间，前端不能靠"整段替换
+    /// live"对齐 → daemon 改发一次整体快照（见 [`Self::note_persisted`]）。
+    pub fn blocks_clean(&self) -> bool {
+        self.blocks_clean
+    }
+
+    /// daemon 发过一次整体快照之后，账本回到干净（各前端都重新对齐了）。
+    pub fn reset_blocks_clean(&mut self) {
+        self.blocks_clean = true;
     }
 
     /// Create a fresh session (or adopt an existing one) and adopt the
@@ -592,27 +654,6 @@ impl SessionState {
         self.session_name = name;
     }
 
-    /// Tree navigation landed: replace transcript + pending wholesale
-    /// and merge the effective name (never clobbers an explicit /name).
-    pub fn navigate_to(&mut self, entries: Vec<Entry>, effective_name: Option<String>) -> Change {
-        self.replace_transcript(entries);
-        self.pending.clear();
-        self.session_name = effective_name.or(self.session_name.take());
-        Change::Session
-    }
-
-    /// Bump the cwd migration sequence (after a successful record_cwd).
-    pub fn bump_cwd_seq(&mut self) -> i64 {
-        self.cwd_seq += 1;
-        self.cwd_seq
-    }
-
-    /// Set the cwd migration sequence outright (resume restores it from
-    /// the persisted history's last seq).
-    pub fn set_cwd_seq(&mut self, seq: i64) {
-        self.cwd_seq = seq;
-    }
-
     /// Try to create the session lazily on the first turn. Returns the
     /// new id, or None when the store is unavailable (in-memory mode).
     pub fn ensure_session(&mut self, root: &std::path::Path) -> Option<i64> {
@@ -626,7 +667,7 @@ impl SessionState {
                 Some(id)
             }
             Err(e) => {
-                self.transcript.push(Entry::Error {
+                self.push_live(Entry::Error {
                     text: format!("会话创建失败：{e:#}"),
                 });
                 None
@@ -638,6 +679,16 @@ impl SessionState {
     pub fn persistence(&mut self) -> Option<(&mut Store, i64)> {
         let sid = self.session_id?;
         Some((self.store.as_mut()?, sid))
+    }
+
+    /// 惰性历史：尾巴之后还有更老的条目没进来。
+    pub fn history_pending(&self) -> bool {
+        self.history_pending
+    }
+
+    /// resume 时登记"只装了尾巴"（第一回合之前要补齐）。
+    pub fn set_history_pending(&mut self, pending: bool) {
+        self.history_pending = pending;
     }
 }
 
@@ -867,7 +918,45 @@ impl Session {
                 }
             }
         }
+        self.ensure_full_history();
         self.finish_submit(text)
+    }
+
+    /// 惰性历史补齐：第一回合之前必须把**完整**转录读回来。
+    ///
+    /// resume 只装了尾巴（第一帧才快），而模型上下文必须包含全部历史——
+    /// 只发尾巴会让模型对着半截对话说话，而且不报错。所以这里补齐并重建
+    /// 上下文副本；前端那边会收到一次整体快照（代变了）。
+    fn ensure_full_history(&mut self) {
+        if !self.state.history_pending() {
+            return;
+        }
+        let Some((st, sid)) = self.state.persistence() else {
+            self.state.set_history_pending(false);
+            return;
+        };
+        match st.load_entries(sid) {
+            Ok(all) => {
+                let system = {
+                    let chat = self.chat.lock().expect("chat 锁中毒");
+                    match chat.messages.first() {
+                        Some(crate::server::ai::types::Message::System { content }) => {
+                            content.clone()
+                        }
+                        _ => crate::server::profile::BUILTIN_SYSTEM.to_string(),
+                    }
+                };
+                *self.chat.lock().expect("chat 锁中毒") =
+                    crate::server::turn::entries_to_context(&system, &all);
+                self.state.replace_transcript(all);
+            }
+            Err(e) => {
+                self.state.echo(crate::server::entry::Entry::Error {
+                    text: format!("历史补齐失败：{e:#}"),
+                });
+            }
+        }
+        self.state.set_history_pending(false);
     }
 
     fn finish_submit(&mut self, text: &str) -> bool {
@@ -891,7 +980,7 @@ impl Session {
                 cwd_trail: std::sync::Arc::new(
                     self.state
                         .persistence()
-                        .and_then(|(st, sid)| st.cwd_history(sid).ok())
+                        .and_then(|(st, sid)| st.cwd_trail(sid).ok())
                         .unwrap_or_default(),
                 ),
                 tool_filter: self.tool_filter.clone(),
@@ -940,9 +1029,7 @@ impl Session {
                 anyhow::ensure!(!raw.is_empty(), "用法：{} <目录>", spec.name);
                 let path = self.resolve_dir(raw)?;
                 let previous = self.set_cwd(path.clone());
-                let seq = self.state.bump_cwd_seq();
                 self.ingest(SessionEvent::SetCwd {
-                    seq,
                     path: path.display().to_string(),
                 });
                 self.notice(&format!(
@@ -1084,22 +1171,6 @@ impl Session {
         });
     }
 
-    /// Rebuild the shared chat replica from projected entries (tree
-    /// navigation / resume). Dangling tool tails are repaired inside, and
-    /// the **current** system prompt (the live profile's) is preserved —
-    /// resume must not silently swap the prompt back to the built-in one.
-    pub fn rebuild_chat(&self, entries: &[Entry]) {
-        let system = {
-            let chat = self.chat.lock().expect("chat 锁中毒");
-            match chat.messages.first() {
-                Some(crate::server::ai::types::Message::System { content }) => content.clone(),
-                _ => crate::server::profile::BUILTIN_SYSTEM.to_string(),
-            }
-        };
-        *self.chat.lock().expect("chat 锁中毒") =
-            crate::server::turn::entries_to_context(&system, entries);
-    }
-
     /// Migrate the working directory; returns the previous value.
     pub fn set_cwd(&self, next: std::path::PathBuf) -> std::path::PathBuf {
         let mut w = self.cwd.write().expect("cwd 锁中毒");
@@ -1137,9 +1208,6 @@ impl Session {
     }
     pub fn session_id(&self) -> Option<i64> {
         self.state.session_id()
-    }
-    pub fn cwd_seq(&self) -> i64 {
-        self.state.cwd_seq()
     }
     /// The model id this session talks to (status line + `state` message).
     pub fn model(&self) -> String {
@@ -1195,20 +1263,36 @@ impl Session {
     pub fn set_session_name(&mut self, name: Option<String>) {
         self.state.set_session_name(name)
     }
-    pub fn navigate_to(&mut self, entries: Vec<Entry>, effective_name: Option<String>) -> Change {
-        self.state.navigate_to(entries, effective_name)
-    }
-    pub fn bump_cwd_seq(&mut self) -> i64 {
-        self.state.bump_cwd_seq()
-    }
-    pub fn set_cwd_seq(&mut self, seq: i64) {
-        self.state.set_cwd_seq(seq)
-    }
     pub fn ensure_session(&mut self, root: &std::path::Path) -> Option<i64> {
         self.state.ensure_session(root)
     }
     pub fn persistence(&mut self) -> Option<(&mut Store, i64)> {
         self.state.persistence()
+    }
+
+    /// 惰性历史：尾巴之后还有更老的条目（daemon 据此起后台补发）。
+    pub fn history_pending(&self) -> bool {
+        self.state.history_pending()
+    }
+
+    /// resume 时登记"只装了尾巴"（见 `hub::resume`）。
+    pub fn set_history_pending(&mut self, pending: bool) {
+        self.state.set_history_pending(pending);
+    }
+
+    /// 还没落盘的那截尾巴（daemon 随块增量一起发）。
+    pub fn live(&self) -> &[Entry] {
+        self.state.live()
+    }
+
+    /// 见 [`SessionState::blocks_clean`]。
+    pub fn blocks_clean(&self) -> bool {
+        self.state.blocks_clean()
+    }
+
+    /// 见 [`SessionState::reset_blocks_clean`]。
+    pub fn reset_blocks_clean(&mut self) {
+        self.state.reset_blocks_clean();
     }
     pub fn handle(&mut self, ev: SessionEvent) -> Change {
         self.state.handle(ev)
@@ -1296,19 +1380,29 @@ impl Session {
     ) -> Change {
         // 1) Persist the marker under the current leaf (the tree keeps
         //    the pre-compact branch reachable).
-        if let Some((st, sid)) = self.state.persistence()
-            && let Err(e) = st.append(sid, &entries)
-        {
-            let msg = format!("压缩标记落盘失败：{e:#}");
-            self.state.echo(Entry::Error { text: msg });
-        }
+        let stored = match self.state.persistence() {
+            Some((st, sid)) => match st.append(sid, &entries) {
+                Ok(_) => true,
+                Err(e) => {
+                    let msg = format!("压缩标记落盘失败：{e:#}");
+                    self.state.echo(Entry::Error { text: msg });
+                    false
+                }
+            },
+            None => false,
+        };
         // 2) Swap the live context replica: next turn starts from
         //    system + summary turn + kept region (prefix-cache cold
         //    once, then warm).
         *self.chat.lock().expect("chat 锁中毒") = ctx;
-        // 3) Transcript: the divider marker + the display stats.
+        // 3) Transcript: the divider marker + the display stats. 落盘成功的那份
+        //    以"已落盘条目"上屏（daemon 随后按块 id 发，两边不会各发一条）。
         for e in entries {
-            self.state.echo(e);
+            if stored {
+                self.state.push_stored(e);
+            } else {
+                self.state.echo(e);
+            }
         }
         self.state.echo(Entry::System {
             text: format!("上下文已压缩：≈{tokens_before} → ≈{tokens_after} tokens"),
@@ -1608,8 +1702,8 @@ mod tests {
         assert_eq!(r.tools_json, r#"[{"type":"function"}]"#);
         assert_eq!(r.max_tokens, 1234);
         assert_eq!(r.stop_reason.as_deref(), Some("stop"));
-        assert_eq!(r.first_seq, Some(1));
-        assert_eq!(r.last_seq, Some(2), "user + assistant 两条");
+        assert_eq!(r.first_block, Some(1));
+        assert_eq!(r.last_block, Some(2), "user + assistant 两条");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1709,8 +1803,9 @@ mod tests {
     }
 
     #[test]
-    fn a_rewound_round_replays_as_of_its_own_tip() {
-        // 回退之后，老回合必须按它当时的链复现，而不是按今天这条链。
+    fn an_older_round_replays_as_of_its_own_tip() {
+        // 复现一个老回合，必须按它当时那一块为界重建，而不是按今天的分支末端
+        // ——否则多出来的后续回合会把请求字节改掉。
         let dir = tmp("rewind");
         let (mut s, id) = round(
             "第一问",
@@ -1728,11 +1823,8 @@ mod tests {
             Usage::default(),
             crate::server::ai::types::StopReason::Stop,
         ));
-        // 把游标退到第一条回复上：第二问那条链就离开了当前路径
-        let st = s.store_mut().unwrap();
-        st.set_leaf(id, Some(2)).unwrap();
-        let now = s.store().unwrap().load_entries(id).unwrap();
-        assert_eq!(now.len(), 2, "当前路径只剩第一轮");
+        let all = s.store().unwrap().load_entries(id).unwrap();
+        assert_eq!(all.len(), 4, "两问两答都在库里");
         let rp = s.replay_round(id, 1).unwrap();
         assert_eq!(rp.model, "m1");
         assert_eq!(
@@ -2024,17 +2116,6 @@ mod tests {
         // Marker echoes into the transcript (renderer skips it).
         assert!(matches!(s.transcript().last(), Some(Entry::Name { name }) if name == "test"));
     }
-    #[test]
-    fn navigate_merges_name_without_clobbering() {
-        let mut s = st();
-        s.set_session_name(Some("explicit".into()));
-        // Navigation brings an effective name; explicit /name wins.
-        s.navigate_to(vec![], Some("branch-name".into()));
-        assert_eq!(s.session_name(), Some("branch-name"));
-        s.navigate_to(vec![], None);
-        assert_eq!(s.session_name(), Some("branch-name"));
-    }
-
     #[test]
     fn a_brake_error_followed_by_turn_done_finalizes_once() {
         // The runner sends Error and then TurnDone for the same round when the

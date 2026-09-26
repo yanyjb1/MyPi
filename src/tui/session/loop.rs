@@ -178,6 +178,10 @@ pub fn run_tui(
     app.main
         .reserved
         .attach_completion(std::env::current_dir().unwrap_or_else(|_| home.clone()), home);
+    // 窗口边距（config.yaml 的 `tui:`）：前端内存的上界就在这里，别处没有。
+    app.main_mut()
+        .history
+        .set_window(cfg.app.tui.preload, cfg.app.tui.render_margin);
     // 命令表来自握手（`hello_ok`）：前端不再自己存一份。补全服务上岗之后再喂。
     app.main.reserved.set_commands(conn.commands().to_vec());
     // 参数的**合法值**：命令表只说形状（`model_id` / `profile_name`），
@@ -456,6 +460,18 @@ pub fn run_tui(
 
             // One repaint per coalesced batch.
             draw_frame(&mut terminal, &mut app)?;
+            // 按需历史：只有渲染之后才判定得出「窗口那头还差不差块」（要块
+            // 高，块高在渲染里才算得出），所以这一条在画完之后单独收一次，
+            // 不走 deliver 那条出口请求路。边界由前端点名——窗口有界的前端
+            // 知道自己正拿着哪一块。
+            if let Some((newer, edge, count)) = app.main_mut().history.take_want() {
+                let msg = if newer {
+                    crate::server::wire::ClientMsg::NeedNewer { after: edge, count }
+                } else {
+                    crate::server::wire::ClientMsg::NeedOlder { before: edge, count }
+                };
+                req.request(&msg).ok();
+            }
         }
         Ok(())
     })();
@@ -482,10 +498,19 @@ fn connect_daemon(
         return Ok(c);
     }
     // Spawn a detached daemon (our own binary in --server mode) and retry.
+    //
+    // **All three streams go to null.** stdout/stderr used to be inherited,
+    // which put the daemon's startup banner (`mypi daemon listening on …`)
+    // straight onto the TUI's screen — one stray line above the first frame,
+    // and the alt-screen switch does not clear it. Nothing is lost by closing
+    // them: the daemon's diagnostics go to the in-memory ring in
+    // `server::log`, not to a terminal.
     let exe = std::env::current_exe()?;
     std::process::Command::new(exe)
         .arg("--server")
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| anyhow::anyhow!("无法拉起 mypi daemon: {e}"))?;
     for _ in 0..200 {

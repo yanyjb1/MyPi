@@ -15,7 +15,7 @@
 //! - **Shrink check.** If the summary is not smaller than the region it
 //!   replaces, the compaction is rejected and the session untouched.
 //! - **Persisted fork point.** A single [`Entry::Compaction`] marker
-//!   records `first_kept_seq` + the summary; nothing else. Old entries
+//!   records `first_kept_entry` + the summary; nothing else. Old entries
 //!   stay in the store (the tree keeps the pre-compact branch); token
 //!   counts are recomputed on demand, never stored.
 //!
@@ -43,7 +43,8 @@ pub struct Cut {
 
 /// Walk the transcript backwards in whole blocks and mark the fork point.
 ///
-/// `blocks` is the render-layer grouping (request+result glued). The
+/// `blocks` is the domain grouping (request+result glued, arrival order:
+/// `grouping::chunks` — the compactor must never see a render-order hoist). The
 /// newest block always survives even if it alone exceeds the budget —
 /// an empty tail would make the summary the *entire* context, which is
 /// exactly the "model forgets what it just did" failure we refuse.
@@ -197,7 +198,7 @@ pub fn compact(
         bail!("空会话无需压缩");
     }
 
-    let blocks = crate::grouping::blocks(entries)
+    let blocks = crate::grouping::chunks(entries)
         .into_iter()
         .map(|r| (r.start, r.end))
         .collect::<Vec<_>>();
@@ -238,7 +239,7 @@ pub fn compact(
     }
 
     let marker = Entry::Compaction {
-        first_kept_seq: cut.first_kept,
+        first_kept_entry: cut.first_kept,
         summary: summary.clone(),
     };
 
@@ -292,7 +293,7 @@ mod tests {
     fn cut_keeps_newest_block_even_over_budget() {
         // 4 user entries = 4 blocks; budget admits only the last one.
         let es: Vec<Entry> = (0..4).map(|_i| user(&"x".repeat(400))).collect();
-        let blocks = crate::grouping::blocks(&es)
+        let blocks = crate::grouping::chunks(&es)
             .into_iter()
             .map(|r| (r.start, r.end))
             .collect::<Vec<(usize, usize)>>();
@@ -304,7 +305,7 @@ mod tests {
     #[test]
     fn cut_grows_backwards_within_budget() {
         let es: Vec<Entry> = (0..4).map(|_i| user(&"x".repeat(100))).collect();
-        let blocks = crate::grouping::blocks(&es)
+        let blocks = crate::grouping::chunks(&es)
             .into_iter()
             .map(|r| (r.start, r.end))
             .collect::<Vec<(usize, usize)>>();
@@ -337,7 +338,7 @@ mod tests {
             },
             user("newest"),
         ];
-        let blocks = crate::grouping::blocks(&es)
+        let blocks = crate::grouping::chunks(&es)
             .into_iter()
             .map(|r| (r.start, r.end))
             .collect::<Vec<(usize, usize)>>();
@@ -387,7 +388,7 @@ mod tests {
         assert_eq!(
             out.marker,
             Entry::Compaction {
-                first_kept_seq: 2,
+                first_kept_entry: 2,
                 summary: "## 当前工作\n\n无".into(),
             }
         );

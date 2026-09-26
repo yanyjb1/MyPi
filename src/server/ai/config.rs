@@ -488,6 +488,43 @@ pub struct AppConfig {
     /// Stream delivery mode (`immediate` | `buffered`). See [`StreamMode`].
     #[serde(default)]
     pub streaming: StreamMode,
+    /// 前端窗口的两个旋钮（内存的上界全在这里）。
+    #[serde(default)]
+    pub tui: TuiConfig,
+}
+
+/// **窗口化**的两个数（见 `tui::zone::main::history`）。
+///
+/// 历史区只留"看得见的那一段"：一段**已落盘**的连续窗口 + 还没落盘的活尾巴。
+/// 这两个数决定窗口多大、渲染行缓存留多少块。它们是**深度**旋钮，不是省内存
+/// 的旋钮：实测把渲染缓存从 256 块降到 32 块，进程 RSS 只差 ~4 MB。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub struct TuiConfig {
+    /// 渲染行缓存留多少块（视口上下各一份）。
+    ///
+    /// 也是滚动的手感旋钮：越大，往上翻时越少遇到没量过的块。
+    #[serde(default = "d_render_margin", rename = "renderMargin")]
+    pub render_margin: usize,
+    /// 锚点上面预取/预保留多少**块**（再往上就该去库里取下一页了）。
+    #[serde(default = "d_preload")]
+    pub preload: usize,
+}
+
+fn d_render_margin() -> usize {
+    64
+}
+
+fn d_preload() -> usize {
+    128
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            render_margin: d_render_margin(),
+            preload: d_preload(),
+        }
+    }
 }
 
 /// The merged view both files feed into (what the rest of the program sees).
@@ -653,6 +690,7 @@ impl Config {
                     tools: Default::default(),
                     browser: Default::default(),
                     profile: None,
+                    tui: TuiConfig::default(),
                 };
                 std::fs::create_dir_all(Self::config_dir()?)?;
                 let yaml = serde_yaml::to_string(&app)?;
@@ -733,30 +771,6 @@ impl Config {
         }
         // Structural only: a persisted default that no longer resolves is
         // handled by `finish_load` (warn + fall back), never here.
-        Ok(())
-    }
-
-    /// Write the active profile name to config.yaml (`/profile`).
-    pub fn save_profile(&self, name: &str) -> anyhow::Result<()> {
-        let mut app = self.app.clone();
-        app.profile = Some(name.to_string());
-        let path = Self::app_path()?;
-        std::fs::create_dir_all(Self::config_dir()?)?;
-        let yaml = serde_yaml::to_string(&app)?;
-        std::fs::write(&path, yaml)
-            .with_context(|| format!("failed to write {}", path.display()))?;
-        Ok(())
-    }
-
-    /// Write the default model to config.yaml (never to models.yml).
-    pub fn save_default(&self, id: &str) -> anyhow::Result<()> {
-        let mut app = self.app.clone();
-        app.default = Some(id.to_string());
-        let path = Self::app_path()?;
-        std::fs::create_dir_all(Self::config_dir()?)?;
-        let yaml = serde_yaml::to_string(&app)?;
-        std::fs::write(&path, yaml)
-            .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
 
@@ -1038,6 +1052,7 @@ providers:
         let cfg = Config {
             models,
             app: AppConfig {
+                tui: TuiConfig::default(),
                 default: Some("local:vendor-a/model-x".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
@@ -1117,6 +1132,7 @@ providers:
         let cfg = Config {
             models,
             app: AppConfig {
+                tui: TuiConfig::default(),
                 default: Some("local:global:gpt-5.6-luna".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
@@ -1204,16 +1220,23 @@ theme:
     /// Cross-test mutex: tests that mutate environment variables share this lock.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Round-trip: /model persists the default into config.yaml only.
+    /// /model 的落点：**只动 config.yaml 的一行**。用户的注释与键序必须原样
+    /// 留下（这正是逐行改而不是 YAML 往返的原因），models.yml 一个字节都不写。
     #[test]
-    fn save_default_writes_app_file_not_models() {
+    fn set_default_model_rewrites_one_line_and_never_touches_models() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("mypi-save2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         unsafe {
             std::env::set_var("MYPI_CONFIG", dir.join("config.yaml"));
             std::env::set_var("MYPI_MODELS", dir.join("models.yml"));
         }
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.yaml"),
+            "# 这是用户的注释，别动它\ndefault: local:a\ntheme:\n  accent: red\n",
+        )
+        .unwrap();
         let models = parse_models(
             r#"
 providers:
@@ -1228,6 +1251,7 @@ providers:
         let cfg = Config {
             models,
             app: AppConfig {
+                tui: TuiConfig::default(),
                 default: Some("local:a".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
@@ -1237,16 +1261,53 @@ providers:
                 streaming: Default::default(),
             },
         };
-        cfg.save_default("local:b").unwrap();
-        let text = std::fs::read_to_string(dir.join("config.yaml")).unwrap();
-        let back: AppConfig = serde_yaml::from_str(&text).unwrap();
-        assert_eq!(back.default.as_deref(), Some("local:b"));
-        // models.yml was never written by the program.
+        let path = cfg.set_default_model("local:b").unwrap();
+        assert_eq!(path, dir.join("config.yaml"), "写的是 config.yaml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("default: local:b"), "{text}");
+        assert!(!text.contains("local:a"), "旧值要被换掉：{text}");
+        assert!(text.contains("# 这是用户的注释，别动它"), "注释被吃了：{text}");
+        assert!(text.contains("accent: red"), "别的键被吃了：{text}");
+        // 未声明的 id 在写盘之前就被拒——绝不写坏下一份配置。
+        assert!(cfg.set_default_model("local:zzz").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        // models.yml 是用户的文件，程序永远不写它。
         assert!(!dir.join("models.yml").exists());
         unsafe {
             std::env::remove_var("MYPI_CONFIG");
             std::env::remove_var("MYPI_MODELS");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 逐行改写的三条边界：换掉顶层那一行、键不存在就追加、缩进的同名键不碰。
+    #[test]
+    fn write_default_key_edits_the_top_level_key_only() {
+        let dir = std::env::temp_dir().join(format!("mypi-wdk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("a.yaml");
+        std::fs::write(&path, "# c\ndefault: x\n").unwrap();
+        write_default_key(&path, "y").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# c\ndefault: y\n");
+
+        let path = dir.join("b.yaml");
+        std::fs::write(&path, "theme: {}\n").unwrap();
+        write_default_key(&path, "y").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "theme: {}\ndefault: y\n",
+            "键不存在时追加，不动别的行"
+        );
+
+        let path = dir.join("c.yaml");
+        std::fs::write(&path, "theme:\n  default: keep-me\n").unwrap();
+        write_default_key(&path, "y").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("  default: keep-me"), "缩进的同名键是别人的：{text}");
+        assert!(text.ends_with("default: y\n"), "{text}");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

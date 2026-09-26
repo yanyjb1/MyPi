@@ -88,9 +88,11 @@ pub enum SessionEvent {
     /// /name: rename the session. Persists a Name marker under the
     /// current leaf (branches inherit names, siblings never see them).
     NameMarker(String),
-    /// /cd landed: persist the migrated working directory under `seq`.
+    /// /cd landed: persist the migrated working directory. The block it is
+    /// recorded against is the session's current tip, which storage owns — the
+    /// caller no longer tracks a cursor of its own.
     /// Pure bookkeeping — no transcript change.
-    SetCwd { seq: i64, path: String },
+    SetCwd { path: String },
     /// The request header of the round that is about to start: everything the
     /// gateway will see that is **not** part of the transcript — model id,
     /// protocol, endpoint, system prompt, tool manuals, token ceiling.
@@ -164,7 +166,7 @@ pub enum LiveActivity {
 
 /// The in-flight streaming slots, read-only. The renderer snapshots
 /// these each frame; the session owns the buffers.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct StreamView {
     /// A turn is currently streaming.
     pub active: bool,

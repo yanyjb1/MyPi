@@ -7,16 +7,6 @@ use super::{Handover, SizeChange, SubZone, TermSize, Zone};
 use crate::tui::zone::main::input::ExitRequest;
 
 // ---------------------------------------------------------------------------
-// 子区句柄 —— Zone 持有的不是实现，是实现了 SubZone 契约的槽位。
-// ---------------------------------------------------------------------------
-
-/// 任何子区都从这里进入 Zone 的仲裁循环。
-pub trait SubZoneHandle: SubZone {
-    /// 子区名（仲裁日志/诊断用）。
-    fn id(&self) -> &'static str;
-}
-
-// ---------------------------------------------------------------------------
 // MainZone —— 三个子区槽位 + 一份仲裁结果。
 // ---------------------------------------------------------------------------
 
@@ -311,21 +301,23 @@ mod tests {
             for cols in [40u16, 80, 121] {
                 let mut mz = MainZone::default();
                 mz.attach(TermSize { cols, rows });
-                mz.history.push_entry(Entry::User {
-                    content: "一些内容".into(),
-                });
-                mz.history.push_entry(Entry::Assistant {
-                    content: "回答".into(),
-                    usage: None,
-                });
-                mz.history.push_entry(Entry::ToolRequest {
-                    call_id: "c".into(),
-                    name: "bash".into(),
-                    args: r#"{"intent":"跑","command":"ls"}"#.into(),
-                    intent: "跑".into(),
-                    text: String::new(),
-                    first: true,
-                });
+                mz.history.load_plain(vec![
+                    Entry::User {
+                        content: "一些内容".into(),
+                    },
+                    Entry::Assistant {
+                        content: "回答".into(),
+                        usage: None,
+                    },
+                    Entry::ToolRequest {
+                        call_id: "c".into(),
+                        name: "bash".into(),
+                        args: r#"{"intent":"跑","command":"ls"}"#.into(),
+                        intent: "跑".into(),
+                        text: String::new(),
+                        first: true,
+                    },
+                ]);
                 let frame = mz.render();
                 assert_eq!(
                     frame.len(),

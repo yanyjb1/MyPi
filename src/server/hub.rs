@@ -12,7 +12,7 @@
 //!   open_new → │  id 1: Session + Store + rx        │ ← turn thread (project A)
 //!   open_new → │  id 2: Session + Store + rx        │ ← turn thread (project B)
 //!              └─────────────┬──────────────────────┘
-//!                            │  sessions.db (WAL: readers never block, writers queue)
+//!                            │  sessions.db3 (WAL: readers never block, writers queue)
 //! ```
 //!
 //! Concurrency: turns already run on their own threads (`turn::spawn_turn`),
@@ -153,33 +153,42 @@ impl SessionHub {
     ///
     /// The stored working directory wins over `spec.cwd`: a resumed session
     /// belongs where it was, not where the process happens to be.
+    /// 惰性历史的尾巴长度：够画满第一屏（一屏 ~40 行，条目有大有小）。
+    pub(crate) const HISTORY_TAIL: usize = 400;
+
     pub fn resume(&mut self, id: i64, spec: SessionSpec) -> anyhow::Result<i64> {
         if self.sessions.contains_key(&id) {
             return Ok(id);
         }
         let store = Store::open(&self.db)?;
         let meta = store.session(id)?;
-        let entries = store.load_entries(id)?;
+        // **只读尾巴**：第一帧只要一屏，整读在 32k 块上要 260 ms（§30）。
+        // 其余由 daemon 按前端点名的块区间补（`ServerMsg::OlderBlocks`）。
+        let (tail, has_more) = store.load_tail(id, Self::HISTORY_TAIL)?;
+        let entries: Vec<crate::server::entry::Entry> =
+            tail.into_iter().flat_map(|b| b.entries).collect();
         // Name and cwd come from storage, not from the caller: a resumed
         // session belongs where it was, under the name it had.
         let name = store.effective_name(id)?;
-        let cwd_seq = store
-            .cwd_history(id)?
-            .last()
-            .map(|(seq, _)| *seq)
-            .unwrap_or(0);
         let cwd = meta
             .cwd
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| spec.cwd.clone());
         // The model context is rebuilt from the entries by the same function a
-        // live turn uses, so a resumed session sees the conversation it had.
-        let chat = crate::server::turn::entries_to_context(&spec.system_prompt, &entries);
+        // live turn uses, so a resumed session sees the conversation it had —
+        // **unless** only the tail is in hand: then a context built from it
+        // would silently drop everything older, so it waits for the full
+        // transcript (`Session::ensure_full_history`, first turn).
+        let chat = if has_more {
+            crate::server::turn::entries_to_context(&spec.system_prompt, &[])
+        } else {
+            crate::server::turn::entries_to_context(&spec.system_prompt, &entries)
+        };
         let (mut session, rx) = self.assemble(SessionState::new(Some(store)), spec, chat);
         let _ = session.adopt_session(id, entries, name);
+        session.set_history_pending(has_more);
         session.set_cwd(cwd);
-        session.set_cwd_seq(cwd_seq);
         self.sessions.insert(id, OpenSession { session, rx });
         Ok(id)
     }
@@ -678,6 +687,61 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         panic!("会话 {id} 的回合没结束");
+    }
+
+    /// 惰性历史：resume 只装尾巴（第一帧才快），但**第一回合之前必须补齐**——
+    /// 只把尾巴喂给模型是最难查的一类 bug（模型对着半截对话说话，不报错）。
+    /// 网关会把请求体记下来，这里断言最早那条在请求里。
+    #[test]
+    fn a_resumed_tail_is_completed_before_the_first_turn() {
+        let dir = tmp("lazy-history");
+        let db = std::env::temp_dir().join(format!(
+            "mypi-lazy-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(db.parent().unwrap());
+        let _ = std::fs::remove_file(&db);
+        let wa = dir.join("proj");
+        std::fs::create_dir_all(&wa).unwrap();
+        let sid = {
+            let mut st = Store::open(&db).unwrap();
+            let sid = st
+                .create_session("2026-09-26 09:00:00", wa.to_str().unwrap())
+                .unwrap();
+            let es: Vec<Entry> = (0..500)
+                .map(|i| Entry::User {
+                    content: format!("m{i}"),
+                })
+                .collect();
+            st.append(sid, &es).unwrap();
+            sid
+        };
+
+        let (base, srv) = fake_gateway(vec![sse(&["好"])]);
+        let mut hub = SessionHub::new(db.clone());
+        hub.resume(sid, spec(&base, "model-a", "SYS", &wa)).unwrap();
+
+        let tail = hub.get(sid).unwrap().transcript().len();
+        assert!(tail > 0 && tail <= 400, "resume 只该装尾巴，实际 {tail} 条");
+        assert!(
+            hub.get(sid).unwrap().history_pending(),
+            "只装了尾巴就该登记 pending"
+        );
+
+        run_round(&mut hub, sid, "继续");
+        let seen = srv.join().unwrap();
+        assert!(
+            seen.iter().any(|r| r.contains("m0")),
+            "第一回合的请求里没有最老那条——模型只看到了尾巴"
+        );
+        assert!(
+            !hub.get(sid).unwrap().history_pending(),
+            "补齐之后不该还挂着 pending"
+        );
     }
 
     #[test]

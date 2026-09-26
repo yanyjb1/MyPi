@@ -18,11 +18,41 @@ use crate::tui::zone::main::input::statusline::{StatusEvent, UsageSnapshot};
 /// per surface; the loop stays dumb (`view.on_msg(msg)`).
 pub trait SessionView {
     /// A full transcript snapshot (attach, branch switch, resume, replay of
-    /// a compaction). Replaces everything.
-    fn on_transcript(&mut self, entries: Vec<crate::server::entry::Entry>);
+    /// a compaction). Replaces everything: `blocks` are the stored tail (each
+    /// with its id), `live` the entries that are not rows yet.
+    fn on_transcript(
+        &mut self,
+        blocks: Vec<crate::server::wire::WireBlock>,
+        live: Vec<crate::server::entry::Entry>,
+    );
 
-    /// A burst of new transcript entries appended to the tail.
+    /// A burst of new entries appended to the **live** tail (not blocks yet).
     fn on_entries(&mut self, entries: Vec<crate::server::entry::Entry>);
+
+    /// A round was stored: `blocks` are its new blocks (with ids), `live`
+    /// **replaces** the unpersisted tail — the entries that just became rows
+    /// leave it.
+    fn on_blocks(
+        &mut self,
+        blocks: Vec<crate::server::wire::WireBlock>,
+        live: Vec<crate::server::entry::Entry>,
+    ) {
+        let _ = (blocks, live);
+    }
+
+    /// Older blocks, **prepended** above what we already have (lazy history:
+    /// the tail paints first, the rest arrives on demand). An empty slice is
+    /// the terminator: there is nothing above. Default: ignore — a front end
+    /// that got a full snapshot has nothing to prepend.
+    fn on_older(&mut self, blocks: Vec<crate::server::wire::WireBlock>) {
+        let _ = blocks;
+    }
+
+    /// Newer blocks (the reader scrolled back down into a region this window
+    /// had dropped). An empty slice means "at the tail".
+    fn on_newer(&mut self, blocks: Vec<crate::server::wire::WireBlock>) {
+        let _ = blocks;
+    }
 
     /// The in-flight streaming frame (the half sentence + run state).
     fn on_stream(&mut self, frame: StreamFrame);
@@ -88,7 +118,10 @@ pub fn dispatch(msg: ServerMsg, view: &mut dyn SessionView) {
     match msg {
         ServerMsg::HelloOk { commands, .. } => view.on_hello(commands),
         ServerMsg::Attached { session_id } => view.on_attached(session_id),
-        ServerMsg::Transcript { entries } => view.on_transcript(entries),
+        ServerMsg::Transcript { blocks, live } => view.on_transcript(blocks, live),
+        ServerMsg::Blocks { blocks, live } => view.on_blocks(blocks, live),
+        ServerMsg::OlderBlocks { blocks } => view.on_older(blocks),
+        ServerMsg::NewerBlocks { blocks } => view.on_newer(blocks),
         ServerMsg::EntryMany { entries } => view.on_entries(entries),
         ServerMsg::Entry { entry } => view.on_entries(vec![entry]),
         ServerMsg::Stream {
@@ -204,14 +237,32 @@ impl Drop for ZoneView<'_> {
 }
 
 impl SessionView for ZoneView<'_> {
-    fn on_transcript(&mut self, entries: Vec<crate::server::entry::Entry>) {
-        self.zone.history.replace_transcript(entries);
+    fn on_transcript(
+        &mut self,
+        blocks: Vec<crate::server::wire::WireBlock>,
+        live: Vec<crate::server::entry::Entry>,
+    ) {
+        self.zone.history.replace_transcript(blocks, live);
     }
 
     fn on_entries(&mut self, entries: Vec<crate::server::entry::Entry>) {
-        for e in entries {
-            self.zone.history.push_entry(e);
-        }
+        self.zone.history.push_entries(entries);
+    }
+
+    fn on_blocks(
+        &mut self,
+        blocks: Vec<crate::server::wire::WireBlock>,
+        live: Vec<crate::server::entry::Entry>,
+    ) {
+        self.zone.history.push_blocks(blocks, live);
+    }
+
+    fn on_older(&mut self, blocks: Vec<crate::server::wire::WireBlock>) {
+        self.zone.history.prepend_blocks(blocks);
+    }
+
+    fn on_newer(&mut self, blocks: Vec<crate::server::wire::WireBlock>) {
+        self.zone.history.append_blocks(blocks);
     }
 
     fn on_stream(&mut self, frame: StreamFrame) {
@@ -287,7 +338,7 @@ impl SessionView for ZoneView<'_> {
     }
 
     fn on_notice(&mut self, text: String) {
-        self.zone.history.push_entry(crate::server::entry::Entry::System {
+        self.zone.history.push_local(crate::server::entry::Entry::System {
             text,
             align: crate::server::entry::Align::Left,
             pin: false,
@@ -296,7 +347,7 @@ impl SessionView for ZoneView<'_> {
 
     fn on_error(&mut self, code: crate::server::wire::ErrorCode, message: String) {
         // 协议错误以系统条目进历史区（用户看得到，模型看不到）。
-        self.zone.history.push_entry(crate::server::entry::Entry::Error {
+        self.zone.history.push_local(crate::server::entry::Entry::Error {
             text: format!("[{code:?}] {message}"),
         });
     }
@@ -318,8 +369,34 @@ mod tests {
     }
 
     impl SessionView for Recorder {
-        fn on_transcript(&mut self, entries: Vec<crate::server::entry::Entry>) {
+        fn on_older(&mut self, blocks: Vec<crate::server::wire::WireBlock>) {
+            let _ = blocks;
+            self.events.push("older");
+        }
+
+        fn on_newer(&mut self, blocks: Vec<crate::server::wire::WireBlock>) {
+            let _ = blocks;
+            self.events.push("newer");
+        }
+
+        fn on_blocks(
+            &mut self,
+            blocks: Vec<crate::server::wire::WireBlock>,
+            live: Vec<crate::server::entry::Entry>,
+        ) {
+            let _ = (blocks, live);
+            self.events.push("blocks");
+        }
+
+        fn on_transcript(
+            &mut self,
+            blocks: Vec<crate::server::wire::WireBlock>,
+            live: Vec<crate::server::entry::Entry>,
+        ) {
             self.events.push("transcript");
+            let entries: Vec<crate::server::entry::Entry> =
+                blocks.into_iter().flat_map(|b| b.entries).collect();
+            let _ = live;
             self.transcript = Some(entries);
         }
         fn on_entries(&mut self, entries: Vec<crate::server::entry::Entry>) {
@@ -358,9 +435,21 @@ mod tests {
             ),
             (ServerMsg::Attached { session_id: 3 }, &["attached"]),
             (
-                ServerMsg::Transcript { entries: vec![] },
+                ServerMsg::Transcript {
+                    blocks: vec![],
+                    live: vec![],
+                },
                 &["transcript"],
             ),
+            (
+                ServerMsg::Blocks {
+                    blocks: vec![],
+                    live: vec![],
+                },
+                &["blocks"],
+            ),
+            (ServerMsg::OlderBlocks { blocks: vec![] }, &["older"]),
+            (ServerMsg::NewerBlocks { blocks: vec![] }, &["newer"]),
             (ServerMsg::EntryMany { entries: vec![] }, &["entries"]),
             (
                 ServerMsg::Entry {

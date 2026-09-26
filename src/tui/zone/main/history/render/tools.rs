@@ -1576,7 +1576,7 @@ mod tests {
         assert!(got[3].contains("继续读"), "尾注原样画：{}", got[3]);
     }
 
-    /// 老 payload（没有 `atLine`）不许凭空编行号。
+    /// 没有行号（`write` 预览、跨文件的 mass_edit 都是这种）不许凭空编行号。
     #[test]
     fn a_diff_without_line_numbers_only_draws_the_marker_column() {
         let t = HistoryTheme::resolve();
@@ -1621,20 +1621,6 @@ mod tests {
             }
         );
         assert!(view.is_diff());
-        // 老 payload（`atLine` 之前落的库）照样能画：行号栏退化成标记列。
-        let legacy = serde_json::json!({
-            "kind": "diff",
-            "deletions": ["a"],
-            "insertions": ["b"],
-        });
-        assert_eq!(
-            ToolView::from_details(Some(&legacy), ""),
-            ToolView::Diff {
-                deletions: vec!["a".into()],
-                insertions: vec!["b".into()],
-                at_line: None,
-            }
-        );
     }
 
     #[test]

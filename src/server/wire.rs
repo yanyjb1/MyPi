@@ -13,7 +13,7 @@ use crate::server::session::Replay;
 
 /// Wire protocol version. Bump on any incompatible change to the message
 /// shapes below; a mismatching `hello` is refused before anything else runs.
-pub const PROTO_VERSION: u32 = 1;
+pub const PROTO_VERSION: u32 = 5;
 
 /// Hard cap on one encoded line. A big transcript really does reach a few MB,
 /// so this is not a 64 KiB joke value; it only exists to refuse garbage or
@@ -23,6 +23,20 @@ pub const MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
+
+/// One transcript block as a front end sees it: **its stored id plus the
+/// entries inside it**.
+///
+/// The id is the whole point. A front end that keeps a bounded window has to
+/// name the range it is dropping (`need_older{before}`), and it can only do
+/// that if the server tells it where each block sits in the branch. Entries
+/// alone are addressable only by index, and an index shifts the moment the
+/// window slides.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WireBlock {
+    pub id: i64,
+    pub entries: Vec<Entry>,
+}
 
 /// Front end → daemon.
 ///
@@ -39,6 +53,17 @@ pub enum ClientMsg {
     /// Leave the current session. The daemon stops its round when the last
     /// watcher leaves (SERVER.md §4).
     Detach,
+    /// 前端要 `count` 块**比 `before` 更老**的（惰性历史，按需）。
+    ///
+    /// 边界由**前端**点名，不是"下一页"：窗口有界的前端知道自己正要丢掉
+    /// 哪一块，服务端没有游标可持有（一个会话可以被好几个前端看着，各看各
+    /// 的窗口）。服务端用**空的一页**回答"上面没有了"——前端据此闩死，否则
+    /// 每滚一格都会白问一次。
+    NeedOlder { before: i64, count: usize },
+    /// 前端往回滚、要 `count` 块**比 `after` 更新**的（它曾经丢过窗口另一
+    /// 头）。空的一页 = 后面没有了（到尾巴了，剩下的在 `ServerMsg::Blocks`
+    /// 的 live 那一侧）。
+    NeedNewer { after: i64, count: usize },
     /// List sessions (picker, `mypi sessions`).
     /// Delete a stored session and everything hanging off it (entries, cwd
     /// history, artifacts, round headers). Refused while the session is open
@@ -134,12 +159,41 @@ pub enum ServerMsg {
     Attached { session_id: i64 },
     /// Full transcript snapshot (on attach, and whenever the generation
     /// changes — branch switch, compaction, resume).
-    Transcript { entries: Vec<Entry> },
-    /// One new entry appended to the transcript tail.
+    ///
+    /// Two halves, and the split is what keeps a front end's memory bounded:
+    /// `blocks` are **stored** blocks (with ids — the window addresses them),
+    /// `live` are the entries appended since the last successful write (echoes
+    /// and the round in flight — they have no id yet because they are not
+    /// rows yet). The snapshot carries only the **tail** of the branch; older
+    /// blocks come on demand through `need_older`.
+    Transcript {
+        blocks: Vec<WireBlock>,
+        #[serde(default)]
+        live: Vec<Entry>,
+    },
+    /// One new entry appended to the **live** tail (not yet a stored block).
     Entry { entry: Entry },
     /// Several new entries appended since the last frame (the daemon
     /// coalesces a burst — e.g. a finished tool run — into one message).
     EntryMany { entries: Vec<Entry> },
+    /// A round was persisted: `blocks` are its newly stored blocks, in order,
+    /// with their ids — append them to the window.
+    ///
+    /// `live` **replaces** the front end's unpersisted tail wholesale: those
+    /// entries stay live (an echo emitted mid-round, a name marker), and the
+    /// ones that just became blocks leave. Replacing rather than appending is
+    /// what makes the hand-off exact — the front end never has to guess which
+    /// of its live entries moved into which block.
+    Blocks {
+        blocks: Vec<WireBlock>,
+        #[serde(default)]
+        live: Vec<Entry>,
+    },
+    /// **更老的**块，前置到前端窗口的另一头（惰性历史）。`blocks` 为空 =
+    /// 上面没有了（对 `need_older` 的回答，也是一个终止符）。
+    OlderBlocks { blocks: Vec<WireBlock> },
+    /// 更新的块（前端往回滚，要它曾经丢掉的区间）。空 = 到尾巴了。
+    NewerBlocks { blocks: Vec<WireBlock> },
     /// The in-flight streaming snapshot, merged at most every ~33ms.
     Stream {
         active: bool,
@@ -223,8 +277,8 @@ pub struct RoundInfo {
     pub base_url: String,
     pub max_tokens: u32,
     pub stop_reason: Option<String>,
-    pub first_seq: Option<i64>,
-    pub last_seq: Option<i64>,
+    pub first_block: Option<i64>,
+    pub last_block: Option<i64>,
 }
 
 /// `logs` row — mirror of `log::Record` (that type stays wire-agnostic).

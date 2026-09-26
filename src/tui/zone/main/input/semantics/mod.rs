@@ -297,6 +297,12 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
         // is being browsed); otherwise ordinary up. Mirrors pi's editor.ts:925 —
         // without the condition, multiline input could never use ↑.
         KeyCode::Up => {
+            if ctrl {
+                // Ctrl+↑/↓ 归**历史区**（转录滚动），编辑器一律不碰：事件是
+                // 广播给各子区的，两边都动就是"按一下既滚了转录、又动了光标
+                // 或输入历史"。
+                return Action::None;
+            }
             if cx.at_first_line && (cx.editor_empty || cx.browsing_history) {
                 Action::HistoryPrev
             } else {
@@ -305,6 +311,9 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
         }
         // ↓: on the last row while browsing history, switch to the next entry
         KeyCode::Down => {
+            if ctrl {
+                return Action::None;
+            }
             if cx.at_last_line && cx.browsing_history {
                 Action::HistoryNext
             } else {
@@ -736,6 +745,51 @@ mod tests {
         assert_eq!(
             translate(key(KeyCode::Char('k'), KeyModifiers::NONE)),
             Action::Insert('k')
+        );
+    }
+}
+
+#[cfg(test)]
+mod ctrl_arrow_belongs_to_the_transcript {
+    use super::*;
+    use ratatui::crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+
+    fn k(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: mods,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    /// Ctrl+↑/↓ 是历史区（转录滚动）的；编辑器不许再当成"上/下一行"或
+    /// "输入历史"——事件是广播的，两边都动就是一次按键两个效果。
+    #[test]
+    fn ctrl_arrows_do_nothing_in_the_editor() {
+        let browsing = KeyContext {
+            at_first_line: true,
+            at_last_line: true,
+            editor_empty: true,
+            browsing_history: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            translate_with(k(KeyCode::Up, KeyModifiers::CONTROL), browsing),
+            Action::None
+        );
+        assert_eq!(
+            translate_with(k(KeyCode::Down, KeyModifiers::CONTROL), browsing),
+            Action::None
+        );
+        // 不带 Ctrl 的老行为原样：↑ 在首行且空/正在浏览 → 输入历史。
+        assert_eq!(
+            translate_with(k(KeyCode::Up, KeyModifiers::NONE), browsing),
+            Action::HistoryPrev
+        );
+        assert_eq!(
+            translate_with(k(KeyCode::Down, KeyModifiers::NONE), browsing),
+            Action::HistoryNext
         );
     }
 }

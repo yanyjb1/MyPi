@@ -45,53 +45,131 @@ pub fn render_transcript_public(
 /// for examples/render_bench.rs. Not API.
 #[doc(hidden)]
 pub mod bench {
-    pub use crate::tui::zone::main::history::render::blocks::blocks;
-    pub use crate::tui::zone::main::history::cache::BlockCache;
+    use crate::server::entry::Entry;
+    use crate::tui::zone::main::history::cache::Item;
 
-    /// Cache sync + windowed render, mirroring view.rs's hot path.
-    /// `offset_rows` counts up from the transcript bottom (0 = newest).
+    pub use crate::tui::zone::main::history::cache::BlockCache;
+    pub use crate::tui::zone::main::history::render::blocks::blocks;
+
+    /// 块清单：`blocks()` 分好组，键 = 序号（bench 里没有库里的 id）。
+    fn items_of<'a>(entries: &'a [Entry], ranges: &[crate::grouping::Range]) -> Vec<Item<'a>> {
+        ranges
+            .iter()
+            .enumerate()
+            .map(|(i, r)| Item {
+                key: i as i64 + 1,
+                entries: &entries[r.start..r.end],
+            })
+            .collect()
+    }
+
+    /// Cache sync + a bottom-anchored window render, mirroring the history
+    /// zone's hot path. `offset_rows` counts up from the transcript bottom
+    /// (0 = newest).
     pub fn window_bottom(
         cache: &mut BlockCache,
-        entries: &[crate::server::entry::Entry],
+        entries: &[Entry],
         offset_rows: usize,
         viewport_rows: usize,
         width: usize,
     ) -> (Vec<ratatui::text::Line<'static>>, usize, usize) {
         let p = crate::tui::zone::main::history::render::theme::HistoryTheme::resolve();
-        cache.sync(entries, 0, &p, true, true, width);
-        let w = cache.window_from_bottom(entries, &p, true, true, offset_rows, viewport_rows);
-        let rows = cache.rows_for(entries, &p, true, true, w.b0..w.b1);
+        let ranges = blocks(entries);
+        let items = items_of(entries, &ranges);
+        cache.sync(&items, 0, width);
+        // 从末尾往回攒 `offset + viewport` 行，再往下丢掉 `offset` 行。
+        let need = offset_rows.saturating_add(viewport_rows);
+        let mut below = 0usize;
+        let mut picked: Vec<usize> = Vec::new();
+        for i in (0..items.len()).rev() {
+            let h = cache.height(&items[i], &p, true, true);
+            if h == 0 {
+                continue;
+            }
+            below += h + 1;
+            picked.push(i);
+            if below >= need {
+                break;
+            }
+        }
+        picked.reverse();
+        let mut rows = cache.rows_for(&items, &picked, &p, true, true);
+        rows.truncate(rows.len().saturating_sub(offset_rows));
+        let drop = rows.len().saturating_sub(viewport_rows);
+        rows.drain(..drop);
         (rows, cache.cached_rows(), cache.cached_blocks())
     }
 
-    /// Old-style direct block-range window (for cache-hit benchmarks).
+    /// Direct block-range window (for cache-hit benchmarks).
     pub fn window_at(
         cache: &mut BlockCache,
-        entries: &[crate::server::entry::Entry],
+        entries: &[Entry],
         b0: usize,
         b1: usize,
         width: usize,
     ) -> (Vec<ratatui::text::Line<'static>>, usize, usize) {
         let p = crate::tui::zone::main::history::render::theme::HistoryTheme::resolve();
-        cache.sync(entries, 0, &p, true, true, width);
-        let rows = cache.rows_for(entries, &p, true, true, b0..b1);
+        let ranges = blocks(entries);
+        let items = items_of(entries, &ranges);
+        cache.sync(&items, 0, width);
+        let picked: Vec<usize> = (b0..b1.min(items.len())).collect();
+        let rows = cache.rows_for(&items, &picked, &p, true, true);
         (rows, cache.cached_rows(), cache.cached_blocks())
     }
 
-    pub fn block_count(entries: &[crate::server::entry::Entry]) -> usize {
+    pub fn block_count(entries: &[Entry]) -> usize {
         blocks(entries).len()
     }
+
+    /// 把一串条目包成一条 `transcript` 快照消息（键 = 序号），给 bench 的
+    /// "装一条转录"用。
+    pub fn transcript_of(entries: Vec<Entry>) -> crate::server::wire::ServerMsg {
+        let blocks = crate::grouping::chunks(&entries)
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| crate::server::wire::WireBlock {
+                id: i as i64 + 1,
+                entries: entries[r.start..r.end].to_vec(),
+            })
+            .collect();
+        crate::server::wire::ServerMsg::Transcript {
+            blocks,
+            live: Vec::new(),
+        }
+    }
+
     /// Measure-only window walk (no rows painted): for bench offsets.
+    /// Returns the block range `[b0, b1)` covering `[offset, offset+viewport)`.
     pub fn walk_window(
         cache: &mut BlockCache,
-        entries: &[crate::server::entry::Entry],
+        entries: &[Entry],
         offset_rows: usize,
         viewport_rows: usize,
         width: usize,
     ) -> (usize, usize) {
         let p = crate::tui::zone::main::history::render::theme::HistoryTheme::resolve();
-        cache.sync(entries, 0, &p, true, true, width);
-        let w = cache.window_from_bottom(entries, &p, true, true, offset_rows, viewport_rows);
-        (w.b0, w.b1)
+        let ranges = blocks(entries);
+        let items = items_of(entries, &ranges);
+        cache.sync(&items, 0, width);
+        let need = offset_rows.saturating_add(viewport_rows);
+        let mut below = 0usize;
+        let mut top: Option<usize> = None;
+        let mut bottom: Option<usize> = None;
+        for i in (0..items.len()).rev() {
+            let h = cache.height(&items[i], &p, true, true);
+            if h == 0 {
+                continue;
+            }
+            if bottom.is_none() && offset_rows < below + h + 1 {
+                bottom = Some(i);
+            }
+            if below + h >= need {
+                top = Some(i);
+                break;
+            }
+            below += h + 1;
+        }
+        let (b_bottom, b_top) = (bottom.unwrap_or(0), top.unwrap_or(0));
+        (b_top.min(b_bottom), b_top.max(b_bottom) + 1)
     }
 }

@@ -27,7 +27,25 @@ use super::tools::ToolOutcome;
 use super::system::system_block;
 use super::{BlockKind, Streaming, render_block};
 use crate::server::entry::{Align, Entry};
+use super::blocks::Deferred;
 use super::theme::HistoryTheme;
+
+/// 把一块的行接进 `out`，并把它的待上色段**重定基**到 `out` 的坐标系上。
+///
+/// 段的 `before` 是"在这块自己的行序列里的位置"，接进组合出来的块之后要
+/// 加上落点偏移——不然上色会去改别的行。
+fn push_block(
+    out: &mut Vec<Line<'static>>,
+    deferred: &mut Vec<Deferred>,
+    (rows, mut d): (Vec<Line<'static>>, Vec<Deferred>),
+) {
+    let base = out.len();
+    out.extend(rows);
+    for x in &mut d {
+        x.before += base;
+    }
+    deferred.extend(d);
+}
 #[cfg(test)]
 use super::theme::Token;
 
@@ -64,7 +82,9 @@ pub fn render_at(
             show_reasoning,
             tools_expanded,
             width,
-        ));
+            false,
+        )
+        .0);
     }
     out
 }
@@ -90,7 +110,9 @@ pub fn render_at_public(
             show_reasoning,
             tools_expanded,
             width,
-        ));
+            false,
+        )
+        .0);
     }
     out
 }
@@ -104,7 +126,8 @@ pub(crate) fn single_node(
     show_reasoning: bool,
     tools_expanded: bool,
     width: usize,
-) -> Vec<Line<'static>> {
+    defer: bool,
+) -> (Vec<Line<'static>>, Vec<Deferred>) {
     debug_assert!(
         group.len() <= 2,
         "a node is one entry or one request+result pair"
@@ -112,19 +135,31 @@ pub(crate) fn single_node(
     let e = &group[0];
     match e {
         Entry::User { content } => {
-            render_block(BlockKind::User, content, Streaming::Final, width, t)
+            render_block(BlockKind::User, content, Streaming::Final, width, t, defer)
         }
-        Entry::Assistant { content, .. } => {
-            render_block(BlockKind::Assistant, content, Streaming::Final, width, t)
-        }
+        Entry::Assistant { content, .. } => render_block(
+            BlockKind::Assistant,
+            content,
+            Streaming::Final,
+            width,
+            t,
+            defer,
+        ),
         // The thinking chain, its own block: Ctrl+T hides the whole block
         // (a *visibility* switch here, not a render flag — the cache keeps
         // one variant per block and never re-renders).
         Entry::Reasoning { content } => {
             if !show_reasoning || content.trim().is_empty() {
-                return Vec::new();
+                return (Vec::new(), Vec::new());
             }
-            render_block(BlockKind::Reasoning, content, Streaming::Final, width, t)
+            render_block(
+                BlockKind::Reasoning,
+                content,
+                Streaming::Final,
+                width,
+                t,
+                defer,
+            )
         }
         Entry::ToolRequest {
             name,
@@ -151,21 +186,22 @@ pub(crate) fn single_node(
                 _ => None,
             });
             let mut out = Vec::new();
+            let mut deferred = Vec::new();
             // 模型在调工具前说的那半句：它作为**第一条调用**的一部分存档
             // （`Entry::ToolRequest.text`），所以画在卡片**上面**当正文。
             // 只认第一条：一条消息带多个调用时，那半句不属于后面几次。
             if *first && !text.trim().is_empty() {
-                out.extend(render_block(
-                    BlockKind::Assistant,
-                    text,
-                    Streaming::Final,
-                    width,
-                    t,
-                ));
+                push_block(
+                    &mut out,
+                    &mut deferred,
+                    render_block(BlockKind::Assistant, text, Streaming::Final, width, t, defer),
+                );
                 out.push(super::blocks::block_gap());
             }
+            // 工具卡自己的高亮是**逐行**调的（`tools.rs`），不走推迟那条路：
+            // 它的行是"行号栏 + 高亮片段"，补色得重画整行，机制不同。
             out.extend(tool_card(name, args, paired, t, tools_expanded, width));
-            out
+            (out, deferred)
         }
         // 只有结果没有调用：调用参数已经不在手上，卡上就只剩 header + 结果。
         Entry::ToolResult {
@@ -175,18 +211,21 @@ pub(crate) fn single_node(
             details,
             duration_ms,
             ..
-        } => tool_card(
-            name,
-            "",
-            Some(ToolOutcome {
-                text: result.as_str(),
-                ok: *ok,
-                details: details.as_ref(),
-                duration_ms: *duration_ms,
-            }),
-            t,
-            tools_expanded,
-            width,
+        } => (
+            tool_card(
+                name,
+                "",
+                Some(ToolOutcome {
+                    text: result.as_str(),
+                    ok: *ok,
+                    details: details.as_ref(),
+                    duration_ms: *duration_ms,
+                }),
+                t,
+                tools_expanded,
+                width,
+            ),
+            Vec::new(),
         ),
         Entry::Error { text } => {
             let err = crate::tui::theme::theme().fg_style(crate::tui::theme::ColorToken::Error);
@@ -194,22 +233,25 @@ pub(crate) fn single_node(
             for part in text.split('\n') {
                 out.push(Line::styled(part.to_string(), err));
             }
-            out
+            (out, Vec::new())
         }
         // Emitter-aligned notice (model switches, compaction reports).
-        Entry::System { text, align, pin: _ } => system_block(text, *align, t, width),
+        Entry::System { text, align, pin: _ } => (system_block(text, *align, t, width), Vec::new()),
         // Name markers are metadata, not chat content: never a history row.
-        Entry::Name { .. } => Vec::new(),
+        Entry::Name { .. } => (Vec::new(), Vec::new()),
         // Same for the todo list: it is session **state** (the last one wins,
         // for resume and for the context note), not narration. What the user
         // sees is the `todo` call's own card, whose details carry the list.
         // 清单是**状态**不是叙述：它不在这条流里，而是贴在历史区底部
         // （`render::todo`，由 `HistoryZone::render_rows` 预留行高）。
-        Entry::Todo { .. } => Vec::new(),
+        Entry::Todo { .. } => (Vec::new(), Vec::new()),
         // Compaction fork point: a centered divider announcing the
         // boundary. The summary itself lives in the context (a user
         // turn), not on screen — this is just the seam marker.
-        Entry::Compaction { .. } => system_block("—— 上下文已压缩 ——", Align::Center, t, width),
+        Entry::Compaction { .. } => (
+            system_block("—— 上下文已压缩 ——", Align::Center, t, width),
+            Vec::new(),
+        ),
     }
 }
 
@@ -234,25 +276,33 @@ pub(crate) fn live_tail(
     let fold = |lines: Vec<Line<'static>>| super::blocks::wrap_rows(lines.into_iter(), width);
     let mut out = Vec::new();
     if show_reasoning && !reasoning.trim().is_empty() {
-        out = fold(render_block(
-            BlockKind::Reasoning,
-            reasoning,
-            Streaming::Live,
-            width,
-            t,
-        ));
+        out = fold(
+            render_block(
+                BlockKind::Reasoning,
+                reasoning,
+                Streaming::Live,
+                width,
+                t,
+                false,
+            )
+            .0,
+        );
     }
     if !text.is_empty() {
         if !out.is_empty() {
             out.push(super::blocks::block_gap());
         }
-        out.extend(fold(render_block(
-            BlockKind::Assistant,
-            text,
-            Streaming::Live,
-            width,
-            t,
-        )));
+        out.extend(fold(
+            render_block(
+                BlockKind::Assistant,
+                text,
+                Streaming::Live,
+                width,
+                t,
+                false,
+            )
+            .0,
+        ));
     }
     // 运行中的工具输出：**纯文本**（命令输出不是 markdown —— `*` 会被当成列表），
     // 且只画尾巴（服务端缓冲本来就是尾巴，屏幕上再多也看不过来）。它排在待定
@@ -786,23 +836,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_tool_request_without_args_still_loads() {
-        // Pre-refactor rows stored only `object`; they must not break resume.
-        let old = r#"{"call_id":"c1","name":"bash","object":""}"#;
-        let back = Entry::from_payload("tool_request", old).unwrap();
-        match back {
-            Entry::ToolRequest {
-                args, intent, name, ..
-            } => {
-                assert_eq!(args, "");
-                assert_eq!(intent, "");
-                assert_eq!(name, "bash");
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-
-    #[test]
     fn the_sentence_before_a_tool_call_is_rendered_above_its_card() {
         // 模型在调工具前说的那半句（`Entry::ToolRequest.text`）属于这次调用，
         // 画在卡片上面当正文。以前它只在流式尾巴上闪一下，`buffered` 模式
@@ -1023,25 +1056,15 @@ mod tests {
         let (kind, payload) = e.to_payload();
         assert_eq!(kind, "reasoning");
         assert_eq!(Entry::from_payload(kind, &payload).unwrap(), e);
-        // The assistant payload no longer carries reasoning at all; a
-        // legacy row that still has one reads fine (field ignored).
-        let legacy = r#"{"content":"老消息","usage":null,"reasoning":"旧思考"}"#;
-        let back = Entry::from_payload("assistant", legacy).unwrap();
-        assert_eq!(
-            back,
-            Entry::Assistant {
-                content: "老消息".into(),
-                usage: None,
-            }
-        );
     }
 
     #[test]
     fn inline_code_stays_on_one_line() {
         let p = HistoryTheme::resolve();
-        let lines = super::super::markdown::render_markdown(
+        let (lines, _) = super::super::markdown::render_markdown(
             "已用 `edit` 工具将 `main.rs` 中的 `hi` 改为 `hello`。",
             &p,
+            false,
         );
         assert_eq!(lines.len(), 1, "行内代码不该换行: {:?}", text_of(&lines));
     }

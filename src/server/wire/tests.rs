@@ -68,8 +68,10 @@ fn every_server_msg_roundtrips() {
         },
         ServerMsg::Attached { session_id: 3 },
         ServerMsg::Transcript {
-            entries: vec![
-                Entry::User { content: "hi".into() },
+            blocks: vec![WireBlock {
+                id: 7,
+                entries: vec![
+                    Entry::User { content: "hi".into() },
                 Entry::Assistant {
                     content: "reply".into(),
                     usage: None,
@@ -96,11 +98,41 @@ fn every_server_msg_roundtrips() {
                     align: crate::server::entry::Align::Left,
                     pin: false,
                 },
-                Entry::Compaction {
-                    first_kept_seq: 12,
-                    summary: "earlier context".into(),
-                },
-            ],
+                    Entry::Compaction {
+                        first_kept_entry: 12,
+                        summary: "earlier context".into(),
+                    },
+                ],
+            }],
+            live: vec![Entry::User {
+                content: "还没落盘".into(),
+            }],
+        },
+        ServerMsg::Blocks {
+            blocks: vec![WireBlock {
+                id: 8,
+                entries: vec![Entry::Assistant {
+                    content: "落盘了".into(),
+                    usage: None,
+                }],
+            }],
+            live: Vec::new(),
+        },
+        ServerMsg::OlderBlocks {
+            blocks: vec![WireBlock {
+                id: 6,
+                entries: vec![Entry::User {
+                    content: "更老的".into(),
+                }],
+            }],
+        },
+        ServerMsg::NewerBlocks {
+            blocks: vec![WireBlock {
+                id: 9,
+                entries: vec![Entry::User {
+                    content: "更新的".into(),
+                }],
+            }],
         },
         ServerMsg::Entry {
             entry: Entry::Error { text: "boom".into() },
@@ -147,8 +179,8 @@ fn every_server_msg_roundtrips() {
                 base_url: "https://api.example.com/v1".into(),
                 max_tokens: 4096,
                 stop_reason: Some("end_turn".into()),
-                first_seq: Some(2),
-                last_seq: Some(9),
+                first_block: Some(2),
+                last_block: Some(9),
             }],
         },
         ServerMsg::Logs {
@@ -402,9 +434,13 @@ fn one_big_line_arrives_in_chunks() {
     let (mut conn, mut server) = pair(std::time::Duration::from_millis(50));
     let big = "x".repeat(400_000);
     let bytes = encode(&ServerMsg::Transcript {
-        entries: vec![Entry::User {
-            content: big.clone(),
+        blocks: vec![WireBlock {
+            id: 1,
+            entries: vec![Entry::User {
+                content: big.clone(),
+            }],
         }],
+        live: Vec::new(),
     });
     assert!(bytes.len() > 400_000);
     let writer = std::thread::spawn(move || {
@@ -417,8 +453,9 @@ fn one_big_line_arrives_in_chunks() {
         .wait_for_within(|_| true, std::time::Duration::from_secs(10))
         .unwrap();
     match got {
-        ServerMsg::Transcript { entries } => {
-            assert_eq!(entries, vec![Entry::User { content: big }]);
+        ServerMsg::Transcript { blocks, .. } => {
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].entries, vec![Entry::User { content: big }]);
         }
         other => panic!("expected the transcript, got {other:?}"),
     }

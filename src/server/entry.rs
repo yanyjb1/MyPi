@@ -223,16 +223,17 @@ pub enum Entry {
     // A context compaction marker — the **conversation fork point**.
     //
     // Semantically it is a branch node on the entry tree: everything
-    // before `first_kept_seq` is superseded by `summary` (kept verbatim
+    // before `first_kept_entry` is superseded by `summary` (kept verbatim
     // in the payload for audit; the live context rebuilds from
-    // first_kept_seq onward). Tokens before/after are *computed*, never
+    // first_kept_entry onward). Tokens before/after are *computed*, never
     // stored — the CPU is good at arithmetic.
     //
     // entries_to_context treats this as the context root: system + a
     // synthesized summary user turn + entries after the marker.
     Compaction {
-        // First entry seq of the retained (verbatim) region.
-        first_kept_seq: usize,
+        // Position of the first entry of the retained (verbatim) region —
+        // an index into the entry list, not a stored id.
+        first_kept_entry: usize,
         // The compaction summary (the compacted region's stand-in).
         summary: String,
     },
@@ -244,31 +245,6 @@ pub enum Entry {
 pub enum Align {
     Left,
     Center,
-}
-
-// Recover the model-facing text of a legacy tool-result row that stored a
-// *view* instead of the text (see `from_payload`).
-//
-// The view is a UI concept — this module deliberately does not know its type;
-// it reads the two shapes it can see in old rows and nothing else. Unknown
-// shapes yield `None`, which degrades to an empty result rather than a panic.
-fn legacy_view_text(view: Option<&serde_json::Value>) -> Option<String> {
-    let view = view?;
-    if let Some(text) = view.get("Plain").and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
-        return Some(text.to_string());
-    }
-    let diff = view.get("Diff")?;
-    let mut out = String::new();
-    for d in diff.get("deletions").and_then(|d| d.as_array()).into_iter().flatten() {
-        out.push_str("- ");
-        out.push_str(d.as_str().unwrap_or_default());
-        out.push('\n');
-    }
-    for i in diff.get("insertions").and_then(|i| i.as_array()).into_iter().flatten() {
-        out.push_str("+ ");
-        out.push_str(i.as_str().unwrap_or_default());
-    }
-    Some(out)
 }
 
 // Fields the stats line needs (the minimal set extracted from usage).
@@ -349,12 +325,12 @@ impl Entry {
                 serde_json::json!({ "text": text, "align": align, "pin": pin }).to_string(),
             ),
             Entry::Compaction {
-                first_kept_seq,
+                first_kept_entry,
                 summary,
             } => (
                 "compaction",
                 serde_json::json!({
-                    "first_kept_seq": first_kept_seq, "summary": summary
+                    "first_kept_entry": first_kept_entry, "summary": summary
                 })
                 .to_string(),
             ),
@@ -381,14 +357,9 @@ impl Entry {
                 content: v.get("content")?.as_str()?.to_string(),
             },
             "tool_request" => {
-                // `args` is the current key; `object` is the pre-refactor one
-                // (it held a bare path, and resume mis-replayed it as JSON —
-                // reading it keeps old sessions loadable, empty args is the
-                // honest value for a card we cannot reconstruct).
                 let args = v
                     .get("args")
                     .and_then(|a| a.as_str())
-                    .or_else(|| v.get("object").and_then(|o| o.as_str()))
                     .unwrap_or_default()
                     .to_string();
                 Entry::ToolRequest {
@@ -404,8 +375,6 @@ impl Entry {
                         .and_then(|i| i.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    // Legacy rows predate these fields: no attached text, and
-                    // treat each as its own message (the old replay shape).
                     text: v
                         .get("text")
                         .and_then(|t| t.as_str())
@@ -422,16 +391,11 @@ impl Entry {
                     .to_string(),
                 name: v.get("name")?.as_str()?.to_string(),
                 ok: v.get("ok")?.as_bool()?,
-                // Legacy DBs (before `result` existed) stored the *view* instead:
-                // `{"Plain":{"text":…}}` or `{"Diff":{"deletions":[…],…}}`.
-                // Recovered once, here, so the rest of the system only ever sees
-                // `result`. Hand-parsed on purpose: the view is a UI concept and
-                // this module must not carry a UI type to read old rows.
                 result: v
                     .get("result")
                     .and_then(|r| r.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| legacy_view_text(v.get("view")).unwrap_or_default()),
+                    .unwrap_or_default()
+                    .to_string(),
                 details: v.get("details").cloned().filter(|d| !d.is_null()),
                 duration_ms: v.get("duration_ms").and_then(|d| d.as_u64()).unwrap_or(0),
             },
@@ -445,8 +409,8 @@ impl Entry {
                 phases: serde_json::from_value(v.get("phases")?.clone()).ok()?,
             },
             "compaction" => Entry::Compaction {
-                first_kept_seq: v
-                    .get("first_kept_seq")
+                first_kept_entry: v
+                    .get("first_kept_entry")
                     .and_then(|s| s.as_u64())
                     .map(|s| s as usize)?,
                 summary: v.get("summary")?.as_str()?.to_string(),

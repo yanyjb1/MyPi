@@ -48,12 +48,6 @@ pub struct SizeChange {
     pub to: TermSize,
 }
 
-/// 行高广播：Zone 完成子区行高分配后发出，携带受影响的子区新行高。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HeightNotice {
-    pub rows: u16,
-}
-
 /// Zone 身份。互斥：同一时刻至多一个 Zone 持有所有权。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneId {

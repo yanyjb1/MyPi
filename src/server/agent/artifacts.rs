@@ -73,10 +73,13 @@ impl ArtifactStore {
         Ok((id, lines))
     }
 
-    /// Fetch an artifact owned by this session.
+    /// Fetch an artifact by id.
+    ///
+    /// Deliberately not scoped to this session: a forked session reads blocks it
+    /// inherited, whose `#N` references point at the parent's artifacts.
     pub fn fetch(&self, id: i64) -> Result<Option<(String, i64, String)>> {
         let st = self.inner.lock().expect("store 锁中毒");
-        st.get_artifact(id, self.session_id)
+        st.get_artifact(id)
     }
 }
 
@@ -276,7 +279,7 @@ mod tests {
             .inner
             .lock()
             .unwrap()
-            .get_artifact(id, 1)
+            .get_artifact(id)
             .unwrap()
             .expect("跨连接可见");
         assert_eq!(name, "bash");

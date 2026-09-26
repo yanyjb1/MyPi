@@ -19,8 +19,9 @@ use crate::server::wire::{
     ClientMsg, ErrorCode, LogRecord, RoundInfo, ServerMsg, SessionInfo, MAX_LINE_BYTES,
     PROTO_VERSION,
 };
-use crate::server::events::Change;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use crate::server::events::{Change, StreamView};
+use crate::server::store::Store;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -57,6 +58,9 @@ pub struct Daemon {
     conns: BTreeMap<u64, Conn>,
     next_conn_id: u64,
     cmd_rx: Receiver<Command>,
+    /// A sender clone kept for threads the daemon spawns itself (the lazy-history
+    /// pager); the connection threads get their own clones from `bind`.
+    cmd_tx: Sender<Command>,
     /// New connections from the accept loop, waiting to be registered.
     reg_rx: Receiver<ConnectionHandle>,
     /// The accept thread's handle, held so the thread outlives `serve` but
@@ -64,10 +68,20 @@ pub struct Daemon {
     _accept: std::thread::JoinHandle<()>,
     /// Session → front ends currently watching it.
     watchers: HashMap<i64, Vec<u64>>,
-    /// Last shipped transcript tail per session (generation, length). The
-    /// delta computation keys on it, so a front end attaching mid-round gets
-    /// a full snapshot once and only the tail afterwards.
-    shipped: HashMap<(i64, u64), (u64, usize)>,
+    /// Last shipped transcript state per (session, connection): generation,
+    /// live-tail length, newest block sent. A front end attaching mid-round
+    /// gets a snapshot once and only the deltas afterwards.
+    shipped: HashMap<(i64, u64), Ship>,
+    /// Last `StreamView` shipped per session. A `Change::Stream` only says the
+    /// session touched a streaming slot — **not** that the picture changed (a
+    /// delta that only moves `live`/`reasoning_done` renders identically), and
+    /// every shipped snapshot costs the front end a full frame. Comparing the
+    /// view — not its lengths, the tool-output tail slides at constant
+    /// length — keeps the wire quiet exactly when the screen is quiet.
+    last_stream: HashMap<i64, StreamView>,
+    /// (会话, 连接, 方向) → 后台正在读那一段。前端连着滚会重复开口（手不会
+    /// 只滚一格），没有这道闸门同一个区间会读两遍、前端收到重复内容。
+    paging: HashSet<(i64, u64, bool)>,
     /// Idle-exit bookkeeping (SERVER.md §4): nothing attached, nothing busy.
     idle_since: Option<std::time::Instant>,
     idle_limit: std::time::Duration,
@@ -77,6 +91,16 @@ pub struct Daemon {
 enum Command {
     /// A parsed message from a front end.
     Msg { conn: u64, msg: ClientMsg },
+    /// 按需历史：前端点名要的那一段读回来了（见 [`spawn_page`]）。
+    ///
+    /// `blocks = None` = 读失败——**什么都不回**（回空的会被当成"上面没有
+    /// 了"），主循环只把闸门打开，等前端再要。
+    Page {
+        conn: u64,
+        session: i64,
+        newer: bool,
+        blocks: Option<Vec<crate::server::store::Block>>,
+    },
     /// The connection closed (peer hangup / read error / protocol error).
     Gone { conn: u64 },
 }
@@ -123,44 +147,63 @@ fn accept_loop(listener: std::os::unix::net::UnixListener, cmd_tx: Sender<Comman
     }
 }
 
-/// Entries per wire message when shipping a transcript.
-///
-/// A 32 000-entry conversation encodes to ~39 MB in **one** JSON line: over
-/// `MAX_LINE_BYTES` (so the front end refuses it outright) and a memory spike
-/// on both ends even when it fits. The snapshot therefore ships as a run of
-/// messages — `Transcript` (the first chunk, which replaces the view's
-/// transcript) followed by `EntryMany` (the rest, which appends). That is
-/// exactly what the view already does with those two messages, so the wire
-/// protocol is unchanged.
-const SNAPSHOT_CHUNK: usize = 2_000;
+/// One (session, connection) shipping ledger — see
+/// [`Daemon::transcript_msgs_for`].
+#[derive(Clone, Copy)]
+struct Ship {
+    /// 转录代：变了 = 整体快照（分支跳转 / 补齐 / 压缩重排）。
+    generation: u64,
+    /// 已经发到前端的那截活尾巴有多长（前端的 live 就是这一段）。
+    live_len: usize,
+    /// 已经发过的最新块 id（0 = 一块都没发过）。
+    block_id: i64,
+}
 
-/// Split a transcript slice into the messages that ship it.
-///
-/// `replace` marks this as a full snapshot: the first message must be
-/// `Transcript` so the view drops what it had. An empty snapshot still sends
-/// one empty `Transcript` — "you have nothing" is information.
-fn chunk_transcript(entries: &[crate::server::entry::Entry], replace: bool) -> Vec<ServerMsg> {
-    if entries.is_empty() {
-        return if replace {
-            vec![ServerMsg::Transcript {
-                entries: Vec::new(),
-            }]
-        } else {
-            Vec::new()
-        };
+/// 一次补发最多带几块（落盘补差；正常一回合也就几块）。
+const NEW_BLOCKS_MAX: usize = 512;
+
+/// 库里的一块 → 线上的一块。
+fn wire_block(b: crate::server::store::Block) -> crate::server::wire::WireBlock {
+    crate::server::wire::WireBlock {
+        id: b.id,
+        entries: b.entries,
     }
-    entries
-        .chunks(SNAPSHOT_CHUNK)
-        .enumerate()
-        .map(|(i, chunk)| {
-            let entries = chunk.to_vec();
-            if replace && i == 0 {
-                ServerMsg::Transcript { entries }
+}
+
+/// 按需历史：为**一次**请求读一段（更老或更新）。
+///
+/// 一次读在 32k 块上是几十毫秒——放在主循环里会卡住**所有**会话，所以它跑在
+/// 自己的线程上，读完丢回命令队列。请求**点名边界 id**（`before` / `after`），
+/// 所以服务端没有游标：同一会话上几个前端各看各的窗口，互不干扰；一页也只回
+/// 给开口的那条连接。
+///
+/// 读失败**什么都不回**（不是"没有更老的了"——那会让前端闩死）。主循环把闸门
+/// 打开，前端下一帧照样会再要一次。
+fn spawn_page(
+    db: std::path::PathBuf,
+    conn: u64,
+    session: i64,
+    edge: i64,
+    count: usize,
+    newer: bool,
+    cmd_tx: Sender<Command>,
+) {
+    std::thread::spawn(move || {
+        let store = Store::open(&db);
+        let blocks = store.ok().and_then(|st| {
+            if newer {
+                st.load_after(session, edge, count).ok()
             } else {
-                ServerMsg::EntryMany { entries }
+                st.load_before(session, edge, count).ok().map(|(b, _)| b)
             }
-        })
-        .collect()
+        });
+        let _ = cmd_tx.send(Command::Page {
+            conn,
+            session,
+            newer,
+            blocks,
+        });
+    });
 }
 
 /// One connection's read half: parse lines into `ClientMsg`s.
@@ -285,9 +328,10 @@ impl Daemon {
         // Accept loop: one thread, forever. Each accepted connection gets a
         // reader thread (into `tx`) and a writer thread (from its queue tx),
         // plus its `ConnectionHandle` sent to the main loop for registration.
+        let accept_tx = tx.clone();
         let accept = std::thread::Builder::new()
             .name("daemon-accept".into())
-            .spawn(move || accept_loop(listener, tx, reg_tx))?;
+            .spawn(move || accept_loop(listener, accept_tx, reg_tx))?;
         Ok(Self {
             _accept: accept,
             hub,
@@ -295,9 +339,12 @@ impl Daemon {
             conns: BTreeMap::new(),
             next_conn_id: 1,
             cmd_rx,
+            cmd_tx: tx.clone(),
             reg_rx,
             watchers: HashMap::new(),
             shipped: HashMap::new(),
+            last_stream: HashMap::new(),
+            paging: HashSet::new(),
             idle_since: None,
             idle_limit,
             shutting_down: false,
@@ -311,6 +358,12 @@ impl Daemon {
             // drained even when nobody sends anything.
             match self.cmd_rx.recv_timeout(TICK) {
                 Ok(Command::Msg { conn, msg }) => self.handle(conn, msg),
+                Ok(Command::Page {
+                    conn,
+                    session,
+                    newer,
+                    blocks,
+                }) => self.ship_page(conn, session, newer, blocks),
                 Ok(Command::Gone { conn }) => self.drop_conn(conn),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
@@ -370,7 +423,15 @@ impl Daemon {
                 }
             }
             if stream_dirty {
-                msgs.push(self.stream_msg(id));
+                let view = self
+                    .hub
+                    .get(id)
+                    .map(|s| s.stream_view().clone())
+                    .unwrap_or_default();
+                if Self::stream_changed(self.last_stream.get(&id), &view) {
+                    self.last_stream.insert(id, view.clone());
+                    msgs.push(Self::stream_msg_of(view));
+                }
             }
             if tail_dirty {
                 // Tail delta, or a full snapshot when the generation jumped
@@ -436,6 +497,10 @@ impl Daemon {
                 }
             }
             ClientMsg::Attach { id } => self.attach(conn, id),
+            ClientMsg::NeedOlder { before, count } => {
+                self.need_page(conn, before, count, false)
+            }
+            ClientMsg::NeedNewer { after, count } => self.need_page(conn, after, count, true),
             ClientMsg::Detach => {
                 if let Some(c) = self.conns.get_mut(&conn)
                     && let Some(old) = c.attached.take()
@@ -510,8 +575,8 @@ impl Daemon {
                                 base_url: r.base_url,
                                 max_tokens: r.max_tokens,
                                 stop_reason: r.stop_reason,
-                                first_seq: r.first_seq,
-                                last_seq: r.last_seq,
+                                first_block: r.first_block,
+                                last_block: r.last_block,
                             })
                             .collect();
                         self.send(conn, ServerMsg::Rounds { id, rounds });
@@ -573,6 +638,59 @@ impl Daemon {
                 self.shutting_down = true;
             }
         }
+    }
+
+    /// 前端点名要一段历史（`ClientMsg::{NeedOlder,NeedNewer}`）。
+    ///
+    /// 边界由前端给（`before` / `after` 是块 id），所以这里没有游标可以做主：
+    /// 同一会话几个前端各看各的窗口，谁要的那段就回给谁。同一条连接同一方向
+    /// 只放一段在飞，重复的开口直接丢掉（前端下一帧还会再要一次，见
+    /// [`Self::ship_page`] 的失败处理）。
+    fn need_page(&mut self, conn: u64, edge: i64, count: usize, newer: bool) {
+        let Some(id) = self.conns.get(&conn).and_then(|c| c.attached) else {
+            return;
+        };
+        let count = count.clamp(1, NEW_BLOCKS_MAX);
+        if self.paging.insert((id, conn, newer)) {
+            spawn_page(
+                self.hub.db().to_path_buf(),
+                conn,
+                id,
+                edge,
+                count,
+                newer,
+                self.cmd_tx.clone(),
+            );
+        }
+        // 前端在等这一段画出来（滚轮按着呢），立刻发，别等下一次 pump。
+        self.flush_outbox(conn);
+    }
+
+    /// 按需历史：读到的那一段回给开口的连接。
+    ///
+    /// 空的一段**照发**（`blocks: []`）——那是"这个方向到头了"的终止符，前端
+    /// 据此闩死，否则每滚一格都会白问一次。读失败则不回（`None`），闸门照开：
+    /// 回空的会把前端骗进"到头了"的死角。
+    fn ship_page(
+        &mut self,
+        conn: u64,
+        session: i64,
+        newer: bool,
+        blocks: Option<Vec<crate::server::store::Block>>,
+    ) {
+        self.paging.remove(&(session, conn, newer));
+        let Some(blocks) = blocks else {
+            return;
+        };
+        let blocks: Vec<crate::server::wire::WireBlock> =
+            blocks.into_iter().map(wire_block).collect();
+        let msg = if newer {
+            ServerMsg::NewerBlocks { blocks }
+        } else {
+            ServerMsg::OlderBlocks { blocks }
+        };
+        self.send(conn, msg);
+        self.flush_outbox(conn);
     }
 
     fn attach(&mut self, conn: u64, id: i64) {
@@ -697,33 +815,139 @@ impl Daemon {
 
     /// The transcript messages for ONE watcher of `id` (empty = nothing new).
     ///
-    /// The `(generation, len)` ledger is per (session, connection): two front
-    /// ends attaching at different times need different snapshots, and a
-    /// shared ledger would ship conn2 nothing because conn1 already took the
-    /// tail. Within one session the entries themselves are identical for all
-    /// watchers, so per-watcher ledgers stay consistent.
+    /// The ledger is per (session, connection): two front ends attaching at
+    /// different times need different snapshots, and a shared ledger would
+    /// ship conn2 nothing because conn1 already took the tail.
     ///
-    /// More than one message when the run is long enough to need chunking —
-    /// see [`SNAPSHOT_CHUNK`].
+    /// **Two ledgers, because a front end holds two things.** Its window is
+    /// blocks (with ids) and its live tail is entries that are not rows yet.
+    /// A delta therefore has two possible halves:
+    ///
+    /// - **live grew** → ship the new entries (`entry` / `entry_many`). This
+    ///   is the streaming hot path and costs exactly what it used to.
+    /// - **a round landed** → ship the newly stored blocks (`blocks`) plus the
+    ///   live list as it now stands. The live half is a *replacement*: that is
+    ///   what makes the hand-off exact — the entries that just became rows
+    ///   have to leave the front end's live tail, and only the server knows
+    ///   which ones those are (`SessionState::note_persisted`).
+    ///
+    /// Nothing is chunked: a snapshot is the branch **tail** ([`HISTORY_TAIL`]
+    /// blocks ≈ 1 MB), not a whole conversation, so it fits one line.
     fn transcript_msgs_for(&mut self, id: i64, conn: u64) -> Vec<ServerMsg> {
+        let (generation, live) = {
+            let Some(session) = self.hub.get(id) else {
+                return Vec::new();
+            };
+            (
+                session.state.transcript_generation(),
+                session.live().to_vec(),
+            )
+        };
+        let key = (id, conn);
+        if let Some(s) = self.shipped.get(&key).copied()
+            && s.generation == generation
+        {
+            let mut msgs = Vec::new();
+            if live.len() > s.live_len {
+                let tail = &live[s.live_len..];
+                msgs.push(if tail.len() == 1 {
+                    ServerMsg::Entry {
+                        entry: tail[0].clone(),
+                    }
+                } else {
+                    ServerMsg::EntryMany {
+                        entries: tail.to_vec(),
+                    }
+                });
+            }
+            let fresh = self.stored_between(id, s.block_id, NEW_BLOCKS_MAX);
+            if !fresh.is_empty() || live.len() < s.live_len {
+                // A shrunken live list with no new blocks cannot happen (a
+                // persist writes at least one block), but a front end that
+                // misses the replacement would keep showing entries that are
+                // already blocks — so resync it either way.
+                let newest = fresh.last().map(|b| b.id).unwrap_or(s.block_id);
+                msgs.push(ServerMsg::Blocks {
+                    blocks: fresh,
+                    live: live.clone(),
+                });
+                self.shipped.insert(
+                    key,
+                    Ship {
+                        live_len: live.len(),
+                        block_id: newest,
+                        generation,
+                    },
+                );
+            } else if live.len() != s.live_len {
+                self.shipped.insert(
+                    key,
+                    Ship {
+                        live_len: live.len(),
+                        generation,
+                        ..s
+                    },
+                );
+            }
+            return msgs;
+        }
+        // First ship for this watcher, or the transcript was replaced
+        // wholesale: the window starts at the branch tail, plus whatever has
+        // not been stored yet.
+        let blocks = self.tail_blocks(id, crate::server::hub::SessionHub::HISTORY_TAIL);
+        let newest = blocks.last().map(|b| b.id).unwrap_or(0);
+        let msg = ServerMsg::Transcript {
+            blocks,
+            live: live.clone(),
+        };
+        self.shipped.insert(
+            key,
+            Ship {
+                generation,
+                live_len: live.len(),
+                block_id: newest,
+            },
+        );
+        vec![msg]
+    }
+
+    /// 会话的尾巴那截块（窗口的起点）。
+    fn tail_blocks(&self, id: i64, limit: usize) -> Vec<crate::server::wire::WireBlock> {
+        let Some(sid) = self.hub.get(id).and_then(|s| s.state.session_id()) else {
+            return Vec::new();
+        };
+        let Some(st) = self.hub.get(id).and_then(|s| s.state.store()) else {
+            return Vec::new();
+        };
+        st.load_tail(sid, limit)
+            .map(|(blocks, _)| blocks.into_iter().map(wire_block).collect())
+            .unwrap_or_default()
+    }
+
+    /// 库里比 `after` 更新的块（有新回合落盘时补发；空 = 没有）。
+    fn stored_between(
+        &self,
+        id: i64,
+        after: i64,
+        limit: usize,
+    ) -> Vec<crate::server::wire::WireBlock> {
         let Some(session) = self.hub.get(id) else {
             return Vec::new();
         };
-        let generation = session.state.transcript_generation();
-        let transcript = session.state.transcript();
-        let len = transcript.len();
-        let key = (id, conn);
-        let msgs = match self.shipped.get(&key).copied() {
-            Some((g, l)) if g == generation => {
-                if l >= len {
-                    return Vec::new();
-                }
-                chunk_transcript(&transcript[l..], false)
-            }
-            _ => chunk_transcript(transcript, true),
+        let (Some(sid), Some(st)) = (session.state.session_id(), session.state.store()) else {
+            return Vec::new();
         };
-        self.shipped.insert(key, (generation, len));
-        msgs
+        st.load_after(sid, after, limit)
+            .map(|blocks| blocks.into_iter().map(wire_block).collect())
+            .unwrap_or_default()
+    }
+
+
+    /// 这一帧流式快照值不值得发：和上一帧**逐字段**相同就不发。
+    ///
+    /// 不比长度：工具输出的尾巴是滑动窗口，长度可以一模一样而内容是新的。
+    fn stream_changed(last: Option<&StreamView>, now: &StreamView) -> bool {
+        last != Some(now)
     }
 
     fn stream_msg(&self, id: i64) -> ServerMsg {
@@ -732,6 +956,12 @@ impl Daemon {
             .get(id)
             .map(|s| s.stream_view().clone())
             .unwrap_or_default();
+        Self::stream_msg_of(v)
+    }
+
+    /// Build the wire message from an already-snapshotted view (the pump
+    /// compares it against the last one it sent; attach always sends one).
+    fn stream_msg_of(v: StreamView) -> ServerMsg {
         let run_state = v.run_state();
         ServerMsg::Stream {
             active: v.active,
@@ -845,7 +1075,13 @@ impl Daemon {
     }
 
     fn idle_check(&mut self) {
-        let any_busy = self.hub.ids().iter().any(|id| {
+        let ids = self.hub.ids();
+        // 会话关掉之后，两张按会话记账的表留着条目只是长胖：`shipped` 还按
+        // (会话, 连接) 记，连接号只增不减。
+        self.shipped.retain(|(id, _), _| ids.contains(id));
+        self.last_stream.retain(|id, _| ids.contains(id));
+        self.paging.retain(|(id, _, _)| ids.contains(id));
+        let any_busy = ids.iter().any(|id| {
             self.hub
                 .get(*id)
                 .map(|s| s.busy())

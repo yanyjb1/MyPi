@@ -13,7 +13,7 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
-use super::color::{contrast_text_on, parse_hex};
+use super::color::parse_hex;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -202,24 +202,6 @@ impl Theme {
     /// Background-filled span (foreground untouched).
     pub fn bg(&self, token: ColorToken, text: impl Into<String>) -> Span<'static> {
         Span::styled(text.into(), self.bg_style(token))
-    }
-
-    /// Text on a token background with omp's contrast rule: black on light
-    /// fills, near-white on dark ones.
-    pub fn fg_on_bg(
-        &self,
-        fg: ColorToken,
-        bg: ColorToken,
-        text: impl Into<String>,
-    ) -> Span<'static> {
-        let bgc = self.color(bg);
-        // Token foreground wins unless it is the terminal default, which is
-        // unreadable against an arbitrary fill — contrast rule kicks in.
-        let color = match self.color(fg) {
-            Color::Reset => contrast_text_on(bgc),
-            c => c,
-        };
-        Span::styled(text.into(), Style::new().bg(bgc).fg(color))
     }
 
     /// Convenience: token foreground + modifier set.

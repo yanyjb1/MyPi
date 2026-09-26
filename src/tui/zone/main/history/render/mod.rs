@@ -49,13 +49,20 @@ pub enum Streaming {
 /// 唯一的渲染入口：`kind` 定画法，`content` 是这块的全文，`streaming`
 /// 声明它是否还在流。`width` / `t` 是每帧参数 —— 宽度每帧递入、不存字段，
 /// resize 自然重排；主题取当帧的快照。
+/// 画一块。
+///
+/// `defer` = **推迟上色**：代码围栏先按纯文本出图，并把这些段的位置一并
+/// 交回来，由缓存决定什么时候补色（见 `blocks::Deferred`）。上色只改样式、
+/// 不改行数与文本，所以推迟与不推迟的排版逐行相同——这正是块缓存敢在
+/// 首帧只出纯文本的原因。
 pub fn render_block(
     kind: BlockKind,
     content: &str,
     streaming: Streaming,
     width: usize,
     t: &HistoryTheme,
-) -> Vec<Line<'static>> {
+    defer: bool,
+) -> (Vec<Line<'static>>, Vec<blocks::Deferred>) {
     match kind {
         BlockKind::User => {
             debug_assert_eq!(
@@ -63,19 +70,24 @@ pub fn render_block(
                 Streaming::Final,
                 "用户消息永远是成品，不存在流式"
             );
-            cards::user_card(content, t, width)
+            (cards::user_card(content, t, width), Vec::new())
         }
         // 流式与非流式在这里画法相同：markdown 直接吃「还没写完」的文本，
         // 未闭合的围栏照常画。两者的区别只在缓存策略（Live 不进缓存）。
-        BlockKind::Assistant => markdown::render_markdown(content, t),
-        BlockKind::Reasoning => reasoning(content, t),
+        BlockKind::Assistant => markdown::render_markdown(content, t, defer),
+        // 思考链的颜色**全部**被下面的灰色斜体覆盖掉：在这里高亮是白烧的钱。
+        // 所以它永远按"推迟"渲染，而且不需要谁来补色。
+        BlockKind::Reasoning => {
+            let (rows, _) = markdown::render_markdown(content, t, true);
+            (reasoning_fold(rows, t), Vec::new())
+        }
     }
 }
 
 /// 思考链：正文 markdown，整块压成系统灰 + 斜体。
-fn reasoning(content: &str, t: &HistoryTheme) -> Vec<Line<'static>> {
+fn reasoning_fold(rows: Vec<Line<'static>>, t: &HistoryTheme) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    for mut line in markdown::render_markdown(content, t) {
+    for mut line in rows {
         for sp in &mut line.spans {
             sp.style = sp
                 .style
@@ -112,9 +124,9 @@ mod tests {
     #[test]
     fn each_kind_has_its_own_look() {
         let t = t();
-        let user = render_block(BlockKind::User, "问题", Streaming::Final, 20, &t);
-        let reason = render_block(BlockKind::Reasoning, "想一下", Streaming::Final, 20, &t);
-        let answer = render_block(BlockKind::Assistant, "答案", Streaming::Final, 20, &t);
+        let (user, _) = render_block(BlockKind::User, "问题", Streaming::Final, 20, &t, false);
+        let (reason, _) = render_block(BlockKind::Reasoning, "想一下", Streaming::Final, 20, &t, false);
+        let (answer, _) = render_block(BlockKind::Assistant, "答案", Streaming::Final, 20, &t, false);
 
         // 用户消息：卡片，整块黑底。
         assert_eq!(
@@ -148,8 +160,8 @@ mod tests {
     fn live_renders_the_text_it_has_so_far() {
         let t = t();
         let partial = "答案的前半";
-        let live = render_block(BlockKind::Assistant, partial, Streaming::Live, 40, &t);
-        let done = render_block(BlockKind::Assistant, partial, Streaming::Final, 40, &t);
+        let (live, _) = render_block(BlockKind::Assistant, partial, Streaming::Live, 40, &t, false);
+        let (done, _) = render_block(BlockKind::Assistant, partial, Streaming::Final, 40, &t, false);
         assert_eq!(text_of(&live), text_of(&done));
         assert!(text_of(&live).contains(partial));
     }
