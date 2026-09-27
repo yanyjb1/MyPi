@@ -137,6 +137,10 @@ pub struct BlockCache {
     /// sync.
     generation: u64,
     width: usize,
+    /// 渲染时的**工作目录**：工具卡的路径要相对化（`/w/src/a.rs` → `./src/a.rs`）。
+    /// 它一变，缓存里那些路径就画错了，和换宽度同等处理。存在这里而不是层层
+    /// 传参：`height`/`rows_for`/`ensure_measured` 的签名不必为它变形。
+    cwd: String,
     /// Theme epoch the cached rows were colored with. A theme swap bumps the
     /// epoch; the next sync drops everything. omp's `themeEpoch` contract.
     theme_epoch: u64,
@@ -182,6 +186,7 @@ impl BlockCache {
             heights: HashMap::new(),
             generation: u64::MAX, // force a full rebuild on the first sync
             width: 0,
+            cwd: String::new(),
             theme_epoch: crate::tui::theme::theme_epoch(),
             stamp: 0,
             budget: DEFAULT_BLOCK_BUDGET,
@@ -190,14 +195,16 @@ impl BlockCache {
     }
 
     /// 跟窗口对齐：换代/宽度/主题就整片作废，否则只把**离开窗口的键**丢掉。
-    pub(crate) fn sync(&mut self, items: &[Item<'_>], generation: u64, width: usize) {
+    pub(crate) fn sync(&mut self, items: &[Item<'_>], generation: u64, width: usize, cwd: &str) {
         let epoch = crate::tui::theme::theme_epoch();
-        if epoch != self.theme_epoch || width != self.width {
-            // 每一行的折行/配色都作废了。
+        if epoch != self.theme_epoch || width != self.width || cwd != self.cwd {
+            // 每一行的折行/配色/路径都作废了。
             self.slots.clear();
             self.heights.clear();
             self.theme_epoch = epoch;
             self.width = width;
+            self.cwd.clear();
+            self.cwd.push_str(cwd);
             self.generation = u64::MAX; // 下一句按整体替换走
         }
         if generation != self.generation {
@@ -228,6 +235,7 @@ impl BlockCache {
         show_reasoning: bool,
         tools_expanded: bool,
         width: usize,
+        cwd: &str,
     ) -> Vec<blocks::Block> {
         let r = Range {
             start: 0,
@@ -265,9 +273,9 @@ impl BlockCache {
         let mut out = Vec::with_capacity(if two { 2 } else { 1 });
         // 缓存那一路**推迟上色**：首帧只出纯文本，段落进视口时再补
         // （见 `blocks::Deferred` 与 `HistoryZone::color_visible`）。
-        out.push(blocks::render_group(entries, r, t, off.0, off.1, width, true));
+        out.push(blocks::render_group(entries, r, t, off.0, off.1, width, true, cwd));
         if two {
-            out.push(blocks::render_group(entries, r, t, on.0, on.1, width, true));
+            out.push(blocks::render_group(entries, r, t, on.0, on.1, width, true, cwd));
         }
         out
     }
@@ -409,7 +417,14 @@ impl BlockCache {
     ) {
         if !self.slots.contains_key(&it.key) {
             let variants =
-                self.render_variants(it.entries, t, show_reasoning, tools_expanded, self.width);
+                self.render_variants(
+                    it.entries,
+                    t,
+                    show_reasoning,
+                    tools_expanded,
+                    self.width,
+                    &self.cwd,
+                );
             self.admit(it.key, variants);
             return;
         }

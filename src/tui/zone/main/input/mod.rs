@@ -431,6 +431,13 @@ impl SubZone for InputZone {
             let cx = semantics::KeyContext::for_input(false, self.streaming, true);
             let action = semantics::translate_with(*key, cx);
             use semantics::Action as A;
+            // 空格在这里也是"确认"：路径参数打完（`/cdp ~/Projects/Utility/MyPi `）
+            // 那一下空格，人想说的是"就到这儿"。落进编辑器它就变成参数里的
+            // 一个空格，命令解析跟着错位。
+            let space = key.code == KeyCode::Char(' ')
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL);
             match action {
                 A::Complete => {
                     self.pending_lend = Some(ToReserved::Confirm);
@@ -438,6 +445,10 @@ impl SubZone for InputZone {
                 }
                 A::CompleteUp | A::CompleteDown | A::DismissCompletion => {
                     self.pending_lend = Some(ToReserved::Lend(action));
+                    return true;
+                }
+                _ if space => {
+                    self.pending_lend = Some(ToReserved::Confirm);
                     return true;
                 }
                 _ => {}

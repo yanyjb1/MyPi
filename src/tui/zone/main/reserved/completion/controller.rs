@@ -43,6 +43,12 @@ pub struct CompletionController {
     // re-scans the directory via `read_dir` whenever the input contains
     // a path-like word — even though moving the cursor usually does not
     // change the word. Skip the rescan when the word is unchanged.
+    /// 用户**手动**关过的那一处 `(from, word)`（Esc）。
+    ///
+    /// 关掉之后同一轮 `refresh` 还会再扫一次目录，候选原封不动地在那儿，
+    /// 弹窗于是当场重开——屏幕上看起来像 Esc 完全没反应（真机上就是这样）。
+    /// 记下来就够：继续打字、或把光标移到别的词，它自然失效，补全照常回来。
+    dismissed: Option<(usize, String)>,
     last_word: Option<(usize, String)>,
 }
 
@@ -57,6 +63,7 @@ impl CompletionController {
         Self {
             commands: Vec::new(),
             popup: CompletionPopup::default(),
+            dismissed: None,
             last_word: None,
         }
     }
@@ -164,6 +171,11 @@ impl CompletionController {
                 if self.last_word.as_ref() == Some(&(from, word.clone())) && self.popup.is_open() {
                     return;
                 }
+                // 用户刚把这一处关掉（Esc）：候选还在也不重开。位置或词一变
+                // （继续打字、移动到别的词）它自然失效。
+                if self.dismissed.as_ref() == Some(&(from, word.clone())) {
+                    return;
+                }
                 self.last_word = Some((from, word.clone()));
                 let at_start = from == 0;
                 let mut items = engine::complete(&word, at_start, cx.cwd, cx.home, &self.commands);
@@ -228,6 +240,16 @@ impl CompletionController {
 
     pub fn move_selection(&mut self, d: isize) {
         self.popup.move_selection(d);
+    }
+
+    /// 用户按 Esc 关掉：记住**关的是哪一处**，别让紧随其后的 `refresh`
+    /// 又把它开回来。`close()` 不带这个语义——提交、清空、叶子命中都
+    /// 该"关了就关了，下次重新算"。
+    pub fn dismiss(&mut self) {
+        if self.popup.is_open() {
+            self.dismissed = self.last_word.clone();
+        }
+        self.close();
     }
 
     /// Close and drop the memo (Esc, submit, editor clear...).
@@ -423,7 +445,7 @@ impl crate::tui::zone::main::reserved::area::Claim for CompletionService {
                 true
             }
             Action::DismissCompletion => {
-                self.controller.close();
+                self.controller.dismiss();
                 true
             }
             // 只观察不消费；输入区继续自己的处理。

@@ -71,7 +71,7 @@ fn cold_start_renders_only_the_requested_window() {
     let bs = convo(2000);
     let its = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&its, 1, 60);
+    c.sync(&its, 1, 60, "");
     let tail: Vec<usize> = (1990..2000).collect();
     let rows = c.rows_for(&its, &tail, &t(), true, false);
     assert!(!rows.is_empty());
@@ -89,7 +89,7 @@ fn a_sliding_window_never_crosses_rows_between_blocks() {
     let bs = convo(30);
     let its = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&its, 1, 60);
+    c.sync(&its, 1, 60, "");
     let r0 = c.rows_for(&its, &(10..15).collect::<Vec<_>>(), &t(), true, false);
     assert!(has(&r0, "用户消息 10"));
 
@@ -113,7 +113,7 @@ fn the_window_bounds_the_cache() {
     let mut end: usize = 400;
     while end > 0 {
         let start = end.saturating_sub(16);
-        c.sync(&its[start..end], 1, 60);
+        c.sync(&its[start..end], 1, 60, "");
         let _ = c.rows_for(&its, &all(end - start), &t(), true, false);
         end = start;
     }
@@ -132,7 +132,7 @@ fn heights_outlive_evicted_rows() {
     let its = items(&bs);
     let mut c = BlockCache::new();
     c.set_budget(8);
-    c.sync(&its, 1, 60);
+    c.sync(&its, 1, 60, "");
     let h0 = c.height(&its[0], &t(), true, false);
     assert!(h0 > 0);
     // Render enough other blocks to push block 0's rows out of the cache.
@@ -153,9 +153,9 @@ fn idle_sync_after_a_width_change_still_renders() {
     let bs = convo(20);
     let its = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&its, 1, 60);
-    c.sync(&its, 1, 80); // 宽度变了：清行重排
-    c.sync(&its, 1, 80); // 什么都没变
+    c.sync(&its, 1, 60, "");
+    c.sync(&its, 1, 80, ""); // 宽度变了：清行重排
+    c.sync(&its, 1, 80, ""); // 什么都没变
     let rows = c.rows_for(&its, &all(2), &t(), true, false);
     assert!(!rows.is_empty(), "宽度变化之后窗口空了");
 }
@@ -179,10 +179,10 @@ fn hidden_reasoning_paints_nothing() {
     let bs = flat(&es, 1);
     let its = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&its, 1, 80);
+    c.sync(&its, 1, 80, "");
     assert!(has(&c.rows_for(&its, &all(3), &t(), true, false), "内心独白"));
 
-    c.sync(&its, 1, 80);
+    c.sync(&its, 1, 80, "");
     let rows = c.rows_for(&its, &all(3), &t(), false, false);
     assert!(!has(&rows, "内心独白"), "Ctrl+T 藏不住思考（缓存路径）");
     // 藏起来的块不该留下任何独占的行：和「转录里从来没有这条思考」渲染出来
@@ -191,7 +191,7 @@ fn hidden_reasoning_paints_nothing() {
     let bs2 = flat(&without, 1);
     let its2 = items(&bs2);
     let mut c2 = BlockCache::new();
-    c2.sync(&its2, 1, 80);
+    c2.sync(&its2, 1, 80, "");
     assert_eq!(
         text(&rows),
         text(&c2.rows_for(&its2, &all(2), &t(), false, false)),
@@ -228,12 +228,12 @@ fn content_swap_with_equal_block_count_must_not_render_stale_rows() {
     let io = items(&bo);
     let inn = items(&bn);
     let mut c = BlockCache::new();
-    c.sync(&io, 1, 60);
+    c.sync(&io, 1, 60, "");
     assert!(has(&c.rows_for(&io, &all(2), &t(), true, false), "旧回答"));
 
     // Same generation would (correctly) keep the cache; the session bumps it
     // on a wholesale swap, and that is what must clear it.
-    c.sync(&inn, 2, 60);
+    c.sync(&inn, 2, 60, "");
     let r1 = c.rows_for(&inn, &all(2), &t(), true, false);
     assert!(!has(&r1, "旧回答"), "换 transcript 后不得渲染旧分支内容");
     assert!(has(&r1, "新回答"), "必须渲染新内容");
@@ -244,7 +244,7 @@ fn same_generation_append_keeps_measured_heights() {
     let bs = convo(3);
     let its = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&its, 1, 60);
+    c.sync(&its, 1, 60, "");
     let _ = c.rows_for(&its, &all(3), &t(), true, false);
     assert!(c.heights[&1][0] != usize::MAX, "已测高度");
 
@@ -262,7 +262,7 @@ fn same_generation_append_keeps_measured_heights() {
         ],
     ));
     let gi = items(&grown);
-    c.sync(&gi, 1, 60);
+    c.sync(&gi, 1, 60, "");
     assert!(c.heights[&1][0] != usize::MAX, "追加不得清空已测高度");
 }
 
@@ -271,11 +271,11 @@ fn keys_that_leave_the_window_take_their_heights() {
     let bs = convo(5);
     let its = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&its, 1, 60);
+    c.sync(&its, 1, 60, "");
     let _ = c.rows_for(&its, &all(5), &t(), true, false);
     assert!(c.heights.contains_key(&1));
     // 回退 / 窗口前移：键 1 不在窗口里了。
-    c.sync(&its[1..], 1, 60);
+    c.sync(&its[1..], 1, 60, "");
     assert!(!c.heights.contains_key(&1), "离开窗口的键该连高度一起丢");
     assert!(c.heights.contains_key(&2));
 }
@@ -302,7 +302,7 @@ fn a_foldable_exchange_has_one_variant_when_both_states_render_alike() {
     let bs = vec![(1, vec![req, res])];
     let its = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&its, 1, 60);
+    c.sync(&its, 1, 60, "");
     let folded = c.height(&its[0], &t(), true, false);
     let expanded = c.height(&its[0], &t(), true, true);
     assert_eq!(folded, expanded, "两态画得一样就该是一份变体");
@@ -319,7 +319,7 @@ fn reasoning_is_single_variant_and_hides_cleanly() {
     )];
     let its = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&its, 1, 60);
+    c.sync(&its, 1, 60, "");
     assert!(c.height(&its[0], &t(), true, false) > 0);
     assert_eq!(
         c.height(&its[0], &t(), false, false),
@@ -343,7 +343,7 @@ fn coloring_through_the_cache_touches_only_the_given_rows() {
     );
     let it = items(&bs);
     let mut c = BlockCache::new();
-    c.sync(&it, 0, 40);
+    c.sync(&it, 0, 40, "");
     let all_rows = all(it.len());
     let _ = c.rows_for(&it, &all_rows, &t(), true, false);
     assert_eq!(c.pending_rows(), 2, "两个围栏 = 两段待上色");

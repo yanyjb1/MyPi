@@ -201,6 +201,38 @@ pub fn dispatch(msg: ServerMsg, view: &mut dyn SessionView) {
 
 /// The MainZone instance: wire messages land as zone calls.
 ///
+/// 新到的块里，有没有 `cd` 工具的结果？有就给出它落脚的目录。
+///
+/// 认的是**工具结果**，不是 State 帧：帧里的 `cwd` 只说"现在在哪"，说不出
+/// 是谁挪的（`/cdp` 和 `cd` 都改它），而两者的状态栏语义不同——`cd` 是临时
+/// 迁移，git 段不该跟着走。
+fn cd_migrations(blocks: &[crate::server::wire::WireBlock]) -> Vec<String> {
+    cd_migrations_in(blocks.iter().flat_map(|b| b.entries.iter()))
+}
+
+/// 同上，但喂给它的是一串条目 —— 工具结果来路不止一条：`Blocks` /
+/// `NewerBlocks` / `EntryMany` 都带着它，漏掉哪条，哪条路上的 `cd` 就
+/// 悄悄退回 `[D]`。
+fn cd_migrations_in<'a>(
+    entries: impl Iterator<Item = &'a crate::server::entry::Entry>,
+) -> Vec<String> {
+    entries
+        .filter_map(|e| {
+            let crate::server::entry::Entry::ToolResult { name, details, .. } = e else {
+                return None;
+            };
+            if name != "cd" {
+                return None;
+            }
+            let d = details.as_ref()?;
+            if d.get("kind").and_then(|k| k.as_str()) != Some("cwd") {
+                return None;
+            }
+            d.get("path")?.as_str().map(String::from)
+        })
+        .collect()
+}
+
 /// The zone lives in the `App` (the renderer needs it); the view borrows it
 /// per message via [`MainSessionView::zone_for`] — same-loop borrows only.
 /// Per-session view state that outlives one message (edge detection).
@@ -209,6 +241,9 @@ pub struct ViewState {
     last_busy: Option<bool>,
     last_model: String,
     last_name: String,
+    /// 上一次下发给状态栏的目录。用来区分"工作区真的移动了"与"只是
+    /// `cd` 的临时迁移"——后者由工具结果下发（`CwdMigrated`）。
+    last_cwd: String,
 }
 
 /// The MainZone instance: wire messages land as zone calls.
@@ -243,6 +278,7 @@ impl MainSessionView {
             last_busy: self.state.last_busy.take(),
             last_model: std::mem::take(&mut self.state.last_model),
             last_name: std::mem::take(&mut self.state.last_name),
+            last_cwd: std::mem::take(&mut self.state.last_cwd),
             state_slot: &mut self.state,
         }
     }
@@ -256,6 +292,7 @@ struct ZoneView<'a> {
     last_busy: Option<bool>,
     last_model: String,
     last_name: String,
+    last_cwd: String,
     state_slot: &'a mut ViewState,
 }
 
@@ -265,7 +302,22 @@ impl Drop for ZoneView<'_> {
         self.state_slot.last_busy = self.last_busy;
         self.state_slot.last_model = std::mem::take(&mut self.last_model);
         self.state_slot.last_name = std::mem::take(&mut self.last_name);
+        self.state_slot.last_cwd = std::mem::take(&mut self.last_cwd);
     }
+}
+
+impl ZoneView<'_> {
+    /// 模型用 `cd` 迁移过：状态栏从 `[D]` 变 `[T]`（temporary）。
+    ///
+    /// 同时把 `last_cwd` 记成新位置——随后到达的 State 帧就不会把它当成
+    /// "工作区移动"再广播一次（那会把 `[T]` 又按回 `[D]`）。
+    fn note_cd_migration(&mut self, path: &str) {
+        self.zone
+            .input
+            .notify(&StatusEvent::CwdMigrated(std::path::Path::new(path)));
+        self.last_cwd = path.to_string();
+    }
+
 }
 
 impl SessionView for ZoneView<'_> {
@@ -277,10 +329,16 @@ impl SessionView for ZoneView<'_> {
         // 整份快照 = 换会话、换分支、压缩：账本跟着换，旧面板上那些数字已经
         // 不属于眼前这条对话了。留着比关掉更糟——它看起来一样可信。
         self.zone.reserved.usage.close();
+        for path in cd_migrations(&blocks) {
+            self.note_cd_migration(&path);
+        }
         self.zone.history.replace_transcript(blocks, live);
     }
 
     fn on_entries(&mut self, entries: Vec<crate::server::entry::Entry>) {
+        for path in cd_migrations_in(entries.iter()) {
+            self.note_cd_migration(&path);
+        }
         self.zone.history.push_entries(entries);
     }
 
@@ -289,6 +347,9 @@ impl SessionView for ZoneView<'_> {
         blocks: Vec<crate::server::wire::WireBlock>,
         live: Vec<crate::server::entry::Entry>,
     ) {
+        for path in cd_migrations(&blocks) {
+            self.note_cd_migration(&path);
+        }
         self.zone.history.push_blocks(blocks, live);
     }
 
@@ -297,6 +358,9 @@ impl SessionView for ZoneView<'_> {
     }
 
     fn on_newer(&mut self, blocks: Vec<crate::server::wire::WireBlock>) {
+        for path in cd_migrations(&blocks) {
+            self.note_cd_migration(&path);
+        }
         self.zone.history.append_blocks(blocks);
     }
 
@@ -347,9 +411,22 @@ impl SessionView for ZoneView<'_> {
             }
             None => {}
         }
-        self.zone.input.notify(&StatusEvent::WorkspaceChanged(std::path::Path::new(
-            &frame.cwd,
-        )));
+        // 只有**工作区移动**才走这条：`/cdp`、resume、分叉恢复。模型自己
+        // 的 `cd` 走 `CwdMigrated`（从工具结果认出来，见 `note_cd_migration`），
+        // 因为这一帧的 `cwd` 只说"现在在哪"，说不出是谁把它挪过去的。
+        //
+        // 判"变了没有"而不是无条件广播，正是为了让两帧的**先后顺序无关**：
+        // 块先到 → `[T]`，随后这帧发现 cwd 已经记过，不再按回 `[D]`。
+        if frame.cwd != self.last_cwd {
+            self.zone
+                .input
+                .notify(&StatusEvent::WorkspaceChanged(std::path::Path::new(
+                    &frame.cwd,
+                )));
+            self.last_cwd = frame.cwd.clone();
+        }
+        // 历史区的工具卡也按它相对化路径（同一个工作目录，两个消费者）。
+        self.zone.history.set_cwd(&frame.cwd);
         self.zone.input.notify(&StatusEvent::Usage(UsageSnapshot {
             total_cost: frame.spend_usd,
             // 分母是 models.yml 的模型元数据（服务器管）；分子是最近一轮
@@ -480,6 +557,38 @@ mod tests {
             self.events.push("error");
             self.errors.push(m);
         }
+    }
+
+    /// 模型 `cd` 之后状态栏要从 `[D]` 变 `[T]`（temporary）。认的是**工具
+    /// 结果**：State 帧的 `cwd` 只说"现在在哪"，说不出是谁挪的，而 `/cdp`
+    /// 与 `cd` 的状态栏语义不同（后者 git 段不该跟着走）。
+    #[test]
+    fn only_a_cd_result_is_a_migration() {
+        let entry = |name: &str, details: serde_json::Value| crate::server::entry::Entry::ToolResult {
+            call_id: "c1".into(),
+            name: name.into(),
+            ok: true,
+            result: String::new(),
+            details: Some(details),
+            duration_ms: 0,
+        };
+        let blocks = |e| {
+            vec![crate::server::wire::WireBlock {
+                id: 1,
+                entries: vec![e],
+            }]
+        };
+        assert_eq!(
+            cd_migrations(&blocks(entry(
+                "cd",
+                serde_json::json!({"kind": "cwd", "path": "/tmp/scratch"})
+            ))),
+            vec!["/tmp/scratch".to_string()]
+        );
+        // `read` 也带 path，但它不改工作区。
+        assert!(cd_migrations(&blocks(entry("read", serde_json::json!({"path": "a.rs"})))).is_empty());
+        // 别的载荷即使来自 cd 也不算（形状不对就不猜）。
+        assert!(cd_migrations(&blocks(entry("cd", serde_json::json!({"kind": "shell"})))).is_empty());
     }
 
     #[test]

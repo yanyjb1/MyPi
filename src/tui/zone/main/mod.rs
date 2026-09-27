@@ -242,6 +242,56 @@ mod tests {
     /// 走一遍真帧路径（和 loop.rs 的 `draw_frame` 同一套调用）：主区出行
     /// → ratatui 画进后端 → 读回缓冲。检查画出来的格子真的在缓冲里
     /// （行丢了/串行了都会挂），以及硬件光标落在容器内。
+    /// 复现两条真实症状（都在 `/cdp ~~/Projects/Utility/MyPi` 这种"目标是
+    /// 目录、底下还有别的条目"的情形里）：
+    ///
+    /// 1. Esc 关不掉弹窗 —— `close()` 清掉 `last_word`，同一轮的 `refresh`
+    ///    又扫到候选，当场重开；
+    /// 2. 空格落进编辑器 —— 参数打完那一下空格被当普通字符，命令解析错位。
+    #[test]
+    fn esc_closes_the_popup_and_space_confirms_instead_of_typing() {
+        let root = std::env::temp_dir().join(format!("mypi_esc_{}", std::process::id()));
+        let proj = root.join("Projects").join("Utility").join("MyPi");
+        std::fs::create_dir_all(proj.join("sub")).unwrap();
+        std::fs::write(proj.join("inside.txt"), "x").unwrap();
+
+        let mut mz = MainZone::default();
+        mz.attach(crate::tui::zone::TermSize { cols: 100, rows: 30 });
+        mz.reserved.attach_completion(root.clone(), root.clone());
+        let key = |code: ratatui::crossterm::event::KeyCode| crate::tui::zone::RawEvent::Key {
+            key: ratatui::crossterm::event::KeyEvent {
+                code,
+                modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+                kind: ratatui::crossterm::event::KeyEventKind::Press,
+                state: ratatui::crossterm::event::KeyEventState::NONE,
+            },
+        };
+        let typed = format!("/cdp {}", proj.display());
+        for c in typed.chars() {
+            mz.deliver(key(ratatui::crossterm::event::KeyCode::Char(c)));
+        }
+        assert!(mz.reserved.completion_open(), "目录名打完该有候选：sub / inside.txt");
+
+        // Esc：关掉，而且**下一轮不许自己回来**。
+        mz.deliver(key(ratatui::crossterm::event::KeyCode::Esc));
+        mz.deliver(crate::tui::zone::RawEvent::Paste(String::new()));
+        assert!(!mz.reserved.completion_open(), "Esc 之后弹窗该关着");
+
+        // 继续打字 = 新的触发词，补全照常回来。
+        mz.deliver(key(ratatui::crossterm::event::KeyCode::Char('/')));
+        assert!(mz.reserved.completion_open(), "换了个词，补全该回来");
+
+        // 空格：确认候选，**不进编辑器**。
+        let before = mz.input.editor.text();
+        mz.deliver(key(ratatui::crossterm::event::KeyCode::Char(' ')));
+        let after = mz.input.editor.text();
+        assert!(
+            !after.ends_with(' ') || after == before,
+            "空格被判成确认，不该原样落进编辑器：{before:?} -> {after:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_frame_path_paints_through_ratatui_and_keeps_the_cursor_inside() {
         use ratatui::Terminal;

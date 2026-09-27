@@ -705,17 +705,32 @@ impl BuiltinTools {
             .canonicalize()
             .with_context(|| format!("no such dir: {p}"))?;
         anyhow::ensure!(real.is_dir(), "not a directory: {p}");
-        // The workspace is the boundary for every file tool, so `cd` — the only
-        // way the model moves it — has to respect it. Out-of-workspace work is
-        // still reachable by absolute path (the temp dir is licensed for files),
-        // but the *session's* directory stays where the session started.
-        let root = canonicalize_lenient(&self.root);
+        // `cd` 能站的地方：工作区、`$HOME`、`/tmp`。系统目录（`/proc`、
+        // `/etc`、`/sys`…）不去——不是权限问题（文件工具本来就碰不到），是
+        // **别让会话站在那儿**：真站进去之后每个相对路径都落在 zone 外，次次
+        // 被拒，模型只会原地绕圈。
+        //
+        // 去了哪儿也不落盘：这是模型的临时落脚点，重启/恢复时以工作区为准。
+        // 落盘的是用户自己敲的 `/cdp`（那条会写 `cwd_history`）。
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        let allowed = [
+            canonicalize_lenient(&self.root),
+            canonicalize_lenient(&home),
+            canonicalize_lenient(&std::env::temp_dir()),
+        ];
         anyhow::ensure!(
-            real.starts_with(&root),
-            "denied: {} is outside the workspace ({})",
-            real.display(),
-            root.display()
+            allowed
+                .iter()
+                .any(|z| !z.as_os_str().is_empty() && real.starts_with(z)),
+            "denied: {} 不在工作区、$HOME 或 /tmp 之内",
+            real.display()
         );
+        // 换之前站的地方。前端画 `cd` 那一行时要拿它当**相对化的基准**：
+        // `cd ..` 说的是"从我所在的这一层往上"，基准若是切换之后的目录，
+        // `..` 就会被画成 `.`（真机上出过这个洋相）。
+        let from = self.cwd.clone();
         self.cwd = real.clone();
         // Write back to the shared slot: the TUI statusline and the next
         // turn's spawn_turn snapshot both read it
@@ -724,7 +739,11 @@ impl BuiltinTools {
         }
         Ok(ToolOutput::with_details(
             format!("working directory changed to {}", real.display()),
-            serde_json::json!({ "kind": "cwd", "path": real.display().to_string() }),
+            serde_json::json!({
+                "kind": "cwd",
+                "path": real.display().to_string(),
+                "from": from.display().to_string(),
+            }),
         ))
     }
 }
@@ -998,10 +1017,10 @@ fn line_of(text: &str, pos: usize) -> usize {
 // session directory, not whatever directory some thread happens to be in.
 pub struct BuiltinTools {
     cwd: std::path::PathBuf,
-    // The workspace **root**: where the session started, and the one thing `cd`
-    // may not leave. `cwd` moves; the root does not, so "inside the workspace"
-    // stays a stable fact even after a migration (a boundary that moves with the
-    // thing it bounds is not a boundary).
+    // The workspace **root**: where the session started. It is the base of the
+    // file-tool license zone (`licensed_zones`), **not** a cage around `cd`:
+    // the model may move wherever it likes, but what it can *touch* still
+    // starts from here. `cwd` moves; the root does not.
     root: std::path::PathBuf,
     // Inline-output budget (config.yaml → tools.outputMax*): what `read` hands
     // over before pointing at the rest, and what makes a result a 巨物.
@@ -1114,7 +1133,8 @@ impl BuiltinTools {
         std::sync::Arc::clone(&self.todo)
     }
 
-    /// The workspace root: `cd` may move within it, never out of it.
+    /// The startup directory. Only one thing uses it now: the list of places
+    /// `cd` is allowed to land (workspace / `$HOME` / temp).
     pub fn with_workspace_root(mut self, root: std::path::PathBuf) -> Self {
         self.root = root;
         self
@@ -1126,9 +1146,21 @@ impl BuiltinTools {
         self
     }
 
-    /// The zones the file tools may touch (workspace + temp).
+    /// The zones the file tools may touch: **where the session is standing**,
+    /// plus temp.
+    ///
+    /// Tied to `cwd`, not to the startup root. `cd` moves the model somewhere
+    /// on purpose; if the licence stayed behind, every relative path in the new
+    /// place would be refused and the move would be pointless (the model would
+    /// be told "changed to X" and then denied everything under X).
+    ///
+    /// `cwd` can only ever be inside the workspace, `$HOME` or temp (see
+    /// [`Self::tool_cd`]), so this widens nothing: at startup it is exactly the
+    /// old `root + temp`, and after a `cd` it is wherever the model went. It is
+    /// also the same zone `bash` already uses (it passes its `cwd` to
+    /// `classify`), so "what may be touched" has one definition, not two.
     fn zones(&self) -> Vec<std::path::PathBuf> {
-        licensed_zones(&self.root)
+        licensed_zones(&self.cwd)
     }
 
     // Attach the bash wall-clock cap (config: `tools.bashTimeoutSecs`).
@@ -2845,19 +2877,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// `cd` **带着工作区一起走**：新落脚点就是能读写的地方。
+    ///
+    /// 反例是实测出来的：`cd ~/Projects/Utility` 成功，紧接着
+    /// `read ./test.txt` 却被拒——zone 还钉在启动目录上，cd 白走一趟。
     #[test]
-    fn cd_moves_the_license_zone_within_the_workspace_only() {
+    fn cd_carries_the_license_zone_with_it() {
         let d = std::env::temp_dir().join("mypi_zone_a");
         let inner = d.join("inner");
         let other = home_dir().join(".mypi_zone_b");
         let _ = std::fs::create_dir_all(&d);
         let _ = std::fs::create_dir_all(&inner);
         let _ = std::fs::create_dir_all(&other);
+        std::fs::write(inner.join("a.txt"), "a").unwrap();
+        std::fs::write(other.join("b.txt"), "b").unwrap();
 
         let mut t = BuiltinTools::new(d.clone());
-        // Into a subdirectory: the zone follows, and the delete is licensed.
+        // 起点：zone 只有 d + /tmp（`d` 在 /tmp 下，所以先拿 `$HOME` 里的
+        // 那个文件当靶子——它不在任何一侧）。
+        assert!(
+            resolve_path(&t.cwd, &t.zones(), other.join("b.txt").to_str().unwrap(), true).is_err(),
+            "起点不该看见 $HOME"
+        );
+
+        // 走进子目录：zone 跟着走。
         t.tool_cd(inner.to_str().unwrap()).unwrap();
         assert_eq!(t.cwd, inner.canonicalize().unwrap());
+        assert!(
+            resolve_path(&t.cwd, &t.zones(), "./a.txt", true).is_ok(),
+            "cd 过去之后同一个文件该读得到"
+        );
+        // 子目录里的 rm 照旧放行。
         let victim = inner.join("victim.txt");
         std::fs::write(&victim, "x").unwrap();
         assert!(
@@ -2871,20 +2921,77 @@ mod tests {
                 &mut |_| {}
             )
             .is_ok(),
-            "子目录仍在工作区内，应放行"
+            "新工作区里的删除该放行"
         );
 
-        // Out of the workspace: refused. `cd` is the only way the model moves
-        // the zone, so an unbounded cd would make every file boundary advisory.
-        let err = t.tool_cd(other.to_str().unwrap()).unwrap_err();
+        // 走出原工作区但仍在 `$HOME` 下：允许，zone 一并搬过去。
+        t.tool_cd(other.to_str().unwrap()).unwrap();
+        assert_eq!(t.cwd, other.canonicalize().unwrap());
         assert!(
-            format!("{err:#}").contains("outside the workspace"),
-            "越界 cd 必须拒绝: {err:#}"
+            resolve_path(&t.cwd, &t.zones(), "./b.txt", true).is_ok(),
+            "新落脚点里的文件该读得到"
         );
-        assert_eq!(t.cwd, inner.canonicalize().unwrap(), "拒绝后 cwd 不该变");
 
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::remove_dir_all(&other);
+    }
+
+    /// `cd` 只站工作区、`$HOME`、`/tmp`：系统目录不站。
+    #[test]
+    fn cd_refuses_the_system_directories() {
+        let d = std::env::temp_dir().join("mypi_zone_c");
+        let _ = std::fs::create_dir_all(&d);
+        let mut t = BuiltinTools::new(d.clone());
+        for p in ["/proc", "/etc", "/sys", "/"] {
+            let err = t.tool_cd(p).unwrap_err();
+            assert!(format!("{err:#}").contains("denied"), "{p} 该被拒: {err:#}");
+        }
+        // $HOME 与 /tmp 是模型该待的地方。
+        t.tool_cd(&home_dir().to_string_lossy()).unwrap();
+        t.tool_cd("/tmp").unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// guard 管的是**破坏性动作**（删 / 移出区 / 设备写入 / 提权 / 反弹
+    /// shell…），不是"碰系统目录"。运维要看 `/proc` 是家常便饭，只读命令照跑。
+    #[test]
+    fn read_only_system_inspection_is_allowed() {
+        let zone = std::path::Path::new("/tmp");
+        for cmd in [
+            "cat /proc/2/exe",
+            "cat /proc/self/status",
+            "ls -l /proc/2/fd",
+            "ps aux",
+            "lsof -p 2",
+            "cat /etc/hostname",
+            "journalctl -n 20",
+        ] {
+            assert!(
+                matches!(
+                    crate::server::agent::bash_guard::classify(cmd, zone),
+                    crate::server::agent::bash_guard::Verdict::Allow
+                ),
+                "{cmd} 只是读，不该被挡"
+            );
+        }
+    }
+
+    /// 分类放行不等于真跑得起来：这条把命令**真的执行**一遍。
+    /// （`/proc/2/exe` 本身普通用户读不到 —— 那是 EACCES，不是 guard 的
+    /// `denied`，两回事，所以这里用一个读得到的。）
+    #[test]
+    fn reading_proc_really_runs() {
+        let out = bash_with_stop(
+            std::path::Path::new("/tmp"),
+            "cat /proc/self/status | head -1",
+            None,
+            T,
+            None,
+            L,
+            &mut |_| {},
+        )
+        .expect("只读的 /proc 命令该被执行，而不是被 guard 拒绝");
+        assert!(out.text.contains("Name:"), "读到了什么：{:?}", out.text);
     }
 
     #[test]

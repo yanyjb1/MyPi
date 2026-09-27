@@ -229,6 +229,8 @@ pub struct HistoryZone {
     render_margin: usize,
     /// 转录代。只能由整体替换推进（见 [`HistoryZone::replace_transcript`]）。
     generation: u64,
+    /// 会话当前的工作目录：工具卡的路径按它相对化（`cache` 和它一起换代）。
+    cwd: String,
     /// 块缓存渲染器（变体 + 高度 + 测量全在里面）。
     cache: BlockCache,
     /// 流式尾巴（还没定稿的那半句）。**不是转录**：不进窗口、不进块缓存、
@@ -275,6 +277,7 @@ impl Default for HistoryZone {
             preload: 128,
             render_margin: 64,
             generation: 0,
+            cwd: String::new(),
             cache: BlockCache::new_public(),
             live: LiveTail::default(),
             live_rows: LiveRows::default(),
@@ -828,6 +831,15 @@ impl HistoryZone {
     ///
     /// 宽度是每帧传进来的参数（`MainZone.size` 是唯一真相源），不存字段：
     /// 终端一变宽，下一帧新宽度就到，`cache.sync` 自动全量失效重排。
+    /// 会话的工作目录变了（`cd` 工具或 `/cdp`）：下一帧的块缓存按新目录重画
+    /// 路径。缓存自己会发现变化并整片作废（见 `BlockCache::sync`）。
+    pub fn set_cwd(&mut self, cwd: &str) {
+        if cwd != self.cwd {
+            self.cwd.clear();
+            self.cwd.push_str(cwd);
+        }
+    }
+
     pub fn render_rows(&mut self, term_w: u16, t: &HistoryTheme) -> Vec<Line<'static>> {
         let width = usize::from(term_w.max(1));
         // 「读者推过」只描述这一次渲染之前的那一下滚动，渲染过就作废。
@@ -877,7 +889,7 @@ impl HistoryZone {
             .collect();
         let order = display_order(&items);
         let view = (!self.reasoning_folded, self.tools_expanded);
-        self.cache.sync(&items, self.generation, width);
+        self.cache.sync(&items, self.generation, width, &self.cwd);
 
         // 积压的滚动先在渲染帧里兑现（要高度的活只有这里有）。
         if !matches!(self.pending, Pending::Rows(0)) {

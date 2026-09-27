@@ -83,6 +83,7 @@ pub fn render_at(
             tools_expanded,
             width,
             false,
+            "",
         )
         .0);
     }
@@ -111,6 +112,7 @@ pub fn render_at_public(
             tools_expanded,
             width,
             false,
+            "",
         )
         .0);
     }
@@ -127,6 +129,7 @@ pub(crate) fn single_node(
     tools_expanded: bool,
     width: usize,
     defer: bool,
+    cwd: &str,
 ) -> (Vec<Line<'static>>, Vec<Deferred>) {
     debug_assert!(
         group.len() <= 2,
@@ -210,6 +213,41 @@ pub(crate) fn single_node(
                 }),
                 _ => None,
             });
+            // `read` **不走卡片**：一行说完"读了哪个文件的哪一段"，正文不上屏
+            // （用户：「我不关心读取的具体内容，我只关心文件」）。展开与否都
+            // 一样 —— 所以它不参与 Ctrl+O 的两态。
+            if name == "read" || name == "cd" {
+                let mut out = Vec::new();
+                let mut deferred = Vec::new();
+                if *first && !text.trim().is_empty() {
+                    push_block(
+                        &mut out,
+                        &mut deferred,
+                        render_block(BlockKind::Assistant, text, Streaming::Final, width, t, defer),
+                    );
+                    out.push(super::blocks::block_gap());
+                }
+                out.extend(match name.as_str() {
+                    "read" => super::tools::read_line(args, paired, cwd, t),
+                    _ => super::tools::cd_line(args, paired, cwd, t),
+                });
+                return (out, deferred);
+            }
+            let paired = group.get(1).and_then(|e| match e {
+                Entry::ToolResult {
+                    ok,
+                    result,
+                    details,
+                    duration_ms,
+                    ..
+                } => Some(ToolOutcome {
+                    text: result.as_str(),
+                    ok: *ok,
+                    details: details.as_ref(),
+                    duration_ms: *duration_ms,
+                }),
+                _ => None,
+            });
             let mut out = Vec::new();
             let mut deferred = Vec::new();
             // 模型在调工具前说的那半句：它作为**第一条调用**的一部分存档
@@ -256,20 +294,22 @@ pub(crate) fn single_node(
                     Vec::new(),
                 );
             }
+            let lone = ToolOutcome {
+                text: result.as_str(),
+                ok: *ok,
+                details: details.as_ref(),
+                duration_ms: *duration_ms,
+            };
+            // read / cd 的孤立结果（调用那一半不在手上）同样一行说完。
+            if name == "read" || name == "cd" {
+                let lines = match name.as_str() {
+                    "read" => super::tools::read_line("", Some(lone), cwd, t),
+                    _ => super::tools::cd_line("", Some(lone), cwd, t),
+                };
+                return (lines, Vec::new());
+            }
             (
-                tool_card(
-                    name,
-                    "",
-                    Some(ToolOutcome {
-                        text: result.as_str(),
-                        ok: *ok,
-                        details: details.as_ref(),
-                        duration_ms: *duration_ms,
-                    }),
-                    t,
-                    tools_expanded,
-                    width,
-                ),
+                tool_card(name, "", Some(lone), t, tools_expanded, width),
                 Vec::new(),
             )
         }
@@ -1203,9 +1243,9 @@ mod tests {
     }
 
     #[test]
-    fn read_shows_its_content_like_every_tool() {
-        // 有了 header 就不必再靠「不画结果」省那一行：路径进 header 的
-        // meta，正文就是读到的内容本身。read 和别的工具一种画法。
+    fn read_is_one_line_and_never_shows_its_body() {
+        // read 不画卡片、不画正文：一行说完"读了哪个文件的哪一段"。
+        // 用户的口径：「我不关心读取的具体内容，我只关心文件」。
         let p = HistoryTheme::resolve();
         let entries = vec![
             Entry::ToolRequest {
@@ -1227,14 +1267,94 @@ mod tests {
         ];
         let lines = render(&entries, &p, false, false);
         let all = text_of(&lines);
-        // 一张卡：顶边带 header、底边收尾（调用没有正文，所以不画接缝）。
-        let edges = lines
-            .iter()
-            .filter(|l| text_of(std::slice::from_ref(*l)).trim_end().starts_with("+-"))
-            .count();
-        assert_eq!(edges, 2, "调用 + 结果该是一张卡: {all:?}");
-        assert!(all.contains("fn main"), "读到的内容没画出来: {all}");
-        assert!(all.contains("main.rs"), "路径该在 header 的 meta 里: {all}");
+        assert_eq!(lines.len(), 1, "read 只该有一行：{all:?}");
+        assert!(!all.contains("+-"), "read 不该有卡片框：{all:?}");
+        assert!(all.contains("Read main.rs"), "形状应是 `Read <路径>`：{all}");
+        assert!(!all.contains("fn main"), "正文不该上屏：{all}");
+        assert!(!all.contains("读文件"), "intent 不该上屏：{all}");
+    }
+
+    #[test]
+    fn a_workspace_path_collapses_to_a_dot() {
+        // 工作区里的文件是这个项目的东西，卡上写全路径只是噪音。
+        let p = HistoryTheme::resolve();
+        let line = |args: &str, cwd: &str| {
+            text_of(&tools::read_line(
+                args,
+                Some(ToolOutcome::text("body", true)),
+                cwd,
+                &p,
+            ))
+        };
+        assert_eq!(
+            line(r#"{"path":"/w/src/a.rs"}"#, "/w"),
+            "[ok] Read ./src/a.rs"
+        );
+        // cwd 本身
+        assert_eq!(line(r#"{"path":"/w"}"#, "/w"), "[ok] Read .");
+        // 尾部斜杠的 cwd 也一样
+        assert_eq!(line(r#"{"path":"/w/a.rs"}"#, "/w/"), "[ok] Read ./a.rs");
+        // 相对路径原样：它本来就是相对当前目录说的。
+        assert_eq!(line(r#"{"path":"./a.rs"}"#, "/w"), "[ok] Read ./a.rs");
+    }
+
+    #[test]
+    fn tmp_and_outsiders_keep_their_absolute_path() {
+        // /tmp 不在工作区里，`/tmp/any` 已经是它最短的样子；工作区的**兄弟**
+        // 目录（`/work2` 之于 `/work`）不是工作区，绝不能被前缀吃掉。
+        let p = HistoryTheme::resolve();
+        let line = |path: &str, cwd: &str| {
+            text_of(&tools::read_line(
+                &format!(r#"{{"path":"{path}"}}"#),
+                Some(ToolOutcome::text("body", true)),
+                cwd,
+                &p,
+            ))
+        };
+        assert_eq!(line("/tmp/any", "/w"), "[ok] Read /tmp/any");
+        assert_eq!(line("/work2/a.rs", "/work"), "[ok] Read /work2/a.rs");
+        assert_eq!(line("/etc/passwd", "/w"), "[ok] Read /etc/passwd");
+    }
+
+    #[test]
+    fn a_read_range_rides_along_with_the_path() {
+        // 按行读的时候路径后面跟区间：一次说清读了哪一段。
+        let p = HistoryTheme::resolve();
+        let line = |args: &str| {
+            text_of(&tools::read_line(
+                args,
+                Some(ToolOutcome::text("body", true)),
+                "/w",
+                &p,
+            ))
+        };
+        assert_eq!(
+            line(r#"{"path":"/w/a.rs","offset":10,"limit":10}"#),
+            "[ok] Read ./a.rs:10-19"
+        );
+        // 只给 offset：起点之后到哪儿由文件说了算，不编一个终点。
+        assert_eq!(
+            line(r#"{"path":"/w/a.rs","offset":10}"#),
+            "[ok] Read ./a.rs:10"
+        );
+        // 都不给：没有区间。
+        assert_eq!(line(r#"{"path":"/w/a.rs"}"#), "[ok] Read ./a.rs");
+    }
+
+    #[test]
+    fn a_failed_read_says_why() {
+        // 一行化的 read 不能把失败也吞掉：错了必须看得见。
+        let p = HistoryTheme::resolve();
+        let e = Entry::ToolResult {
+            call_id: "c1".into(),
+            name: "read".into(),
+            ok: false,
+            result: "工作区外：/etc/passwd".into(),
+            details: None,
+            duration_ms: 0,
+        };
+        let all = text_of(&render(&[e], &p, false, false));
+        assert!(all.contains("工作区外"), "失败理由该上屏：{all}");
     }
 
     #[test]
@@ -1306,7 +1426,7 @@ mod tests {
             })),
             duration_ms: 3,
         };
-        let (lines, _) = single_node(&[call, result], &p, false, false, 40, false);
+        let (lines, _) = single_node(&[call, result], &p, false, false, 40, false, "");
         let text = text_of(&lines);
         // 恰好一行：间隔行由渲染层统一给，这里加一条就会变成双倍空行。
         assert_eq!(lines.len(), 1, "只该有标记行，不该自己加间隔：{text:?}");
@@ -1330,7 +1450,7 @@ mod tests {
             details: None,
             duration_ms: 1,
         };
-        let (card, _) = single_node(&[other], &p, false, false, 40, false);
+        let (card, _) = single_node(&[other], &p, false, false, 40, false, "");
         assert!(text_of(&card).contains("+-"), "其他工具的卡必须还在");
     }
 
@@ -1357,7 +1477,7 @@ mod tests {
             details: None,
             duration_ms: 2,
         };
-        let (lines, _) = single_node(&[call, result], &p, false, false, 40, false);
+        let (lines, _) = single_node(&[call, result], &p, false, false, 40, false, "");
         let text = text_of(&lines);
         assert!(text.contains("[!!] Todo"), "失败要换字形：{text:?}");
         assert!(text.contains("找不到这条任务"), "失败要说理由：{text:?}");

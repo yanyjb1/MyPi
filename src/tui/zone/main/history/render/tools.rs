@@ -13,7 +13,7 @@
 //! 分层，但只取画法：异步、spinner、图片、记忆化都还没接。
 
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 
 use super::glyphs as g;
 use super::highlight;
@@ -593,6 +593,151 @@ const WRITE_PREVIEW_LINES: usize = 8;
 /// `  1│` 的宽度，缩进不随内容长度跳。
 const WRITE_GUTTER_MIN_WIDTH: usize = 3;
 
+/// 工作区相对化：`/w/src/a.rs`（base `/w`）→ `./src/a.rs`。
+///
+/// 工作区里的文件是**这个项目的东西**，卡上写全路径只是噪音。`/tmp` 下的
+/// 路径原样保留——它不在工作区里，`/tmp/any` 已经是它最短的样子。不做任何
+/// 文件系统访问：只比字符串前缀，渲染层不该去 stat 什么东西。
+///
+/// **往下给 `./x`，上一级给 `..`，其余一切给绝对路径。**
+///
+/// 上一级只认直接父目录（`cd ..` 就这一种）——再往上是绝对路径。兄弟目录、
+/// 隔了好几层的祖先、完全无关的两棵树同理：`../other` 读起来像"就在隔壁"，
+/// 实际可能跨了好几个项目；`../../../../` 更是没人想数。绝对路径反而最清楚。
+pub(crate) fn relativize(base: &str, path: &str) -> String {
+    let base = base.trim_end_matches('/');
+    // 相对路径原样：模型写 `./x` / `x` 时，它本来就是相对当前目录说的。
+    if !path.starts_with('/') || base.is_empty() {
+        return path.to_string();
+    }
+    // 必须是**整段**前缀：`/work2/a` 不该被 `/work` 吃掉。
+    if let Some(rest) = path.strip_prefix(base) {
+        if rest.is_empty() {
+            return ".".to_string();
+        }
+        if let Some(rest) = rest.strip_prefix('/') {
+            return format!("./{rest}");
+        }
+    }
+    // 向上：**只认直接父目录**，也就是 `cd ..` 这一种。
+    //
+    // 不数楼层。`../../../../..` 这种东西人手打不出来，替人数出来的楼层数错了
+    // 没人看得出来、数对了也没人愿意读——`cd /home` 从深目录出发就会长成
+    // 那样。超过一层就写绝对路径：`/home` 一眼就懂，`../../../../` 一眼就晕。
+    let parent = base.rsplit_once('/').map(|(p, _)| if p.is_empty() { "/" } else { p });
+    if parent == Some(path) {
+        return "..".to_string();
+    }
+    path.to_string()
+}
+
+/// 这次读的是哪一段：`offset`/`limit` 任一出现就给 `:start-end`（omp 的
+/// `renderCall` 同样从**参数**算：结果还没回来时也要能显示区间）。
+fn read_range(args: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(args).ok()?;
+    let offset = v.get("offset").and_then(|o| o.as_u64());
+    let limit = v.get("limit").and_then(|l| l.as_u64());
+    if offset.is_none() && limit.is_none() {
+        return None;
+    }
+    let start = offset.unwrap_or(1);
+    Some(match limit {
+        Some(n) => format!(":{}-{}", start, start + n.saturating_sub(1)),
+        None => format!(":{start}"),
+    })
+}
+
+/// `read` 的**单行**形态：`[x] Read ./src/a.rs:10-20`。
+///
+/// read 不画卡片、不画正文——用户要的是"读了哪个文件的哪一段"，不是内容
+/// （原话：「我不关心读取的具体内容，我只关心文件」）。形状照 omp 的
+/// `renderStatusLine`：字形 + 加粗标题 + accent 路径，没有冒号，不摆 intent。
+///
+/// 失败时补上理由：错了必须看得见，那是给人看的，别只发给模型。
+pub(super) fn read_line(
+    args: &str,
+    result: Option<ToolOutcome<'_>>,
+    cwd: &str,
+    t: &HistoryTheme,
+) -> Vec<Line<'static>> {
+    let state = match result {
+        None => State::Pending,
+        Some(o) if o.ok => State::Ok,
+        Some(_) => State::Err,
+    };
+    let mut spans = vec![
+        t.fg(state.glyph(), state.glyph_token()),
+        t.fg_mod(" Read", Token::ToolTitle, Modifier::BOLD),
+    ];
+    let path = arg_str(args, "path").unwrap_or_default();
+    if !path.trim().is_empty() {
+        let mut target = relativize(cwd, &path);
+        if let Some(span) = read_range(args) {
+            target.push_str(&span);
+        }
+        spans.push(t.fg(format!(" {target}"), Token::ToolPath));
+    }
+    let mut out = vec![Line::from(spans)];
+    if let Some(o) = result.filter(|o| !o.ok) {
+        for part in o.text.lines().filter(|s| !s.trim().is_empty()) {
+            out.push(Line::from(t.fg(format!("  {part}"), Token::Err)));
+        }
+    }
+    out
+}
+
+/// `cd` 的**单行**形态：`[ok] Cd ./scratch`。
+///
+/// 和 `read` 同样不走卡片：这件事的唯一事实是"落到哪了"，一行的信息量已经
+/// 饱和，卡片只是给它套了个框。能相对就相对（落到 cwd 底下时写 `./…`），
+/// 不能就照原样给绝对路径。
+///
+/// 越界被拒时路径换成**错误色**，而且**不铺理由**：哪个目录、犯的是哪条
+/// 规则——那些是给模型看的，人只需要知道"没成"和"想去哪"。模型那边照旧
+/// 收到完整的那句话。
+pub(super) fn cd_line(
+    args: &str,
+    result: Option<ToolOutcome<'_>>,
+    cwd: &str,
+    t: &HistoryTheme,
+) -> Vec<Line<'static>> {
+    let state = match result {
+        None => State::Pending,
+        Some(o) if o.ok => State::Ok,
+        Some(_) => State::Err,
+    };
+    // 成功时用**落地**的目录（`details.path`，已 canonicalize），还没跑完
+    // 或失败时用模型写的那个（失败没有 details：工具直接 Err 了）。
+    let landed = result
+        .and_then(|o| o.details)
+        .filter(|d| d.get("kind").and_then(|k| k.as_str()) == Some("cwd"))
+        .and_then(|d| d.get("path").and_then(|p| p.as_str()).map(String::from));
+    let want = landed.or_else(|| arg_str(args, "path"));
+    // 相对化的基准是**切换之前**的目录（工具在 `details.from` 里给了）。
+    // 拿切换之后的当基准，`cd ..` 会被画成 `.` —— 那不是"我从哪儿来"，
+    // 只是"我现在在哪"，而这一行说的正是"我动了"。
+    //
+    // 失败时没有 `details`（`tool_cd` 直接 Err），此时 cwd 没变过，用当下的
+    // 就等价于用基准。
+    let base = result
+        .and_then(|o| o.details)
+        .and_then(|d| d.get("from").and_then(|p| p.as_str()).map(String::from))
+        .unwrap_or_else(|| cwd.to_string());
+    let mut spans = vec![
+        t.fg(state.glyph(), state.glyph_token()),
+        t.fg_mod(" Cd", Token::ToolTitle, Modifier::BOLD),
+    ];
+    if let Some(p) = want.filter(|p| !p.trim().is_empty()) {
+        let tok = if matches!(state, State::Ok) {
+            Token::ToolPath
+        } else {
+            Token::Err
+        };
+        spans.push(t.fg(format!(" {}", relativize(&base, &p)), tok));
+    }
+    vec![Line::from(spans)]
+}
+
 /// read 的结果：把正文里 `   12<TAB>内容` 的行号前缀重画成行号栏 `12│内容`。
 ///
 /// 给**模型**的文本保持原样（行号 + 制表符，那是它对不齐时的依据）；这一层
@@ -812,12 +957,20 @@ fn edit_call(b: &ToolBlock<'_>, t: &HistoryTheme) -> Vec<Line<'static>> {
     }
     let path = arg_str(b.args, "path").unwrap_or_default();
     let lang = highlight::language_for_path(&path);
+    // 只在**单行换单行**时标出改动的字：多行对多行没有一一对应关系，硬配会把
+    // 两段无关的代码比成一整块（omp 的 `renderIntraLineDiff` 同样只在 1:1 时做）。
+    let old_text = arg_str(b.args, "old");
+    let new_text = arg_str(b.args, "new");
+    let changed = match (old_text.as_deref(), new_text.as_deref()) {
+        (Some(o), Some(n)) if o.lines().count() == 1 && n.lines().count() == 1 => changed_spans(o, n),
+        _ => None,
+    };
     let mut out = Vec::new();
-    if let Some(old) = arg_str(b.args, "old") {
-        push_diff(&mut out, '-', &old, lang, t);
+    if let Some(old) = old_text {
+        push_diff(&mut out, '-', &old, changed.as_ref().map(|(r, _)| r.clone()), lang, t);
     }
-    if let Some(new) = arg_str(b.args, "new") {
-        push_diff(&mut out, '+', &new, lang, t);
+    if let Some(new) = new_text {
+        push_diff(&mut out, '+', &new, changed.map(|(_, r)| r), lang, t);
     }
     // mass_edit 说的是行号而不是原文：逐行点名要换掉哪几行。
     if out.is_empty()
@@ -831,16 +984,84 @@ fn edit_call(b: &ToolBlock<'_>, t: &HistoryTheme) -> Vec<Line<'static>> {
             let body = e.get("text").and_then(|l| l.as_str()).unwrap_or("");
             text.push_str(&format!("{line}: {body}\n"));
         }
-        push_diff(&mut out, '+', text.trim_end(), lang, t);
+        push_diff(&mut out, '+', text.trim_end(), None, lang, t);
     }
     out
 }
 
+/// 两行之间**真正改动的那一段**：掐掉公共前缀与公共后缀，中间剩下什么就是
+/// 什么（按字符比，切点永远落在字符边界上）。
+///
+/// 返回 `old` 与 `new` 各自的字节区间。两行相同 = `None`（没有"变化"可言）。
+///
+/// 只做前后缀而不是通用词级 diff：`修改前22222` → `修改后22222` 这类
+/// 「一句话里改了几个字」是绝大多数情况，前后缀正好剩下那两个字。真要做多段
+/// 对齐得引一个 diff 库，为这点高亮不值得。
+fn changed_spans(old: &str, new: &str) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+    if old == new {
+        return None;
+    }
+    let oc: Vec<char> = old.chars().collect();
+    let nc: Vec<char> = new.chars().collect();
+    let mut pre = 0;
+    while pre < oc.len() && pre < nc.len() && oc[pre] == nc[pre] {
+        pre += 1;
+    }
+    let mut suf = 0;
+    while suf < oc.len() - pre && suf < nc.len() - pre && oc[oc.len() - 1 - suf] == nc[nc.len() - 1 - suf]
+    {
+        suf += 1;
+    }
+    let at = |s: &str, ci: usize| s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b);
+    Some((
+        at(old, pre)..at(old, oc.len() - suf),
+        at(new, pre)..at(new, nc.len() - suf),
+    ))
+}
+
+/// 一行的 spans 按**字节区间** `[lo, hi)` 切成三段：前 / 中 / 后。
+///
+/// 切点必须落在字符边界（`changed_spans` 给的区间满足）。语法高亮把一行切成
+/// 若干带色的 span，直接对字符串切就丢了配色，所以要在 span 层面切。
+fn split_at_bytes(
+    spans: Vec<Span<'static>>,
+    lo: usize,
+    hi: usize,
+) -> (Vec<Span<'static>>, Vec<Span<'static>>, Vec<Span<'static>>) {
+    let mut before = Vec::new();
+    let mut mid = Vec::new();
+    let mut after = Vec::new();
+    let mut at = 0usize;
+    for sp in spans {
+        let (start, end) = (at, at + sp.content.len());
+        at = end;
+        for (lo, hi, bucket) in [
+            (0, lo, &mut before),
+            (lo, hi, &mut mid),
+            (hi, usize::MAX, &mut after),
+        ] {
+            let (s, e) = (start.max(lo), end.min(hi));
+            if s < e {
+                bucket.push(Span::styled(
+                    sp.content[(s - start)..(e - start)].to_string(),
+                    sp.style,
+                ));
+            }
+        }
+    }
+    (before, mid, after)
+}
+
 /// 一行 diff：`<符号> <内容>`，符号与内容同色，内容照旧走语法高亮。
+///
+/// `changed` 是这一行里**真正变了的那几个字**的字节区间：那一段反显。整行的
+/// 浅红/浅绿只说"这一行动了"，反显才说"动的是这几个字"（omp 的
+/// `renderIntraLineDiff` 用的是同一招）。
 fn push_diff(
     out: &mut Vec<Line<'static>>,
     sign: char,
     text: &str,
+    changed: Option<std::ops::Range<usize>>,
     lang: Option<&str>,
     t: &HistoryTheme,
 ) {
@@ -849,10 +1070,28 @@ fn push_diff(
     } else {
         Token::DiffAdded
     };
-    for l in text.lines() {
+    for (i, l) in text.lines().enumerate() {
         let mut spans = vec![t.fg(format!("{sign} "), tok)];
-        for hl in highlight::highlight(l, lang, t) {
-            spans.extend(hl.spans);
+        let hl = highlight::highlight(l, lang, t)
+            .into_iter()
+            .next()
+            .filter(|ln| !ln.spans.is_empty());
+        // 区间只对第一行有意义（调用方只在整段是单行时才给）。
+        let r = if i == 0 { changed.clone() } else { None };
+        match (hl, r) {
+            (Some(ln), Some(r)) => {
+                let (pre, mid, post) = split_at_bytes(ln.spans, r.start, r.end);
+                spans.extend(pre);
+                for sp in mid {
+                    spans.push(Span::styled(
+                        sp.content,
+                        sp.style.add_modifier(Modifier::REVERSED),
+                    ));
+                }
+                spans.extend(post);
+            }
+            (Some(ln), None) => spans.extend(ln.spans),
+            (None, _) => spans.push(t.plain(l)),
         }
         out.push(Line::from(spans));
     }
@@ -896,21 +1135,33 @@ fn edit_result(o: ToolOutcome<'_>, expanded: bool, t: &HistoryTheme) -> Vec<Line
             // 单行替换 `-12` / `+12` 与「插入 + 紧邻上下文」）。
             // 用"相同才留空"而不是"两边等长就全留空"——2:2 的替换里
             // `+98` 的前一行是 `-99`，本来就该印出来。
+            // 单行换单行：把**真正改动的字**反显出来。整行的浅红/浅绿只说
+            // "这一行动了"，反显才说"动的是这几个字"（omp 的 `renderIntraLineDiff`）。
+            let changed = (deletions.len() == 1 && insertions.len() == 1)
+                .then(|| changed_spans(&deletions[0], &insertions[0]))
+                .flatten();
             let mut last_shown: Option<usize> = None;
-            let mut emit = |sign: char, idx: usize, text: &str, tok: Token| {
+            let mut emit = |sign: char, idx: usize, text: &str, tok: Token, r: Option<std::ops::Range<usize>>| {
                 let n = at_line.map(|at| at + idx);
                 let blank = matches!((n, last_shown), (Some(a), Some(b)) if a == b);
                 last_shown = n;
-                out.push(Line::styled(
-                    format!("{}{text}", gutter(sign, idx, blank)),
-                    Style::new().fg(fg).bg(dim_bg(t.get(tok), card)),
-                ));
+                let style = Style::new().fg(fg).bg(dim_bg(t.get(tok), card));
+                let lead = gutter(sign, idx, blank);
+                match r {
+                    // 前三段：变之前 / 变的那几个字（反显）/ 变之后。
+                    Some(r) => out.push(Line::from(vec![
+                        Span::styled(format!("{lead}{}", &text[..r.start]), style),
+                        Span::styled(text[r.start..r.end].to_string(), style.add_modifier(Modifier::REVERSED)),
+                        Span::styled(text[r.end..].to_string(), style),
+                    ])),
+                    None => out.push(Line::styled(format!("{lead}{text}"), style)),
+                }
             };
             for (i, d) in deletions.iter().enumerate() {
-                emit('-', i, d, Token::DiffRemoved);
+                emit('-', i, d, Token::DiffRemoved, changed.as_ref().map(|(r, _)| r.clone()));
             }
             for (i, ins) in insertions.iter().enumerate() {
-                emit('+', i, ins, Token::DiffAdded);
+                emit('+', i, ins, Token::DiffAdded, changed.as_ref().map(|(_, r)| r.clone()));
             }
             out
         }
@@ -1276,6 +1527,166 @@ mod tests {
         let full = text_of(&sections_text(&open, &t));
         assert!(full.contains("line 1"), "展开后没给全文：{full}");
         assert!(!full.contains(g::EXPAND_HINT), "展开了还提示展开：{full}");
+    }
+
+    /// `cd` 单行：成功写落地目录（能相对就相对），失败写想去的地方 + 错误色。
+    #[test]
+    fn cd_is_one_line_and_marks_a_denial_in_red() {
+        let t = t();
+        let d = serde_json::json!({"kind": "cwd", "path": "/w/scratch"});
+        let ok = ToolOutcome {
+            text: "working directory changed to /w/scratch".into(),
+            ok: true,
+            details: Some(&d),
+            duration_ms: 0,
+        };
+        let good = cd_line(r#"{"path":"/w/scratch"}"#, Some(ok), "/w", &t);
+        assert_eq!(text_of(&good), "[ok] Cd ./scratch", "落在 cwd 底下就写相对");
+
+        // 越界被拒：路径错误色，**一行**，理由不上屏（那是给模型的）。
+        let bad = cd_line(
+            r#"{"path":"/home"}"#,
+            Some(ToolOutcome::text(
+                "tool execution failed: denied: /home 不在工作区、$HOME 或 /tmp 之内",
+                false,
+            )),
+            "/w",
+            &t,
+        );
+        assert_eq!(bad.len(), 1, "只该有一行：{}", text_of(&bad));
+        assert_eq!(text_of(&bad), "[!!] Cd /home");
+        let path_span = &bad[0].spans[2];
+        assert_eq!(
+            path_span.style.fg,
+            Some(t.get(Token::Err)),
+            "被拒的路径该用错误色"
+        );
+        // 还没跑完：模型写的那个（还没有 details）
+        assert_eq!(
+            text_of(&cd_line(r#"{"path":"/w/a"}"#, None, "/w", &t)),
+            "[*] Cd ./a"
+        );
+
+        // `cd ..`：基准是**切换前**的目录。真机上这里出过错——拿切换后的
+        // 当基准，`..` 被画成 `.`，看着像原地没动。
+        let up_d = serde_json::json!({"kind": "cwd", "path": "/w", "from": "/w/MyPi"});
+        let up = ToolOutcome {
+            text: "working directory changed to /w".into(),
+            ok: true,
+            details: Some(&up_d),
+            duration_ms: 0,
+        };
+        assert_eq!(
+            text_of(&cd_line(r#"{"path":".."}"#, Some(up), "/w", &t)),
+            "[ok] Cd ..",
+            "切换后的 cwd 传进来也不该拿它当基准"
+        );
+        // 往上**只认一层**：`cd /home` 从深目录出发不该长成 `../../../../..`。
+        let d3 = serde_json::json!({"kind": "cwd", "path": "/home", "from": "/w/a/b"});
+        let far = ToolOutcome {
+            text: "",
+            ok: true,
+            details: Some(&d3),
+            duration_ms: 0,
+        };
+        assert_eq!(
+            text_of(&cd_line(r#"{"path":"/home"}"#, Some(far), "/home", &t)),
+            "[ok] Cd /home",
+            "隔了好几层就写绝对路径，不数楼层"
+        );
+        // 直接父目录仍然给 `..`
+        let d4 = serde_json::json!({"kind": "cwd", "path": "/w/a", "from": "/w/a/b"});
+        let one = ToolOutcome {
+            text: "",
+            ok: true,
+            details: Some(&d4),
+            duration_ms: 0,
+        };
+        assert_eq!(
+            text_of(&cd_line(r#"{"path":".."}"#, Some(one), "/w/a", &t)),
+            "[ok] Cd .."
+        );
+    }
+
+    /// 行内变化就是**公共前后缀之外**那一段，按字符切（中文不能切坏）。
+    #[test]
+    fn the_change_is_the_middle_between_common_ends() {
+        let (o, n) = changed_spans("111111111修改前22222", "111111111修改后22222").unwrap();
+        assert_eq!(&"111111111修改前22222"[o], "前");
+        assert_eq!(&"111111111修改后22222"[n], "后");
+        // 纯插入：旧的一侧是空区间，不是"整行都变了"。
+        let (o, n) = changed_spans("ab", "aXb").unwrap();
+        assert!(o.is_empty());
+        assert_eq!(&"aXb"[n], "X");
+        // 相同的两行没有"变化"可言。
+        assert!(changed_spans("same", "same").is_none());
+    }
+
+    /// 改动的字**反显**（前景背景互换 = 深色底），整行仍是浅红/浅绿。
+    /// 只有 1:1 才标：多行之间没有对应关系。
+    #[test]
+    fn only_a_single_line_pair_marks_its_changed_run() {
+        let t = t();
+        let reversed = |b: &ToolBlock<'_>| -> Vec<String> {
+            b.call_body(&t)
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+                .map(|s| s.content.to_string())
+                .collect()
+        };
+        let one = ToolBlock {
+            name: "edit",
+            args: r#"{"intent":"改","path":"main.rs","old":"111111111修改前22222","new":"111111111修改后22222"}"#,
+            result: None,
+            expanded: false,
+        };
+        assert_eq!(reversed(&one), vec!["前".to_string(), "后".to_string()]);
+
+        let many = ToolBlock {
+            args: r#"{"intent":"改","path":"main.rs","old":"aa\nbb","new":"cc\ndd"}"#,
+            ..one
+        };
+        assert!(
+            reversed(&many).is_empty(),
+            "多行换多行不该猜对应关系：{:?}",
+            reversed(&many)
+        );
+    }
+
+    /// 结果那一半（`details` 里的 diff）走同一条规则：1:1 标出改动的字。
+    #[test]
+    fn the_result_diff_marks_its_changed_run_too() {
+        let t = t();
+        let details = serde_json::json!({
+            "kind": "diff",
+            "deletions": ["111111111修改前22222"],
+            "insertions": ["111111111修改后22222"],
+            "atLine": 12
+        });
+        let o = ToolOutcome {
+            text: "",
+            ok: true,
+            details: Some(&details),
+            duration_ms: 0,
+        };
+        let b = ToolBlock {
+            name: "edit",
+            args: "{}",
+            result: Some(o),
+            expanded: false,
+        };
+        let lines: Vec<_> = b.sections(&t).into_iter().flat_map(|s| s.lines).collect();
+        let reversed: Vec<String> = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(reversed, vec!["前".to_string(), "后".to_string()]);
+        // 行号栏与内容照旧，反显只加在那两个字上。
+        let head = text_of(&lines);
+        assert!(head.contains("-12│"), "行号栏没画：{head}");
     }
 
     #[test]

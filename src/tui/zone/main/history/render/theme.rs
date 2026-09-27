@@ -61,6 +61,9 @@ tokens! {
     // ---- 工具卡 ----
     // 工具标题（header 里的 title）。
     ToolTitle,
+    // header 里的**操作对象**（文件路径）。与标题分开取色：omp 的
+    // `renderStatusLine` 里 title 与 description 是两档。
+    ToolPath,
     // 工具输出正文。
     ToolOutput,
     // 待执行 / 流式中：底色。
@@ -163,6 +166,7 @@ impl HistoryTheme {
         put(Token::AssistantText, t.color(ColorToken::Text));
         put(Token::ReasoningText, t.color(ColorToken::ThinkingText));
         put(Token::ToolTitle, t.color(ColorToken::ToolTitle));
+        put(Token::ToolPath, t.color(ColorToken::Accent));
         put(Token::ToolOutput, t.color(ColorToken::ToolOutput));
         put(Token::ToolBgPending, t.color(ColorToken::ToolPendingBg));
         put(Token::ToolBgSuccess, t.color(ColorToken::ToolSuccessBg));

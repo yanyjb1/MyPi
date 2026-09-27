@@ -200,10 +200,11 @@ pub(crate) fn render_group(
     tools_expanded: bool,
     width: usize,
     defer: bool,
+    cwd: &str,
 ) -> Block {
     let group = &entries[r.start..r.end];
     let (mut lines, deferred) =
-        chat::single_node(group, t, show_reasoning, tools_expanded, width, defer);
+        chat::single_node(group, t, show_reasoning, tools_expanded, width, defer, cwd);
     // Wrap now, once per cache fill — not once per frame.
     //
     // 折行是**逐行独立**的（`wrap_rows` 每行各自切），所以"按段分开折行"与
@@ -390,8 +391,8 @@ mod tests {
             usage: None,
         }];
         let t = t();
-        let eager = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, false);
-        let mut late = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true);
+        let eager = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, false, "");
+        let mut late = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true, "");
 
         assert_eq!(late.height, eager.height, "推迟上色不许改高度");
         assert_eq!(rows_text(&late), rows_text(&eager), "推迟上色不许改文本");
@@ -442,9 +443,9 @@ mod tests {
             usage: None,
         }];
         let t = t();
-        let eager = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, false);
+        let eager = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, false, "");
 
-        let mut late = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true);
+        let mut late = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true, "");
         assert_eq!(late.pending_len(), 1);
 
         // 每次只给一行预算，强制分很多帧。
@@ -471,7 +472,7 @@ mod tests {
             usage: None,
         }];
         let t = t();
-        let mut b = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true);
+        let mut b = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true, "");
         // 只补围栏**最后**那一行的区间；宽行在它前面且大于阈值。
         let n = b.height;
         b.color_rows(n.saturating_sub(1), n, &t);
@@ -487,7 +488,7 @@ mod tests {
             usage: None,
         }];
         let t = t();
-        let mut b = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true);
+        let mut b = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true, "");
         assert_eq!(b.pending_len(), 2, "两个围栏 = 两段");
         // 只给头 3 行（第一个围栏所在）补色。
         assert_eq!(b.color_rows(0, 3, &t), 1);
@@ -499,7 +500,7 @@ mod tests {
         let es = vec![user(
             "一段很长很长的中文消息用来测试折行 behaviour with mixed 文本 abcdefgh",
         )];
-        let b = render_group(&es, Range { start: 0, end: 1 }, &t(), true, false, 20, false);
+        let b = render_group(&es, Range { start: 0, end: 1 }, &t(), true, false, 20, false, "");
         assert!(b.height >= 3, "用户卡至少三行: {}", b.height);
         for l in &b.rows {
             let w: usize = l
@@ -515,7 +516,7 @@ mod tests {
     fn long_user_text_wraps_and_keeps_every_char() {
         let text = "一二三四五六七八九十".repeat(5);
         let es = vec![user(&text)];
-        let b = render_group(&es, Range { start: 0, end: 1 }, &t(), true, false, 10, false);
+        let b = render_group(&es, Range { start: 0, end: 1 }, &t(), true, false, 10, false, "");
         let joined: String = b
             .rows
             .iter()

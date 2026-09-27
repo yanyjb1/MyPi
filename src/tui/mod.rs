@@ -77,7 +77,7 @@ pub mod bench {
         let p = crate::tui::zone::main::history::render::theme::HistoryTheme::resolve();
         let ranges = blocks(entries);
         let items = items_of(entries, &ranges);
-        cache.sync(&items, 0, width);
+        cache.sync(&items, 0, width, "");
         // 从末尾往回攒 `offset + viewport` 行，再往下丢掉 `offset` 行。
         let need = offset_rows.saturating_add(viewport_rows);
         let mut below = 0usize;
@@ -112,7 +112,7 @@ pub mod bench {
         let p = crate::tui::zone::main::history::render::theme::HistoryTheme::resolve();
         let ranges = blocks(entries);
         let items = items_of(entries, &ranges);
-        cache.sync(&items, 0, width);
+        cache.sync(&items, 0, width, "");
         let picked: Vec<usize> = (b0..b1.min(items.len())).collect();
         let rows = cache.rows_for(&items, &picked, &p, true, true);
         (rows, cache.cached_rows(), cache.cached_blocks())
@@ -151,7 +151,7 @@ pub mod bench {
         let p = crate::tui::zone::main::history::render::theme::HistoryTheme::resolve();
         let ranges = blocks(entries);
         let items = items_of(entries, &ranges);
-        cache.sync(&items, 0, width);
+        cache.sync(&items, 0, width, "");
         let need = offset_rows.saturating_add(viewport_rows);
         let mut below = 0usize;
         let mut top: Option<usize> = None;
