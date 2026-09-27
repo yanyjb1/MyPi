@@ -167,37 +167,56 @@ fn markdown(r: &mut Rng, i: usize) -> String {
 /// "很脏很脏"的内容：折行、宽度计算、高亮的最坏情况。真实转录里这些都会出现
 /// （贴进来的 base64、没空格的 CJK、带 ANSI 的命令输出、emoji、超长单行），
 /// 只是不会全挤在一起——冷启动第一帧要量的就是这种最坏情况。
+/// 一行的硬上限（**字符**，按 UTF-8 字节数近似）。
+///
+/// 现代模型一次性输出的东西不会吐出超长单行：真正的长输出是多行、每行几十
+/// 到几百字符。所以这里给每行封顶 500 字节——够宽，能压到折行与宽度计算的
+/// 边界；但不再造 10k 单行那种产物。syntect 的单行成本随长度陡增（实测 10k
+/// 字符一行 ≈100ms），把它留在基准里只会测一个现实中不存在的形态。
+const MAX_LINE_BYTES: usize = 500;
+
 fn dirty_text(r: &mut Rng, lines: usize) -> String {
     let mut out = String::new();
     // 每一块都有：不可断 token、制表符、ANSI、emoji、组合符、零宽字符。
+    // 这些都是真实的窄行，保留——它们考的是折行与宽度计算，不是单行长度。
     out.push_str("不可断 token：");
-    out.push_str(&"QWxhZGRpbjpvcGVuIHNlc2FtZQ".repeat(20)); // ~520 字符无空格
+    out.push_str(&"QWxhZGRpbjpvcGVuIHNlc2FtZQ".repeat(6)); // ~156 字符无空格
     out.push_str("\n制表与 ANSI：\t列一\t列二\x1b[31m红\x1b[0m\x1b[1;33m黄\x1b[0m\n");
     out.push_str("emoji 与组合符：👨‍👩‍👧‍👦 🏳️‍🌈 éé́ ‍ 零宽\u{200b}空格\n");
-    out.push_str("```rust\nfn 未闭合围栏() {\n");
-    // 每 16 块来一次真正的极端：无空格 CJK 长段 + 10k 单行（贴日志/贴 base64）。
-    if r.below(16) == 0 {
-        out.push_str("无空格 CJK：");
-        for _ in 0..200 {
-            out.push_str("汉字连绵不绝");
-        }
-        out.push_str("\n超长单行（10k）：");
-        while out.len() < 10240 {
-            out.push('x');
-        }
-        out.push('\n');
+    // 无空格 CJK：真实存在（中文不分词），但封顶在 MAX_LINE_BYTES。
+    let mut cjk = String::from("无空格 CJK：");
+    while cjk.len() + "汉字连绵不绝".len() <= MAX_LINE_BYTES {
+        cjk.push_str("汉字连绵不绝");
     }
+    out.push_str(&cjk);
+    out.push('\n');
+    out.push_str("```rust\nfn 未闭合围栏() {\n");
     for _ in 0..lines {
-        out.push_str(&format!(
-            "{}\t{}\t{}\n",
-            lorem(r, 2),
-            "字".repeat(r.range(1, 30)),
-            "z".repeat(r.range(1, 90))
-        ));
+        // 每行封顶：普通内容 + 一段可长可短的 CJK + 一段 ASCII 尾巴。
+        let mut line = format!("{}\t", lorem(r, 2));
+        for _ in 0..r.range(1, 4) {
+            line.push_str(&"字".repeat(r.range(1, 30)));
+        }
+        line.push('\t');
+        line.push_str(&"z".repeat(r.range(1, 90)));
+        if line.len() > MAX_LINE_BYTES {
+            line.truncate(MAX_LINE_BYTES);
+        }
+        out.push_str(&line);
+        out.push('\n');
     }
     out.push_str("> 引用里再来一段 ");
     out.push_str(&lorem(r, 20));
     out
+}
+
+/// 脏内容的行数：真正用上 `lines`，但夹到一个上界。
+///
+/// 规格关心的是「一屏块 ≤500 行」——超过 500 行的东西会被巨物机制兜底，
+/// 不在关心范围。所以这里封在 500，既不丢 `r.range(600, 3000)` 的意图
+/// （"这是个溢出级的输出"），也不越过规格划的那条线。
+fn dirty_lines(lines: usize) -> usize {
+    lines.clamp(10, 500)
 }
 
 fn tool_output(r: &mut Rng, lines: usize) -> String {
@@ -318,7 +337,11 @@ fn gen_entries(scale: usize, seed: u64, dirty: bool) -> Vec<Entry> {
                     r.range(10, 200)
                 };
                 let result = if dirty {
-                    dirty_text(&mut r, lines.min(40))
+                    // 走脏内容这条路时 `lines` 就是真行数：以前这里是
+                    // `lines.min(40)`，把上面 `r.range(600, 3000)` 整段丢弃，
+                    // 于是那个区间成了死参数、脏块永远 ≤150 行——测不到规格
+                    // 写的「500 行以内」。现在按真行数生成。
+                    dirty_text(&mut r, dirty_lines(lines))
                 } else if spill {
                     aid += 1;
                     artifact_placeholder(&mut r, aid, name, lines)

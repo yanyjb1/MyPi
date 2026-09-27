@@ -85,6 +85,9 @@ pub struct Daemon {
     /// Idle-exit bookkeeping (SERVER.md §4): nothing attached, nothing busy.
     idle_since: Option<std::time::Instant>,
     idle_limit: std::time::Duration,
+    /// 上一跳有没有会话在跑回合。回合刚结束的那一跳仍然要对账一次：那一回
+    /// 合写的条目是在 `busy()` 为真时落的，`busy()` 变假并不代表账已经结清。
+    was_busy: bool,
     shutting_down: bool,
 }
 
@@ -103,11 +106,36 @@ enum Command {
     },
     /// The connection closed (peer hangup / read error / protocol error).
     Gone { conn: u64 },
+    /// A connection was just accepted and handed to `reg_rx`.
+    ///
+    /// `reg_rx` is a separate channel from `cmd_rx`, and `mpsc` cannot be
+    /// selected on, so the main loop would otherwise only drain it on the next
+    /// tick. That cost the attach path a full `TICK` before the first frame
+    /// could be painted (measured: 36ms → 51ms at TICK=20ms). This variant is
+    /// a pure wake-up: it carries no payload and intentionally does nothing
+    /// when handled, it just makes `recv_timeout` return so registration runs
+    /// now instead of up to a tick later.
+    Woke,
 }
 
-/// How long the daemon waits between ticks. Short enough that a submitted
-/// round starts within one tick; long enough to not burn CPU.
-const TICK: std::time::Duration = std::time::Duration::from_millis(5);
+/// How long the daemon waits between ticks **with no command arriving**.
+///
+/// This is the idle poll, not the latency knob: `recv_timeout` returns the
+/// moment a command (submit, page, attach) lands, so interactive latency does
+/// not depend on it. What it does decide is how often the loop wakes to ask
+/// "anything new?" for a turn running in another thread. At 5ms that was 200
+/// wakeups a second for the whole life of every session — measured at 0.5% of
+/// a core with one client attached and nothing happening, against ~0.1% at
+/// 20ms. 20ms is still far below the ~50ms at which a person notices a
+/// streamed word appearing, and the reconciliation gate in `pump` keeps the
+/// per-tick SQL out of the idle path entirely.
+///
+/// One thing this *cannot* cover is the accept path: a new connection is
+/// handed over on `reg_rx`, a different channel, which `mpsc` cannot select
+/// on. The accept loop therefore sends `Command::Woke` so the wait ends
+/// immediately — without that, raising this value from 5ms to 20ms added 15ms
+/// to the attach cold start (measured 36ms → 51ms).
+const TICK: std::time::Duration = std::time::Duration::from_millis(20);
 
 /// Hard cap on a connection's fact queue before we call it dead.
 const OUTBOX_CAP: usize = 10_000;
@@ -136,6 +164,12 @@ fn accept_loop(listener: std::os::unix::net::UnixListener, cmd_tx: Sender<Comman
             .is_err()
         {
             break; // daemon is shutting down
+        }
+        // Wake the main loop now: `reg_rx` is drained after `recv_timeout`
+        // returns, and nothing else guarantees that happens before the next
+        // tick. Without this the first frame of an attach waits a full TICK.
+        if cmd_tx.send(Command::Woke).is_err() {
+            break;
         }
         // Wait for the main loop to register us before reading: otherwise a
         // fast client's messages could arrive for an unknown conn id.
@@ -189,7 +223,10 @@ fn spawn_page(
     cmd_tx: Sender<Command>,
 ) {
     std::thread::spawn(move || {
+        let t0 = std::time::Instant::now();
         let store = Store::open(&db);
+        let t_open = t0.elapsed();
+        let t1 = std::time::Instant::now();
         let blocks = store.ok().and_then(|st| {
             if newer {
                 st.load_after(session, edge, count).ok()
@@ -197,6 +234,15 @@ fn spawn_page(
                 st.load_before(session, edge, count).ok().map(|(b, _)| b)
             }
         });
+        let t_read = t1.elapsed();
+        let n = blocks.as_ref().map(|b| b.len()).unwrap_or(0);
+        eprintln!(
+            "[page] open={:.2}ms read={:.2}ms n={} dir={}",
+            t_open.as_secs_f64() * 1e3,
+            t_read.as_secs_f64() * 1e3,
+            n,
+            if newer { "new" } else { "old" }
+        );
         let _ = cmd_tx.send(Command::Page {
             conn,
             session,
@@ -347,6 +393,7 @@ impl Daemon {
             paging: HashSet::new(),
             idle_since: None,
             idle_limit,
+            was_busy: false,
             shutting_down: false,
         })
     }
@@ -356,21 +403,32 @@ impl Daemon {
         while !self.shutting_down {
             // Commands from the front ends, with a tick timeout so the hub is
             // drained even when nobody sends anything.
-            match self.cmd_rx.recv_timeout(TICK) {
-                Ok(Command::Msg { conn, msg }) => self.handle(conn, msg),
+            let acted = match self.cmd_rx.recv_timeout(TICK) {
+                Ok(Command::Msg { conn, msg }) => {
+                    self.handle(conn, msg);
+                    true
+                }
                 Ok(Command::Page {
                     conn,
                     session,
                     newer,
                     blocks,
-                }) => self.ship_page(conn, session, newer, blocks),
-                Ok(Command::Gone { conn }) => self.drop_conn(conn),
-                Err(RecvTimeoutError::Timeout) => {}
+                }) => {
+                    self.ship_page(conn, session, newer, blocks);
+                    true
+                }
+                Ok(Command::Gone { conn }) => {
+                    self.drop_conn(conn);
+                    true
+                }
+                // Pure wake-up: the work is draining `reg_rx` just below.
+                Ok(Command::Woke) => false,
+                Err(RecvTimeoutError::Timeout) => false,
                 Err(RecvTimeoutError::Disconnected) => {
                     // Every connection thread is gone: nothing left to serve.
                     break;
                 }
-            }
+            };
             // Register connections the accept loop admitted meanwhile.
             while let Ok(handle) = self.reg_rx.try_recv() {
                 let (outbox_tx, outbox_rx) = std::sync::mpsc::channel::<ServerMsg>();
@@ -389,7 +447,7 @@ impl Daemon {
                 );
                 handle.ready.send(id).ok();
             }
-            self.pump();
+            self.pump(acted);
             self.idle_check();
         }
         // Wake every reader thread (dropping the command channel closes their
@@ -398,7 +456,26 @@ impl Daemon {
         Ok(())
     }
 
-    fn pump(&mut self) {
+    /// `acted` = a command ran this iteration.
+    ///
+    /// The reconciliation pass at the end has a different trigger from the
+    /// delta pass, which is why one flag does not cover both:
+    ///
+    /// - the **delta** pass needs a drained change (that is what a change is);
+    /// - the **reconciliation** pass needs "something may have landed since it
+    ///   last looked". Entries reach storage without a tail-shaped change:
+    ///   `Session::start_turn` writes the user's own message while reporting
+    ///   `Change::Stream`, and a tool round's blocks are persisted as the round
+    ///   proceeds. Running it on *every* tick is what caught those — and also
+    ///   what made an attached-but-idle daemon issue a per-watcher SQL query
+    ///   200 times a second (measured: 0.5% of a core, forever).
+    ///
+    /// So it runs while a turn is in flight (the only window in which blocks
+    /// land unannounced), on the tick a command ran, and on the **one** tick
+    /// after the last busy one — the round just ended, and the entries it wrote
+    /// while `busy()` was still true are exactly what that pass owes the
+    /// watchers. Every other tick skips it.
+    fn pump(&mut self, acted: bool) {
         // Drain every session's event channel and fan out the deltas.
         for (id, changes) in self.hub.drain_all() {
             let mut msgs = Vec::new();
@@ -460,6 +537,21 @@ impl Daemon {
         // 话它会一直压到回合结束：回车之后屏幕上什么都不动，最后和回复一起
         // 冒出来。账本已经前进的会话这里返回空，上面刚发过的不会重复；
         // 只补尾巴不补状态，因为前端看得见的顺序是「转录先于描述它的状态」。
+        //
+        // 跑不跑的判据见 `pump` 的文档：有回合在飞（块可能悄悄落地）、刚有人
+        // 下过命令、或者**回合刚结束的那一跳**（那时 `busy()` 已是 false，而
+        // 这一回合写的条目正是欠 watcher 的账）。
+        let busy = self
+            .hub
+            .ids()
+            .iter()
+            .any(|id| self.hub.get(*id).map(|s| s.busy()).unwrap_or(false));
+        let settling = !busy && self.was_busy;
+        self.was_busy = busy;
+        if !(acted || busy || settling) {
+            self.flush_all();
+            return;
+        }
         for id in self.watchers.keys().copied().collect::<Vec<_>>() {
             let conns = self.watchers.get(&id).cloned().unwrap_or_default();
             for cid in conns {
@@ -469,6 +561,11 @@ impl Daemon {
             }
         }
         // Ship everything.
+        self.flush_all();
+    }
+
+    /// Write every connection's queued messages out.
+    fn flush_all(&mut self) {
         let conn_ids: Vec<u64> = self.conns.keys().copied().collect();
         for cid in conn_ids {
             self.flush_outbox(cid);
@@ -682,6 +779,7 @@ impl Daemon {
         let Some(blocks) = blocks else {
             return;
         };
+        eprintln!("[page] ship n={} dir={}", blocks.len(), if newer { "new" } else { "old" });
         let blocks: Vec<crate::server::wire::WireBlock> =
             blocks.into_iter().map(wire_block).collect();
         let msg = if newer {
@@ -758,7 +856,7 @@ impl Daemon {
         }
         // Whatever happened, the transcript (and thus the front end) is refreshed
         // by the pump on the next tick.
-        self.pump();
+        self.pump(true);
     }
 
     /// The session this connection is attached to, creating it on first use.

@@ -120,6 +120,50 @@ fn older_blocks_are_only_asked_for_at_the_window_edge() {
     );
 }
 
+/// 贴底时窗口只装到"视口上沿 + preload"那一截。旧实现里 `note_wants` 在贴底
+/// （锚为 `None`）时拿**窗口尾**当视口上沿，于是 `above` 恒等于窗口长度：只要
+/// 窗口比 preload 大就每帧开口要同一页更老的块 —— 真机上表现为"往上滚不动"
+/// （刚取回的页立刻被裁掉）+ 反复整页重装的内存高水位。这条钉住新口径：
+/// 按**视口上沿那块**数，预取满了就不再问。
+#[test]
+fn a_pinned_reader_counts_the_viewport_top_not_the_window_tail() {
+    let mut z = zone_with(tall(400, "甲")); // 800 块，远超窗口
+    z.rows = 20;
+    assert!(z.scroll_pinned, "前提：还没离开底部");
+    let _ = rows_text(&mut z);
+    let mut rounds = 0;
+    while let Some((newer, edge, count)) = z.take_want() {
+        assert!(!newer, "贴底只该要更老的");
+        rounds += 1;
+        assert!(rounds < 60, "预取循环没有收敛");
+        if edge <= 1 {
+            z.prepend_blocks(Vec::new());
+            break;
+        }
+        z.prepend_blocks(blocks_of("更老", count, (edge - count as i64).max(1)));
+        let _ = rows_text(&mut z);
+    }
+    // 旧口径的现场在这里：贴底时 `note_wants` 拿**窗口尾**当视口上沿，`above`
+    // 恒等于窗口长度。窗口有上界（trim 之后 ≤ preload+margin+一屏），所以那条
+    // 判据只在"窗口还没装满"的那几帧成立 —— 也就是 attach 之后的第一帧：
+    // `replace_transcript` 把整条转录装进窗口，800 块 >> preload，旧代码当场
+    // 开口要一页更老的；新口径按视口上沿数，那一帧就不该问。
+    let mut fresh = zone_with(tall(400, "甲"));
+    fresh.rows = 20;
+    let _ = rows_text(&mut fresh);
+    assert!(fresh.window_len() > fresh.preload(), "前提：窗口里远多于预取深度");
+    assert!(
+        fresh.take_want().is_none(),
+        "attach 后第一帧不该开口要更老的（旧实现在这里每帧要一页）"
+    );
+
+    assert!(z.window_len() > z.preload(), "前提：窗口比预取深度大——旧口径正是在这里每帧开口（窗口 {} 块 > preload {}）", z.window_len(), z.preload());
+    for k in 0..30 {
+        let _ = rows_text(&mut z);
+        assert!(z.take_want().is_none(), "贴底第 {k} 帧又去要同一页 = 活锁");
+    }
+}
+
 /// 前置更老的块**不能动读者的位置**：锚是内容坐标，上面挂多少内容都跟它
 /// 无关。动了就是"一补页画面就跳走"——这也是按需历史敢在读者正往上滚的
 /// 时候补页的前提。

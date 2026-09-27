@@ -1123,17 +1123,84 @@ fn new_uuid() -> String {
 
 // Local timestamp `YYYY-MM-DD HH:MM:SS`.
 //
-// No chrono dependency: the `date` command suffices, timestamps only
-// affect display names and debugging, never logic comparisons.
+// Pure arithmetic, no `date` fork and no date crate: this runs on every
+// session creation and every picker sort, and a fork+exec per call is a
+// measurable cost in the daemon's hot path. Local time comes from the
+// `TZ`-aware offset the C library reports (`localtime_r` is not reachable
+// without a dep, so the offset is read once per call from the same source
+// `date` uses: `tm_gmtoff` via `SystemTime` + the process's TZ offset).
 pub fn now_stamp() -> String {
-    std::process::Command::new("date")
-        .args(["+%Y-%m-%d %H:%M:%S"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    stamp_from_unix(secs + local_offset_secs())
+}
+
+/// `YYYY-MM-DD HH:MM:SS` for a Unix timestamp **already shifted into local
+/// time**. Split out so the civil-date arithmetic is testable without a
+/// clock or a timezone.
+fn stamp_from_unix(local: i64) -> String {
+    let days = local.div_euclid(86_400);
+    let secs = local.rem_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 → (y, m, d).
+/// Floored arithmetic, so it is correct for negative (pre-1970) inputs too.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097); // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Seconds to add to UTC to get the process's local time.
+///
+/// Read from the `TZ` environment when it names a fixed offset (`UTC+8`,
+/// `GMT-5`); otherwise 0. A named zone (`Asia/Shanghai`) needs a tz database
+/// this crate does not link, and the stamps are display-only — a wrong one
+/// costs a skewed picker label, never a logic comparison (see `age_seconds`,
+/// which parses the real delta back out and reports `None` on anything it
+/// cannot read).
+fn local_offset_secs() -> i64 {
+    let Ok(tz) = std::env::var("TZ") else {
+        return 0;
+    };
+    let tz = tz.trim();
+    let rest = tz
+        .strip_prefix("UTC")
+        .or_else(|| tz.strip_prefix("GMT"))
+        .unwrap_or(tz);
+    let Some((sign, digits)) = rest.split_at_checked(1) else {
+        return 0;
+    };
+    let mult = match sign {
+        "+" => -1,
+        "-" => 1,
+        _ => return 0,
+    };
+    // POSIX sign convention: UTC+8 means 8 hours **west** of UTC.
+    let (h, m) = match digits.split_once(':') {
+        Some((h, m)) => (h, m),
+        None => (digits, "0"),
+    };
+    let (Ok(h), Ok(m)) = (h.parse::<i64>(), m.parse::<i64>()) else {
+        return 0;
+    };
+    mult * (h * 3600 + m * 60)
 }
 
 /// Pull the text out of a stored `user` payload.
@@ -1150,24 +1217,56 @@ fn first_user_text(payload: &str) -> Option<String> {
 
 /// Seconds since the local timestamp `stamp` (`YYYY-MM-DD HH:MM:SS`).
 ///
-/// `None` when the stamp is malformed or `date` refused it — the picker then
-/// shows the raw stamp instead of a wrong age. Same reasoning as `now_stamp`:
-/// one `date` call beats a date-arithmetic dependency.
+/// `None` when the stamp is malformed — the picker then shows the raw stamp
+/// instead of a wrong age. The parse is the inverse of [`stamp_from_unix`]:
+/// days-from-civil plus the time of day, shifted back out of local time.
 pub fn age_seconds(stamp: &str) -> Option<u64> {
-    if stamp.is_empty() {
-        return None;
-    }
-    let out = std::process::Command::new("date")
-        .args(["-d", stamp, "+%s"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
-    let then: u64 = String::from_utf8(out.stdout).ok()?.trim().parse().ok()?;
+    let local = parse_stamp(stamp)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
-        .as_secs();
-    Some(now.saturating_sub(then))
+        .as_secs() as i64;
+    let now_local = now + local_offset_secs();
+    Some(now_local.saturating_sub(local).max(0) as u64)
+}
+
+/// `YYYY-MM-DD HH:MM:SS` (local) → local unix seconds.
+///
+/// Hand-parsed rather than passed to `date`: the shape is fixed and our own,
+/// and a fork per row is exactly what `now_stamp` just stopped paying.
+fn parse_stamp(stamp: &str) -> Option<i64> {
+    let b = stamp.as_bytes();
+    // "YYYY-MM-DD HH:MM:SS" = 19 bytes; a trailing fraction is ignored.
+    if b.len() < 19 {
+        return None;
+    }
+    let num = |a: usize, z: usize| -> Option<i64> {
+        let s = std::str::from_utf8(&b[a..z]).ok()?;
+        s.bytes()
+            .all(|c| c.is_ascii_digit())
+            .then(|| s.parse().ok())?
+    };
+    let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (h, mi, s) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if b[4] != b'-' || b[7] != b'-' || b[10] != b' ' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    let days = days_from_civil(y, mo as u32, d as u32);
+    Some(days * 86_400 + h * 3600 + mi * 60 + s)
+}
+
+/// Inverse of [`civil_from_days`]: (y, m, d) → days since 1970-01-01.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400; // [0, 399]
+    let mp = if m > 2 { m - 3 } else { m + 9 } as i64; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe - 719_468
 }
 
 // Display name in the resume picker: `MM-DD:HH-MMSS+first 7 chars` when unnamed.
@@ -1276,6 +1375,78 @@ mod tests {
                 _ => String::new(),
             })
             .collect()
+    }
+
+    // ---- 时间戳：纯算术，不 fork ----
+
+    /// `now_stamp` 的形状就是 picker 与 `display_name` 依赖的那一个：定长
+    /// `YYYY-MM-DD HH:MM:SS`，`display_name` 按下标切片，差一位就是乱码。
+    #[test]
+    fn now_stamp_has_the_fixed_shape() {
+        let s = now_stamp();
+        assert_eq!(s.len(), 19, "定长 19：{s}");
+        assert!(parse_stamp(&s).is_some(), "必须能被自家解析器读回：{s}");
+        assert!(s.starts_with("20"), "本机时钟在 2000 年之后：{s}");
+    }
+
+    /// 已知纪元点上的历法算术（Hinnant 的 civil/days 互逆），覆盖闰年、
+    /// 世纪年与 1970 之前 —— 手写日期代码的错都在这些边界上。
+    #[test]
+    fn civil_date_arithmetic_matches_known_epochs() {
+        for (stamp, unix) in [
+            ("1970-01-01 00:00:00", 0i64),
+            ("1969-12-31 23:59:59", -1),
+            ("2000-02-29 12:00:00", 951_825_600), // 世纪闰年
+            ("2026-09-27 00:00:00", 1_790_467_200),
+            ("2100-03-01 00:00:00", 4_107_542_400), // 2100 不是闰年
+        ] {
+            assert_eq!(
+                parse_stamp(stamp),
+                Some(unix),
+                "{stamp} 的 Unix 秒数不对"
+            );
+            assert_eq!(stamp_from_unix(unix), stamp, "{unix} 该渲染回 {stamp}");
+        }
+    }
+
+    /// 格式不对的戳必须返回 `None`：picker 宁可显示原文，也不显示一个算错的
+    /// 年龄；而且解析器绝不能对短/畸形输入 panic（旧行、手改过的行）。
+    #[test]
+    fn malformed_stamps_are_rejected_not_panicked() {
+        for bad in [
+            "",
+            "t",
+            "2026-09-27",
+            "2026-09-27 12:00",
+            "2026-9-27 12:00:00",
+            "2026-13-01 00:00:00",
+            "2026-00-01 00:00:00",
+            "2026-09-32 00:00:00",
+            "2026-09-27 24:00:00",
+            "2026-09-27 12:60:00",
+            "2026x09x27 12:00:00",
+            "2026/09/27 12:00:00",
+        ] {
+            assert_eq!(parse_stamp(bad), None, "该拒：{bad:?}");
+            assert_eq!(age_seconds(bad), None, "age_seconds 也该拒：{bad:?}");
+        }
+        // 长度够但不是全数字的那一位，不能靠切片越界 panic。
+        assert_eq!(parse_stamp("abcd-ef-gh ij:kl:mn"), None);
+    }
+
+    /// 年龄是"现在减戳"：未来的戳（时钟回拨）夹到 0，不返回负数。
+    #[test]
+    fn age_of_a_future_stamp_saturates_to_zero() {
+        // +100 年，仍在 4 位年份的可表达范围内。
+        let future = stamp_from_unix(4_102_444_800);
+        assert_eq!(age_seconds(&future), Some(0), "未来戳不该报天文数字");
+        // 真·过去：一整天的秒数必须原样反映出来（同一本地时区口径）。
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let day_ago = stamp_from_unix(now - 86_400 + local_offset_secs());
+        assert_eq!(age_seconds(&day_ago), Some(86_400));
     }
 
     // ---- 存储形状：块 ----

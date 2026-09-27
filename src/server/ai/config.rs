@@ -844,6 +844,11 @@ impl Config {
 /// A YAML round-trip would rewrite the whole document and drop the user's
 /// comments and key order; this touches one line and leaves every other byte
 /// alone. The key (and the file) is created when missing.
+///
+/// The rewritten line keeps whatever followed the old value on the same line:
+/// `default: local:a  # my note` comes back as `default: local:b  # my note`.
+/// Dropping that comment is the same loss a round-trip would cause, only
+/// quieter — the user sees their note vanish with no error to explain it.
 fn write_default_key(path: &std::path::Path, id: &str) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let mut out = String::with_capacity(text.len() + id.len() + 16);
@@ -854,6 +859,17 @@ fn write_default_key(path: &std::path::Path, id: &str) -> anyhow::Result<()> {
         let top_level = !line.starts_with([' ', '\t']);
         if !replaced && top_level && line.trim_start().starts_with("default:") {
             out.push_str(&format!("default: {id}"));
+            // Everything from the run of spaces before the comment marker on
+            // is the user's, not ours: the alignment they chose is part of
+            // the line, and a `#` starts a comment only outside a quoted
+            // scalar.
+            if let Some(at) = comment_start(line) {
+                let spaces = line[..at]
+                    .rfind(|c: char| !c.is_whitespace())
+                    .map(|i| i + line[i..].chars().next().map_or(1, char::len_utf8))
+                    .unwrap_or(0);
+                out.push_str(&line[spaces..]);
+            }
             replaced = true;
         } else {
             out.push_str(line);
@@ -872,12 +888,124 @@ fn write_default_key(path: &std::path::Path, id: &str) -> anyhow::Result<()> {
     std::fs::write(path, out)?;
     Ok(())
 }
+
+/// Byte offset of the line's trailing `#` comment, or `None`.
+///
+/// A `#` inside a quoted scalar is data, not a comment (`default: "#abc"`),
+/// so quotes are tracked. YAML needs whitespace before a comment marker for it
+/// to be one; accepting `x#y` as a comment would truncate a value like
+/// `local:a#b`. Escapes inside double quotes are honoured so `"a\"#"` does not
+/// end the string early.
+fn comment_start(line: &str) -> Option<usize> {
+    let b = line.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        match quote {
+            Some(q) if c == b'\\' && q == b'"' => i += 1, // skip the escaped byte
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == b'\'' || c == b'"' => quote = Some(c),
+            None if c == b'#' && (i == 0 || b[i - 1].is_ascii_whitespace()) => {
+                // A comment marker needs whitespace (or start of line) before it.
+                return Some(i);
+            }
+            None => {}
+        }
+        i += 1;
+    }
+    None
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse_models(yaml: &str) -> anyhow::Result<ModelsConfig> {
         Ok(serde_yaml::from_str(yaml)?)
+    }
+
+    /// 改 `default:` 是**只动一个值**，行尾注释必须原样留下（用户看得到自己
+    /// 写的东西，才有底气让工具碰配置）；其余字节一个不动。
+    #[test]
+    fn rewriting_default_keeps_the_users_comment_and_everything_else() {
+        let dir = std::env::temp_dir().join(format!("mypi-default-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config.yaml");
+
+        let original = "\
+# 我的配置
+default: local:old   # 别动这一行，我特意选的
+theme:
+  name: dark
+tools:
+  bashTimeoutSecs: 42   # 十分钟够用
+";
+        std::fs::write(&cfg, original).unwrap();
+        write_default_key(&cfg, "local:new").unwrap();
+        let got = std::fs::read_to_string(&cfg).unwrap();
+        assert_eq!(
+            got,
+            "\
+# 我的配置
+default: local:new   # 别动这一行，我特意选的
+theme:
+  name: dark
+tools:
+  bashTimeoutSecs: 42   # 十分钟够用
+",
+            "只该换掉 default 的值"
+        );
+
+        // 没有 `default:` 的配置：追加一行，其余原样。
+        std::fs::write(&cfg, "# 空配置\ntheme: {}\n").unwrap();
+        write_default_key(&cfg, "local:x").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&cfg).unwrap(),
+            "# 空配置\ntheme: {}\ndefault: local:x\n"
+        );
+
+        // 缩进的 `default:` 属于别人的小节，绝不能碰。
+        std::fs::write(&cfg, "providers:\n  default: keep-me\n").unwrap();
+        write_default_key(&cfg, "local:x").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&cfg).unwrap(),
+            "providers:\n  default: keep-me\ndefault: local:x\n",
+            "缩进的 default 不是顶层键"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 注释识别不能把引号里的 `#` 当注释，也不能把 `x#y` 当注释（YAML 要求
+    /// 注释标记前有空白）——两种情况都会把用户的值截断。
+    #[test]
+    fn comment_detection_respects_quotes_and_needs_whitespace() {
+        assert_eq!(comment_start("default: local:a  # 走这条"), Some(18));
+        assert_eq!(comment_start("default: \"#abc\""), None, "引号里的 # 是数据");
+        assert_eq!(comment_start("default: 'a # b'"), None);
+        assert_eq!(comment_start("default: local:a#b"), None, "没有空白就不是注释");
+        assert_eq!(comment_start("x: \"a\\\"#b\"  # 真的注释"), Some(12));
+        assert_eq!(comment_start("# 整行注释"), Some(0));
+        assert_eq!(comment_start("theme: {}"), None);
+    }
+
+    /// 带引号/井号的值经 rewrite 之后不能被截断成半截值加注释。
+    #[test]
+    fn a_quoted_value_does_not_leak_into_the_rewrite() {
+        let dir = std::env::temp_dir().join(format!("mypi-default-q-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config.yaml");
+
+        // `"#weird"` 的 `#` 在引号里：不是注释，所以不能被当成"注释"照抄下来
+        // （会把 `#weird"` 变成新值的尾巴，写出一行非法 YAML）。
+        std::fs::write(&cfg, "default: \"#weird\"\n").unwrap();
+        write_default_key(&cfg, "local:x").unwrap();
+        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), "default: local:x\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -541,8 +541,16 @@ fn classify_credential_write(lower: &str) -> bool {
         if raw.len() != t.len() || (i > 0 && tokens[i - 1].ends_with('>')) {
             return true;
         }
-        // `tee /etc/shadow`
-        if i > 0 && verb_text(tokens[i - 1]) == "tee" {
+        // `tee /etc/shadow` — the write target is tee's first non-flag
+        // argument, so `tee -a /etc/shadow` and `tee -i /etc/shadow` count
+        // too. Looking only at the immediately preceding token missed every
+        // flagged invocation.
+        if let Some(verb) = (0..i)
+            .rev()
+            .find(|j| !tokens[*j].starts_with('-'))
+            .filter(|j| starts_segment(&tokens, *j))
+            && verb_text(tokens[verb]) == "tee"
+        {
             return true;
         }
     }
@@ -921,6 +929,47 @@ mod tests {
             "echo x | tee /etc/shadow",
         ] {
             assert!(!classify(cmd, &z).allows(), "写必须拦: {cmd}");
+        }
+    }
+
+    /// `tee` 的写入目标不是"紧挨着它的那个 token"：`-a`（追加）、`-i`
+    /// （忽略中断）这些开关会插在中间，只看前一个 token 会把带开关的调用全放
+    /// 过去——而 `tee -a /etc/shadow` 正是最该拦的那一种（追加一行后门账号）。
+    #[test]
+    fn tee_write_targets_survive_intervening_flags() {
+        let z = zone();
+        for cmd in [
+            "tee -a /etc/passwd",
+            "tee -i /etc/shadow",
+            "tee --append /etc/sudoers",
+            "tee -a -i /etc/ssh/sshd_config",
+            "cat /tmp/x | tee -a /etc/passwd",
+            "/usr/bin/tee -a /etc/shadow",
+        ] {
+            assert!(!classify(cmd, &z).allows(), "带开关的 tee 也要拦: {cmd}");
+        }
+        // 不是写入目标的参数不该触发：读到别处、或者只是把 tee 当管道中间站。
+        for cmd in [
+            "tee /tmp/out",
+            "tee -a /tmp/out",
+            "echo hi | tee -a /tmp/notes",
+            "cat /etc/passwd | tee /tmp/backup",
+        ] {
+            assert_eq!(classify(cmd, &z), Verdict::Allow, "临时文件不该拦: {cmd}");
+        }
+    }
+
+    /// 别的动词提到这些路径不算写：`tee` 的判定必须认**命令位置**，不能被
+    /// 引号里的字面量骗到（`echo 'tee -a /etc/shadow'` 只是打印）。
+    #[test]
+    fn tee_in_prose_or_as_an_argument_is_not_a_write() {
+        let z = zone();
+        for cmd in [
+            "echo 'tee -a /etc/shadow'",
+            "grep tee /etc/passwd",
+            "cat /tmp/tee /etc/passwd",
+        ] {
+            assert_eq!(classify(cmd, &z), Verdict::Allow, "不是 write: {cmd}");
         }
     }
 

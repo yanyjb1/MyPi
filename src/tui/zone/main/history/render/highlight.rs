@@ -365,6 +365,156 @@ pub fn highlight(code: &str, language: Option<&str>, t: &HistoryTheme) -> Vec<Li
     out
 }
 
+/// A code block being colored a few lines at a time.
+///
+/// The reason this exists: syntect's cost is dominated by **line length**, not
+/// line count. Measured on the dirty bench block, one 10k-character line costs
+/// ~100ms and one 200×CJK line ~112ms, while 46 ordinary lines cost 3.5ms
+/// together. Coloring a whole fenced segment to paint a 21-row viewport
+/// therefore paid for every wide line in it, whether or not any of them was on
+/// screen — the measured 200ms frame peaks were two such lines.
+///
+/// So the segment is colored **line by line**, and the caller decides how many
+/// lines one frame may pay for. `ParseState` carries the lexer context across
+/// lines and is cheap to clone (a small `Vec` of context ids), so the walk can
+/// stop anywhere and resume on the next frame without re-parsing what it
+/// already did — the colors are identical to coloring the segment in one go,
+/// because the parse still happens in source order from line 0.
+pub struct HighlightCursor {
+    state: ParseState,
+    stack: ScopeStack,
+    /// Source lines still to color, in order.
+    lines: std::vec::IntoIter<String>,
+    /// Index of `lines`' next element == how many source lines are done.
+    done: usize,
+    t: HistoryTheme,
+}
+
+impl HighlightCursor {
+    /// Start coloring `code` as `lang`. Returns `None` when the language is
+    /// unknown — the caller then owes plain rows, which cost nothing.
+    pub fn new(code: &str, lang: Option<&str>, t: &HistoryTheme) -> Option<Self> {
+        let lang = lang?;
+        let syntax = find_syntax(lang)?;
+        Some(Self {
+            state: ParseState::new(syntax),
+            stack: ScopeStack::new(),
+            lines: split_keep_empty(code),
+            done: 0,
+            t: *t,
+        })
+    }
+
+    pub fn done(&self) -> usize {
+        self.done
+    }
+
+    /// Total source lines — known up front, so a caller can budget.
+    pub fn total(&self) -> usize {
+        self.done + self.lines.len()
+    }
+
+    /// True when there is nothing left to color.
+    pub fn is_empty(&self) -> bool {
+        self.lines.len() == 0
+    }
+
+    /// Byte length of the next source line, without coloring it.
+    ///
+    /// A peek, not a pop: `IntoIter` has no cheap "front" access, so this is
+    /// served from a clone-free `as_slice` — worth it because the caller uses
+    /// it to decide whether the next line is cheap enough to skip over or
+    /// expensive enough to defer until it is actually on screen.
+    pub fn peek_len(&self) -> usize {
+        self.lines.as_slice().first().map(|l| l.len()).unwrap_or(0)
+    }
+
+    /// Color up to `budget` more lines, **ignoring** the parse cost of each
+    /// one. Returns the styled rows produced, in source order.
+    ///
+    /// A line can be arbitrarily expensive, so the budget alone cannot bound
+    /// the time — the caller pairs this with a wall-clock check via
+    /// [`Self::is_empty`] and stops issuing calls. One line is always colored
+    /// per call when lines remain, so progress is guaranteed.
+    pub fn take(&mut self, budget: usize) -> Vec<Line<'static>> {
+        let mut out = Vec::new();
+        for _ in 0..budget {
+            let Some(line) = self.lines.next() else { break };
+            self.done += 1;
+            out.push(color_one_line(
+                &line,
+                &mut self.state,
+                &mut self.stack,
+                &self.t,
+            ));
+        }
+        out
+    }
+}
+
+/// Split source into lines the way syntect's `LinesWithEndings` does: every
+/// line keeps its terminator, and a trailing newline does **not** produce a
+/// final empty element. Kept in sync with [`highlight`] by construction — the
+/// row count must match or the geometry the cache holds becomes a lie.
+fn split_keep_empty(code: &str) -> std::vec::IntoIter<String> {
+    let mut v: Vec<String> = syntect::util::LinesWithEndings::from(code)
+        .map(|l| l.to_string())
+        .collect();
+    if v.is_empty() {
+        v.push(String::new());
+    }
+    v.into_iter()
+}
+
+/// Color one already-line-split source line, advancing the shared state.
+fn color_one_line(
+    line: &str,
+    state: &mut ParseState,
+    stack: &mut ScopeStack,
+    t: &HistoryTheme,
+) -> Line<'static> {
+    let Ok(ops) = state.parse_line(line, &SYNTAXES) else {
+        return Line::from(line.trim_end_matches(['\n', '\r']).to_string());
+    };
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut prev_end = 0usize;
+    for (offset, op) in ops {
+        let offset = offset.min(line.len());
+        if offset > prev_end {
+            let text = &line[prev_end..offset];
+            let cat = scope_to_category(stack);
+            spans.push(spans_for(t, cat, text));
+            prev_end = offset;
+        }
+        match op {
+            ScopeStackOp::Push(scope) => stack.push(scope),
+            ScopeStackOp::Pop(count) => {
+                for _ in 0..count {
+                    stack.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    if prev_end < line.len() {
+        let text = &line[prev_end..];
+        let cat = scope_to_category(stack);
+        spans.push(spans_for(t, cat, text));
+    }
+    // Trim the trailing newline the syntect line iteration keeps.
+    if let Some(last) = spans.last_mut() {
+        let mut s = last.content.to_string();
+        while s.ends_with('\n') || s.ends_with('\r') {
+            s.pop();
+        }
+        last.content = s.into();
+        if last.content.is_empty() {
+            spans.pop();
+        }
+    }
+    Line::from(spans)
+}
+
 /// Build one styled span: colored when the category resolves, plain text
 /// otherwise (NOMATCH inherits the card's default look).
 fn spans_for(t: &HistoryTheme, cat: usize, text: &str) -> Span<'static> {

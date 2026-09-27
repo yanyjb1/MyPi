@@ -412,14 +412,24 @@ fn run_shell(
         // Bridge the session's AtomicBool into this command's flag: poll at
         // the same tick the wait loop uses. Interrupts are rare; 50ms of
         // worst-case latency is nothing next to a 600s deadline.
+        //
+        // Exit condition is `is_done`, **not** `is_armed`: a command that
+        // finishes without anyone interrupting or hitting the deadline never
+        // arms the flag, and polling on "armed" alone left one thread per
+        // bash call spinning every 50ms for the life of the process.
         let bridged = stop.clone();
-        std::thread::spawn(move || {
-            while !bridged.is_armed() {
+        named("mypi-bash-bridge", move || {
+            // Wake on the flag (a condvar, not a 50ms poll): the worst-case
+            // stop latency is now the scheduler, not half a tick. The
+            // `is_done` leg is what ends this thread on a command nobody
+            // interrupted — a plain successful bash call used to leave one
+            // poller per call spinning for the life of the process.
+            while !bridged.is_armed() && !bridged.is_done() {
                 if ext.load(std::sync::atomic::Ordering::Relaxed) {
                     bridged.arm();
                     break;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                bridged.wait_for(std::time::Duration::from_millis(20));
             }
         });
     }
@@ -460,7 +470,7 @@ fn run_shell(
         ),
     ] {
         let tx = tx.clone();
-        std::thread::spawn(move || {
+        named("mypi-bash-read", move || {
             use std::io::Read as _;
             let mut rdr = std::io::BufReader::new(pipe);
             let mut raw = [0u8; 8192];
@@ -492,17 +502,20 @@ fn run_shell(
     // Waiter thread: the only place blocked on the child's exit.
     let waiter_stop = stop.clone();
     let tx_wait = tx.clone();
-    std::thread::spawn(move || {
+    named("mypi-bash-wait", move || {
         let r = child.wait();
         let _ = tx_wait.send(Msg::Exited(r));
         drop(waiter_stop);
     });
     drop(tx);
 
-    // Deadline: arms the same flag the front-end stop arms.
+    // Deadline: arms the same flag the front-end stop arms. It waits on the
+    // shared condvar rather than sleeping out the full timeout — a 600s
+    // default used to park one thread per bash call for ten minutes after
+    // the command had already returned.
     let timer_stop = stop.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(timeout);
+    named("mypi-bash-deadline", move || {
+        timer_stop.wait_for(timeout);
         timer_stop.arm();
     });
 
@@ -552,6 +565,10 @@ fn run_shell(
     if !unflushed.is_empty() {
         progress(ToolProgress::Output(crate::ansi::strip_ansi(&unflushed)));
     }
+    // The command is over — release the interrupt bridge (and the deadline
+    // thread's flag watcher) before touching the status, so the early returns
+    // below cannot strand a polling thread.
+    stop.finish();
     let killed = killed || stop.is_armed();
     let out = status
         .expect("loop only exits with a status")
@@ -584,20 +601,69 @@ fn run_shell(
     })
 }
 
+/// Spawn with a name: these four threads live as long as one bash command,
+/// and an unnamed pool of them is unreadable in `top -H` or a debugger
+/// (`server::agent::tools::tests::…` for every one of them). A name that
+/// fails is not worth failing the command over.
+fn named(name: &str, f: impl FnOnce() + Send + 'static) {
+    let _ = std::thread::Builder::new().name(name.into()).spawn(f);
+}
+
 /// Why a bash command died without a clean exit. Shared with the waiter
-/// and deadline threads; arming is one-way.
+/// and deadline threads; arming is one-way. `done` is the other direction:
+/// it says "this command is over", which is what lets the interrupt-bridge
+/// thread stop polling (arming alone never fires on a command that simply
+/// finished before anyone interrupted it).
 #[derive(Default)]
 struct StopFlag {
     armed: std::sync::atomic::AtomicBool,
+    done: std::sync::atomic::AtomicBool,
+    /// Wakes both waiters the instant either flag flips, so neither has to
+    /// poll (the bridge) or sleep out a long timeout (the deadline).
+    bell: std::sync::Condvar,
+    lock: std::sync::Mutex<()>,
 }
 
 impl StopFlag {
     fn arm(&self) {
         self.armed
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.ring();
     }
     fn is_armed(&self) -> bool {
         self.armed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Command finished (however it finished): stop every thread waiting on
+    /// this flag. Idempotent.
+    fn finish(&self) {
+        self.done
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.ring();
+    }
+    fn is_done(&self) -> bool {
+        self.done.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Wake every waiter (arming and finishing both end the wait).
+    ///
+    /// The lock/unlock alone is **not** a signal — taking the mutex only
+    /// makes the flag flip visible; the waiter is parked on the condvar and
+    /// needs `notify_all` to be scheduled. (Getting this wrong is silent:
+    /// the waiters simply sleep out the full timeout.)
+    fn ring(&self) {
+        drop(self.lock.lock().unwrap_or_else(|e| e.into_inner()));
+        self.bell.notify_all();
+    }
+    /// Block until the flag is armed, finished, or `timeout` elapses. Used by
+    /// the deadline thread in place of a bare `sleep`, and by the bridge in
+    /// place of a 50ms poll loop.
+    fn wait_for(&self, timeout: std::time::Duration) {
+        let guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = self
+            .bell
+            .wait_timeout_while(guard, timeout, |_| {
+                !self.is_armed() && !self.is_done()
+            })
+            .unwrap_or_else(|e| e.into_inner());
     }
 }
 
@@ -2937,5 +3003,52 @@ mod tests {
             t0.elapsed()
         );
         assert!(out.text.contains("interrupted/timeout"), "停止要标注: {:?}", out.text);
+    }
+
+    /// 装好外部停止标志的 bash 调用，命令结束后**不能留下轮询线程**。
+    ///
+    /// 修之前的形状是 `while !bridged.is_armed()`：命令正常跑完（没人中断、
+    /// 没到 deadline）时 `armed` 永远不置位，于是每次成功的 bash 调用都在
+    /// 进程里留下一个每 50ms 醒一次的线程。这条用例数线程数：外壳线程数在
+    /// 一次调用后必须回到基线（轮询线程没就绪时也不会真的少，只可能多）。
+    #[test]
+    fn a_finished_command_leaves_no_interrupt_poller_behind() {
+        use std::sync::atomic::AtomicBool;
+        let cwd = std::env::temp_dir();
+        let count = || {
+            std::fs::read_dir("/proc/self/task")
+                .map(|d| d.count())
+                .unwrap_or(0)
+        };
+        // 先跑一次让 reader / waiter / deadline 线程的创建路径走热（线程
+        // 创建本身会留下短暂的回收延迟，基线要在同一形状下取）。
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        bash_with_stop(&cwd, "true", None, T, Some(flag.clone()), L, &mut |_| {}).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let base = count();
+
+        for _ in 0..8 {
+            let flag = std::sync::Arc::new(AtomicBool::new(false));
+            let out = bash_with_stop(&cwd, "true", None, T, Some(flag), L, &mut |_| {}).unwrap();
+            assert!(out.text.is_empty() || out.text == "true", "干净退出: {:?}", out.text);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let after = count();
+        if after > base + 2 {
+            let mut names: Vec<String> = std::fs::read_dir("/proc/self/task")
+                .unwrap()
+                .filter_map(|e| {
+                    let e = e.ok()?;
+                    let name = std::fs::read_to_string(e.path().join("comm")).ok()?;
+                    Some(name.trim().to_string())
+                })
+                .collect();
+            names.sort();
+            panic!("8 次调用后线程数从 {base} 涨到 {after}：{names:?}");
+        }
+        assert!(
+            after <= base + 2,
+            "8 次调用后线程数从 {base} 涨到 {after}：轮询线程没退出"
+        );
     }
 }

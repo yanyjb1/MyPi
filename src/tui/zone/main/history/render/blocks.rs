@@ -46,12 +46,40 @@ pub struct Deferred {
     pub(crate) lang: Option<String>,
 }
 
-/// 一个还没上色的段：块内**行区间** + 它的源码与语言。
+/// 一个还没上完色的段：块内**行区间** + 一个可续的染色游标。
+///
+/// 游标按源码行推进，因为 syntect 的成本由**行长度**决定而不是行数——
+/// 实测脏块里一行 10k 字符 100ms、一行 200×CJK 112ms，而 46 行普通代码
+/// 合起来 3.5ms。整段一次染等于替视口里根本看不见的宽行付钱，那正是
+/// 200ms 峰值的来源。详见 [`highlight::HighlightCursor`]。
 struct Pending {
     rows: std::ops::Range<usize>,
-    code: String,
-    lang: Option<String>,
+    cursor: highlight::HighlightCursor,
+    /// 整段的行数（游标里也能算，存一份免得反复问）。
+    total: usize,
+    /// 这一段的源码行 → 块内行。折行前是 1:1，折行后要查表：
+    /// `line_rows[i]` = 第 i 个源码行落在块内哪几行。
+    line_rows: Vec<std::ops::Range<usize>>,
+    /// 已经写回 `rows` 的源码行数。
+    painted: usize,
 }
+
+/// 一帧最多推进多少源码行去补色。
+///
+/// 折中：太大则单行暴击会连撞几次（每帧墙钟闸门仍会兜住），太小则普通代码
+/// 补色拖很多帧、视觉上是"一行一行慢慢变彩"。64 行在两种内容上都够平顺。
+const HIGHLIGHT_LINES_PER_FRAME: usize = 64;
+
+/// 一帧补色最多烧多久。单行成本无上界（10k 字符行 ≈100ms），所以行数预算
+/// 之外还要有墙钟闸门：撞上暴击行时至少不会在同一帧里再撞第二次。
+const HIGHLIGHT_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// 超过这么多字符的源码行，没滚到视口里就先不染。
+///
+/// syntect 的单行成本随长度陡增（实测 10k 字符 ≈100ms，520 字符 ≈12ms）。
+/// 这类行"路过"时解析一遍只为推进状态，代价等于真染一遍，那就是白烧；
+/// 干脆停在它前面，等视口真的滚到它头上再一次性付掉。
+const WIDE_LINE_CHARS: usize = 2000;
 
 /// One rendered node: wrapped rows + exact height.
 pub(crate) struct Block {
@@ -72,33 +100,78 @@ impl Block {
     /// **从下往上**：段按行号倒序处理——读者盯的是底部，底部先出色。
     /// 上色只改样式（行数与逐行文本不变），所以行区间与高度都不用动，缓存的
     /// 几何一律不作废。上完的段就从待办里摘掉：下一帧直接读缓存的那几行。
-    pub(crate) fn color_rows(&mut self, lo: usize, hi: usize, t: &HistoryTheme) -> usize {
+    /// 给 `[lo, hi)` 里还没上色的段补色，返回补了几段。
+    ///
+    /// 从下往上遍历（读者盯的是底部）；补过的段从待办里摘掉，下一帧直接读缓存。
+    pub(crate) fn color_rows(&mut self, lo: usize, hi: usize, _t: &HistoryTheme) -> usize {
         if self.pending.is_empty() || hi <= lo {
             return 0;
         }
         let mut colored = 0usize;
         let mut still: Vec<Pending> = Vec::new();
-        for p in std::mem::take(&mut self.pending).into_iter().rev() {
+        for mut p in std::mem::take(&mut self.pending).into_iter().rev() {
             if p.rows.start >= hi || p.rows.end <= lo {
                 still.push(p);
                 continue;
             }
-            let rows = wrap_rows(
-                highlight::highlight(&p.code, p.lang.as_deref(), t).into_iter(),
-                self.width,
-            );
-            // 行数必须一致——不一致说明"上色不改行数"这条前提被破坏了，
-            // 那就宁可不换色（换了会让几何错位）。
-            debug_assert_eq!(
-                rows.len(),
-                p.rows.len(),
-                "上色改变了行数：{} vs {}",
-                rows.len(),
-                p.rows.len()
-            );
-            if rows.len() == p.rows.len() {
-                self.rows[p.rows.clone()].clone_from_slice(&rows);
-                colored += 1;
+            // 一帧最多推进这么多**源码行**，外加一个墙钟闸门。两个都要：
+            // 行数是常规预算（普通代码一行几微秒，一批下去很快），墙钟是
+            // 防单行暴击（一行 10k 字符 100ms，预算再小也挡不住它，但至少
+            // 不会在一帧里连着撞好几次）。
+            let mut spent_lines = 0usize;
+            let t0 = std::time::Instant::now();
+            // 视口 [lo, hi) 之外的源码行**这一帧根本不该染**：读者看不见，
+            // 高峰值那两行（10k 字符 ≈100ms）正是躲在视口外面被白染掉的。
+            // 只有落在视口里的行才值得花预算；跳过的行留在待办里，等视口
+            // 真的滚到它们头上再付钱。
+            while spent_lines < HIGHLIGHT_LINES_PER_FRAME
+                && p.painted < p.total
+                && t0.elapsed() < HIGHLIGHT_BUDGET
+            {
+                let target = p.line_rows[p.painted].clone();
+                if target.end <= lo || target.start >= hi {
+                    // 不在视口里：只推进解析状态，不产生、不写回行。
+                    // 状态必须推进，否则后面那行的词法上下文就错了——
+                    // 但推进的代价仍要花，所以这里只跳**廉价**行；贵行等
+                    // 滚到再付。判据用已知行长度做一个常数级的预判。
+                    if p.cursor.peek_len() > WIDE_LINE_CHARS {
+                        break;
+                    }
+                    let batch = highlight::HighlightCursor::take(&mut p.cursor, 1);
+                    if batch.is_empty() {
+                        break;
+                    }
+                    p.painted += 1;
+                    spent_lines += 1;
+                    continue;
+                }
+                let batch = highlight::HighlightCursor::take(&mut p.cursor, 1);
+                if batch.is_empty() {
+                    break;
+                }
+                // 一个源码行 → 块内那几行（折行后可能不止一行）。
+                let wrapped = wrap_rows(batch.into_iter(), self.width);
+                if wrapped.len() == target.len() {
+                    self.rows[target].clone_from_slice(&wrapped);
+                } else {
+                    // 行数对不上说明「上色不改行数」这条前提破了；宁可不换色，
+                    // 也不能让几何错位。整段放弃后续补色。
+                    debug_assert!(
+                        wrapped.len() == target.len(),
+                        "上色改变了行数：{} vs {}",
+                        wrapped.len(),
+                        target.len()
+                    );
+                    p.painted = p.total;
+                    break;
+                }
+                p.painted += 1;
+                spent_lines += 1;
+            }
+            if p.painted >= p.total {
+                colored += 1; // 整段补完，从待办里摘掉
+            } else {
+                still.push(p);
             }
         }
         still.reverse();
@@ -145,13 +218,25 @@ pub(crate) fn render_group(
         rows.extend(wrap_rows(it.by_ref().take(gap), width));
         consumed += gap;
         let lo = rows.len();
-        rows.extend(wrap_rows(it.by_ref().take(d.count), width));
+        // 逐行折行并记下每个源码行落在哪几行：上色按源码行推进，写回时
+        // 要靠这张表把「第 i 个源码行」兑成块内的行区间。
+        let mut line_rows: Vec<std::ops::Range<usize>> = Vec::with_capacity(d.count);
+        for _ in 0..d.count {
+            let Some(line) = it.next() else { break };
+            let before = rows.len();
+            rows.extend(wrap_rows(std::iter::once(line), width));
+            line_rows.push(before..rows.len());
+        }
         consumed += d.count;
-        pending.push(Pending {
-            rows: lo..rows.len(),
-            code: d.code,
-            lang: d.lang,
-        });
+        if let Some(cursor) = highlight::HighlightCursor::new(&d.code, d.lang.as_deref(), t) {
+            pending.push(Pending {
+                rows: lo..rows.len(),
+                total: line_rows.len(),
+                line_rows,
+                painted: 0,
+                cursor,
+            });
+        }
     }
     rows.extend(wrap_rows(it.by_ref(), width));
     Block {
@@ -318,6 +403,75 @@ mod tests {
             cells(&eager),
             "补完色该与急切渲染逐格相同"
         );
+    }
+
+    /// 分多帧补色 = 一帧补完，逐格相同。
+    ///
+    /// `color_rows` 现在按**源码行**推进（一帧有行预算），所以"补到一半"
+    /// 是常态。这条测试守的就是那个不变量：中途收手再接上，解析状态必须
+    /// 正确续传，最终每一格的颜色都要和一次性补完一模一样。
+    #[test]
+    fn incremental_coloring_matches_one_shot() {
+        // 内容必须**跨行带状态**，否则这条测试是空的：能"不续传也对"的
+        // 代码测不出续传有没有坏。这里用三样东西制造状态：
+        //   1. 一个跨 20 行的块注释 —— 里面的行全被染成注释色；
+        //   2. 一个跨 10 行的原始字符串 —— 同样影响后续每一行；
+        //   3. 结尾再若干普通行 —— 用来检查状态**退出**后是否恢复。
+        // 不续传时，注释块里的第 2 行会因为看不见 `/*` 而被当成普通代码。
+        let mut md = String::from("```rust\n");
+        md.push_str("/* 跨行注释开始\n");
+        for i in 0..20 {
+            md.push_str(&format!("注释块内的第 {i} 行\n"));
+        }
+        md.push_str("注释结束 */\n");
+        md.push_str("let s = r#\"原始字符串\n");
+        for i in 0..10 {
+            md.push_str(&format!("字符串内第 {i} 行\n"));
+        }
+        md.push_str("结束\"#;\n");
+        for i in 0..250 {
+            md.push_str(&format!("let v{i} = {i}; // 注释 {i}\n"));
+        }
+        md.push_str("```\n");
+        let es = vec![Entry::Assistant {
+            content: md,
+            usage: None,
+        }];
+        let t = t();
+        let eager = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, false);
+
+        let mut late = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true);
+        assert_eq!(late.pending_len(), 1);
+
+        // 每次只给一行预算，强制分很多帧。
+        let mut guard = 0;
+        while late.pending_len() > 0 {
+            late.color_rows(0, late.height, &t);
+            guard += 1;
+            assert!(guard < 10_000, "补色没有推进（死循环）");
+        }
+        assert_eq!(late.height, eager.height, "分帧补色不许改高度");
+        assert_eq!(rows_text(&late), rows_text(&eager), "分帧补色不许改文本");
+        assert_eq!(cells(&late), cells(&eager), "分帧补色必须与一次补完逐格相同");
+    }
+
+    /// 视口外的宽行不该被染色：它不在屏上，这次不该付它的钱。
+    #[test]
+    fn a_wide_line_outside_the_viewport_is_left_pending() {
+        let mut md = String::from("```rust\n");
+        md.push_str(&format!("let big = \"{}\";\n", "x".repeat(5000)));
+        md.push_str("let after = 1;\n");
+        md.push_str("```\n");
+        let es = vec![Entry::Assistant {
+            content: md,
+            usage: None,
+        }];
+        let t = t();
+        let mut b = render_group(&es, Range { start: 0, end: 1 }, &t, true, true, 40, true);
+        // 只补围栏**最后**那一行的区间；宽行在它前面且大于阈值。
+        let n = b.height;
+        b.color_rows(n.saturating_sub(1), n, &t);
+        assert_eq!(b.pending_len(), 1, "宽行没滚到视口，该留着待办");
     }
 
     /// 只补落在给出行区间里的段：视口之外的那些留着待办（滚到再补）。
