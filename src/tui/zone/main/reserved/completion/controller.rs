@@ -255,7 +255,10 @@ impl CompletionController {
                     || format!("{}:{}", m.provider, m.id).starts_with(arg_part)
             })
             .map(|m| engine::Completion {
+                kind: engine::CandidateKind::Plain,
                 name: m.id.clone(),
+                // 模型 id 也是前缀过滤，命中的是打进去的那几位。
+                hits: (0..arg_part.chars().count()).collect(),
                 detail: m.detail.clone(),
                 is_dir: false,
                 insert: format!("{cmd} {}:{}", m.provider, m.id),
@@ -274,7 +277,9 @@ impl CompletionController {
             .iter()
             .filter(|n| n.starts_with(arg_part))
             .map(|n| engine::Completion {
+                kind: engine::CandidateKind::Plain,
                 name: n.clone(),
+                hits: (0..arg_part.chars().count()).collect(),
                 detail: String::new(),
                 is_dir: false,
                 insert: format!("{cmd} {n}"),

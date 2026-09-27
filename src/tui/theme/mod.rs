@@ -27,7 +27,7 @@ mod token;
 
 pub use class::{Theme, ThemeJson};
 pub use color::contrast_text_on;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 pub use token::ColorToken;
 
@@ -269,12 +269,9 @@ impl Palette {
         Span::styled(text.into(), Style::new())
     }
 
-    /// Muted gray + italic: helper text such as completion descriptions and thinking blocks.
-    pub fn muted_italic(&self, text: impl Into<String>) -> Span<'static> {
-        Span::styled(
-            text.into(),
-            Style::new().fg(self.muted).add_modifier(Modifier::ITALIC),
-        )
+    /// Muted gray, upright: helper text such as completion descriptions.
+    pub fn muted(&self, text: impl Into<String>) -> Span<'static> {
+        Span::styled(text.into(), Style::new().fg(self.muted))
     }
 }
 

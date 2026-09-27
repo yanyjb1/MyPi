@@ -93,11 +93,25 @@ impl ReservedZone {
         }
     }
 
-    /// 输入区每次内容/光标变化后的候选刷新（col = 光标终端绝对列）。
-    pub fn refresh_completion(&mut self, text: &str, cursor: usize, col: usize) {
+    /// 输入区每次内容/光标变化后的候选刷新。
+    ///
+    /// 不带列参数：锚点由渲染路径的 `realign_completion` 单独校正，
+    /// 因为事件期的光标列必然是上一帧的值。
+    pub fn refresh_completion(&mut self, text: &str, cursor: usize) {
         if let Some(svc) = self.completion.as_mut() {
-            svc.anchor_col = col;
             svc.refresh(text, cursor);
+        }
+    }
+
+    /// 只重算锚点列，不重扫候选。
+    ///
+    /// 锚点是**渲染期**概念（要等输入区这一帧把 `cursor_col` 算出来），
+    /// 候选是**事件期**概念（键盘一响就该更新）。拆开之后渲染路径可以
+    /// 随时校正锚点，而不必顺带重扫一次目录。
+    pub fn realign_completion(&mut self, text: &str, cursor: usize, col: usize) {
+        use crate::tui::zone::main::reserved::completion::engine as ceng;
+        if let Some(svc) = self.completion.as_mut() {
+            svc.anchor_col = ceng::anchor_column(text, cursor, col);
         }
     }
 
@@ -150,18 +164,10 @@ impl ReservedZone {
             && let Some(svc) = self.completion.as_ref()
         {
             use crate::tui::zone::main::reserved::area::Claim as _;
-            let mut lines = svc.draw(term_w, rows, p);
-            let anchor = svc.anchor_col;
-            // 锚点缩进：每行左侧补 anchor 列空格（弹窗自身的左移规则
-            // 已在 popup::render 里算好，这里只平移）。
-            if anchor > 0 {
-                for l in lines.iter_mut() {
-                    let mut spans = vec![ratatui::text::Span::raw(" ".repeat(anchor))];
-                    spans.append(&mut l.spans);
-                    l.spans = spans;
-                }
-            }
-            return lines;
+            // 每行**自带**锚点缩进（命令行把 `>` 放在锚点左侧两列，所以它的
+            // 缩进是 anchor-2，其余行是 anchor）。这里只做列数上限裁剪，不再
+            // 叠加任何前缀，否则名字会被推离光标列。
+            return svc.draw(term_w, rows, p);
         }
         vec![ratatui::text::Line::from("")]
     }

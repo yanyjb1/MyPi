@@ -76,9 +76,12 @@ pub fn is_exact_command(word: &str, table: &[crate::server::wire::CommandInfo]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::engine::CandidateKind;
 
     fn c(insert: &str) -> Completion {
         Completion {
+            kind: CandidateKind::Plain,
+            hits: Vec::new(),
             name: String::new(),
             detail: String::new(),
             is_dir: false,

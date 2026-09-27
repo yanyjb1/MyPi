@@ -16,11 +16,34 @@ use crate::server::wire::CommandInfo;
 // How many candidates to show at most (the popup is small; more would be unreadable).
 pub const MAX_VISIBLE: usize = 8;
 
+// What a candidate *is*, for rendering.
+//
+// Not derivable from `detail.is_empty()`: profile names are descriptionless
+// yet are not paths, and model ids carry a description yet are not commands.
+// The rendering rules differ per kind, so the kind is stated at construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateKind {
+    // A slash command name (`/model`). Rendered with a `>` selection marker and
+    // an x-aligned description column.
+    Command,
+    // Everything else: filesystem paths, profile names, model ids. Rendered with
+    // no marker; selection is shown by color alone.
+    Plain,
+}
+
 // One completion candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Completion {
+    // What this candidate is (decides the popup's row style).
+    pub kind: CandidateKind,
     // Display name (files: name only; commands: `/model` with the slash).
     pub name: String,
+    // Char indices in `name` that the typed prefix matched, ascending.
+    //
+    // A prefix hit yields `0..typed_len`; a fuzzy hit yields the positions the
+    // matcher actually consumed (non-contiguous). The popup accents exactly these
+    // characters, so the list shows *why* a candidate is in it.
+    pub hits: Vec<usize>,
     // Extra description (gray italic after the name for commands; empty for files).
     pub detail: String,
     // Directory flag (directories get a `/` suffix and remain completable).
@@ -92,6 +115,35 @@ pub fn candidate(text: &str, cursor: usize) -> Option<(usize, String)> {
     Some((start, word))
 }
 
+// The column the **candidate list** aligns to: the character right after the
+// last `/` in the trigger word.
+//
+// Not the cursor column: `src/se` puts the cursor after `se`, but candidates must
+// line up under the `s`, so the anchor is the cursor column minus the width of
+// everything typed after that `/`. For `/mod` the anchor is just after the slash.
+//
+// `cursor_col` is the cursor's absolute terminal column (border included).
+pub fn anchor_column(text: &str, cursor: usize, cursor_col: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let mut start = cursor;
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    let word: String = chars[start..cursor].iter().collect();
+    // Command (`/mod`): the user's rule is that the candidate's own `/` sits
+    // **directly below** the typed `/`, so the anchor is the slash column itself.
+    if start == 0 && word.starts_with('/') {
+        return cursor_col.saturating_sub(crate::tui::text::display_width(&word));
+    }
+    // Path: the anchor is the first character of the final segment.
+    let typed_after_slash: String = match word.rfind('/') {
+        Some(i) => word[i + 1..].to_string(),
+        None => word,
+    };
+    cursor_col.saturating_sub(crate::tui::text::display_width(&typed_after_slash))
+}
+
 // List candidates for `input`.
 //
 // `input` is the user's word (possibly with `~`); `cwd` resolves relative paths.
@@ -124,7 +176,10 @@ pub fn complete_commands(input: &str, table: &[CommandInfo]) -> Vec<Completion> 
         .iter()
         .filter(|c| c.name.starts_with(input))
         .map(|c| Completion {
+            kind: CandidateKind::Command,
             name: c.name.clone(),
+            // 命令名按前缀过滤，命中的就是打进去的那几位。
+            hits: (0..input.chars().count()).collect(),
             detail: c.detail.clone(),
             is_dir: false,
             insert: format!("{} ", c.name),
@@ -198,23 +253,39 @@ pub fn complete_files(input: &str, cwd: &Path, home: &Path) -> Vec<Completion> {
 
     // 混合过滤（用户决策）：精确前缀 + 模糊子序列一起收，前缀命中
     // 排前。`src/` 触发后打成 "mian" 仍能捞回 main.rs。
-    fn is_subsequence(needle: &str, hay: &str) -> bool {
-        let mut it = hay.chars();
-        needle.chars().all(|n| it.any(|h| h == n))
+    // 匹配器一律返回**命中的字符下标**（升序），而不只是布尔：
+    // 高亮要照着实打实匹配到的位置走，前缀是连续段，模糊是离散点。
+    fn is_subsequence(needle: &str, hay: &str) -> Option<Vec<usize>> {
+        let mut hits = Vec::new();
+        let mut it = hay.char_indices();
+        for n in needle.chars() {
+            loop {
+                match it.next() {
+                    Some((i, h)) if h == n => {
+                        hits.push(hay[..i].chars().count());
+                        break;
+                    }
+                    Some(_) => continue,
+                    None => return None,
+                }
+            }
+        }
+        Some(hits)
     }
 
     /// 打错字兜底：needle 的字符全部出现在 hay 里（不要求顺序，
     /// 覆盖相邻换位 mian↔main 这类子序列抓不住的错）。
-    fn is_bag_match(needle: &str, hay: &str) -> bool {
+    fn is_bag_match(needle: &str, hay: &str) -> Option<Vec<usize>> {
         let mut hay_chars: Vec<char> = hay.chars().collect();
-        needle.chars().all(|n| {
-            if let Some(pos) = hay_chars.iter().position(|&h| h == n) {
-                hay_chars.remove(pos);
-                true
-            } else {
-                false
-            }
-        })
+        let mut hits = Vec::new();
+        for n in needle.chars() {
+            let pos = hay_chars.iter().position(|&h| h == n)?;
+            hits.push(pos);
+            // Consume this occurrence so repeated letters need repeats in the haystack.
+            hay_chars[pos] = '\0';
+        }
+        hits.sort_unstable();
+        Some(hits)
     }
 
     #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -228,24 +299,36 @@ pub fn complete_files(input: &str, cwd: &Path, home: &Path) -> Vec<Completion> {
         let name = entry.file_name().to_string_lossy().to_string();
         let lower_name = name.to_lowercase();
         // 前缀档：直接前缀 + 点容忍（含大小写不敏感）。
+        //
+        // 命中下标就是 `0..输入长度`——前缀命中时输入的那几个字符本身就是
+        // 被高亮的部分，不需要再扫一遍。
+        let typed = name_part.chars().count();
         let prefix_hit = name.starts_with(name_part)
             || (name.starts_with('.') && name[1..].starts_with(name_part))
             || lower_name.starts_with(&lower_part)
             || (lower_name.starts_with('.') && lower_name[1..].starts_with(&dotless_part));
         // 模糊档：子序列（按序）或全字符兜底（覆盖 mian↔main 换位）。
-        let fuzzy_hit = !lower_part.is_empty()
-            && (is_subsequence(&lower_part, &lower_name)
-                || is_bag_match(&lower_part, &lower_name));
-        if !prefix_hit && !fuzzy_hit {
+        let fuzzy_hits = if lower_part.is_empty() || prefix_hit {
+            None
+        } else {
+            is_subsequence(&lower_part, &lower_name).or_else(|| is_bag_match(&lower_part, &lower_name))
+        };
+        if !prefix_hit && fuzzy_hits.is_none() {
             continue;
         }
-        let rank = if prefix_hit { Rank::Prefix } else { Rank::Fuzzy };
+        let (rank, hits) = if prefix_hit {
+            (Rank::Prefix, (0..typed).collect())
+        } else {
+            (Rank::Fuzzy, fuzzy_hits.unwrap_or_default())
+        };
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let suffix = if is_dir { "/" } else { "" };
         out.push((
             rank,
             Completion {
+                kind: CandidateKind::Plain,
                 name: format!("{name}{suffix}"),
+                hits,
                 detail: String::new(),
                 is_dir,
                 // The written-back text keeps the user's original form (`~/`, `./`, `/abs/`)
@@ -322,6 +405,20 @@ pub struct CompletionPopup {
     locked_height: Option<usize>,
 }
 
+// One row of the popup, as the renderer needs it.
+//
+// A struct rather than a tuple: six fields with three same-typed neighbours is
+// exactly where positional access goes wrong silently.
+pub struct VisibleRow<'a> {
+    pub kind: CandidateKind,
+    pub name: &'a str,
+    // Char indices in `name` the typed prefix matched.
+    pub hits: &'a [usize],
+    pub detail: &'a str,
+    pub selected: bool,
+    pub is_dir: bool,
+}
+
 impl CompletionPopup {
     pub fn is_open(&self) -> bool {
         !self.items.is_empty()
@@ -343,10 +440,9 @@ impl CompletionPopup {
     // The popup's displayed rows, with a scrolling window that keeps the selection
     // visible.
     //
-    // `avail` is the popup's row capacity (from layout). Returns
-    // `(name, selected, is_dir)` **top to bottom** — matching screen order, so ↑
-    // really moves up and never inverts.
-    pub fn visible(&self, avail: usize) -> Vec<(&str, &str, bool, bool)> {
+    // `avail` is the popup's row capacity (from layout). Rows come back **top to
+    // bottom**, matching screen order, so ↑ really moves up and never inverts.
+    pub fn visible(&self, avail: usize) -> Vec<VisibleRow<'_>> {
         // Locked height wins: the reserved area occupies the rows from open time (empty
         // slots stay blank), so fewer candidates leave whitespace instead of collapsing
         // the block — no visual jumps.
@@ -363,13 +459,13 @@ impl CompletionPopup {
         self.items[start..end]
             .iter()
             .enumerate()
-            .map(|(i, c)| {
-                (
-                    c.name.as_str(),
-                    c.detail.as_str(),
-                    start + i == self.selected,
-                    c.is_dir,
-                )
+            .map(|(i, c)| VisibleRow {
+                kind: c.kind,
+                name: c.name.as_str(),
+                hits: c.hits.as_slice(),
+                detail: c.detail.as_str(),
+                selected: start + i == self.selected,
+                is_dir: c.is_dir,
             })
             .collect()
     }
@@ -549,6 +645,52 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    #[test]
+    fn prefix_hit_reports_the_typed_characters_as_hits() {
+        let d = tmpdir("hits-prefix");
+        fs::write(d.join("main.rs"), "x").unwrap();
+        let got = complete_files("ma", &d, &d);
+        assert_eq!(got[0].name, "main.rs");
+        // 打进去的 "ma" 就是命中的两个字符。
+        assert_eq!(got[0].hits, vec![0, 1]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn fuzzy_hit_reports_the_consumed_positions() {
+        let d = tmpdir("hits-fuzzy");
+        fs::write(d.join("README.md"), "x").unwrap();
+        // "rd" 是子序列：R(0) … D(3)（readme 的 d 在 index 3，大小写不敏感）
+        let got = complete_files("rd", &d, &d);
+        assert_eq!(got[0].name, "README.md");
+        assert_eq!(got[0].hits, vec![0, 3], "子序列命中的是实际吃掉的位次");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn bag_hit_reports_positions_in_ascending_order() {
+        let d = tmpdir("hits-bag");
+        fs::write(d.join("main.rs"), "x").unwrap();
+        // "mian" 是换位（子序列抓不住），袋匹配捞回；命中的位次必须升序，
+        // 否则渲染时 binary_search 会漏掉后面的字符。
+        let got = complete_files("mian", &d, &d);
+        assert_eq!(got[0].name, "main.rs");
+        let hits = &got[0].hits;
+        assert_eq!(hits.len(), 4, "四个字符都命中: {hits:?}");
+        assert!(hits.windows(2).all(|w| w[0] < w[1]), "位次必须严格升序: {hits:?}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn directory_hits_exclude_the_trailing_slash() {
+        let d = tmpdir("hits-dir");
+        fs::create_dir(d.join("session")).unwrap();
+        let got = complete_files("ses", &d, &d);
+        assert_eq!(got[0].name, "session/");
+        assert_eq!(got[0].hits, vec![0, 1, 2], "命中只覆盖键入的三位");
+        let _ = fs::remove_dir_all(&d);
+    }
+
     use super::*;
     use std::fs;
 
@@ -587,6 +729,63 @@ mod tests {
         let (start, word) = candidate("foo bar/baz", 11).unwrap();
         assert_eq!(word, "bar/baz");
         assert_eq!(start, 4);
+    }
+
+    // ---- anchor column ----
+
+    #[test]
+    fn path_anchor_is_the_last_segment_start() {
+        // 输入框左缘有 2 列边框，"src/se" 的光标落在第 8 列（2 + 6）。
+        // 锚点要在 `s` 上，即第 6 列（2 + "src/".len()）。
+        assert_eq!(anchor_column("src/se", 6, 8), 6);
+        // 更深一层：草稿 "a/b/cd"，光标在第 8 列，锚点在第 6 列（`c`）。
+        assert_eq!(anchor_column("a/b/cd", 6, 8), 6);
+    }
+
+    #[test]
+    fn command_anchor_is_the_slash_column() {
+        // "/mod"：光标在第 6 列，斜杠在第 2 列——候选自身那个 `/` 要落在它下面。
+        assert_eq!(anchor_column("/mod", 4, 6), 2);
+        // 命令名打了一半也一样。
+        assert_eq!(anchor_column("/q", 2, 4), 2);
+    }
+
+    #[test]
+    fn path_anchor_uses_display_width_not_char_count() {
+        // 中文目录名占两列：`中/se` 的光标列是 2 + 2 + 3 = 7，
+        // 锚点要落在 `s` 上 = 2 + 2 + 1 = 5。
+        assert_eq!(anchor_column("中/se", 4, 7), 5);
+    }
+
+    #[test]
+    fn anchor_does_not_underflow_on_a_short_column() {
+        // 光标列小于键入长度时不许 panic（防御性；正常路径不会出现）。
+        assert_eq!(anchor_column("src/se", 6, 1), 0);
+    }
+
+    #[test]
+    fn anchor_of_a_multi_word_line_starts_at_the_word() {
+        // "看下 src/se"：词从 index 3 开始，光标列 2 + 4 + 6 = 12。
+        // 锚点 = 12 - "se".len() = 10，也就是 `s` 所在列。
+        assert_eq!(anchor_column("看下 src/se", 10, 12), 10);
+    }
+
+    #[test]
+    fn anchor_lands_one_column_right_of_a_trailing_slash() {
+        // 用户报告的回归：敲完 "src/" 时（还没打段名），光标紧跟斜杠，
+        // 锚点必须落在斜杠的**右一位**，候选不能压在斜杠底下。
+        // 光标列 = 2 + 4 = 6，斜杠在第 5 列，锚点 = 6。
+        assert_eq!(anchor_column("src/", 4, 6), 6);
+        // 词在句中时同理："看下 src/"，光标列 2 + 4 + 4 = 10，锚点 10。
+        assert_eq!(anchor_column("看下 src/", 8, 10), 10);
+    }
+
+    #[test]
+    fn anchor_tracks_each_typed_character_of_the_segment() {
+        // 逐字敲 "src/s" → "src/se"：锚点必须钉死在段首，不随输入右移。
+        assert_eq!(anchor_column("src/s", 5, 7), 6);
+        assert_eq!(anchor_column("src/se", 6, 8), 6);
+        assert_eq!(anchor_column("src/ser", 7, 9), 6);
     }
 
     // ---- directory listing ----
@@ -698,12 +897,16 @@ mod tests {
     fn common_prefix_of_siblings() {
         let items = vec![
             Completion {
+                kind: CandidateKind::Plain,
+                hits: Vec::new(),
                 detail: String::new(),
                 name: "main.rs".into(),
                 is_dir: false,
                 insert: "src/main.rs".into(),
             },
             Completion {
+                kind: CandidateKind::Plain,
+                hits: Vec::new(),
                 detail: String::new(),
                 name: "mainfest".into(),
                 is_dir: false,
@@ -717,12 +920,16 @@ mod tests {
     fn common_prefix_none_on_divergence() {
         let items = vec![
             Completion {
+                kind: CandidateKind::Plain,
+                hits: Vec::new(),
                 detail: String::new(),
                 name: "a".into(),
                 is_dir: false,
                 insert: "a".into(),
             },
             Completion {
+                kind: CandidateKind::Plain,
+                hits: Vec::new(),
                 detail: String::new(),
                 name: "b".into(),
                 is_dir: false,
@@ -735,6 +942,8 @@ mod tests {
     #[test]
     fn common_prefix_single_item_is_itself() {
         let items = vec![Completion {
+            kind: CandidateKind::Plain,
+            hits: Vec::new(),
             name: "x".into(),
             detail: String::new(),
             is_dir: false,
@@ -762,6 +971,8 @@ mod tests {
 
     fn cand(name: &str, is_dir: bool) -> Completion {
         Completion {
+            kind: CandidateKind::Plain,
+            hits: Vec::new(),
             name: name.to_string(),
             detail: String::new(),
             is_dir,
@@ -818,13 +1029,13 @@ mod tests {
         // Selection inside the window
         let vis = p.visible(avail);
         assert_eq!(vis.len(), avail);
-        assert!(vis.iter().any(|(_, _, sel, _)| *sel));
+        assert!(vis.iter().any(|r| r.selected));
         // After many downward steps the selection must still be visible
         for step in 0..20 {
             p.move_selection(1);
             let vis = p.visible(avail);
             assert!(
-                vis.iter().any(|(_, _, sel, _)| *sel),
+                vis.iter().any(|r| r.selected),
                 "selection escaped the window after step {step}"
             );
         }
@@ -836,9 +1047,9 @@ mod tests {
         let mut p = CompletionPopup::default();
         p.open(vec![cand("first", false), cand("second", false)], 0, 1);
         let vis = p.visible(2);
-        assert_eq!(vis[0].0, "first");
-        assert_eq!(vis[1].0, "second");
-        assert!(vis[0].2, "first entry highlighted by default");
+        assert_eq!(vis[0].name, "first");
+        assert_eq!(vis[1].name, "second");
+        assert!(vis[0].selected, "first entry highlighted by default");
     }
 
     #[test]
@@ -886,12 +1097,16 @@ mod tests {
         p.open(
             vec![
                 Completion {
+                    kind: CandidateKind::Plain,
+                    hits: Vec::new(),
                     detail: String::new(),
                     name: "src/".into(),
                     is_dir: true,
                     insert: "src/".into(),
                 },
                 Completion {
+                    kind: CandidateKind::Plain,
+                    hits: Vec::new(),
                     detail: String::new(),
                     name: "srcx".into(),
                     is_dir: false,
@@ -919,12 +1134,16 @@ mod tests {
         p.open(
             vec![
                 Completion {
+                    kind: CandidateKind::Plain,
+                    hits: Vec::new(),
                     detail: String::new(),
                     name: "src/".into(),
                     is_dir: true,
                     insert: "src/".into(),
                 },
                 Completion {
+                    kind: CandidateKind::Plain,
+                    hits: Vec::new(),
                     detail: String::new(),
                     name: "srcx".into(),
                     is_dir: false,
@@ -955,8 +1174,8 @@ mod tests {
         p.open(items, 0, 1);
         assert_eq!(p.visible(MAX_VISIBLE).len(), MAX_VISIBLE);
         // First entry highlighted
-        assert!(p.visible(MAX_VISIBLE)[0].2);
-        assert!(!p.visible(MAX_VISIBLE)[1].2);
+        assert!(p.visible(MAX_VISIBLE)[0].selected);
+        assert!(!p.visible(MAX_VISIBLE)[1].selected);
     }
 
     // ---- command / argument completion ----

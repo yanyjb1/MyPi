@@ -176,8 +176,7 @@ impl Zone for MainZone {
             {
                 let text = self.input.editor.text();
                 let cursor = self.input.editor.cursor();
-                let col = self.input.cursor_col as usize;
-                self.reserved.refresh_completion(&text, cursor, col);
+                self.reserved.refresh_completion(&text, cursor);
                 // 弹窗开合是**输入区**决定键位归属的依据（开着 = ↑↓/Tab/
                 // Enter/Esc 归补全服务），而它只有 Zone 看得见。
                 self.input
@@ -207,6 +206,15 @@ impl Zone for MainZone {
             out.push(ratatui::text::Line::default());
         }
         out.extend(self.input.render_rows(term_w, &p));
+        // 锚点必须在**输入区刚渲染完**之后重算：`cursor_col` 是上面这一行
+        // 写进去的，而 `deliver` 跑在渲染之前，读到的永远是上一帧的值——
+        // 敲下 `/` 的那一帧锚点会少算一列，候选于是压在 `/` 底下而不是
+        // 落在它右边，直到下一次按上下键触发重算才归位。
+        self.reserved.realign_completion(
+            &self.input.editor.text(),
+            self.input.editor.cursor(),
+            self.input.cursor_col as usize,
+        );
         out.extend(self.reserved.render_rows(term_w, &p));
         out
     }
