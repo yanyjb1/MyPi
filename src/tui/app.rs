@@ -32,8 +32,13 @@ impl App {
     /// 启动哪个 Zone 由调用方决定：命令行直接进 → `ZoneId::Main`；
     /// 未来 `cli --resume` → `ZoneId::Resume`（Zone 实现后挂上即可，
     /// APP 代码不变）。
-    pub fn new(size: TermSize, startup: ZoneId) -> Self {
+    pub fn new(
+        size: TermSize,
+        startup: ZoneId,
+        usage: &crate::server::ai::config::UsageConfig,
+    ) -> Self {
         let mut main = crate::tui::zone::MainZone::default();
+        main.set_usage_config(usage);
         main.attach(size);
         let mut resume = crate::tui::zone::ResumeZone::default();
         resume.attach(size);
@@ -124,7 +129,7 @@ mod tests {
 
     #[test]
     fn app_starts_with_main_as_owner() {
-        let app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main);
+        let app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main, &Default::default());
         assert_eq!(app.current_owner(), ZoneId::Main);
     }
 
@@ -136,7 +141,7 @@ mod tests {
     fn opening_the_tree_then_feeding_it_renders_rows() {
         use crate::server::wire::{ForkInfo, TreeNode};
         use crate::tui::zone::Zone as _;
-        let mut app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main);
+        let mut app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main, &Default::default());
         app.open_tree();
         assert_eq!(
             app.current_owner(),
@@ -166,7 +171,7 @@ mod tests {
 
     #[test]
     fn resize_broadcasts_to_zone() {
-        let mut app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main);
+        let mut app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main, &Default::default());
         app.on_resize(TermSize { cols: 100, rows: 30 });
         assert_eq!(app.main.size, Some(TermSize { cols: 100, rows: 30 }));
     }

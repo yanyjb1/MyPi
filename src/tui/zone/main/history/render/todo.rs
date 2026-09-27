@@ -67,7 +67,7 @@ pub fn roman(one_based: usize) -> String {
 /// `budget` 太小就砍尾巴并补一行 `… 还有 N 行`——宁可少画也不能把
 /// 聊天区顶没。
 ///
-/// `fold` 是折叠策略（`config.yaml` → `tui.todoFold`），`touched` 是**最近
+/// `fold` 是折叠策略（`config.yaml` → `tui.TodoFold`），`touched` 是**最近
 /// 一次 `todo` 调用碰过的阶段名**。折叠开着时，没被碰过的阶段折成一行
 /// `名字 · 3/5`，碰过的完整展开——所以你在做大任务一，二和三收起来。
 /// `touched` 为空 = 没有信号，全部展开（和关掉折叠一个效果）。

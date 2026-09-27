@@ -79,6 +79,13 @@ pub struct Daemon {
     /// view — not its lengths, the tool-output tail slides at constant
     /// length — keeps the wire quiet exactly when the screen is quiet.
     last_stream: HashMap<i64, StreamView>,
+    /// 上一次**发出去**的状态帧（按内容比对，不是按事件）。
+    ///
+    /// 状态帧的触发不能只挂在 `Change::{TurnDone,Session}` 上：命令
+    /// （`/switch`、`/name`、`/cdp`）直接改会话字段、不产生 `SessionEvent`，
+    /// 提交那一刻也只报 `Change::Stream`。少了这本账，"切了模型要等这一轮
+    /// 跑完才改"和"spinner 死活不转"就是必然。
+    last_state: HashMap<i64, ServerMsg>,
     /// (会话, 连接, 方向) → 后台正在读那一段。前端连着滚会重复开口（手不会
     /// 只滚一格），没有这道闸门同一个区间会读两遍、前端收到重复内容。
     paging: HashSet<(i64, u64, bool)>,
@@ -390,6 +397,7 @@ impl Daemon {
             watchers: HashMap::new(),
             shipped: HashMap::new(),
             last_stream: HashMap::new(),
+            last_state: HashMap::new(),
             paging: HashSet::new(),
             idle_since: None,
             idle_limit,
@@ -484,10 +492,21 @@ impl Daemon {
             let mut state_dirty = false;
             for c in changes {
                 match c {
-                    Change::Transcript | Change::ToolActivity => tail_dirty = true,
+                    Change::Transcript | Change::ToolActivity => {
+                        tail_dirty = true;
+                        // 条目落册的同时流式槽位也可能被改：`ToolStart` 会清空
+                        // 正文缓冲（那半句已经随工具条目存档），`ToolFinish` 会
+                        // 丢掉工具输出尾巴——两者报的都是条目变更。只认
+                        // `Change::Stream` 的话，前端会一直挂着那半句，屏幕上
+                        // 正文区和工具卡片各一份。
+                        stream_dirty = true;
+                    }
                     Change::TurnDone => {
                         tail_dirty = true;
                         state_dirty = true;
+                        // 收尾会把半句取走（`finalize_round` 的 `mem::take`），
+                        // 前端也得知道它没了。
+                        stream_dirty = true;
                     }
                     // Consecutive Stream changes collapse into ONE snapshot:
                     // the message carries the whole in-flight half-sentence.
@@ -499,32 +518,28 @@ impl Daemon {
                     Change::None => {}
                 }
             }
-            if stream_dirty {
-                let view = self
-                    .hub
-                    .get(id)
-                    .map(|s| s.stream_view().clone())
-                    .unwrap_or_default();
-                if Self::stream_changed(self.last_stream.get(&id), &view) {
-                    self.last_stream.insert(id, view.clone());
-                    msgs.push(Self::stream_msg_of(view));
-                }
+            if stream_dirty && let Some(m) = self.fresh_stream(id) {
+                msgs.push(m);
             }
             if tail_dirty {
                 // Tail delta, or a full snapshot when the generation jumped
                 // (replace_transcript / resume / compaction). Per watcher:
                 // a client that attached later still gets its own snapshot.
                 let conns = self.watchers.get(&id).cloned().unwrap_or_default();
+                // 状态按会话记账，但每个 watcher 都得收到同一份。
+                let state = self.fresh_state(id);
                 for cid in conns {
                     for m in self.transcript_msgs_for(id, cid) {
                         self.enqueue(cid, m);
                     }
-                    self.enqueue(cid, self.state_msg(id));
+                    if let Some(m) = state.clone() {
+                        self.enqueue(cid, m);
+                    }
                 }
                 state_dirty = false;
             }
-            if state_dirty {
-                msgs.push(self.state_msg(id));
+            if state_dirty && let Some(m) = self.fresh_state(id) {
+                msgs.push(m);
             }
             if msgs.is_empty() {
                 continue;
@@ -554,8 +569,14 @@ impl Daemon {
         }
         for id in self.watchers.keys().copied().collect::<Vec<_>>() {
             let conns = self.watchers.get(&id).cloned().unwrap_or_default();
+            // 状态帧的主场：命令改完模型/名字，或者回合刚收尾，都在这里把
+            // 新的状态发出去（转录排在它前面，前端看到的顺序才是对的）。
+            let state = self.fresh_state(id);
             for cid in conns {
                 for m in self.transcript_msgs_for(id, cid) {
+                    self.enqueue(cid, m);
+                }
+                if let Some(m) = state.clone() {
                     self.enqueue(cid, m);
                 }
             }
@@ -854,7 +875,14 @@ impl Daemon {
             self.send(conn, m);
         }
         self.send(conn, self.stream_msg(id));
-        self.send(conn, self.state_msg(id));
+        // 挂载是无条件对齐：这两份就是"上一次发出去的"，记账跟上，免得下一
+        // 跳又原样重发一遍。
+        if let Some(s) = self.hub.get(id) {
+            self.last_stream.insert(id, s.stream_view().clone());
+        }
+        let state = self.state_msg(id);
+        self.last_state.insert(id, state.clone());
+        self.send(conn, state);
         // Attach responses must ship immediately (a front end blocks on them
         // before drawing); the periodic pump would also get there, but with
         // unbounded latency.
@@ -888,6 +916,12 @@ impl Daemon {
             if let Some(s) = self.hub.get_mut(id) {
                 s.notice(&format!("{name} 没做成：{e:#}"));
             }
+        }
+        // `/usage` 的账单是**给敲命令的这个前端**的一张面板，不是转录条目：
+        // 别的 watcher 不该被弹一脸，所以它单独走一条消息，只回发起者。
+        let panel = self.hub.get_mut(id).and_then(|s| s.take_usage_panel());
+        if let Some((lang, groups)) = panel {
+            self.send(conn, ServerMsg::Usage { lang, groups });
         }
         // Whatever happened, the transcript (and thus the front end) is refreshed
         // by the pump on the next tick.
@@ -966,6 +1000,23 @@ impl Daemon {
     }
 
     fn do_submit(&mut self, conn: u64, id: i64, text: String) {
+        // 模型不可用的会话不许开工：不静默拿默认模型顶上（上下文一长，账单是
+        // 用户的），也不假装收到了。
+        let blocked = self
+            .hub
+            .get(id)
+            .and_then(|s| s.model_block())
+            .map(str::to_string);
+        if let Some(block) = blocked {
+            self.send(
+                conn,
+                ServerMsg::Error {
+                    code: ErrorCode::Internal,
+                    message: block,
+                },
+            );
+            return;
+        }
         if self.hub.submit(id, &text) {
             // The user's own message reaches every watcher through the
             // transcript tail; pump() runs right after this command.
@@ -1110,13 +1161,6 @@ impl Daemon {
     }
 
 
-    /// 这一帧流式快照值不值得发：和上一帧**逐字段**相同就不发。
-    ///
-    /// 不比长度：工具输出的尾巴是滑动窗口，长度可以一模一样而内容是新的。
-    fn stream_changed(last: Option<&StreamView>, now: &StreamView) -> bool {
-        last != Some(now)
-    }
-
     fn stream_msg(&self, id: i64) -> ServerMsg {
         let v = self
             .hub
@@ -1141,6 +1185,42 @@ impl Daemon {
         }
     }
 
+    /// 流式帧的内容比对（和 [`Self::fresh_state`] 一个思路）。
+    ///
+    /// `Change::Stream` 不是唯一会让流式槽位变样的事件——`ToolStart` 清空正文
+    /// 缓冲、`finalize_round` 取走半句，报的都是别的 `Change`。比对**内容**
+    /// 而不是信任事件标签，才不会漏帧：漏一帧的后果是前端把已经存档的那半句
+    /// 继续挂在正文区，和工具卡片上的同一段字重成两份。
+    fn fresh_stream(&mut self, id: i64) -> Option<ServerMsg> {
+        let fresh = {
+            let Some(s) = self.hub.get(id) else {
+                return None;
+            };
+            let view = s.stream_view();
+            if self.last_stream.get(&id) == Some(view) {
+                return None;
+            }
+            view.clone()
+        };
+        self.last_stream.insert(id, fresh.clone());
+        Some(Self::stream_msg_of(fresh))
+    }
+
+    /// 状态帧的边沿检测：与上一次**发出去**的逐字段比对，变了才发。
+    ///
+    /// 这是 `/switch`、`/name`、`/cdp` 这类命令唯一的出路——它们直接改会话
+    /// 字段，不产生任何 `SessionEvent`，delta pass 看不见它们；也是 spinner
+    /// 亮起来的唯一出路——提交那一刻只报 `Change::Stream`，`busy()` 由假
+    /// 变真没有任何事件。副作用是好的：状态帧从此只在真的变了的时候走线。
+    fn fresh_state(&mut self, id: i64) -> Option<ServerMsg> {
+        let now = self.state_msg(id);
+        if self.last_state.get(&id) == Some(&now) {
+            return None;
+        }
+        self.last_state.insert(id, now.clone());
+        Some(now)
+    }
+
     fn state_msg(&self, id: i64) -> ServerMsg {
         let Some(s) = self.hub.get(id) else {
             return ServerMsg::State {
@@ -1148,8 +1228,10 @@ impl Daemon {
                 name: None,
                 cwd: String::new(),
                 spend_usd: 0.0,
+                currency: String::new(),
                 last_prompt_tokens: 0,
                 context_window: 0,
+                ctx_estimate: 0,
                 busy: false,
             };
         };
@@ -1159,8 +1241,11 @@ impl Daemon {
             name: s.session_name().map(str::to_string),
             cwd: s.cwd().to_string_lossy().into_owned(),
             spend_usd,
+            // 货币符号跟着模型走：金额没有符号就是个无法解释的数。
+            currency: s.currency_symbol().to_string(),
             last_prompt_tokens,
             context_window: s.context_window(),
+            ctx_estimate: s.context_estimate(),
             busy: s.busy(),
         }
     }
@@ -1247,6 +1332,7 @@ impl Daemon {
         // (会话, 连接) 记，连接号只增不减。
         self.shipped.retain(|(id, _), _| ids.contains(id));
         self.last_stream.retain(|id, _| ids.contains(id));
+        self.last_state.retain(|id, _| ids.contains(id));
         self.paging.retain(|(id, _, _)| ids.contains(id));
         let any_busy = ids.iter().any(|id| {
             self.hub

@@ -122,6 +122,11 @@ impl MainZone {
         let _ = self.input.on_height_changed(h.input);
         let _ = self.reserved.on_height_changed(h.reserved);
     }
+
+    /// 把配置里的显示选项交给保留区住户（装配时一次）。
+    pub fn set_usage_config(&mut self, cfg: &crate::server::ai::config::UsageConfig) {
+        self.reserved.set_usage_config(cfg);
+    }
 }
 
 impl Zone for MainZone {
@@ -183,6 +188,8 @@ impl Zone for MainZone {
                 // Enter/Esc 归补全服务），而它只有 Zone 看得见。
                 self.input
                     .set_completion_open(self.reserved.completion_open());
+                // 面板的开合同理：它决定 Esc 的归属，而只有 Zone 看得见保留区。
+                self.input.set_panel_open(self.reserved.panel_open());
             }
             // 出口请求逐级上报：一次事件的全部产出都搬上来，不吞。
             self.pending_exits.append(&mut self.input.pending_exits);

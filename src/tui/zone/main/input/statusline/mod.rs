@@ -84,7 +84,7 @@ const ENGINE_TOKENS: [Token; 2] = [Token::Accent, Token::Sep];
 
 /// Everything a statusline component can be told. Payloads are borrowed: a
 /// notification is synchronous and the component copies what it keeps.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum StatusEvent<'a> {
     /// One animation frame. Emitted once per render-loop pass; only the
     /// activity indicator does anything with it.
@@ -114,7 +114,7 @@ pub enum StatusEvent<'a> {
 }
 
 /// What the price segment and the usage gauge display.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UsageSnapshot {
     /// Session cumulative cost in the model's currency.
     pub total_cost: f64,
@@ -122,8 +122,13 @@ pub struct UsageSnapshot {
     pub ctx_tokens: u64,
     /// Context window (denominator of the gauge).
     pub ctx_limit: u64,
-    pub currency_symbol: &'static str,
-    /// False when the model has no price sheet: the price segment hides.
+    /// 还没有实测值时用的起点（服务器按历史/字符给的）。`ctx_tokens == 0`
+    /// 时它顶上，渲染成 `~8%` 那样的估算读数；有了实测值就不再被看。
+    pub ctx_estimate: u64,
+    /// 计价货币的符号（`¥` / `$` / `cr`），来自服务端的模型元数据。
+    pub currency_symbol: String,
+    /// False when there is nothing honest to print: no price sheet
+    /// (`currency` empty), or a session that has not spent anything yet.
     pub show_cost: bool,
 }
 
@@ -236,7 +241,8 @@ mod tests {
             total_cost: 1.2345,
             ctx_tokens: 80_000,
             ctx_limit: 1_000_000,
-            currency_symbol: "¥",
+            ctx_estimate: 0,
+            currency_symbol: "¥".into(),
             show_cost: true,
         }));
         s
@@ -415,6 +421,34 @@ mod tests {
         assert_eq!(spans(&s), idle, "idling again must restore the idle row");
     }
 
+    /// spinner 的四个字形都要走一遍。用户报过"只看到 `|`"——那时候主循环
+    /// 阻塞在 socket 上，一条 `Tick` 都没发出去（组件这边一直是好的，坏的是
+    /// 没人喂它）。这条钉住组件侧：喂满四拍，四个字形一个不少。
+    #[test]
+    fn every_spinner_frame_appears_across_four_ticks() {
+        use components::activity::Activity;
+        let mut a = Activity::default();
+        let glyph = |a: &Activity| {
+            a.render(&StatusTheme::resolve(), None)
+                .iter()
+                .map(|sp| sp.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(glyph(&a), "π", "没跑的时候是 π");
+        a.on_event(&StatusEvent::ActivityStarted);
+        let mut seen = vec![glyph(&a)];
+        for _ in 0..4 {
+            a.on_event(&StatusEvent::Tick);
+            seen.push(glyph(&a));
+        }
+        for want in ["|", "/", "-", "\\"] {
+            assert!(seen.iter().any(|g| g == want), "没转到 {want}：{seen:?}");
+        }
+        assert_eq!(seen[0], seen[4], "四拍正好转一圈回到起点");
+        a.on_event(&StatusEvent::ActivityStopped);
+        assert_eq!(glyph(&a), "π", "回合结束回到 π");
+    }
+
     #[test]
     fn git_counts_show_only_what_exists() {
         let t = StatusTheme::resolve();
@@ -472,7 +506,8 @@ mod tests {
             total_cost: 0.0,
             ctx_tokens: 0,
             ctx_limit: 1000,
-            currency_symbol: "$",
+            ctx_estimate: 0,
+            currency_symbol: "$".into(),
             show_cost: false,
         }));
         let txt = text(&s.render(&t, 200));

@@ -89,7 +89,8 @@ mypi --model <p:id>       # 保留：本会话覆盖默认模型
 | `transcript` | `entries` | 附着时给一次全量；换分支/换会话时再给一次 |
 | `entry` | `entry` | 转录尾巴新增一条（工具请求/结果、回复、错误都在里面） |
 | `stream` | `active`, `text`, `reasoning`, `live`, `run_state` | 正在流的那半句；每帧合并发一次（≤ 33ms 一条） |
-| `state` | `model`, `cwd`, `name`, `spend`, `usage`, `busy` | 状态栏；变化时发 |
+| `state` | `model`, `cwd`, `name`, `spend`, `currency`, `usage`, `busy` | 状态栏；变化时发 |
+| `usage` | `lang`, `groups` | `/usage` 的账单面板；**只回敲命令的那个前端** |
 | `sessions` / `rounds` / `replay` | 查询结果 | 对应请求的回包 |
 | `logs` | `records` | 日志回包 |
 | `error` | `code`, `message` | 协议层错误（非回合错误；回合错误是 `entry`） |

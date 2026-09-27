@@ -38,6 +38,8 @@ fn spec(base: &str) -> SessionSpec {
         cost: Cost::default(),
         context_window: 0,
         model_name: "m".into(),
+        model_provider: "test".into(),
+        currency: crate::server::ai::config::Currency::Cny,
         cwd: std::env::temp_dir(),
         tool_filter: None,
         roster_source: None,
@@ -247,34 +249,92 @@ fn lazy_history_ships_the_tail_then_the_older_pages_on_demand() {
     let _ = h.join();
 }
 
-/// 前端每收到一帧 `Stream` 就要付一次整帧重绘（~3 ms），所以"画面没变"的
-/// 快照不该发。判据是**逐字段**比：工具输出的尾巴滑动时长度可以不变，
-/// 按长度比就会把真正的新内容吞掉。
+/// 一个**分段发货**的网关：正文那半句先到，工具调用隔 `delay` 才来。
+///
+/// [`fake_gateway`] 用 `Content-Length` 一次 write 把整个响应送出去——每个
+/// chunk 挤在同一瞬间抵达，于是"半句到达"和"正文被清空"落在同一个 pump
+/// 节拍里被合并掉（初始态和终态一样，本来也不该发帧）。可要测的正是中间
+/// 那一帧，所以这里把两次写隔开。
+fn staged_gateway(delay: std::time::Duration) -> (String, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let h = std::thread::spawn(move || {
+        // 第一轮：正文先走。
+        let Ok((mut sock, _)) = listener.accept() else {
+            return;
+        };
+        let _ = crate::server::test_gateway::read_request(&mut sock);
+        let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n");
+        let _ = sock.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"\xe6\x88\x91\xe5\x85\x88\xe7\x9c\x8b\xe7\x9c\x8b\"}}]}\n\n");
+        let _ = sock.flush();
+        std::thread::sleep(delay);
+        // 隔一拍，工具调用才来。
+        let _ = sock.write_all(
+            b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"bash\",\"arguments\":\"{\\\"command\\\":\\\"sleep 0.4\\\",\\\"intent\\\":\\\"wait a beat\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        );
+        let _ = sock.write_all(b"data: [DONE]\n\n");
+        let _ = sock.flush();
+        drop(sock);
+
+        // 第二轮：收尾回复。
+        let Ok((mut sock, _)) = listener.accept() else {
+            return;
+        };
+        let _ = crate::server::test_gateway::read_request(&mut sock);
+        let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n");
+        let _ = sock.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"\xe8\xaf\xbb\xe5\xae\x8c\xe4\xba\x86\"}}]}\n\n");
+        let _ = sock.write_all(b"data: [DONE]\n\n");
+        let _ = sock.flush();
+    });
+    (format!("http://{addr}/v1"), h)
+}
+
+/// 工具开始的那一刻，服务端会清空正文缓冲（那半句已经随工具条目存档了）。
+/// **这个清空必须发一帧出去**：不发的话，前端把那半句继续挂在正文区，于是
+/// 屏幕上同一段字出现两份——工具卡片上方一份（来自条目），正文区一份（来自
+/// 早先那帧流式快照），直到下一轮内容把它顶掉。
+///
+/// 它报的是 `Change::Transcript`（同时还有一条工具条目要落），所以只认
+/// `Change::Stream` 的发送逻辑一定会漏掉它。
 #[test]
-fn an_unchanged_stream_snapshot_is_not_shipped() {
-    use crate::server::events::StreamView;
-    let base = StreamView {
-        active: true,
-        text: "半句".into(),
-        tool_output: "line1\nline2\n".into(),
-        ..Default::default()
-    };
-    // 一模一样：不发。
-    assert!(!Daemon::stream_changed(Some(&base), &base.clone()));
-    // 正文长了一截：发。
-    let grown = StreamView {
-        text: "半句话".into(),
-        ..base.clone()
-    };
-    assert!(Daemon::stream_changed(Some(&base), &grown));
-    // **同样长度、不同内容**（尾巴滑了一行）：必须发。
-    let slid = StreamView {
-        tool_output: "line2\nline3\n".into(),
-        ..base.clone()
-    };
-    assert!(Daemon::stream_changed(Some(&base), &slid));
-    // 第一次（没有上一帧）：发。
-    assert!(Daemon::stream_changed(None, &base));
+fn the_cleared_text_buffer_reaches_the_front_end_as_a_stream_frame() {
+    let dir = tmp("tool-clear");
+    let path = dir.join("d.sock");
+    // 工具**慢一点**：回合快到一个 tick 里跑完的话，中间那几帧会被合并掉
+    // （初始态和终态一样，本来就不该发），这里要看的正是中间那一帧。
+    let (base, _srv) = staged_gateway(std::time::Duration::from_millis(150));
+    let hub = SessionHub::new(dir.join("sessions.sqlite3"));
+    let daemon = Daemon::bind(
+        path.clone(),
+        hub,
+        spec(&base),
+        std::time::Duration::from_secs(600),
+    )
+    .unwrap();
+    let h = std::thread::spawn(move || daemon.serve().unwrap());
+    for _ in 0..200 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut c = TestClient::connect(&path);
+    c.send(&ClientMsg::Submit {
+        text: "看看文件".into(),
+        from_block: None,
+    });
+    let _id = c.attached_id();
+    // 那半句先到。
+    c.wait_for(|m| matches!(m, ServerMsg::Stream { text, .. } if text == "我先看看"));
+    // 工具一开始，服务端就把那半句从流式槽位取走（它已经随工具条目存档）。
+    // 这一帧到不了的话，前端会把它继续挂在正文区，和工具卡片上的同一段字
+    // 重成两份——等不到就在这里超时炸掉，那正是要防的退化。
+    c.wait_for(|m| matches!(m, ServerMsg::Stream { text, .. } if text.is_empty()));
+
+    c.quit();
+    h.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 fn start_daemon(name: &str, base: &str) -> (std::path::PathBuf, std::thread::JoinHandle<()>) {
@@ -586,13 +646,102 @@ fn state_frame_carries_model_metadata() {
             ServerMsg::State {
                 model,
                 context_window,
+                ctx_estimate,
                 ..
-            } => Some((model.clone(), *context_window)),
+            } => Some((model.clone(), *context_window, *ctx_estimate)),
             _ => None,
         })
         .expect("a state frame must have arrived");
     assert_eq!(st.0, "GLM5.3F", "display name comes from models.yml name");
     assert_eq!(st.1, 128_000, "context window rides the wire");
+    assert!(
+        st.2 > 0,
+        "还没跑过回合时用量表要有起点（系统提示词加工具手册的折算）"
+    );
+
+    c.quit();
+    h.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// 提交那一刻状态帧就得走线：状态栏的 spinner 靠 `busy` 的**起始沿**亮起，
+/// 而提交只报 `Change::Stream`——状态帧要是非等到 `TurnDone` 才发，它整场
+/// 都亮不起来（这正是它此前死活不转的原因）。
+#[test]
+fn busy_reaches_the_front_end_the_moment_a_turn_starts() {
+    let dir = tmp("busy-edge");
+    let path = dir.join("d.sock");
+    let (base, _srv) = fake_gateway(vec![sse(&["答"])]);
+    let hub = SessionHub::new(dir.join("sessions.sqlite3"));
+    let daemon = Daemon::bind(
+        path.clone(),
+        hub,
+        spec(&base),
+        std::time::Duration::from_secs(600),
+    )
+    .unwrap();
+    let h = std::thread::spawn(move || daemon.serve().unwrap());
+    for _ in 0..200 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut c = TestClient::connect(&path);
+    c.send(&ClientMsg::Submit {
+        text: "问".into(),
+        from_block: None,
+    });
+    let _id = c.attached_id();
+    c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
+    assert!(
+        c.read
+            .iter()
+            .any(|m| matches!(m, ServerMsg::State { busy: true, .. })),
+        "回合进行中的状态帧没发出去，spinner 没有起始沿：{:?}",
+        c.read
+            .iter()
+            .filter(|m| matches!(m, ServerMsg::State { .. }))
+            .collect::<Vec<_>>()
+    );
+
+    c.quit();
+    h.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// `/name` 这类命令直接改会话字段，**不产生 `SessionEvent`**——delta pass
+/// 看不见它们。状态帧改成按内容比对之后，新名字一个 tick 内就到前端，不必
+/// 等这一轮跑完（那是用户抱怨的"命令没有及时反馈"）。
+#[test]
+fn renaming_reaches_the_front_end_without_waiting_for_a_turn() {
+    let dir = tmp("name-now");
+    let path = dir.join("d.sock");
+    let hub = SessionHub::new(dir.join("sessions.sqlite3"));
+    let daemon = Daemon::bind(
+        path.clone(),
+        hub,
+        spec("http://127.0.0.1:1/v1"),
+        std::time::Duration::from_secs(600),
+    )
+    .unwrap();
+    let h = std::thread::spawn(move || daemon.serve().unwrap());
+    for _ in 0..200 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut c = TestClient::connect(&path);
+    c.send(&ClientMsg::Command {
+        name: "/name".into(),
+        args: "改个名".into(),
+    });
+    c.wait_for(
+        |m| matches!(m, ServerMsg::State { name: Some(n), .. } if n == "改个名"),
+    );
 
     c.quit();
     h.join().unwrap();
@@ -665,4 +814,112 @@ fn an_empty_snapshot_still_says_so() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+
+/// `/usage`：跑过一轮之后敲它，服务端把**按轮**记下的用量聚起来、拿当前价格表
+/// 折成钱，并且只回给发起命令的那个前端。
+///
+/// 断言落到四个数上（输入/输出 token、两栏的钱），因为那正是用户要看的东西：
+/// 账单算错一位小数和一整块面板画错是两回事，这里钉住的是前者。
+#[test]
+fn usage_answers_the_asking_front_end_with_the_session_bill() {
+    use crate::server::commands::{CommandEnv, ModelSwitch};
+    use crate::server::wire::UsageLang;
+    let dir = tmp("usage-panel");
+    let path = dir.join("d.sock");
+    let (base, _srv) = fake_gateway(vec![sse(&["答"])]);
+    let hub = SessionHub::new(dir.join("sessions.sqlite3"));
+    let mut sp = spec(&base);
+    // 价格表：输入 1/M、输出 4/M、缓存读 0.02/M。测的是"token × 单价"，
+    // 换算式本身由 pricing 的测试钉着。
+    sp.cost = Cost {
+        input: 1.0,
+        output: 4.0,
+        cache_read: 0.02,
+        cache_write: 0.0,
+    };
+    sp.commands = CommandEnv {
+        resolve_model: Some(std::sync::Arc::new(|_: &str| {
+            Ok(ModelSwitch {
+                base_url: "http://127.0.0.1:1/v1".into(),
+                api_key: "k".into(),
+                model_id: "m".into(),
+                provider: "test".into(),
+                name: "FAKE-1M".into(),
+                context_window: 1_000_000,
+                max_tokens: 4096,
+                cost: Cost {
+                    input: 1.0,
+                    output: 4.0,
+                    cache_read: 0.02,
+                    cache_write: 0.0,
+                },
+                // 用美元计价：面板要按汇率折到人民币，这张表的数字才可比。
+                currency: crate::server::ai::config::Currency::Usd,
+            })
+        })),
+        fx: crate::server::ai::config::FxConfig { usd_cny: 7.2 },
+        ..Default::default()
+    };
+    let daemon = Daemon::bind(path.clone(), hub, sp, std::time::Duration::from_secs(600)).unwrap();
+    let h = std::thread::spawn(move || daemon.serve().unwrap());
+    for _ in 0..200 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut c = TestClient::connect(&path);
+    c.send(&ClientMsg::Submit {
+        text: "问".into(),
+        from_block: None,
+    });
+    let _ = c.attached_id();
+    c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
+
+    c.send(&ClientMsg::Command {
+        name: "/usage".into(),
+        args: "lang:zh".into(),
+    });
+    let groups = match c.wait_for(|m| matches!(m, ServerMsg::Usage { .. })) {
+        ServerMsg::Usage { lang, groups } => {
+            assert_eq!(lang, UsageLang::Zh, "lang:zh 要真的换口径");
+            groups
+        }
+        other => panic!("expected usage, got {other:?}"),
+    };
+
+    assert_eq!(groups.len(), 1, "只问过一个模型：{groups:?}");
+    let g = &groups[0];
+    assert_eq!(g.rounds, 1, "一轮就是一轮");
+    // fake_gateway 的 usage chunk：prompt 10 / completion 2 / 无 cached。
+    assert_eq!(g.prompt_tokens, 10);
+    assert_eq!(g.completion_tokens, 2);
+    assert_eq!(g.cached_tokens, 0);
+    assert_eq!(g.name, "FAKE-1M", "展示名来自当前配置，不是裸 id");
+    assert_eq!(
+        g.currency.as_deref(),
+        Some("¥"),
+        "跨币种的账要折到同一个单位上，不然表里的数字没法比"
+    );
+    let cost = g.cost.expect("有价格表就该算得出钱");
+    // $1 = ¥7.2：输入 10 token × $1/M、输出 2 token × $4/M，再各乘 7.2。
+    assert!((cost.input - 10.0 / 1e6 * 7.2).abs() < 1e-12, "{cost:?}");
+    assert!((cost.output - 8.0 / 1e6 * 7.2).abs() < 1e-12, "{cost:?}");
+    assert_eq!(cost.cache_read, 0.0);
+    assert_eq!(cost.cache_write, 0.0);
+
+    // 面板**不是**转录条目：进历史就等于把它写进了模型看得见的上下文。
+    for m in &c.read {
+        for e in msg_entries(m) {
+            let text = format!("{e:?}");
+            assert!(!text.contains("FAKE-1M"), "账单不许混进转录：{text}");
+        }
+    }
+
+    c.quit();
+    h.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }

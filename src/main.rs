@@ -23,6 +23,9 @@ fn main() -> anyhow::Result<()> {
     // 共用一枚值，进程启动时钉住。TUI 与 daemon 各跑一次 `main`，
     // 读的是同一份配置，所以两边看到的永远是同一串。
     mypi::server::entry::set_empty_reply(&cfg.app.tui.empty_reply);
+    // 回退到旧节点时剪不剪后面的块（`tui.PruneOnRewind`）：TUI 和 daemon
+    // 各跑一次 `main`，但真正做回退的只有 daemon，所以这里钉的值只有它会读。
+    mypi::server::hub::set_prune_on_rewind(cfg.app.tui.prune_on_rewind);
     // --model overrides the default for this session only (never written
     // back; /model is the persistent path).
     if let Some(spec) = &cli.model {
@@ -116,6 +119,7 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
                     .map_err(|e| format!("{e:#}"))
             }
         })),
+        fx: cfg.app.fx.clone(),
     };
 
     Ok(SessionSpec {
@@ -126,6 +130,8 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
         // 模型元数据归服务器管（SERVER.md §0）：展示名有 name 用 name，
         // 没有 fallback 到 id；上下文窗口是量表分母。
         context_window: model.context_window,
+        model_provider: rm.provider_name.clone(),
+        currency: rm.entry.currency,
         model_name: if model.name.is_empty() {
             model.id.clone()
         } else {
@@ -158,6 +164,7 @@ fn resolve_switch(cfg: &Config, id: &str) -> Result<mypi::server::commands::Mode
         base_url: provider.base_url.clone(),
         api_key: cfg.resolve_key(provider),
         model_id: rm.entry.id.clone(),
+        provider: rm.provider_name.clone(),
         name: if rm.entry.name.is_empty() {
             rm.entry.id.clone()
         } else {
@@ -166,6 +173,7 @@ fn resolve_switch(cfg: &Config, id: &str) -> Result<mypi::server::commands::Mode
         context_window: rm.entry.context_window,
         max_tokens: rm.entry.max_output_tokens.unwrap_or(4096) as u32,
         cost: rm.entry.cost,
+        currency: rm.entry.currency,
     })
 }
 

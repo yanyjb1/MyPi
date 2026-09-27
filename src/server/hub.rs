@@ -55,6 +55,12 @@ pub struct SessionSpec {
     /// Statusline display name for the model (models.yml `name`), falling
     /// back to the id when unnamed. Display-only; the id stays in `Client`.
     pub model_name: String,
+    /// 服务商名（models.yml 的段名）。`/usage` 的账单认人用：同名模型可以
+    /// 挂在不同服务商名下，光有 id 分不出来。
+    pub model_provider: String,
+    /// 计价货币（models.yml 的 `currency`）。状态栏的金额和 `/usage` 的账单
+    /// 都按它写符号——同一个数在 `¥` 和 `$` 下不是一回事。
+    pub currency: crate::server::ai::config::Currency,
     /// Working directory. A resume prefers the stored one (see [`SessionHub::resume`]).
     pub cwd: PathBuf,
     /// Tool allow-list (`None` = all).
@@ -89,6 +95,23 @@ struct OpenSession {
 pub struct SessionHub {
     db: PathBuf,
     sessions: BTreeMap<i64, OpenSession>,
+}
+
+static PRUNE_ON_REWIND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// 回退到旧节点时是否**剪掉**后面的块（`config.yaml` → `tui.PruneOnRewind`）。
+///
+/// 默认剪：回退是后悔药，被抛下的内容就该扔掉，会话链不该越用越长。
+/// 置 false 则每次回退开一条新分支（一行 INSERT，不拷数据），之后任何节点
+/// 都还能回去。
+pub fn prune_on_rewind() -> bool {
+    *PRUNE_ON_REWIND.get().unwrap_or(&true)
+}
+
+/// 钉住开关（启动时，从配置）。首次调用生效——同
+/// [`crate::server::entry::set_empty_reply`]。
+pub fn set_prune_on_rewind(on: bool) {
+    let _ = PRUNE_ON_REWIND.set(on);
 }
 
 impl SessionHub {
@@ -189,6 +212,11 @@ impl SessionHub {
         let _ = session.adopt_session(id, entries, name);
         session.set_history_pending(has_more);
         session.set_cwd(cwd);
+        // 会话行里记着上一次 `/switch` 到的模型：换回去。这是 `/switch` 落盘的
+        // 全部意义——接着聊不用再敲一遍。
+        session.restore_model();
+        // 账本也要接上：花钱是事实，不该因为重启就归零。
+        session.restore_spend();
         self.sessions.insert(id, OpenSession { session, rx });
         Ok(id)
     }
@@ -208,6 +236,8 @@ impl SessionHub {
             spec.cost,
             spec.context_window,
             spec.model_name,
+            spec.model_provider,
+            spec.currency,
             spec.cwd,
             spec.tool_filter,
             spec.tools,
@@ -338,27 +368,48 @@ impl SessionHub {
         store.fork_session(parent, block)
     }
 
-    /// 就地把一个**已经开着的**会话分叉到 `block` 上，返回新的会话行 id。
+    /// 把一个**已经开着的**会话**回退**到 `block` 上，返回它的会话行 id。
     ///
-    /// 分叉不是"开一个新会话"——**是同一个会话换个 tip**。内存里那份
-    /// `Session`（它的转录、cwd、模型上下文、运行时权柄）全部留着，只把
-    /// `session_id` 指到新行上：之后写块归新分支，`blocks.session_id`
-    /// 自己就是归属。这样回到历史节点发消息**不会**撞上"没打开/忙碌"，
-    /// 也不会把中间攒下的运行时状态扔掉。
+    /// 回退不是"开一个新会话"——内存里那份 `Session`（转录、cwd、模型上下文、
+    /// 运行时权柄）全部留着，只把它指到 `block` 为止的历史上。这样回到旧节点
+    /// 发消息**不会**撞上"没打开/忙碌"，也不会把中间攒下的运行时状态扔掉。
     ///
-    /// 转录要换成**选中的那块为止的前缀**（含），否则新分支会带着分叉点
-    /// 之后那些本该被抛下的块继续跑。
+    /// 被抛下的那段历史怎么落，由 `tui.PruneOnRewind` 定：
+    ///
+    /// - **剪**（默认）：[`Store::prune_session`] 就地截断——`block` 之后自己
+    ///   名下的块连同回合记录一起删掉，同一行内挪 tip。回退不可逆，也不会让
+    ///   分支链变长。
+    /// - **留**：[`Store::fork_session`] 开一条新分支（一行 INSERT，不拷数据），
+    ///   旧内容原样留着，之后任何节点都还能回去。
+    ///
+    /// 两条路都要接管在跑的那一轮：转录换成**选中的那块为止的前缀**（含），
+    /// 否则新历史会带着分叉点之后那些本该被抛下的块继续跑；上一轮剩下的收尾
+    /// 事件也不该写进来（`abandon_turn` 把事件通道和上下文副本一起换掉）。
     pub fn fork_in_place(&mut self, id: i64, block: i64) -> anyhow::Result<i64> {
-        let mut store = Store::open(&self.db)?;
-        let new_id = store.fork_session(id, block)?;
-        // 前缀 = 从会话根到 `block`（含）的全部条目，跨分叉点拼。
-        let (entries, _missing) = store.load_branch(id, Some(block))?;
+        self.rewind(id, block, prune_on_rewind())
+    }
 
-        let open = self
+    /// [`Self::fork_in_place`] 的本体。`prune` 走参数而不是读全局：两条路
+    /// 都要能测，而开关是进程级 `OnceLock`，测试里只设得上一次。
+    fn rewind(&mut self, id: i64, block: i64, prune: bool) -> anyhow::Result<i64> {
+        let mut store = Store::open(&self.db)?;
+        let new_id = if prune {
+            // 被整条砍掉的会话可能还开在内存里（用户切走过、但没关）。它们的
+            // 块已经没了，句柄留着只会往一个空壳里写。
+            for gone in store.prune_session(id, block)? {
+                self.sessions.remove(&gone);
+            }
+            id
+        } else {
+            store.fork_session(id, block)?
+        };
+        // 前缀 = 从会话根到 `block`（含）的全部条目，跨分叉点拼。
+        let (entries, _missing) = store.load_branch(new_id, Some(block))?;
+
+        let mut open = self
             .sessions
             .remove(&id)
-            .ok_or_else(|| anyhow::anyhow!("会话 {id} 不在内存里，无法就地分叉"))?;
-        let mut open = open;
+            .ok_or_else(|| anyhow::anyhow!("会话 {id} 不在内存里，无法回退"))?;
         // 先换 tip（转录变成新前缀），再抛下在跑的那一轮：上一轮属于被抛下的
         // 分支——它不该继续把新分支堵成"忙"，也不该把半截回复写进新分支。
         // 上下文副本也跟着新前缀重建（`abandon_turn` 内部做）。
@@ -441,8 +492,10 @@ mod tests {
             system_prompt: system.into(),
             max_tokens: 4096,
             cost: Cost::default(),
+            currency: crate::server::ai::config::Currency::Cny,
             context_window: 0,
             model_name: model.to_string(),
+            model_provider: "test".into(),
             cwd: cwd.to_path_buf(),
             tool_filter: None,
             roster_source: None,
@@ -452,6 +505,34 @@ mod tests {
             browser: BrowserConfig::default(),
             stream_mode: StreamMode::default(),
         }
+    }
+
+    /// 一次历史都没跑过的新会话，也得给用量表一个起点（开场白的字符折算）。
+    /// 「借历史实测值」那条路走 `min_prompt_tokens`，由
+    /// `store::tests::the_smallest_recorded_prompt_is_borrowed` 锁住。
+    #[test]
+    fn a_fresh_session_estimates_from_its_opening() {
+        let dir = tmp("estimate-fresh");
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let id = hub
+            .open_new(spec("http://127.0.0.1:1/v1", "m", "S", &dir))
+            .unwrap();
+        let n = hub.get(id).unwrap().context_estimate();
+        assert!(n > 0, "系统提示词加工具手册再短也得出个数，不能是 0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 同一条会话算两次给同一个数（缓存住，状态帧每跳都可能来问）。
+    #[test]
+    fn the_estimate_is_computed_once() {
+        let dir = tmp("estimate-cached");
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let id = hub
+            .open_new(spec("http://127.0.0.1:1/v1", "m", "S", &dir))
+            .unwrap();
+        let s = hub.get(id).unwrap();
+        assert_eq!(s.context_estimate(), s.context_estimate());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `/switch` 的验收：**用户看得到的东西**要跟着换。
@@ -471,10 +552,12 @@ mod tests {
                         base_url: "http://127.0.0.1:2/v1".into(),
                         api_key: "sk-b".into(),
                         model_id: "model-b".into(),
+                        provider: "fake".into(),
                         name: "FAKE-B".into(),
                         context_window: 999,
                         max_tokens: 1234,
                         cost: Cost::default(),
+                        currency: crate::server::ai::config::Currency::Cny,
                     })
                 } else {
                     Err(format!("未知模型 {id}"))
@@ -515,6 +598,217 @@ mod tests {
             .run_command(cmd, "fake:model-b")
             .unwrap_err();
         assert!(format!("{err:#}").contains("没接"), "{err:#}");
+    }
+
+    /// `/switch` 要落盘：切过模型的会话关掉再开回来，模型自己回来——接着聊
+    /// 不该再敲一遍。存的是全局 id，endpoint 和密钥现从配置解析（不落盘）。
+    #[test]
+    fn a_session_remembers_the_model_it_was_switched_to() {
+        use crate::server::commands::{CommandEnv, ModelSwitch};
+        let dir = tmp("switch-persist");
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let make_spec = || {
+            let mut sp = spec("http://127.0.0.1:1/v1", "model-a", "S", &dir);
+            sp.commands = CommandEnv {
+                resolve_model: Some(std::sync::Arc::new(|id: &str| {
+                    if id == "fake:model-b" {
+                        Ok(ModelSwitch {
+                            base_url: "http://127.0.0.1:2/v1".into(),
+                            api_key: "sk-b".into(),
+                            model_id: "model-b".into(),
+                            provider: "fake".into(),
+                            name: "FAKE-B".into(),
+                            context_window: 999,
+                            max_tokens: 1234,
+                            cost: Cost::default(),
+                            currency: crate::server::ai::config::Currency::Cny,
+                        })
+                    } else {
+                        Err(format!("未知模型 {id}"))
+                    }
+                })),
+                ..Default::default()
+            };
+            sp
+        };
+        let id = hub.open_new(make_spec()).unwrap();
+        let cmd = crate::server::commands::lookup("/switch").expect("/switch 在表里");
+        hub.get_mut(id)
+            .unwrap()
+            .run_command(cmd, "fake:model-b")
+            .unwrap();
+        assert_eq!(hub.get(id).unwrap().model_name(), "FAKE-B");
+        hub.close(id);
+
+        // 关掉再开回来：模型跟着会话走。
+        hub.resume(id, make_spec()).unwrap();
+        let s = hub.get(id).unwrap();
+        assert_eq!(s.model(), "model-b", "resume 换回会话切到的模型");
+        assert_eq!(s.model_name(), "FAKE-B", "显示名一起回来");
+        assert_eq!(s.context_window(), 999, "量表分母一起回来");
+
+        // 没切过的会话：resume 之后还是配置里的默认模型。
+        let other = hub.open_new(make_spec()).unwrap();
+        hub.close(other);
+        hub.resume(other, make_spec()).unwrap();
+        assert_eq!(
+            hub.get(other).unwrap().model(),
+            "model-a",
+            "没切过就用默认"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 会话记着的模型解析不出来时**卡住这个会话**，绝不静默换成默认模型——
+    /// 上下文一长，用错的模型接着跑是真金白银。`/switch` 到能用的模型就解卡。
+    #[test]
+    fn an_unresolvable_session_model_blocks_until_switched() {
+        use crate::server::commands::{CommandEnv, ModelSwitch};
+        let dir = tmp("model-blocked");
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let resolver = |b_available: bool| {
+            Some(std::sync::Arc::new(move |id: &str| match id {
+                "fake:model-b" if b_available => Ok(ModelSwitch {
+                    base_url: "http://127.0.0.1:2/v1".into(),
+                    api_key: "sk-b".into(),
+                    model_id: "model-b".into(),
+                    provider: "fake".into(),
+                    name: "FAKE-B".into(),
+                    context_window: 999,
+                    max_tokens: 1234,
+                    cost: Cost::default(),
+                    currency: crate::server::ai::config::Currency::Cny,
+                }),
+                "fake:model-c" => Ok(ModelSwitch {
+                    base_url: "http://127.0.0.1:3/v1".into(),
+                    api_key: "sk-c".into(),
+                    model_id: "model-c".into(),
+                    provider: "fake".into(),
+                    name: "FAKE-C".into(),
+                    context_window: 111,
+                    max_tokens: 55,
+                    cost: Cost::default(),
+                    currency: crate::server::ai::config::Currency::Cny,
+                }),
+                other => Err(format!("未知模型 {other}")),
+            }) as crate::server::commands::ModelResolver)
+        };
+        let mut sp = spec("http://127.0.0.1:1/v1", "model-a", "S", &dir);
+        sp.commands = CommandEnv {
+            resolve_model: resolver(true),
+            ..Default::default()
+        };
+        let id = hub.open_new(sp).unwrap();
+        let cmd = crate::server::commands::lookup("/switch").expect("/switch 在表里");
+        hub.get_mut(id)
+            .unwrap()
+            .run_command(cmd, "fake:model-b")
+            .unwrap();
+        assert!(hub.get(id).unwrap().model_block().is_none(), "刚切完能用");
+        hub.close(id);
+
+        // 配置变了：那个模型解析不出来。
+        let mut sp2 = spec("http://127.0.0.1:1/v1", "model-a", "S", &dir);
+        sp2.commands = CommandEnv {
+            resolve_model: resolver(false),
+            ..Default::default()
+        };
+        hub.resume(id, sp2).unwrap();
+        let s = hub.get(id).unwrap();
+        assert!(
+            s.model_block().is_some(),
+            "换不回去就得卡住，不能装作没事"
+        );
+        assert_eq!(
+            s.model(),
+            "model-a",
+            "更不许静默拿默认模型顶上（spec 里那个才是默认）"
+        );
+
+        // `/switch` 到还能解析出来的那个 → 解卡，模型真的换了。
+        let s = hub.get_mut(id).unwrap();
+        let cmd = crate::server::commands::lookup("/switch").expect("/switch 在表里");
+        s.run_command(cmd, "fake:model-c").unwrap();
+        assert!(s.model_block().is_none(), "换到能用的模型就解卡");
+        assert_eq!(s.model_name(), "FAKE-C");
+        assert_eq!(s.model(), "model-c");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// resume 之后状态栏的金额**接着算**：库里按轮记着 token，重新打开时拿
+    /// 当前价格表重算一遍。不接的话每次重启金额都从零开始——用户看到的是
+    /// "这个组件坏了"。
+    #[test]
+    fn a_resumed_session_carries_its_spending_forward() {
+        use crate::server::commands::{CommandEnv, ModelSwitch};
+        use crate::server::events::SessionEvent;
+        let dir = tmp("spend-restore");
+        let price = Cost {
+            input: 1.0,
+            output: 0.0,
+            cache_read: 0.0,
+            cache_write: 0.0,
+        };
+        // 模型单价 1/M：一百万输入 token 正好一块钱，断言不用容差。
+        let resolver = std::sync::Arc::new(move |_: &str| {
+            Ok(ModelSwitch {
+                base_url: "http://127.0.0.1:1/v1".into(),
+                api_key: "k".into(),
+                model_id: "m".into(),
+                provider: "test".into(),
+                name: "M".into(),
+                context_window: 1_000_000,
+                max_tokens: 4096,
+                cost: price,
+                currency: crate::server::ai::config::Currency::Cny,
+            })
+        });
+        let mk = || {
+            let mut sp = spec("http://127.0.0.1:1/v1", "m", "S", &dir);
+            sp.cost = price;
+            sp.commands = CommandEnv {
+                resolve_model: Some(resolver.clone()),
+                ..Default::default()
+            };
+            sp
+        };
+
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let id = hub.open_new(mk()).unwrap();
+        {
+            let s = hub.get_mut(id).unwrap();
+            // 一轮带请求头的回合：账要落到 `turns` 上（没有请求头的那条路
+            // 根本不写账本，也就无从恢复）。
+            s.ingest(SessionEvent::RequestMeta {
+                model: "m".into(),
+                protocol: "openai-chat-completions".into(),
+                base_url: "http://127.0.0.1:1/v1".into(),
+                system: "S".into(),
+                tools_json: "[]".into(),
+                max_tokens: 4096,
+            });
+            s.ingest(SessionEvent::Delta("答".into()));
+            s.ingest(SessionEvent::TurnDone(
+                crate::server::ai::types::Usage {
+                    prompt_tokens: 1_000_000,
+                    completion_tokens: 0,
+                    total_tokens: 1_000_000,
+                    cached_tokens: None,
+                    reasoning_tokens: None,
+                },
+                crate::server::ai::types::StopReason::Stop,
+            ));
+        }
+        assert!((hub.get(id).unwrap().spend().0 - 1.0).abs() < 1e-9, "跑完这一轮就是一块钱");
+        hub.close(id);
+
+        hub.resume(id, mk()).unwrap();
+        let spend = hub.get(id).unwrap().spend().0;
+        assert!(
+            (spend - 1.0).abs() < 1e-9,
+            "重新打开后金额必须接着算，不能归零（现在是 {spend}）"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `/profile` 的两半：下一次请求带的系统提示词，和工具名册。
@@ -572,10 +866,12 @@ mod tests {
                         base_url: "http://127.0.0.1:2/v1".into(),
                         api_key: "k".into(),
                         model_id: "model-b".into(),
+                        provider: "fake".into(),
                         name: "FAKE-B".into(),
                         context_window: 42,
                         max_tokens: 1,
                         cost: Cost::default(),
+                        currency: crate::server::ai::config::Currency::Cny,
                     })
                 } else {
                     Err(format!("未知模型 {id}"))
@@ -772,8 +1068,8 @@ mod tests {
     /// daemon 报成"会话 N 正在回复中"。用户看到的就是：回到历史节点发一条
     /// 消息，屏幕说这个会话正忙。
     #[test]
-    fn forking_in_place_keeps_the_session_usable() {
-        let dir = tmp("fork-in-place");
+    fn rewinding_with_keeping_forks_a_branch() {
+        let dir = tmp("rewind-keep");
         let (base, _srv) = fake_gateway(vec![sse(&["第一答"]), sse(&["分叉答"])]);
         let mut hub = SessionHub::new(dir.join("sessions.db"));
         let a = hub.open_new(spec(&base, "m", "S", &dir)).unwrap();
@@ -785,22 +1081,86 @@ mod tests {
         };
         let fork_point = store_blocks[0].id;
 
-        // 就地分叉：返回新行 id，**旧 id 不再在 hub 里**（同一份内存态换了名）。
-        let b = hub.fork_in_place(a, fork_point).expect("就地分叉");
+        // 留：返回新行 id，**旧 id 不再在 hub 里**（同一份内存态换了名）。
+        let b = hub.rewind(a, fork_point, false).expect("回退（留）");
         assert_ne!(a, b);
-        assert!(hub.get(b).is_some(), "分叉后会话还在内存里");
+        assert!(hub.get(b).is_some(), "留模式下会话还在内存里");
         assert!(
             hub.get(b).unwrap().session_id() == Some(b),
             "内存里的会话要指向新行"
         );
         // 关键断言：能提交。修之前这里是 false（"正在回复中"）。
-        assert!(hub.submit(b, "分叉后的新问题"), "分叉后必须能接着发");
+        assert!(hub.submit(b, "分叉后的新问题"), "回退后必须能接着发");
         // 分叉后的转录 = 到分叉点为止的前缀。
         assert_eq!(
             hub.get(b).unwrap().transcript().len(),
             2,
             "前缀应当是 用户问 + 模型答"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 剪：同一行内截断，分叉点之后的块**真的从库里没了**，会话接着能用
+    /// 且不换行——回退多少次链都不会变长。
+    #[test]
+    fn rewinding_with_pruning_drops_the_tail() {
+        let dir = tmp("rewind-prune");
+        let (base, _srv) = fake_gateway(vec![sse(&["第一答"]), sse(&["第二答"])]);
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let a = hub.open_new(spec(&base, "m", "S", &dir)).unwrap();
+        run_round(&mut hub, a, "第一问");
+        run_round(&mut hub, a, "第二问");
+        let before = crate::server::store::Store::open(&hub.db)
+            .unwrap()
+            .stored_blocks(a)
+            .unwrap();
+        assert!(before.len() >= 4, "两轮至少四块，实际 {}", before.len());
+        let fork_point = before[0].id;
+
+        let b = hub.rewind(a, fork_point, true).expect("回退（剪）");
+        assert_eq!(a, b, "剪枝不换行");
+        let after = crate::server::store::Store::open(&hub.db)
+            .unwrap()
+            .stored_blocks(a)
+            .unwrap();
+        assert_eq!(after.len(), 1, "分叉点之后的块都该没了");
+        assert_eq!(after[0].id, fork_point, "留下的正是回退到的那一块");
+        assert_eq!(
+            hub.get(b).unwrap().transcript().len(),
+            1,
+            "前缀 = 第一问，被截掉的那一轮不许留在上下文里"
+        );
+        assert!(hub.submit(b, "剪枝后的新问题"), "回退后必须能接着发");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 剪枝把回退点之后岔出去的分支整条砍掉——开在内存里的句柄也得跟着走，
+    /// 否则它还会往一个已经不存在的会话里写块。
+    #[test]
+    fn pruning_drops_the_open_handles_of_the_branches_it_takes() {
+        let dir = tmp("prune-handles");
+        let (base, _srv) = fake_gateway(vec![sse(&["第一答"]), sse(&["第二答"])]);
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let a = hub.open_new(spec(&base, "m", "S", &dir)).unwrap();
+        run_round(&mut hub, a, "第一问");
+        run_round(&mut hub, a, "第二问");
+        let blocks = crate::server::store::Store::open(&hub.db)
+            .unwrap()
+            .stored_blocks(a)
+            .unwrap();
+        let (first, third) = (blocks[0].id, blocks[2].id);
+
+        // 留模式岔一条分支（a 的句柄跟着变成 b），再把 a 自己从库里开回来：
+        // 两个会话同时在内存里——这正是"用户切走过、没关"的样子。
+        let b = hub.rewind(a, third, false).unwrap();
+        assert!(hub.get(b).is_some());
+        hub.resume(a, spec(&base, "m", "S", &dir)).unwrap();
+        assert!(hub.get(a).is_some(), "两个会话都开着");
+
+        // 回到 a 上剪枝到第一块：b 挂在第三块之后，整条该走。
+        assert_eq!(hub.rewind(a, first, true).unwrap(), a, "剪枝不换行");
+        assert!(hub.get(a).is_some(), "用户站着的会话必须还在");
+        assert!(hub.get(b).is_none(), "被砍掉的分支不该还开着");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

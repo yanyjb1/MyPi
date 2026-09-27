@@ -63,6 +63,11 @@ pub struct InputZone {
     /// 与 `hang` 是两件事：`hang` 说的是"这个词可以补全"（词内），
     /// 这里说的是"弹窗正开着、有候选等着被选中"（命令名打完之后也成立）。
     pub popup_open: bool,
+    /// `/usage` 面板开着（由 Zone 每轮从保留区同步进来）。
+    ///
+    /// 面板是**只读的一屏数**：它只借 Esc，其余键照常进编辑器。但 Esc 必须
+    /// 先归它——面板在上层，那一下的意思就是"关掉它"。
+    pub panel_open: bool,
     /// 上一次↑↓的目标列记忆（Editor::up/down 的 goal_col 载体）。
     pub goal_col: Option<usize>,
     /// 待投递的借用请求：deliver 里产出，Zone 取走并转发保留区。
@@ -102,6 +107,7 @@ impl Default for InputZone {
             finished: true,
             hang: false,
             popup_open: false,
+            panel_open: false,
             goal_col: None,
             pending_lend: None,
             pending_exits: Vec::new(),
@@ -244,6 +250,8 @@ impl InputZone {
             A::Complete | A::CompleteUp | A::CompleteDown | A::DismissCompletion => {
                 Effect::Nothing
             }
+            // 面板的 Esc：不是编辑动作，解释权在保留区（借出去，见 `deliver`）。
+            A::DismissPanel => Effect::Nothing,
             A::ToggleReasoning | A::ToggleTools => Effect::Nothing,
             A::TreeUp | A::TreeDown | A::TreeConfirm | A::TreeCancel => Effect::Nothing,
             A::None => Effect::Nothing,
@@ -276,6 +284,11 @@ impl InputZone {
     /// 归补全服务——见 `deliver` 里那条分支。
     pub fn set_completion_open(&mut self, open: bool) {
         self.popup_open = open;
+    }
+
+    /// 同步 `/usage` 面板的开合（Zone 每轮调用）。开着时 Esc 归面板。
+    pub fn set_panel_open(&mut self, open: bool) {
+        self.panel_open = open;
     }
 
     /// 补全确认回执：把保留区服务算出的替换写回编辑器，随后自然
@@ -396,6 +409,22 @@ impl SubZone for InputZone {
         // 以前只有一个 `hang`（光标在触发词**里**）会借：`/switch ` 这种
         // "命令名打完了、正在填参数"的状态下 hang 已经落到 false，于是弹窗
         // 虽然开着，回车却落回提交，↑↓ 也动不了高亮。
+        // 面板开着：Esc 关、上下选模型、Tab 换口径——**全归它**。先于补全判断，
+        // 也先于编辑器：面板是浮层，它在上层，输入框里那几行字等关了再编辑不迟。
+        if self.panel_open
+            && let RawEvent::Key { key } = event
+        {
+            use semantics::Action as A;
+            let cx = semantics::KeyContext {
+                panel_open: true,
+                ..Default::default()
+            };
+            let action = semantics::translate_with(*key, cx);
+            if matches!(action, A::DismissPanel | A::Up | A::Down | A::Complete) {
+                self.pending_lend = Some(ToReserved::Lend(action));
+                return true;
+            }
+        }
         if self.popup_open
             && let RawEvent::Key { key } = event
         {
@@ -431,11 +460,12 @@ impl SubZone for InputZone {
         }
         let action = match event {
             RawEvent::Key { key } => {
-                let cx = semantics::KeyContext::for_input(
+                let mut cx = semantics::KeyContext::for_input(
                     self.editor.is_empty(),
                     self.streaming,
                     self.popup_open,
                 );
+                cx.panel_open = self.panel_open;
                 semantics::translate_with(*key, cx)
             }
             RawEvent::Paste(s) => semantics::Action::Paste(s.clone()),

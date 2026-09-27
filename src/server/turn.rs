@@ -67,7 +67,7 @@ pub struct TurnRequest {
 // the context has none: the stored header must record what was sent, never
 // invent a default (a reader of the DB cannot tell "built-in prompt" from
 // "no prompt" otherwise).
-fn system_message(ctx: &ChatContext) -> String {
+pub(crate) fn system_message(ctx: &ChatContext) -> String {
     match ctx.messages.first() {
         Some(crate::server::ai::types::Message::System { content }) => content.clone(),
         _ => String::new(),

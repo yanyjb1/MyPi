@@ -476,7 +476,7 @@ fn run_stream(scale: usize, reply_chars: usize, cols: u16, rows: u16, frames: us
     let entries = gen_entries(scale, seed, false);
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(Sink))
         .expect("terminal");
-    let mut app = App::new(size, mypi::tui::zone::ZoneId::Main);
+    let mut app = App::new(size, mypi::tui::zone::ZoneId::Main, &Default::default());
     app.main
         .reserved
         .attach_completion(std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("/root"));
@@ -932,7 +932,7 @@ fn run_scale(blocks_target: usize, cols: u16, rows: u16, frames: usize, seed: u6
 
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(Sink))
         .expect("terminal");
-    let mut app = App::new(size, mypi::tui::zone::ZoneId::Main);
+    let mut app = App::new(size, mypi::tui::zone::ZoneId::Main, &Default::default());
     app.main
         .reserved
         .attach_completion(std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("/root"));
@@ -992,7 +992,7 @@ fn run_scale(blocks_target: usize, cols: u16, rows: u16, frames: usize, seed: u6
         let dirty_blocks = mypi::tui::bench::block_count(&dirty_entries);
         let mut term2 =
             ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(Sink)).expect("term");
-        let mut app2 = App::new(size, mypi::tui::zone::ZoneId::Main);
+        let mut app2 = App::new(size, mypi::tui::zone::ZoneId::Main, &Default::default());
         app2.main
             .reserved
             .attach_completion(std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("/root"));
@@ -1180,7 +1180,7 @@ fn user_db(path: &str, sid: i64, frames: usize, seed: u64) {
     let size = TermSize { cols, rows };
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(Sink))
         .expect("terminal");
-    let mut app = App::new(size, mypi::tui::zone::ZoneId::Main);
+    let mut app = App::new(size, mypi::tui::zone::ZoneId::Main, &Default::default());
     app.main
         .reserved
         .attach_completion(std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("/root"));

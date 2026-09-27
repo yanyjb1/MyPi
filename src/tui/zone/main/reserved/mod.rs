@@ -4,6 +4,7 @@ use super::SubZone;
 
 pub mod area;
 pub mod completion;
+pub mod usage;
 
 /// 保留区子区。内部是 claim 注册表（components::reserved::ReservedArea）
 /// 和一个补全服务（可被激活、可借键的保留区住户）。
@@ -13,6 +14,9 @@ pub struct ReservedZone {
     pub want: u16,
     /// 补全服务：保留区第一个住户。挂上即入册（claims 同步登记）。
     pub completion: Option<crate::tui::zone::main::reserved::completion::CompletionService>,
+    /// `/usage` 面板：第二个住户。**独立于补全**——它是用户主动敲出来的一屏
+    /// 数，不是编辑的副产品，所以两者不同帧并存（面板优先，见 `claimants`）。
+    pub usage: usage::UsagePanel,
 }
 
 impl Default for ReservedZone {
@@ -21,6 +25,7 @@ impl Default for ReservedZone {
             area: crate::tui::zone::main::reserved::area::ReservedArea::default(),
             want: crate::tui::zone::main::reserved::area::IDLE_ROWS,
             completion: None,
+            usage: usage::UsagePanel::default(),
         }
     }
 }
@@ -32,11 +37,22 @@ impl ReservedZone {
     /// 声明，`area` 冻结，本子区只负责把冻结值报给 Zone。空闲时是 1 行，
     /// 所以没有持有者时布局不会跳。
     pub fn settle(&mut self, term: crate::tui::zone::TermSize) {
-        let mut claims: Vec<&mut dyn area::Claim> = Vec::new();
-        if let Some(c) = self.completion.as_mut() {
-            claims.push(c as &mut dyn area::Claim);
-        }
-        self.area.resolve(&mut claims);
+        // 字段级解构：`area.resolve` 与持有者各借一半，方法级的 `&mut self`
+        // 会把两者判成同一份借用。
+        let Self {
+            area,
+            completion,
+            usage,
+            ..
+        } = self;
+        let mut claims: Vec<&mut dyn area::Claim> = if usage.is_open() {
+            vec![usage]
+        } else if let Some(c) = completion.as_mut() {
+            vec![c]
+        } else {
+            Vec::new()
+        };
+        area.resolve(&mut claims);
         self.want = self.area.rows(term.rows);
     }
 
@@ -44,16 +60,25 @@ impl ReservedZone {
     /// `Claim::accepts()` 声明自取；无人接或未声明则退回（false）。
     /// 输入区对这里零知识——它不知道谁持有、接了干什么。
     pub fn lend(&mut self, action: &crate::tui::zone::main::input::semantics::Action) -> bool {
-        let mut claims: Vec<&mut dyn crate::tui::zone::main::reserved::area::Claim> = Vec::new();
-        if let Some(c) = self.completion.as_mut() {
-            claims.push(c as &mut dyn crate::tui::zone::main::reserved::area::Claim);
-        }
+        let Self {
+            area,
+            completion,
+            usage,
+            ..
+        } = self;
+        let mut claims: Vec<&mut dyn area::Claim> = if usage.is_open() {
+            vec![usage]
+        } else if let Some(c) = completion.as_mut() {
+            vec![c]
+        } else {
+            Vec::new()
+        };
         // 投递前先**重新认一遍持有者**：持有者是上一帧 `settle` 时认出来的，
         // 而"弹窗刚开、同一个事件批次里又来一个 ↑↓"（手快、或按键被合并）
         // 是完全可能的——那时账本还停在上一帧（无人持有），这一下 ↑↓ 就被
         // 丢掉了。行高按上一帧的值走，下一帧 `settle` 再修正。
-        self.area.resolve(&mut claims);
-        self.area.offer(action, &mut claims)
+        area.resolve(&mut claims);
+        area.offer(action, &mut claims)
     }
 
     /// 模型与 profile 的补全候选（启动时一次；见 `CompletionService`）。
@@ -115,6 +140,31 @@ impl ReservedZone {
         }
     }
 
+    /// 面板的显示选项（装配时从配置来一次）。
+    pub fn set_usage_config(&mut self, cfg: &crate::server::ai::config::UsageConfig) {
+        self.usage.set_align(cfg.align);
+    }
+
+    /// `/usage` 的面板数据到了：打开面板，并让补全弹窗让位。
+    ///
+    /// 关补全是**必须**的：保留区一次只服务一个住户，弹窗若还开着，下一帧
+    /// 两个都要位，仲裁当场 debug_assert。
+    pub fn show_usage(
+        &mut self,
+        lang: crate::server::wire::UsageLang,
+        groups: Vec<crate::server::store::ModelUsage>,
+    ) {
+        self.usage.show(lang, groups);
+        if let Some(c) = self.completion.as_mut() {
+            c.controller.close();
+        }
+    }
+
+    /// 面板是否开着（输入区据此决定 Esc 归谁）。
+    pub fn panel_open(&self) -> bool {
+        self.usage.is_open()
+    }
+
     /// 弹窗是否开着（保留区行高声明依据）。
     pub fn completion_open(&self) -> bool {
         self.completion
@@ -159,6 +209,11 @@ impl ReservedZone {
         // 行高用仲裁发下来的（= settle 时 area 冻结的那个值）；
         // 注意不是 term_w：那是宽度，行高跟宽度没关系。
         let rows = usize::from(self.want).max(1);
+        // 面板住户：整幅自己排。
+        if id == "usage" {
+            use crate::tui::zone::main::reserved::area::Claim as _;
+            return self.usage.draw(term_w, rows, p);
+        }
         // 持有者即补全服务（现阶段唯一住户）：按锚点列画。
         if id == "completion"
             && let Some(svc) = self.completion.as_ref()

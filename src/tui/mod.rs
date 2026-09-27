@@ -9,6 +9,7 @@
 //!   几何算术在主区共用的 `zone::main::geometry`。
 pub mod app;
 pub mod keys;
+pub mod num;
 pub mod session;
 pub mod text;
 pub mod theme;

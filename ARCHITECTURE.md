@@ -96,7 +96,9 @@ cargo test --no-default-features    # 联网相关测试随之消失（少 28 �
 
 - 一个回合的条目在 `TurnDone` 时**一次性**写入，落成**块**（`blocks`：一块 = 一个显示
   节点，一次工具往返是一行，两半各占一列），同时写入这个回合的**请求头**（`turns`：
-  model / protocol / endpoint / system / tools / max_tokens / stop_reason + 块的区间）。
+  model / provider / protocol / endpoint / system / tools / max_tokens / stop_reason +
+  块的区间）和这一轮的**用量**（prompt / completion / cached 三个 token 列；
+  `/usage` 的账本——只存 token，钱是按当前价格表算出来的）。
   `block_id` 是全局自增，所以顺序键同时是"时序、唯一、跨会话可比"；
 - **分支是一段区间，不是一串行指针**：分叉只写一行（`parent_id` + `fork_block_id`），
   读分支 = 沿若干 `(会话, 上界)` 段做索引区间扫。删除 = 截断到"活着的分支还需要的最后

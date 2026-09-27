@@ -43,10 +43,24 @@
 //! earlier design used an id-keyed map with a snake_case
 //! `context_length`; that documentation is long obsolete — do not copy it.
 //!
-//! Pricing: unit prices are per 1M tokens; `currency` only picks the
-//! display symbol (¥ / $), no conversion — quotes are already in each
-//! vendor's native currency. Most gateways do not report cacheWrite
-//! separately; 0 means "price as plain input".
+//! Pricing: unit prices are per 1M tokens. `currency` says which currency the
+//! quote is in, and it is **not** cosmetic: a session that switched models can
+//! span two currencies (`¥` and `$`), and a table of numbers in mixed units
+//! compares nothing. `config.yaml` carries the rate (`fx`), and `/usage` folds
+//! every row into CNY before printing it.
+//!
+//! Most gateways do not report cacheWrite separately; 0 means "price as plain
+//! input".
+//!
+//! 前端展示选项在 `config.yaml`：
+//!
+//! ```yaml
+//! fx:
+//!   usdCny: 7.2      # 1 美元 = 多少人民币；省略即 6
+//!
+//! usage:
+//!   align: center    # center | left | right，`/usage` 面板整块贴哪边
+//! ```
 
 use anyhow::{Context as _, anyhow};
 use serde::{Deserialize, Serialize};
@@ -491,6 +505,13 @@ pub struct AppConfig {
     /// 前端窗口的两个旋钮（内存的上界全在这里）。
     #[serde(default)]
     pub tui: TuiConfig,
+    /// 汇率（`config.yaml` → `fx:`）。全默认可用：不配也能把跨币种的账折到
+    /// 一个数上（默认 `1$ = 6¥`）。
+    #[serde(default)]
+    pub fx: FxConfig,
+    /// `/usage` 面板的显示选项（`config.yaml` → `usage:`）。默认居中。
+    #[serde(default)]
+    pub usage: UsageConfig,
 }
 
 /// 任务清单的折叠策略（`config.yaml` → `tui.todoFold`）。
@@ -551,25 +572,35 @@ impl Default for TodoFold {
 /// 这两个数决定窗口多大、渲染行缓存留多少块。它们是**深度**旋钮，不是省内存
 /// 的旋钮：实测把渲染缓存从 256 块降到 32 块，进程 RSS 只差 ~4 MB。
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct TuiConfig {
     /// 渲染行缓存留多少块（视口上下各一份）。
     ///
     /// 也是滚动的手感旋钮：越大，往上翻时越少遇到没量过的块。
-    #[serde(default = "d_render_margin", rename = "renderMargin")]
+    #[serde(default = "d_render_margin")]
     pub render_margin: usize,
     /// 锚点上面预取/预保留多少**块**（再往上就该去库里取下一页了）。
     #[serde(default = "d_preload")]
     pub preload: usize,
     /// 任务清单折叠策略。见 [`TodoFold`]。
-    #[serde(default, rename = "todoFold")]
+    #[serde(default)]
     pub todo_fold: TodoFold,
-    /// 空回复的占位文本（`config.yaml` → `tui.emptyReply`）。
+    /// 空回复的占位文本。
     ///
     /// 一枚值、三个写者：落盘的 assistant 条目、下一轮请求里模型看到的
     /// 上下文、以及打断瞬间前端先画出来的那一行。它们必须一模一样，
     /// 所以文案从这里下发，不各写各的。
-    #[serde(default = "d_empty_reply", rename = "emptyReply")]
+    #[serde(default = "d_empty_reply")]
     pub empty_reply: String,
+    /// 回退到旧节点时，是**剪掉**后面的块，还是留成一条能回去的分支。
+    ///
+    /// `true`（默认）= 剪。同一个会话行里把 tip 挪回去、把更晚的自己名下
+    /// 的块删掉，分支链不会变长——把它当后悔药用。
+    ///
+    /// `false` = 留。回退开一条新分支（一行 INSERT，不拷数据），之后的
+    /// 每一条路线都留在库里，随时能回去任何节点。
+    #[serde(default = "d_prune_on_rewind")]
+    pub prune_on_rewind: bool,
 }
 
 fn d_render_margin() -> usize {
@@ -584,6 +615,10 @@ fn d_empty_reply() -> String {
     crate::server::entry::DEFAULT_EMPTY_REPLY.to_string()
 }
 
+fn d_prune_on_rewind() -> bool {
+    true
+}
+
 impl Default for TuiConfig {
     fn default() -> Self {
         Self {
@@ -591,6 +626,7 @@ impl Default for TuiConfig {
             preload: d_preload(),
             todo_fold: TodoFold::default(),
             empty_reply: d_empty_reply(),
+            prune_on_rewind: d_prune_on_rewind(),
         }
     }
 }
@@ -600,6 +636,58 @@ impl Default for TuiConfig {
 pub struct Config {
     pub models: ModelsConfig,
     pub app: AppConfig,
+}
+
+/// `/usage` 面板的显示选项（`config.yaml` → `usage:`）。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct UsageConfig {
+    #[serde(default)]
+    pub align: UsageAlign,
+}
+
+/// 面板整块的水平位置。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsageAlign {
+    #[default]
+    Center,
+    Left,
+    Right,
+}
+
+/// 汇率：把不同币种的账单折到同一个数上。
+///
+/// 一个会话换过模型就可能横跨两种币种（`¥` 与 `$`），而一张表里的数字必须同
+/// 单位才可比。折算只影响**显示**，不参与任何实际计费。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FxConfig {
+    /// 1 美元 = 多少人民币。省略即 6（`1$ = 6¥`）。
+    #[serde(rename = "usdCny", default = "default_usd_cny")]
+    pub usd_cny: f64,
+}
+
+fn default_usd_cny() -> f64 {
+    6.0
+}
+
+impl Default for FxConfig {
+    fn default() -> Self {
+        Self { usd_cny: default_usd_cny() }
+    }
+}
+
+impl FxConfig {
+    /// 把一笔按 `from` 计价的金额折成**人民币**（账单表的统一单位），
+    /// 连同要写的符号一起还回来。
+    ///
+    /// `Credits` 不折：它不是货币，没有汇率可言，硬套一个数就是编。让它保持
+    /// 原值、原符号，和别的币种并排时至少是诚实的。
+    pub fn to_display(&self, amount: f64, from: Currency) -> (f64, &'static str) {
+        match from {
+            Currency::Cny | Currency::Credits => (amount, from.symbol()),
+            Currency::Usd => (amount * self.usd_cny, Currency::Cny.symbol()),
+        }
+    }
 }
 
 /// Connection details for one provider.
@@ -759,6 +847,8 @@ impl Config {
                     browser: Default::default(),
                     profile: None,
                     tui: TuiConfig::default(),
+                    fx: FxConfig::default(),
+                    usage: UsageConfig::default(),
                 };
                 std::fs::create_dir_all(Self::config_dir()?)?;
                 let yaml = serde_yaml::to_string(&app)?;
@@ -986,6 +1076,42 @@ fn comment_start(line: &str) -> Option<usize> {
     None
 }
 #[cfg(test)]
+mod fx_tests {
+    use super::*;
+
+    #[test]
+    fn the_default_rate_is_six_yuan_per_dollar() {
+        // 用户的口径：不配就是 `1$ = 6¥`。不配也能用，才有"可选"可言。
+        let fx = FxConfig::default();
+        assert_eq!(fx.usd_cny, 6.0);
+        assert_eq!(fx.to_display(2.0, Currency::Usd), (12.0, "¥"));
+    }
+
+    #[test]
+    fn a_configured_rate_is_honoured() {
+        let fx = FxConfig { usd_cny: 7.2 };
+        assert_eq!(fx.to_display(1.0, Currency::Usd), (7.2, "¥"));
+    }
+
+    #[test]
+    fn yuan_and_credits_are_left_alone() {
+        let fx = FxConfig { usd_cny: 7.2 };
+        assert_eq!(fx.to_display(3.0, Currency::Cny), (3.0, "¥"));
+        // Credits 不是货币，没有汇率可言：硬套一个数就是编。
+        assert_eq!(fx.to_display(3.0, Currency::Credits), (3.0, "cr"));
+    }
+
+    #[test]
+    fn the_rate_is_read_from_the_config_file() {
+        // `fx:` 段缺省也要能解析——老配置文件不该因为少一段就起不来。
+        let cfg: AppConfig = serde_yaml::from_str("default: p:m\n").unwrap();
+        assert_eq!(cfg.fx.usd_cny, 6.0);
+        let cfg: AppConfig = serde_yaml::from_str("fx:\n  usdCny: 7.5\n").unwrap();
+        assert_eq!(cfg.fx.usd_cny, 7.5);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1000,28 +1126,32 @@ mod tests {
         let parse = |yaml: &str| -> TuiConfig { serde_yaml::from_str(yaml).unwrap() };
 
         // 缺省（键不在）：不折。
-        let d = parse("preload: 8\n");
+        let d = parse("Preload: 8\n");
         assert!(!d.todo_fold.is_on(), "缺省必须是不折");
         assert_eq!(d.todo_fold.cap(), usize::MAX, "关着时无上限");
 
         // 显式 false：不折。
-        let off = parse("todoFold: false\n");
+        let off = parse("TodoFold: false\n");
         assert!(!off.todo_fold.is_on());
 
         // true：折，用默认上限。
-        let on = parse("todoFold: true\n");
+        let on = parse("TodoFold: true\n");
         assert!(on.todo_fold.is_on());
         assert_eq!(on.todo_fold.cap(), TodoFold::DEFAULT_CAP);
 
         // 数字：折，上限就是这个数。
-        let n = parse("todoFold: 3\n");
+        let n = parse("TodoFold: 3\n");
         assert!(n.todo_fold.is_on());
         assert_eq!(n.todo_fold.cap(), 3);
 
         // 0 等价于关。
-        let zero = parse("todoFold: 0\n");
+        let zero = parse("TodoFold: 0\n");
         assert!(!zero.todo_fold.is_on(), "0 就是不折");
         assert_eq!(zero.todo_fold.cap(), usize::MAX);
+
+        // 回退剪枝：默认剪（把它当后悔药用），显式 false 才留分支。
+        assert!(d.prune_on_rewind, "缺省必须剪");
+        assert!(!parse("PruneOnRewind: false\n").prune_on_rewind);
     }
 
     /// 改 `default:` 是**只动一个值**，行尾注释必须原样留下（用户看得到自己
@@ -1280,6 +1410,8 @@ providers:
             models,
             app: AppConfig {
                 tui: TuiConfig::default(),
+                fx: FxConfig::default(),
+                usage: UsageConfig::default(),
                 default: Some("local:vendor-a/model-x".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
@@ -1360,6 +1492,8 @@ providers:
             models,
             app: AppConfig {
                 tui: TuiConfig::default(),
+                fx: FxConfig::default(),
+                usage: UsageConfig::default(),
                 default: Some("local:global:gpt-5.6-luna".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
@@ -1479,6 +1613,8 @@ providers:
             models,
             app: AppConfig {
                 tui: TuiConfig::default(),
+                fx: FxConfig::default(),
+                usage: UsageConfig::default(),
                 default: Some("local:a".into()),
                 theme: Theme::default(),
                 compact: Default::default(),

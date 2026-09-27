@@ -26,6 +26,8 @@ use crate::tui::zone::main::input::statusline::{PRIORITY_BASE, Side, StatusCompo
 pub struct Usage {
     tokens: u64,
     limit: u64,
+    /// 还没有实测值时用的起点（见 [`UsageSnapshot::ctx_estimate`]）。
+    estimate: u64,
 }
 
 impl StatusComponent for Usage {
@@ -53,17 +55,25 @@ impl StatusComponent for Usage {
         if let StatusEvent::Usage(u) = ev {
             self.tokens = u.ctx_tokens;
             self.limit = u.ctx_limit;
+            self.estimate = u.ctx_estimate;
         }
     }
 
     fn render(&self, t: &StatusTheme, budget: Option<usize>) -> Vec<Span<'static>> {
+        // 第一轮还没回来：拿服务器给的起点顶上，读数带 `~` 说明它是估的。
+        // 真值一到就换过去，`~` 一起消失。
+        let estimated = self.tokens == 0 && self.estimate > 0;
+        let now = if estimated { self.estimate } else { self.tokens };
         let pct = if self.limit == 0 {
             0
         } else {
-            ((self.tokens.min(self.limit) as f64 / self.limit as f64 * 100.0).round() as u64)
-                .min(100)
+            ((now.min(self.limit) as f64 / self.limit as f64 * 100.0).round() as u64).min(100)
         };
-        let pct_txt = format!("{pct}%");
+        let pct_txt = if estimated {
+            format!("~{pct}%")
+        } else {
+            format!("{pct}%")
+        };
         let denom = format!(":{}", fmt_tokens(self.limit));
         // `>` + dashes + `8%` + dashes + `:1M`：百分数**嵌在**横线里，
         // 它左边那段（用量）是 accent，右边那段（余量）不是。以前百分数
@@ -117,6 +127,40 @@ fn fmt_tokens(n: u64) -> String {
 mod tests {
     use super::*;
 
+    /// 第一轮响应回来之前，读数来自服务器给的起点，并且带 `~` 标明是估的；
+    /// 实测值一到，`~` 就该消失（否则用户会永远以为那是真数）。
+    #[test]
+    fn an_estimate_is_marked_until_a_measurement_replaces_it() {
+        let t = StatusTheme::resolve();
+        let mut u = Usage::default();
+        let snap = |tokens: u64, estimate: u64| {
+            crate::tui::zone::main::input::statusline::UsageSnapshot {
+                total_cost: 0.0,
+                ctx_tokens: tokens,
+                ctx_limit: 1_000_000,
+                ctx_estimate: estimate,
+                currency_symbol: "$".into(),
+                show_cost: false,
+            }
+        };
+        u.on_event(&StatusEvent::Usage(snap(0, 12_000)));
+        let text: String = u
+            .render(&t, Some(30))
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(text.contains("~1%"), "估算读数要带 `~`：{text}");
+
+        u.on_event(&StatusEvent::Usage(snap(12_000, 12_000)));
+        let text: String = u
+            .render(&t, Some(30))
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(!text.contains('~'), "有了实测值就不该再标估算：{text}");
+        assert!(text.contains("1%"), "{text}");
+    }
+
     #[test]
     fn token_counts_use_k_and_m() {
         assert_eq!(fmt_tokens(1_000_000), "1M");
@@ -157,7 +201,8 @@ mod tests {
             total_cost: 0.0,
             ctx_tokens: 500_000,
             ctx_limit: 1_000_000,
-            currency_symbol: "$",
+            ctx_estimate: 0,
+            currency_symbol: "$".into(),
             show_cost: false,
         }));
         for budget in [8usize, 9, 20, 41, 100] {

@@ -102,6 +102,10 @@ fn apply_return(app: &mut App, block: i64) {
 /// 两下 Esc 的窗口。超过这么久就没连上，作废。
 const ESC_WINDOW_MS: u64 = 500;
 
+/// 动画节拍：回合进行中主循环至少每这么多毫秒醒一次，把 spinner 推进一帧。
+/// 100ms = 10 fps，四帧转一圈 0.4s——够快看得出在动，又不至于空转烧 CPU。
+const ANIM_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// 开节点树：把所有权交给它，并去服务端要一次树。
 fn open_tree(app: &mut App, req: &mut crate::server::wire::ConnWriter) {
     app.open_tree();
@@ -195,6 +199,7 @@ pub fn run_tui(
             rows: size.height,
         },
         startup,
+        &cfg.app.usage,
     );
     // 补全服务上岗：保留区的第一个住户。cwd/home 是会话层注入的
     // 最后一项（之后路径解析全在服务内部）。
@@ -208,7 +213,7 @@ pub fn run_tui(
     app.main_mut()
         .history
         .set_window(cfg.app.tui.preload, cfg.app.tui.render_margin);
-    // 任务清单的折叠策略（`tui.todoFold`）：同一处下发，同样是启动期常量。
+    // 任务清单的折叠策略（`tui.TodoFold`）：同一处下发，同样是启动期常量。
     app.main_mut().history.set_todo_fold(cfg.app.tui.todo_fold);
     // 命令表来自握手（`hello_ok`）：前端不再自己存一份。补全服务上岗之后再喂。
     app.main.reserved.set_commands(conn.commands().to_vec());
@@ -380,7 +385,21 @@ pub fn run_tui(
         let mut tree_target: Option<i64> = None;
         while !quit {
             // Block until something happens; coalesce queued signals.
-            let first = sig_rx.recv()?;
+            //
+            // 回合进行中按**动画节拍**醒：等模型的那段时间恰好什么信号都没有，
+            // 而 spinner 正是要在那时候转。空闲时照旧无限阻塞（零 CPU）——
+            // 空转不是轮询，它只为动画付出代价，且只在真有东西要动时付出。
+            let first = if app.main.input.streaming {
+                match sig_rx.recv_timeout(ANIM_TICK) {
+                    Ok(sig) => sig,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        crate::tui::session::signal::Signal::Tick
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                }
+            } else {
+                sig_rx.recv()?
+            };
             let mut batch = Vec::new();
             batch.push(first);
             while let Ok(more) = sig_rx.try_recv() {
@@ -407,6 +426,12 @@ pub fn run_tui(
                             cols: s.width,
                             rows: s.height,
                         });
+                    }
+                    crate::tui::session::signal::Signal::Tick => {
+                        // 空拍只服务动画：状态栏的 spinner 靠它推进帧。
+                        app.main.input.notify(
+                            &crate::tui::zone::main::input::statusline::StatusEvent::Tick,
+                        );
                     }
                     crate::tui::session::signal::Signal::Repaint => {
                         // 内容没变，只是后台（语法预热）说"现在能画得更好"。

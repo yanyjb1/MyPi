@@ -60,6 +60,18 @@ pub trait SessionView {
     /// The status line values.
     fn on_state(&mut self, frame: StateFrame);
 
+    /// `/usage` 的面板数据（服务端按当前会话算好的账单）。
+    ///
+    /// **不是**转录条目：它不进历史、不落盘、不参与上下文，是屏幕上一块关得掉
+    /// 的浮层。默认忽略——只有画得下面板的前端才需要它。
+    fn on_usage_panel(
+        &mut self,
+        lang: crate::server::wire::UsageLang,
+        groups: Vec<crate::server::store::ModelUsage>,
+    ) {
+        let _ = (lang, groups);
+    }
+
     /// 打断的明确回执（`ServerMsg::Interrupted`）：服务端**收下**了打断，
     /// flag 已经设上。收到它前端就能立刻把界面切回可输入态——不必等 turn
     /// 真正收尾（那取决于上游还有没有数据可读，可能再拖一会儿）。
@@ -107,8 +119,12 @@ pub struct StateFrame {
     pub name: Option<String>,
     pub cwd: String,
     pub spend_usd: f64,
+    /// 计价货币的符号（`¥` / `$`）。空 = 不知道，金额就不画。
+    pub currency: String,
     pub last_prompt_tokens: u64,
     pub context_window: u64,
+    /// 还没跑过回合时的用量起点（服务器给的，见 wire 的 `State`）。
+    pub ctx_estimate: u64,
     pub busy: bool,
 }
 
@@ -149,21 +165,26 @@ pub fn dispatch(msg: ServerMsg, view: &mut dyn SessionView) {
             run_state,
         }),
         ServerMsg::Interrupted { session_id } => view.on_interrupted(session_id),
+        ServerMsg::Usage { lang, groups } => view.on_usage_panel(lang, groups),
         ServerMsg::State {
             model,
             name,
             cwd,
             spend_usd,
+            currency,
             last_prompt_tokens,
             context_window,
+            ctx_estimate,
             busy,
         } => view.on_state(StateFrame {
             model,
             name,
             cwd,
             spend_usd,
+            currency,
             last_prompt_tokens,
             context_window,
+            ctx_estimate,
             busy,
         }),
         ServerMsg::Sessions { .. } | ServerMsg::Rounds { .. } => {}
@@ -253,6 +274,9 @@ impl SessionView for ZoneView<'_> {
         blocks: Vec<crate::server::wire::WireBlock>,
         live: Vec<crate::server::entry::Entry>,
     ) {
+        // 整份快照 = 换会话、换分支、压缩：账本跟着换，旧面板上那些数字已经
+        // 不属于眼前这条对话了。留着比关掉更糟——它看起来一样可信。
+        self.zone.reserved.usage.close();
         self.zone.history.replace_transcript(blocks, live);
     }
 
@@ -332,8 +356,10 @@ impl SessionView for ZoneView<'_> {
             // 的 prompt_tokens —— 服务器当场算，不落盘（无此字段就是 0）。
             ctx_tokens: frame.last_prompt_tokens,
             ctx_limit: frame.context_window,
-            currency_symbol: "$",
-            show_cost: frame.spend_usd > 0.0,
+            ctx_estimate: frame.ctx_estimate,
+            currency_symbol: frame.currency.clone(),
+            // 没有货币就无从写金额（价格表认不出）；一分钱没花也先别占位。
+            show_cost: frame.spend_usd > 0.0 && !frame.currency.is_empty(),
         }));
         self.last_model = frame.model;
         // 记住当前名：区分「服务器没报名字」和「名字已由真实命名产生」。
@@ -361,6 +387,16 @@ impl SessionView for ZoneView<'_> {
 
     fn on_hello(&mut self, commands: Vec<crate::server::wire::CommandInfo>) {
         self.zone.reserved.set_commands(commands);
+    }
+
+    fn on_usage_panel(
+        &mut self,
+        lang: crate::server::wire::UsageLang,
+        groups: Vec<crate::server::store::ModelUsage>,
+    ) {
+        // 面板是保留区的住户，不是转录条目：不进历史、不落盘。数据到齐就开，
+        // Esc 关（借用关系见 `ReservedZone::show_usage`）。
+        self.zone.reserved.show_usage(lang, groups);
     }
 
     fn on_notice(&mut self, text: String) {
@@ -501,8 +537,10 @@ mod tests {
                     name: None,
                     cwd: "/".into(),
                     spend_usd: 0.0,
+                    currency: "¥".into(),
                     last_prompt_tokens: 0,
                     context_window: 0,
+                    ctx_estimate: 0,
                     busy: false,
                 },
                 &["state"],
@@ -573,8 +611,10 @@ mod tests {
                 name: None,
                 cwd: "/tmp".into(),
                 spend_usd: 0.1,
+                currency: "¥".into(),
                 last_prompt_tokens: 5,
                 context_window: 128_000,
+                ctx_estimate: 0,
                 busy: true,
             });
             v.on_error(crate::server::wire::ErrorCode::NoSuchSession, "gone".into());
@@ -596,8 +636,10 @@ mod tests {
             name,
             cwd: "/home/u/MyPi".into(),
             spend_usd: 0.0,
+            currency: "¥".into(),
             last_prompt_tokens: 0,
             context_window: 0,
+            ctx_estimate: 0,
             busy: false,
         };
         {
@@ -628,8 +670,10 @@ mod tests {
             name: None,
             cwd: "/".into(),
             spend_usd: 0.0,
+            currency: "¥".into(),
             last_prompt_tokens: 0,
             context_window: 0,
+            ctx_estimate: 0,
             busy,
         };
         {

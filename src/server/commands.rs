@@ -94,6 +94,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         scope: Scope::Session,
     },
     CommandSpec {
+        name: "/usage",
+        aliases: &[],
+        detail: "看本会话的用量与账单（分模型；lang:zh 用万/亿）",
+        args: ArgKind::Text,
+        scope: Scope::Session,
+    },
+    CommandSpec {
         name: "/resume",
         aliases: &[],
         detail: "恢复本项目的某个会话",
@@ -131,6 +138,8 @@ pub struct CommandEnv {
     /// lives or what file format holds it (config.yaml is due for a rewrite).
     /// Returns a human-readable destination for the notice.
     pub set_default_model: Option<DefaultModelWriter>,
+    /// 汇率：`/usage` 把跨币种的金额折到人民币。默认 `1$ = 6¥`。
+    pub fx: crate::server::ai::config::FxConfig,
 }
 
 /// `Fn(&str) -> Result<ModelSwitch, String>`: the id the user typed, the pieces
@@ -157,6 +166,9 @@ pub struct ModelSwitch {
     pub api_key: String,
     /// The id sent on the wire.
     pub model_id: String,
+    /// Provider 名（`Ali-dashscope` 这种）。会话要把它记进库：光有模型 id
+    /// 认不出哪一家——不同服务商会有同名模型，报错也说不清是谁的错。
+    pub provider: String,
     /// Statusline display name (models.yml `name`, else the id).
     pub name: String,
     /// Context window for the usage gauge (0 = unknown).
@@ -165,6 +177,9 @@ pub struct ModelSwitch {
     pub max_tokens: u32,
     /// Price sheet of the new model.
     pub cost: crate::server::ai::config::Cost,
+    /// 计价货币。`/usage` 的账单要写对符号：同一个数在 `¥` 和 `$` 下不是一回事，
+    /// 而价格表本身不含货币（它只是四个每百万 token 的单价）。
+    pub currency: crate::server::ai::config::Currency,
 }
 
 /// 按名字或别名查一条命令。

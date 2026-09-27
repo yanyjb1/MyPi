@@ -70,6 +70,9 @@ pub enum Action {
     CompleteDown,
     // Close the completion popup (Esc).
     DismissCompletion,
+    // Close the `/usage` panel (Esc). A panel is a read-only screen of
+    // numbers: Esc is the whole keyboard contract it borrows.
+    DismissPanel,
     // Toggle reasoning fold (Ctrl+T).
     ToggleReasoning,
     // Toggle tool-output expansion (Ctrl+O).
@@ -109,6 +112,9 @@ pub struct KeyContext {
     pub streaming: bool,
     // The completion popup is open.
     pub popup_open: bool,
+    // The `/usage` panel is open. Modal for Esc: the panel is on top and is
+    // what the next Esc means.
+    pub panel_open: bool,
     // The /resume picker is open (modal: ↑↓/Enter/Esc are all taken over).
     pub selector_open: bool,
     // The tree navigator modal is open (full-screen takeover).
@@ -172,6 +178,13 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
             KeyCode::Esc => return Action::SelectorCancel,
             _ => {}
         }
+    }
+
+    // ---- `/usage` 面板：只有 Esc 归它 ----
+    // 面板是只读的一屏数，没有可上下选的东西，所以它**只借 Esc**。放在补全
+    // 之前：面板是用户刚敲出来的一屏，它在上层。
+    if cx.panel_open && matches!(key.code, KeyCode::Esc) {
+        return Action::DismissPanel;
     }
 
     // ---- while the completion popup is open, these keys are taken over first ----

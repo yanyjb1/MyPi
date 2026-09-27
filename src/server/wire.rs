@@ -13,7 +13,7 @@ use crate::server::session::Replay;
 
 /// Wire protocol version. Bump on any incompatible change to the message
 /// shapes below; a mismatching `hello` is refused before anything else runs.
-pub const PROTO_VERSION: u32 = 5;
+pub const PROTO_VERSION: u32 = 6;
 
 /// Hard cap on one encoded line. A big transcript really does reach a few MB,
 /// so this is not a 64 KiB joke value; it only exists to refuse garbage or
@@ -234,10 +234,17 @@ pub enum ServerMsg {
         name: Option<String>,
         cwd: String,
         spend_usd: f64,
+        /// 计价货币的符号（models.yml 的 `currency`，`¥` / `$` / `cr`）。
+        /// 空 = 不知道，前端就不画金额。
+        currency: String,
         last_prompt_tokens: u64,
         /// Context window (models.yml) — the usage gauge's denominator.
         /// 0 = unknown: the gauge hides instead of lying.
         context_window: u64,
+        /// 还没跑过任何回合时的用量起点（`Session::context_estimate`：先借
+        /// 同开场白的历史实测最小值，没有就按字符折）。0 = 没有可报的。
+        /// 第一轮响应回来之后 `last_prompt_tokens` 就是真值，这一项不再被看。
+        ctx_estimate: u64,
         busy: bool,
     },
     /// `list_sessions` answer.
@@ -270,6 +277,49 @@ pub enum ServerMsg {
     /// Protocol-level error (transport, unknown ids, bad state). A round's
     /// own errors travel as `Entry` instead.
     Error { code: ErrorCode, message: String },
+    /// `/usage` 的账单：这个会话问过哪些模型、各花了多少。
+    ///
+    /// 面板数据，**不是**转录条目：它不进历史、不落盘、不参与上下文，是屏幕上
+    /// 一块关得掉的浮层。所以它单独走一条消息，而且只回给**敲这条命令的那个
+    /// 前端**——别的 watcher 不该被弹一脸。
+    Usage {
+        /// 数字按哪种口径报（`lang:zh` / `lang:en`）。
+        lang: UsageLang,
+        /// 一个模型一行，按第一次问到的先后排。
+        groups: Vec<crate::server::store::ModelUsage>,
+    },
+}
+
+/// `/usage` 面板里的数字口径。
+///
+/// 词头与分组一起换，不能只换标签：英文按 10^3 进位（1M = 1,000K），中文按
+/// 10^4 进位（1万 = 10,000）。两套都只是**显示**，底层永远是同一个 token 数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageLang {
+    /// `K` / `M` / `T`，三位一进（1,234,567）。
+    #[default]
+    En,
+    /// `万` / `亿` / `万亿`，四位一进（123,4567）。
+    Zh,
+}
+
+impl UsageLang {
+    /// `/usage` 的参数：空的按英文，`lang:zh` / `lang:en`（大小写不敏感），
+    /// 也认裸的 `zh` / `en`——手打命令时用户不一定记得那个前缀。
+    ///
+    /// 不认识的写法**报错**而不是默默按默认办：用户敲了 `lang:jp` 却拿到英文
+    /// 数字，只会以为命令坏了。
+    pub fn parse(args: &str) -> Result<Self, String> {
+        // 先归一大小写再剥前缀：`LANG:ZH` 和 `lang:zh` 是同一句话。
+        let raw = args.trim().to_ascii_lowercase();
+        let value = raw.strip_prefix("lang:").unwrap_or(&raw);
+        match value {
+            "" | "en" => Ok(Self::En),
+            "zh" => Ok(Self::Zh),
+            other => Err(format!("不认识的语言：{other}（可选 en / zh）")),
+        }
+    }
 }
 
 /// Error codes the daemon can report on the wire. Kept tiny: the message body

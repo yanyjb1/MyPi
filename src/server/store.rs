@@ -21,6 +21,7 @@
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 
 use crate::server::entry::Entry;
 
@@ -98,6 +99,8 @@ pub struct SessionRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoundMeta {
     pub model: String,
+    /// 服务商名。`/usage` 按轮还原价格表时要先认出问的是哪一家。
+    pub provider: String,
     /// Wire protocol id, e.g. `openai-chat-completions`.
     pub protocol: String,
     /// Endpoint base (`https://host/v1`). Never the API key.
@@ -111,12 +114,25 @@ pub struct RoundMeta {
     pub max_tokens: u32,
 }
 
+/// 一轮的用量，按轮落盘（`turns` 的三个 token 列）。
+///
+/// 只存 token：钱是拿当前价格表算出来的，价格改了历史账单跟着改才对。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RoundUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    /// `prompt_tokens` 里从缓存读的那部分。
+    pub cached_tokens: u64,
+}
+
 /// One stored request header (a row of `turns`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoundRow {
     pub seq: i64,
     pub ts: String,
     pub model: String,
+    /// 服务商名；老行为 `None`（那时候还没记）。
+    pub provider: Option<String>,
     pub protocol: String,
     pub base_url: String,
     pub system: String,
@@ -127,6 +143,45 @@ pub struct RoundRow {
     /// Block span this turn wrote (`None` when the turn stored no blocks).
     pub first_block: Option<i64>,
     pub last_block: Option<i64>,
+    /// 这一轮的用量（`None` = 没拿到：半途死掉、网关不报）。
+    pub usage: Option<RoundUsage>,
+}
+
+/// `/usage` 的一行：**一个模型**在同一会话里的累计用量与账单。
+///
+/// 按轮聚合而来（`turns` 按 `(provider, model)` 分组）。钱是服务端拿当前
+/// 价格表算的——前端只负责画。
+///
+/// `Serialize` 是给 wire 用的（它就是面板上那一行）：面板数据不进转录、
+/// 不落盘、不参与上下文，所以 wire 直接内嵌这个结构，不另立一份。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModelUsage {
+    /// 展示名（配置里的 `name`，取不到就用 id）。
+    pub name: String,
+    /// 配置里的 id，认不出配置时前端还是能把行画出来。
+    pub id: String,
+    /// 所属服务商；`None` = 这一行没有服务商记录。
+    pub provider: Option<String>,
+    /// 问过几轮。
+    pub rounds: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cached_tokens: u64,
+    /// 四类 token 各自花的钱（当前价格表算的）。`None` = 认不出价格表。
+    pub cost: Option<UsageCost>,
+    /// 计价货币的展示符号（`¥` / `$`）。
+    pub currency: Option<String>,
+}
+
+/// `/usage` 账单的四个格子。
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct UsageCost {
+    /// 没命中缓存的输入。
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    /// 协议不报"写入缓存"，恒为 0；留着是为了账目四栏齐全。
+    pub cache_write: f64,
 }
 
 /// One segment of a branch: `session`'s blocks up to and including `upper`.
@@ -186,11 +241,25 @@ impl RawBlock {
 
 const BLOCK_COLS: &str = "block_id, ts, kind, payload, kind2, payload2";
 
+const ROUND_COLS: &str = "seq, ts, model, protocol, base_url, system, tools_json, max_tokens,
+     stop_reason, first_block, last_block, provider, prompt_tokens, completion_tokens, cached_tokens";
+
 fn round_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RoundRow> {
+    // 三个 token 列同生同死：网关要么整块报 usage，要么一个字都不报，所以
+    // 拿 prompt 那列探有没有，缺的按 0 补——不引入"半个用量"这种状态。
+    let prompt: Option<i64> = r.get(12)?;
+    let completion: Option<i64> = r.get(13)?;
+    let cached: Option<i64> = r.get(14)?;
+    let usage = prompt.map(|p| RoundUsage {
+        prompt_tokens: p.max(0) as u64,
+        completion_tokens: completion.unwrap_or(0).max(0) as u64,
+        cached_tokens: cached.unwrap_or(0).max(0) as u64,
+    });
     Ok(RoundRow {
         seq: r.get(0)?,
         ts: r.get(1)?,
         model: r.get(2)?,
+        provider: r.get(11)?,
         protocol: r.get(3)?,
         base_url: r.get(4)?,
         system: r.get(5)?,
@@ -199,6 +268,7 @@ fn round_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RoundRow> {
         stop_reason: r.get(8)?,
         first_block: r.get(9)?,
         last_block: r.get(10)?,
+        usage,
     })
 }
 
@@ -223,7 +293,7 @@ impl Store {
         // 别的布局**直接扔掉**：项目未发布、只有一个用户、没有要保留的历史，
         // 迁移代码只会变成负担。`user_version` 对不上就把表全删了重建——
         // 开发期改 schema 只需把这个数字加一。
-        const SCHEMA_VERSION: i64 = 1;
+        const SCHEMA_VERSION: i64 = 3;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != SCHEMA_VERSION {
             // Foreign keys are on (the bundled SQLite turns them on by
@@ -259,6 +329,13 @@ impl Store {
                 tip_block_id  INTEGER,
                 -- 自己块的载荷字节数（列表页的体积列，写入时累加）。
                 bytes         INTEGER NOT NULL DEFAULT 0,
+                -- 会话级模型：**服务商名** + 模型 id（裸的，不带服务商前缀）。
+                -- NULL = 跟着配置的默认模型走。`/switch` 写它、resume 读它：这是
+                -- 这是这个会话在用什么模型，和 `/model` 改的默认配置是两回事。
+                -- 存名字不存 endpoint 和密钥——密钥不该落盘，配置改了也该跟着走。
+                -- 服务商单独存：不同服务商会有同名模型，缺了它恢复时认不出谁是谁。
+                model_provider TEXT,
+                model         TEXT,
                 -- 墓碑：内容被截断、行被留下，只为让子分支还能沿链读到前缀。
                 deleted_at    TEXT
             );
@@ -313,6 +390,17 @@ impl Store {
                 stop_reason TEXT,
                 first_block INTEGER,
                 last_block  INTEGER,
+                -- 这一轮问的是谁。「模型」在配置里只是**某个服务商名下**的一条
+                -- 记录（同名模型可以有两家），裸 id 认不出该问谁问价；价格表
+                -- 归配置管，`/usage` 要按轮还原当时的价格，就得先认出服务商。
+                provider    TEXT,
+                -- 这一轮的用量。**只存 token 不存钱**：token 是事实，钱是拿
+                -- 当前价格表算出来的——价格改了，历史账单跟着改才对。
+                -- NULL = 没拿到（半途死掉、网关不报 usage）。
+                prompt_tokens     INTEGER,
+                completion_tokens INTEGER,
+                -- prompt_tokens 里从缓存读的那部分（计费比普通输入便宜）。
+                cached_tokens     INTEGER,
                 PRIMARY KEY (session_id, seq)
             );",
         )?;
@@ -332,6 +420,39 @@ impl Store {
         Ok(id)
     }
 
+    /// 这个会话在用什么模型：`(服务商名, 裸模型 id)`。`None` = 跟着配置默认走。
+    ///
+    /// 两半缺一不可——不同服务商会有同名模型，只记一个 id 的话，恢复时认不出
+    /// 该去哪家问，报错也说不清是谁的问题。
+    pub fn session_model(&self, session_id: i64) -> Result<Option<(String, String)>> {
+        let v: Option<(Option<String>, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT model_provider, model FROM sessions WHERE id = ?1",
+                [session_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(v.and_then(|(p, m)| Some((p?, m?))))
+    }
+
+    /// 记下这个会话切到了哪个模型（`None` = 回到跟着默认走）。
+    pub fn set_session_model(
+        &mut self,
+        session_id: i64,
+        model: Option<(&str, &str)>,
+    ) -> Result<()> {
+        let (provider, id) = match model {
+            Some((p, m)) => (Some(p), Some(m)),
+            None => (None, None),
+        };
+        self.conn.execute(
+            "UPDATE sessions SET model_provider = ?1, model = ?2 WHERE id = ?3",
+            rusqlite::params![provider, id, session_id],
+        )?;
+        Ok(())
+    }
+
     /// Fork `parent_id` at `fork_block_id` (inclusive): the new session inherits
     /// every block up to and including it and owns none of its own yet.
     ///
@@ -345,8 +466,9 @@ impl Store {
         let cwd = self.session(parent_id)?.cwd.unwrap_or_default();
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT INTO sessions (uuid, started_at, cwd, parent_id, fork_block_id)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO sessions (uuid, started_at, cwd, parent_id, fork_block_id,
+                                   model_provider, model)
+             SELECT ?1, ?2, ?3, ?4, ?5, model_provider, model FROM sessions WHERE id = ?4",
             rusqlite::params![new_uuid(), now_stamp(), cwd, parent_id, fork_block_id],
         )?;
         let id = tx.last_insert_rowid();
@@ -357,6 +479,137 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(id)
+    }
+
+    /// **截断**会话到 `block_id`（含）——「回退」的剪枝做法。
+    ///
+    /// 与 [`Self::fork_session`] 相对：分叉是**留下**被抛下的内容（新开一行，
+    /// 旧行原样），随时能回去；截断是**扔掉**它——自己名下更晚的块、那之后的
+    /// 回合记录、cwd 历史、产物一起删掉，tip 和体积重算。同一个会话行内完成，
+    /// 所以回退多少次链都不会变长。
+    ///
+    /// `block_id` 落在**继承来的前缀**里时（回退到分叉点之前），自己名下的块
+    /// 一块不剩，会话就地**重新生根**：`parent_id` 指到那一块所属的会话上。
+    /// 这样回退到哪，读出来的前缀就到哪。
+    ///
+    /// 不允许回退到自己**后代**的块上：那是把历史接到未来上，还会让
+    /// `parent_id` 成环（`chain` 会转圈）。
+    /// 返回**被整条砍掉的会话 id**（回退点之后岔出去的那些）——调用方要把
+    /// 还开在内存里的句柄一并丢掉。
+    pub fn prune_session(&mut self, session_id: i64, block_id: i64) -> Result<Vec<i64>> {
+        let owner: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT session_id FROM blocks WHERE block_id = ?1",
+                [block_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let owner = owner.ok_or_else(|| anyhow::anyhow!("块 {block_id} 不存在"))?;
+        if owner != session_id {
+            anyhow::ensure!(
+                !self.is_descendant(owner, session_id)?,
+                "不能回退到自己的后代（块 {block_id} 属于会话 {owner}）"
+            );
+        }
+        // **整棵树一起砍**，不只看自己名下那几块：前几次回退岔出去的分支和
+        // 这个会话同根，在用户眼里就是同一段历史的几种走法——只砍自己的，
+        // resume 一看旧内容全还在（这正是"没看到剪枝效果"的来源）。
+        let family = self.subtree(self.root_of(session_id)?)?;
+        // 事务前读：哪些会话会被砍空——回退点之前一块自己的都没有，落点又落
+        // 在被砍的那一段里；或者干脆挂在另一个被砍空的分支上（连坐）。
+        // `family` 是 BFS 序，父一定排在孩子前面，所以一趟就能连坐到底。
+        let mut doomed: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        for &id in &family {
+            if id == session_id {
+                continue;
+            }
+            let (parent, fork, _) = self.branch_row(id)?;
+            let keep: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM blocks WHERE session_id = ?1 AND block_id <= ?2",
+                rusqlite::params![id, block_id],
+                |r| r.get(0),
+            )?;
+            if parent.is_some_and(|p| doomed.contains(&p))
+                || (keep == 0 && fork.is_some_and(|f| f > block_id))
+            {
+                doomed.insert(id);
+            }
+        }
+        let tx = self.conn.transaction()?;
+        for &id in &family {
+            tx.execute(
+                "DELETE FROM blocks WHERE session_id = ?1 AND block_id > ?2",
+                rusqlite::params![id, block_id],
+            )?;
+            // 还没随回合落盘的产物（block_id IS NULL）属于被截掉的那一段。
+            tx.execute(
+                "DELETE FROM artifacts WHERE session_id = ?1
+                   AND (block_id IS NULL OR block_id > ?2)",
+                rusqlite::params![id, block_id],
+            )?;
+            tx.execute(
+                "DELETE FROM turns WHERE session_id = ?1 AND first_block > ?2",
+                rusqlite::params![id, block_id],
+            )?;
+            // 换目录的记录跟着块走：块没了，那条记录的落点也就不存在了。
+            tx.execute(
+                "DELETE FROM cwd_history WHERE session_id = ?1 AND block_id > ?2",
+                rusqlite::params![id, block_id],
+            )?;
+        }
+        // 先给自己换好新的挂载点，再删被砍空的行——否则自己要指向的那一行
+        // 可能正被删掉（外键会拦）。
+        if owner != session_id {
+            tx.execute(
+                "UPDATE sessions SET parent_id = ?1, fork_block_id = ?2 WHERE id = ?3",
+                rusqlite::params![owner, block_id, session_id],
+            )?;
+        }
+        // 深的先走（`family` 是 BFS 序，反过来就是叶子先）。这些行整条不要
+        // 了，关联表得**整个清空**——`cwd_history` 的会话原点行（block_id 0）
+        // 和第一回合的 `turns` 都在回退点之前，只按 `> block_id` 删会留下
+        // 悬空引用，外键当场拦下。
+        let mut dropped: Vec<i64> = Vec::new();
+        for &id in family.iter().rev() {
+            if !doomed.contains(&id) {
+                continue;
+            }
+            for table in ["blocks", "cwd_history", "artifacts", "turns"] {
+                tx.execute(&format!("DELETE FROM {table} WHERE session_id = ?1"), [id])?;
+            }
+            tx.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+            dropped.push(id);
+        }
+        tx.execute(
+            "UPDATE sessions
+                SET tip_block_id = (SELECT MAX(block_id) FROM blocks WHERE session_id = ?1),
+                    bytes = (SELECT COALESCE(SUM(LENGTH(payload)
+                                + COALESCE(LENGTH(payload2), 0)), 0)
+                               FROM blocks WHERE session_id = ?1)
+              WHERE id = ?1",
+            [session_id],
+        )?;
+        tx.commit()?;
+        Ok(dropped)
+    }
+
+    /// `candidate` 是不是 `root` 的后代（沿 `parent_id` 链能走到 `root`）。
+    ///
+    /// 带访问集合：真要出现环时返回 false，而不是转圈。
+    fn is_descendant(&self, candidate: i64, root: i64) -> Result<bool> {
+        let mut seen = std::collections::HashSet::new();
+        let mut cur = Some(candidate);
+        while let Some(id) = cur {
+            if id == root {
+                return Ok(true);
+            }
+            if !seen.insert(id) {
+                return Ok(false);
+            }
+            cur = self.branch_row(id)?.0;
+        }
+        Ok(false)
     }
 
     /// Is `block_id` part of `session_id`'s branch (its own blocks or an
@@ -486,6 +739,7 @@ impl Store {
         entries: &[Entry],
         meta: &RoundMeta,
         stop: Option<&str>,
+        usage: Option<RoundUsage>,
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
         let (first_block, last_block) = Self::append_in(&tx, session_id, entries)?;
@@ -507,8 +761,9 @@ impl Store {
             .context("failed to query max turn seq")?;
         tx.execute(
             "INSERT INTO turns (session_id, seq, ts, model, protocol, base_url, system,
-                                tools_json, max_tokens, stop_reason, first_block, last_block)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                tools_json, max_tokens, stop_reason, first_block, last_block,
+                                provider, prompt_tokens, completion_tokens, cached_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
                 session_id,
                 seq,
@@ -521,7 +776,11 @@ impl Store {
                 meta.max_tokens,
                 stop,
                 first_block,
-                last_block
+                last_block,
+                meta.provider,
+                usage.map(|u| u.prompt_tokens as i64),
+                usage.map(|u| u.completion_tokens as i64),
+                usage.map(|u| u.cached_tokens as i64),
             ],
         )?;
         tx.commit()?;
@@ -530,23 +789,61 @@ impl Store {
 
     // Every stored request header of a session, oldest first.
     pub fn rounds(&self, session_id: i64) -> Result<Vec<RoundRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT seq, ts, model, protocol, base_url, system, tools_json, max_tokens,
-                    stop_reason, first_block, last_block
-             FROM turns WHERE session_id = ?1 ORDER BY seq",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ROUND_COLS} FROM turns WHERE session_id = ?1 ORDER BY seq"
+        ))?;
         let rows = stmt.query_map([session_id], round_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// `/usage` 的数据源：本会话的用量**按模型**聚合成几行。
+    ///
+    /// 以轮为单位（`turns`），因为模型是**会话级**的东西、一轮之内不变——
+    /// 分组键因此是 `(provider, model)` 而不是逐块，顺带也就是"这个会话换过
+    /// 几个模型、各花了多少"。金额不在这里算：价格表归配置管（会话层去解析），
+    /// 存储只认 token 这个事实。
+    ///
+    /// 没拿到用量的轮（`prompt_tokens IS NULL`）计入 `rounds` 但 token 记 0：
+    /// "问过一次、账单没记上"本身是要说出来的信息，藏掉它就等于假装没花过钱。
+    ///
+    /// 分叉不复制 `turns`（见 [`Self::fork_session`]），所以这里天然只算
+    /// **本分支**的账。
+    pub fn usage_by_model(&self, session_id: i64) -> Result<Vec<ModelUsage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT provider, model,
+                    COUNT(*),
+                    COALESCE(SUM(prompt_tokens), 0),
+                    COALESCE(SUM(completion_tokens), 0),
+                    COALESCE(SUM(cached_tokens), 0)
+               FROM turns WHERE session_id = ?1
+              GROUP BY provider, model
+              ORDER BY MIN(seq)",
+        )?;
+        let rows = stmt.query_map([session_id], |r| {
+            let provider: Option<String> = r.get(0)?;
+            let id: String = r.get(1)?;
+            Ok(ModelUsage {
+                name: id.clone(),
+                id,
+                provider,
+                rounds: r.get::<_, i64>(2)?.max(0) as u64,
+                prompt_tokens: r.get::<_, i64>(3)?.max(0) as u64,
+                completion_tokens: r.get::<_, i64>(4)?.max(0) as u64,
+                cached_tokens: r.get::<_, i64>(5)?.max(0) as u64,
+                cost: None,
+                currency: None,
+            })
+        })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
 
     // One stored request header, or None when the turn is not stored.
     pub fn round(&self, session_id: i64, seq: i64) -> Result<Option<RoundRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT seq, ts, model, protocol, base_url, system, tools_json, max_tokens,
-                    stop_reason, first_block, last_block
-             FROM turns WHERE session_id = ?1 AND seq = ?2",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ROUND_COLS} FROM turns WHERE session_id = ?1 AND seq = ?2"
+        ))?;
         let mut rows = stmt.query_map(rusqlite::params![session_id, seq], round_from_row)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
@@ -688,6 +985,56 @@ impl Store {
     /// 而且**从叶子段往回走**——每段一次索引区间扫，分叉深度是几就几跳。
     pub fn load_tail(&self, session_id: i64, limit: usize) -> Result<(Vec<Block>, bool)> {
         self.page(session_id, None, limit)
+    }
+
+    /// 这条会话**最后一条回复**记下的上下文大小（`None` = 一条都没有）。
+    ///
+    /// 恢复历史时用它当用量起点：内存里的实测值是新的（进程刚起来），而库里
+    /// 那段对话早就不止开场白那么长了——拿开场白的体重顶上去，表会指着一个
+    /// 明显偏小的数。
+    ///
+    /// 按轮倒着取第一条有量的记录（`turns.seq` 是会话内的时序键），不解析
+    /// 块的 JSON。
+    pub fn last_prompt_tokens(&self, session_id: i64) -> Result<Option<u64>> {
+        let n: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT prompt_tokens FROM turns
+                  WHERE session_id = ?1 AND prompt_tokens IS NOT NULL
+                  ORDER BY seq DESC LIMIT 1",
+                [session_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(n.filter(|v| *v > 0).map(|v| v as u64))
+    }
+
+    /// 同一份开场白（系统提示词 + 工具手册 + 模型）在**历史回合**里实测到的
+    /// 最小上下文占用。`None` = 一次都没实测过。
+    ///
+    /// 最小值就是开场白的体重：`prompt_tokens` 随对话变长只涨不跌，所以同一份
+    /// 开场白在所有记录里的下界就是"还没说话时"的占用。新会话在第一轮请求
+    /// 回来之前拿它当预估值，比按字符瞎折准得多。
+    ///
+    /// 匹配用**逐字相等**（`turns` 表存的就是请求里那一份原文），所以换一个
+    /// 字符都会落空——那正是要的：换过 profile 的会话不该借旧数据。
+    ///
+    /// 用量按轮存在 `turns` 上，所以这一问是一行聚合，不碰 `blocks` 的 JSON
+    /// 载荷，也不 JOIN。
+    pub fn min_prompt_tokens(
+        &self,
+        system: &str,
+        tools_json: &str,
+        model: &str,
+    ) -> Result<Option<u64>> {
+        let n: Option<i64> = self.conn.query_row(
+            "SELECT MIN(prompt_tokens) FROM turns
+              WHERE system = ?1 AND tools_json = ?2 AND model = ?3
+                AND prompt_tokens IS NOT NULL",
+            rusqlite::params![system, tools_json, model],
+            |r| r.get(0),
+        )?;
+        Ok(n.filter(|v| *v > 0).map(|v| v as u64))
     }
 
     /// `limit` blocks older than `before_block` (ascending) — the page before
@@ -1464,6 +1811,183 @@ mod tests {
     use crate::server::entry::Entry;
     use std::path::Path;
 
+    /// 会话级模型：写进去、读回来；`None` = 跟着配置的默认走。
+    #[test]
+    fn the_session_model_round_trips() {
+        let mut s = mem_store();
+        let a = s.create_session("t0", "/tmp").unwrap();
+        assert_eq!(s.session_model(a).unwrap(), None, "新会话跟着默认走");
+        s.set_session_model(a, Some(("vendor-a", "model-b"))).unwrap();
+        assert_eq!(
+            s.session_model(a).unwrap(),
+            Some(("vendor-a".to_string(), "model-b".to_string()))
+        );
+        s.set_session_model(a, None).unwrap();
+        assert_eq!(s.session_model(a).unwrap(), None, "切回默认就是 NULL");
+    }
+
+    /// 同一份开场白在历史里的**最小**实测占用会被借出来：`prompt_tokens` 随
+    /// 对话只涨不跌，所以历史里的下界就是"还没说话时"的体重——新会话在第一
+    /// 轮响应回来之前，用量表拿它当预估值。
+    #[test]
+    fn the_smallest_recorded_prompt_is_borrowed() {
+        let mut s = mem_store();
+        let a = s.create_session("t0", "/tmp").unwrap();
+        let meta = |model: &str, system: &str| RoundMeta {
+            model: model.into(),
+            provider: "test".into(),
+            protocol: "openai-chat-completions".into(),
+            base_url: "http://x/v1".into(),
+            system: system.into(),
+            tools_json: "[]".into(),
+            max_tokens: 4096,
+        };
+        let used = |n: u64| Entry::Assistant {
+            content: "答".into(),
+            usage: Some(crate::server::entry::UsageSummary {
+                total_tokens: n + 5,
+                prompt_tokens: n,
+                cached_tokens: 0,
+                completion_tokens: 5,
+                reasoning_tokens: 0,
+            }),
+        };
+        s.append_round(
+            a,
+            &[user("一"), used(900)],
+            &meta("m", "SYS"),
+            None,
+            Some(RoundUsage {
+                prompt_tokens: 900,
+                completion_tokens: 5,
+                cached_tokens: 0,
+            }),
+        )
+            .unwrap();
+        s.append_round(
+            a,
+            &[user("二"), used(1400)],
+            &meta("m", "SYS"),
+            None,
+            Some(RoundUsage {
+                prompt_tokens: 1400,
+                completion_tokens: 5,
+                cached_tokens: 0,
+            }),
+        )
+            .unwrap();
+
+        assert_eq!(
+            s.min_prompt_tokens("SYS", "[]", "m").unwrap(),
+            Some(900),
+            "取历史最小值，不是最近一次"
+        );
+        // 开场白、工具手册、模型任意一处不同都落空：换过 profile 的会话不该
+        // 借旧数据（字数差一个也不行，比的是原文）。
+        assert_eq!(s.min_prompt_tokens("SYS!", "[]", "m").unwrap(), None);
+        assert_eq!(s.min_prompt_tokens("SYS", "[{}]", "m").unwrap(), None);
+        assert_eq!(s.min_prompt_tokens("SYS", "[]", "m2").unwrap(), None);
+    }
+
+    /// 恢复历史时的起点：库里**最后**一条回复记录的上下文大小（不是最小值
+    /// ——那段对话早就长过开场白了）。
+    #[test]
+    fn the_last_recorded_prompt_serves_a_resumed_session() {
+        let mut s = mem_store();
+        let a = s.create_session("t0", "/tmp").unwrap();
+        let meta = RoundMeta {
+            model: "m".into(),
+            provider: "test".into(),
+            protocol: "openai-chat-completions".into(),
+            base_url: "http://x/v1".into(),
+            system: "SYS".into(),
+            tools_json: "[]".into(),
+            max_tokens: 4096,
+        };
+        let used = |n: u64| Entry::Assistant {
+            content: "答".into(),
+            usage: Some(crate::server::entry::UsageSummary {
+                total_tokens: n + 5,
+                prompt_tokens: n,
+                cached_tokens: 0,
+                completion_tokens: 5,
+                reasoning_tokens: 0,
+            }),
+        };
+        let usage = |n: u64| {
+            Some(RoundUsage {
+                prompt_tokens: n,
+                completion_tokens: 5,
+                cached_tokens: 0,
+            })
+        };
+        s.append_round(a, &[user("一"), used(900)], &meta, None, usage(900))
+            .unwrap();
+        s.append_round(a, &[user("二"), used(1400)], &meta, None, usage(1400))
+            .unwrap();
+        assert_eq!(s.last_prompt_tokens(a).unwrap(), Some(1400));
+
+        let empty = s.create_session("t0", "/tmp").unwrap();
+        assert_eq!(s.last_prompt_tokens(empty).unwrap(), None, "没跑过就没有");
+    }
+
+    /// `/usage` 的数据源：用量按 `(服务商, 模型)` 分组累加。
+    ///
+    /// 两件事要同时成立——同一个模型跨轮累加，同名模型跨服务商**不**串。
+    /// 后者是分组键要带服务商的原因：`Ali-dashscope/Qwen3.8` 和别家的同名
+    /// 条目是两笔账。
+    #[test]
+    fn usage_is_summed_per_model_and_provider() {
+        let mut s = mem_store();
+        let a = s.create_session("t0", "/tmp").unwrap();
+        let meta = |model: &str, provider: &str| RoundMeta {
+            model: model.into(),
+            provider: provider.into(),
+            protocol: "openai-chat-completions".into(),
+            base_url: "http://x/v1".into(),
+            system: "SYS".into(),
+            tools_json: "[]".into(),
+            max_tokens: 4096,
+        };
+        let u = |p: u64, c: u64, r: u64| RoundUsage {
+            prompt_tokens: p,
+            completion_tokens: c,
+            cached_tokens: r,
+        };
+        s.append_round(a, &[user("一")], &meta("m1", "p1"), None, Some(u(10, 2, 0)))
+            .unwrap();
+        s.append_round(a, &[user("二")], &meta("m1", "p1"), None, Some(u(20, 4, 8)))
+            .unwrap();
+        s.append_round(a, &[user("三")], &meta("m2", "p1"), None, Some(u(5, 1, 0)))
+            .unwrap();
+        // 半途死掉的那一轮：用量没拿到，但它确实问过——不记 token，也别
+        // 装作没有过这一轮。
+        s.append_round(a, &[user("四")], &meta("m2", "p1"), None, None)
+            .unwrap();
+
+        let g = s.usage_by_model(a).unwrap();
+        assert_eq!(g.len(), 2, "两个模型两行：{g:?}");
+        assert_eq!((g[0].provider.as_deref(), g[0].id.as_str()), (Some("p1"), "m1"));
+        assert_eq!(g[0].rounds, 2);
+        assert_eq!(g[0].prompt_tokens, 30, "跨轮累加");
+        assert_eq!(g[0].completion_tokens, 6);
+        assert_eq!(g[0].cached_tokens, 8);
+        assert_eq!(g[1].rounds, 2, "没拿到用量的那轮也算问过一次");
+        assert_eq!(g[1].prompt_tokens, 5);
+
+        // 同名模型挂两家：分组键是 (provider, model)，不是 model。
+        let b = s.create_session("t0", "/tmp").unwrap();
+        s.append_round(b, &[user("一")], &meta("m1", "p1"), None, Some(u(1, 1, 0)))
+            .unwrap();
+        s.append_round(b, &[user("二")], &meta("m1", "p2"), None, Some(u(2, 2, 0)))
+            .unwrap();
+        let g = s.usage_by_model(b).unwrap();
+        assert_eq!(g.len(), 2, "不同服务商的同名模型不许合并：{g:?}");
+
+        // 账本按会话分：另一个会话的轮不能混进来。
+        assert_eq!(s.usage_by_model(a).unwrap()[0].prompt_tokens, 30);
+    }
+
     fn mem_store() -> Store {
         Store::open(Path::new(":memory:")).unwrap()
     }
@@ -1570,6 +2094,96 @@ mod tests {
         );
         // 主干自己后续的块（如果有）不会被分支顶替掉。
         assert!(tip_a < fork_point, "前置条件：A1 早于 A2");
+    }
+
+    /// 回退到**继承来的前缀**里（分叉点之前）：自己名下的块一块不剩，
+    /// 会话就地重新生根到那一块的归属上——回退到哪，前缀就读到哪。
+    #[test]
+    fn pruning_into_an_inherited_prefix_re_roots_the_session() {
+        let mut s = mem_store();
+        let a = s.create_session("t", "/tmp").unwrap();
+        s.append(a, &[user("A1"), user("A2"), user("A3")]).unwrap();
+        let blocks = s.stored_blocks(a).unwrap();
+        let (x, y) = (blocks[1].id, blocks[2].id);
+
+        // 从 A3 岔出去，分支写自己的块。
+        let b = s.fork_session(a, y).unwrap();
+        s.append(b, &[user("B1")]).unwrap();
+        assert_eq!(
+            s.load_branch(b, None).unwrap().0.len(),
+            4,
+            "分叉后 B 看得到 A1 A2 A3 + B1"
+        );
+
+        // 回退到 A2——它在**继承的前缀**里，不是 B 自己的块。
+        s.prune_session(b, x).unwrap();
+
+        assert_eq!(s.stored_blocks(b).unwrap().len(), 0, "B 自己的块全没了");
+        assert_eq!(
+            user_texts(&s.load_branch(b, None).unwrap().0),
+            vec!["A1", "A2"],
+            "前缀读到回退点为止：A3 和 B1 都不该在"
+        );
+        let (_nodes, forks, _) = s.lineage(b).unwrap();
+        assert!(
+            forks.iter().any(|f| f.id == b),
+            "行没换：B 还在树里，链没变长"
+        );
+    }
+
+    /// 回退砍的是**整棵树**里回退点之后的一切：前几次回退岔出去的分支也一起
+    /// 走，不能只砍自己名下那几块——否则 resume 一看，旧内容全在（用户报的
+    /// 就是这一条）。
+    #[test]
+    fn pruning_takes_the_whole_family_with_it() {
+        let mut s = mem_store();
+        let a = s.create_session("t", "/tmp").unwrap();
+        s.append(a, &[user("A1"), user("A2"), user("A3")]).unwrap();
+        let blocks = s.stored_blocks(a).unwrap();
+        let (x, y, z) = (blocks[0].id, blocks[1].id, blocks[2].id);
+
+        // A3 上岔出一条 B，再在 B 上回退到 A2 岔出一条 C——就是连按回退的走法。
+        let b = s.fork_session(a, z).unwrap();
+        s.append(b, &[user("B1")]).unwrap();
+        let c = s.fork_session(b, y).unwrap();
+        s.append(c, &[user("C1")]).unwrap();
+
+        // 站在 C 上回退到 A1。
+        s.prune_session(c, x).unwrap();
+
+        let a_blocks = s.stored_blocks(a).unwrap();
+        assert_eq!(a_blocks.len(), 1, "主干只剩回退点之前那一块");
+        assert_eq!(user_texts(&a_blocks[0].entries), vec!["A1"]);
+        assert!(
+            s.stored_blocks(b).unwrap().is_empty(),
+            "被砍空的分支 B 的块也该没"
+        );
+        assert!(s.stored_blocks(c).unwrap().is_empty(), "C 自己的块没了");
+        assert_eq!(
+            user_texts(&s.load_branch(c, None).unwrap().0),
+            vec!["A1"],
+            "C 的前缀读到 A1 为止"
+        );
+        let (_nodes, forks, _) = s.lineage(c).unwrap();
+        assert!(
+            !forks.iter().any(|f| f.id == b),
+            "被砍空的分支行该从树里消失：{forks:?}"
+        );
+        assert!(
+            forks.iter().any(|f| f.id == c),
+            "用户站着的会话必须还在：{forks:?}"
+        );
+    }
+
+    /// 转录里所有 user 条目的文本（断言用）。
+    fn user_texts(entries: &[Entry]) -> Vec<String> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::User { content } => Some(content.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// 回到历史节点时，树上要看得见**整棵树**：自己那条线 + 平行分支，

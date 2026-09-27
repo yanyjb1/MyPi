@@ -106,23 +106,25 @@ fn build_rows(
         .collect();
     let lnodes: Vec<layout::NodeRef> = nodes
         .iter()
-        .enumerate()
-        .map(|(i, n)| layout::NodeRef {
-            index: i,
-            fork: n.session,
+        .map(|n| layout::NodeRef {
+            block: n.id,
+            session: n.session,
         })
         .collect();
-    let ids: Vec<i64> = nodes.iter().map(|n| n.id).collect();
-    let geo = layout::rows(&lforks, &lnodes, |i| ids[i]);
 
-    geo.into_iter()
-        .zip(nodes)
-        .map(|(geom, n)| Row {
-            geom,
-            block_id: n.id,
-            text: format!("{}: {}", role_label(&n.kind), n.summary),
-            fork: n.session,
-            kind: n.kind.clone(),
+    // `rows` 按**树序**返回（分支跟在自己的分叉点后面），所以这里用 `src`
+    // 索引回原来的节点，而不是按顺序 zip。
+    layout::rows(&lforks, &lnodes)
+        .into_iter()
+        .map(|p| {
+            let n = &nodes[p.src];
+            Row {
+                geom: p.geom,
+                block_id: n.id,
+                text: format!("{}: {}", role_label(&n.kind), n.summary),
+                fork: n.session,
+                kind: n.kind.clone(),
+            }
         })
         .collect()
 }

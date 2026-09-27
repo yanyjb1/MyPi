@@ -16,7 +16,7 @@ use crate::tui::zone::main::input::statusline::{PRIORITY_BASE, Side, StatusCompo
 #[derive(Debug, Default)]
 pub struct Cost {
     total: f64,
-    symbol: &'static str,
+    symbol: String,
     show: bool,
 }
 
@@ -44,7 +44,7 @@ impl StatusComponent for Cost {
     fn on_event(&mut self, ev: &StatusEvent<'_>) {
         if let StatusEvent::Usage(u) = ev {
             self.total = u.total_cost;
-            self.symbol = u.currency_symbol;
+            self.symbol = u.currency_symbol.clone();
             self.show = u.show_cost;
         }
     }
@@ -53,24 +53,10 @@ impl StatusComponent for Cost {
         if !self.show || self.symbol.is_empty() {
             return Vec::new();
         }
-        vec![t.capsule(fmt_money(self.total, self.symbol), t.get(Token::Gold))]
+        vec![t.capsule(
+            crate::tui::num::money(self.total, &self.symbol),
+            t.get(Token::Gold),
+        )]
     }
 }
 
-/// Money: fixed two decimals, with the currency symbol.
-fn fmt_money(v: f64, symbol: &str) -> String {
-    format!("{symbol}{v:.2}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn money_is_two_decimals_with_the_symbol() {
-        assert_eq!(fmt_money(0.0004, "$"), "$0.00");
-        assert_eq!(fmt_money(2.77, "$"), "$2.77");
-        assert_eq!(fmt_money(0.001, "¥"), "¥0.00");
-        assert_eq!(fmt_money(1.5, "¥"), "¥1.50");
-    }
-}

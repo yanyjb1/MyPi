@@ -43,6 +43,12 @@ pub enum Signal {
     /// A message pushed by the daemon (socket reader thread → main loop).
     /// Dispatched to the `SessionView`, which maps it onto zone calls.
     Server(crate::server::wire::ServerMsg),
+    /// 动画的**空拍**：不是"有事发生"，恰恰是"什么事都没发生"，而 spinner
+    /// 必须继续转。
+    ///
+    /// 只在回合进行中由主循环自己造（`recv_timeout` 超时 = 等模型等了一拍）。
+    /// 这不是轮询：空闲时循环照旧阻塞在 `recv()` 上，一个字节都不烧。
+    Tick,
 }
 
 #[cfg(test)]
@@ -57,6 +63,7 @@ mod tests {
         let _ = Signal::Key(k);
         let _ = Signal::Paste("x".into());
         let _ = Signal::Resized;
+        let _ = Signal::Tick;
         let _ = Signal::Server(crate::server::wire::ServerMsg::HelloOk {
             proto: 1,
             commands: Vec::new(),

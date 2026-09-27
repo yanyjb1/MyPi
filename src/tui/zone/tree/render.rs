@@ -1,28 +1,28 @@
 //! 节点树的渲染：几何 → 字符。
 //!
-//! **一块一行**（紧凑布局，用户定的）：`user: 前几个字…` 这样。不换行、不
-//! 多占行 —— 分叉也是行内的两条竖线加一个 `├`，不另起一行。
+//! **一块一行**（紧凑布局）：`user: 前几个字…` 这样。不换行、不多占行。
+//! 分支关系全靠**行首前缀**——祖先岔路口的竖线 + 本层连接符，规则在
+//! [`super::layout`]，这里只负责把它画出来。
 //!
 //! 宽度按**显示列**算（`unicode_width`），不是字符数：中文一个字占两列，
 //! 按 `chars().count()` 算会让整行溢出、把竖线挤歪。
 //!
-//! 颜色：**四类角色各占一个色**（用户定的——树的意义就是一眼看出这段对话
+//! 颜色：**五类角色各占一个色**（用户定——树的意义就是一眼看出这段对话
 //! 是谁说的，同色等于没标）。色号全部走 [`HistoryTheme`]，换主题跟着变。
 
 use super::Row;
+use super::layout::{COL_STEP, RowGeom};
 use crate::tui::zone::TermSize;
 use crate::tui::zone::main::history::render::theme::{HistoryTheme, Token};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-/// 竖直轴。
+/// 竖线：祖先岔路口垂下来的那一支。
 const BAR: char = '│';
-/// 分叉拐点：竖线在中、往右岔——它**本身含主干那根竖线**，所以主干不断。
+/// 连接符左端：后面还有兄弟。
 const TEE: char = '├';
-/// 子轴顶端：横在左、竖在下，收住子轴。
-const TOP: char = '┐';
-/// 在**分支**上分叉的拐点：竖在上、横在右，下边不出头。
+/// 连接符左端：最后一个兄弟。
 const CORNER: char = '└';
 /// 横线。
 const DASH: char = '─';
@@ -75,49 +75,68 @@ fn highlight(line: Line<'static>, on: bool, cols: usize) -> Line<'static> {
     Line::from(spans).style(Style::new().add_modifier(Modifier::REVERSED))
 }
 
-/// 一块一行：前缀（轴 / 分叉）接本块文字，按列宽截断。
+/// 前缀：祖先岔路口的竖线 + 本层连接符 + 缩进留白。
 ///
-/// 前缀里的轴和连线是**暗淡**的（它们是结构，不是内容）；角色名用该角色的
-/// 色，摘要用正文色。这样一眼扫下去能看出"谁说的话"。
-fn paint(row: &Row, cols: usize, t: &HistoryTheme) -> Line<'static> {
-    // 结构线：轴亮一档，横线更暗。
-    let axis = t.fg_style(Token::TreeAxis);
-    let line_st = t.fg_style(Token::TreeLine);
-
-    let col = indent_cols(row.geom.column);
-    let child = indent_cols(row.geom.child_column);
-    let mut spans: Vec<Span<'static>> = Vec::new();
-
-    // 主干恒在 0 列：分叉时它由 `├` 承担（`├` 含竖线）。
-    if col == 0 && row.geom.forks_here {
-        spans.push(Span::styled(TEE.to_string(), axis));
-        spans.push(Span::styled(
-            DASH.to_string().repeat(child.saturating_sub(1)),
-            line_st,
-        ));
-        spans.push(Span::styled(TOP.to_string(), axis));
-    } else {
-        spans.push(Span::styled(BAR.to_string(), axis));
-        if col > 1 {
-            spans.push(Span::raw(" ".repeat(col - 1)));
-        }
-        if row.geom.forks_here {
-            // 分支上分叉：本块的轴已经在上面了，拐点紧接其后，用不出头的 `└`。
-            spans.push(Span::styled(CORNER.to_string(), axis));
-            spans.push(Span::styled(
-                DASH.to_string().repeat(child.saturating_sub(col + 1)),
-                line_st,
-            ));
-            spans.push(Span::styled(TOP.to_string(), axis));
-        } else if col > 0 {
-            spans.push(Span::styled(BAR.to_string(), axis));
+/// 结构线一色、留白无色，所以攒成两段交替推，不是每个字符一个 span
+/// （树每帧都要全量重画，span 数是热路径上的常数）。
+fn prefix(geom: &RowGeom, spans: &mut Vec<Span<'static>>, axis: Style) {
+    let conn_level = geom.connector_level();
+    let mut bars = String::new();
+    let mut blanks = String::new();
+    for i in 0..geom.prefix_cols() {
+        let level = i / COL_STEP;
+        let pos = i % COL_STEP;
+        let ch = if let Some(show) = geom.gutter(level) {
+            // 祖先的岔路口：竖线只占层首那一列。
+            (pos == 0 && show).then_some(BAR)
+        } else if conn_level == Some(level) {
+            match pos {
+                0 => Some(if geom.connector == Some(true) {
+                    CORNER
+                } else {
+                    TEE
+                }),
+                1 => Some(DASH),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        match ch {
+            Some(c) => {
+                if !blanks.is_empty() {
+                    spans.push(Span::raw(std::mem::take(&mut blanks)));
+                }
+                bars.push(c);
+            }
+            None => {
+                if !bars.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut bars), axis));
+                }
+                blanks.push(' ');
+            }
         }
     }
-    spans.push(Span::raw(" "));
+    if !blanks.is_empty() {
+        spans.push(Span::raw(std::mem::take(&mut blanks)));
+    }
+    if !bars.is_empty() {
+        spans.push(Span::styled(std::mem::take(&mut bars), axis));
+    }
+}
+
+/// 一块一行：前缀（树形）接本块文字，按列宽截断。
+///
+/// 前缀里的竖线和横线是**暗淡**的（它们是结构，不是内容）；角色名用该角色的
+/// 色，摘要用正文色。这样一眼扫下去能看出"谁说的话"。
+fn paint(row: &Row, cols: usize, t: &HistoryTheme) -> Line<'static> {
+    let axis = t.fg_style(Token::TreeAxis);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    prefix(&row.geom, &mut spans, axis);
 
     // 正文：`role: 摘要`。角色名上该角色的色，摘要走正文色。
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
-    let body_cols = cols.saturating_sub(used + 1).max(1);
+    let body_cols = cols.saturating_sub(used).max(1);
     let (role, rest) = split_role(&row.text);
     // 角色名 + ": " 的宽度，摘要只剩这么多列。
     let role_cols = role.width() + 2;
@@ -125,7 +144,10 @@ fn paint(row: &Row, cols: usize, t: &HistoryTheme) -> Line<'static> {
         spans.push(Span::styled(role.to_string(), role_style(&row.kind, t)));
         spans.push(Span::raw(": "));
         let rest_cols = body_cols - role_cols;
-        spans.push(Span::styled(fit(rest, rest_cols), t.fg_style(Token::AssistantText)));
+        spans.push(Span::styled(
+            fit(rest, rest_cols),
+            t.fg_style(Token::AssistantText),
+        ));
     } else {
         // 太窄，连角色名都放不下：整段按角色色截断。
         spans.push(Span::styled(
@@ -144,7 +166,7 @@ fn split_role(text: &str) -> (&str, &str) {
     }
 }
 
-/// 角色 → 色号。四类互不相同（用户定的）。
+/// 角色 → 色号。五类互不相同（用户定的）。
 fn role_style(kind: &str, t: &HistoryTheme) -> Style {
     let tok = match kind {
         "user" => Token::TreeUser,
@@ -168,11 +190,6 @@ fn fit(s: &str, max: usize) -> String {
     out
 }
 
-/// 第 `column` 列对应的字符列。列宽的唯一定义在 `layout::COL_STEP`。
-fn indent_cols(column: usize) -> usize {
-    column * crate::tui::zone::tree::layout::COL_STEP
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,13 +201,25 @@ mod tests {
         HistoryTheme::resolve()
     }
 
-    /// 场景：主干(1) A B  ->  从 B（块 2）岔出 f2  ->  f2 两块（块 3,4）
-    ///        ->  从块 4 岔出 f3  ->  f3 两块（块 5,6）  ->  回主干 C D。
+    /// 场景：主干 A B  ->  从块 2 岔出 f2  ->  f2 两块（块 3,4）
+    ///        ->  从块 4 岔出 f3  ->  f3 一块（块 5）  ->  回主干 C D。
     fn sample() -> Vec<Row> {
         let forks = vec![
-            ForkRef { id: 1, parent: None, fork_block: None },
-            ForkRef { id: 2, parent: Some(1), fork_block: Some(2) },
-            ForkRef { id: 3, parent: Some(2), fork_block: Some(4) },
+            ForkRef {
+                id: 1,
+                parent: None,
+                fork_block: None,
+            },
+            ForkRef {
+                id: 2,
+                parent: Some(1),
+                fork_block: Some(2),
+            },
+            ForkRef {
+                id: 3,
+                parent: Some(2),
+                fork_block: Some(4),
+            },
         ];
         let spec: Vec<(i64, i64, &str, &str)> = vec![
             (1, 1, "user", "user: 主干 A"),
@@ -198,25 +227,27 @@ mod tests {
             (3, 2, "assistant", "assistant: 分1 a"),
             (4, 2, "tool_result", "tool_result: 分1 b"),
             (5, 3, "reasoning", "reasoning: 分2 a"),
-            (6, 3, "user", "user: 分2 b"),
-            (7, 1, "user", "user: 主干 C"),
-            (8, 1, "assistant", "assistant: 主干 D"),
+            (6, 1, "user", "user: 主干 C"),
+            (7, 1, "assistant", "assistant: 主干 D"),
         ];
         let nodes: Vec<NodeRef> = spec
             .iter()
-            .enumerate()
-            .map(|(i, (_, fk, _, _))| NodeRef { index: i, fork: *fk })
+            .map(|(id, fk, _, _)| NodeRef {
+                block: *id,
+                session: *fk,
+            })
             .collect();
-        let ids: Vec<i64> = spec.iter().map(|(id, _, _, _)| *id).collect();
-        let geo = crate::tui::zone::tree::layout::rows(&forks, &nodes, |i| ids[i]);
-        geo.into_iter()
-            .zip(spec)
-            .map(|(geom, (id, fk, kind, tx))| Row {
-                geom,
-                block_id: id,
-                text: tx.to_string(),
-                fork: fk,
-                kind: kind.to_string(),
+        crate::tui::zone::tree::layout::rows(&forks, &nodes)
+            .into_iter()
+            .map(|p| {
+                let (id, fk, kind, tx) = &spec[p.src];
+                Row {
+                    geom: p.geom,
+                    block_id: *id,
+                    text: tx.to_string(),
+                    fork: *fk,
+                    kind: kind.to_string(),
+                }
             })
             .collect()
     }
@@ -229,46 +260,44 @@ mod tests {
 
     #[test]
     fn every_block_is_exactly_one_line() {
-        assert_eq!(painted(&sample()).len(), 8);
+        assert_eq!(painted(&sample()).len(), 7);
     }
 
+    /// 主干**齐平在左**：一条直线上的块不带任何前缀。
     #[test]
-    fn the_trunk_bar_is_never_broken() {
-        for (i, l) in painted(&sample()).iter().enumerate() {
-            assert!(
-                l.starts_with(BAR) || l.starts_with(TEE),
-                "第 {i} 行丢了主干：{l:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_row_never_carries_more_than_two_bars() {
-        for l in painted(&sample()) {
-            let n = l.matches(BAR).count();
-            assert!(n <= 2, "一行超过两根竖线：{l:?} ({n})");
-        }
-    }
-
-    #[test]
-    fn a_fork_row_connects_the_corner_to_the_child_axis() {
+    fn the_trunk_stays_flush_left() {
         let lines = painted(&sample());
-        let f = lines.iter().find(|l| l.contains(TEE)).expect("该有分叉");
-        let cs: Vec<char> = f.chars().collect();
-        let tee = cs.iter().position(|c| *c == TEE).unwrap();
-        let top = cs.iter().position(|c| *c == TOP).unwrap();
-        let between = &cs[tee + 1..top];
+        assert_eq!(lines[0], "user: 主干 A");
+        assert_eq!(lines[1], "user: 主干 B");
+    }
+
+    /// 分支那一行带连接符，分支内部带祖先的竖线（一直垂到那一支结束）。
+    #[test]
+    fn a_branch_row_draws_its_connector_and_gutter() {
+        let lines = painted(&sample());
+        assert!(lines[2].starts_with("├─ "), "分支头：{}", lines[2]);
+        assert!(lines[3].starts_with("│  "), "分支内部要竖线：{}", lines[3]);
+        assert!(lines[4].starts_with("│  "), "再深一层也还得有：{}", lines[4]);
+        assert!(lines[5].starts_with("└─ "), "最后一条分支：{}", lines[5]);
+    }
+
+    /// 末支下面不再竖线：`└─` 之后是空格，不是 `│`。
+    #[test]
+    fn the_last_branch_has_no_gutter() {
+        let lines = painted(&sample());
+        assert!(!lines[5].contains(BAR), "末支自己不带竖线：{}", lines[5]);
         assert!(
-            !between.is_empty() && between.iter().all(|c| *c == DASH),
-            "拐点到子轴之间断了：{f:?}"
+            !lines[6].contains(BAR),
+            "末支内部也不该有竖线：{}",
+            lines[6]
         );
+        assert_eq!(lines[6], "   assistant: 主干 D", "留白对齐，不画线");
     }
 
     /// **每一类角色的颜色都必须互不相同。**
     ///
-    /// 这条是这次改动的主要目的：以前整棵树一个色，分不清谁说的话。
-    /// `tool_call` 和 `tool_result` 也在内——它们是这条往返的两半，
-    /// 同色等于又把它们合并回去了。
+    /// 以前整棵树一个色，分不清谁说的话。`tool_call` 和 `tool_result` 也在内
+    /// ——它们是这条往返的两半，同色等于又把它们合并回去了。
     #[test]
     fn every_role_gets_its_own_color() {
         let t = theme();
@@ -299,7 +328,7 @@ mod tests {
         );
     }
 
-    /// 结构线（轴）和内容色**不同**：轴不该抢正文的风头。
+    /// 结构线（竖线/横线）和内容色**不同**：结构不该抢正文的风头。
     #[test]
     fn the_structure_lines_use_their_own_color() {
         let t = theme();
@@ -313,10 +342,10 @@ mod tests {
     fn cjk_text_never_overflows_the_terminal_width() {
         let t = theme();
         let rows = [Row {
-            geom: crate::tui::zone::tree::layout::RowGeom {
-                column: 0,
-                forks_here: false,
-                child_column: 0,
+            geom: RowGeom {
+                indent: 1,
+                connector: Some(false),
+                gutters: Vec::new(),
             },
             block_id: 1,
             text: format!("user: {}", "中文内容很长很长".repeat(20)),
@@ -354,9 +383,9 @@ mod tests {
         z.deliver(k(KeyCode::Up));
         assert_eq!(z.selected, 0, "顶端再往上不动");
         z.deliver(k(KeyCode::End));
-        assert_eq!(z.selected, 7);
+        assert_eq!(z.selected, 6);
         z.deliver(k(KeyCode::Down));
-        assert_eq!(z.selected, 7, "底端再往下不动");
+        assert_eq!(z.selected, 6, "底端再往下不动");
     }
 
     #[test]
@@ -397,6 +426,9 @@ mod tests {
         let t = theme();
         for r in &sample() {
             println!("{}", paint(r, 80, &t));
+        }
+        for (i, l) in painted(&sample()).iter().enumerate() {
+            println!("{i}: {l}");
         }
     }
 }

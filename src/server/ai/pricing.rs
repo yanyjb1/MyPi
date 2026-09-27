@@ -21,6 +21,25 @@ use crate::server::ai::types::Usage;
 // Divisor for per-1M-tokens pricing.
 const PER_MILLION: f64 = 1_000_000.0;
 
+/// 一笔请求的账单，四栏分开——`/usage` 要的就是这四栏。
+///
+/// 单位是 `Cost` 的货币（公式本身与货币无关）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Breakdown {
+    /// 没命中缓存的输入。
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    /// 协议不报"写入缓存"（见 [`cost`]），恒为 0；留着是为了账目四栏齐全。
+    pub cache_write: f64,
+}
+
+impl Breakdown {
+    pub fn total(self) -> f64 {
+        self.input + self.output + self.cache_read + self.cache_write
+    }
+}
+
 // Cost of one request (numeric value in `Cost`'s currency; the formula itself is currency-agnostic).
 //
 // Cache writes (`c.cacheWrite`) are **not included**: usage has no
@@ -30,7 +49,21 @@ const PER_MILLION: f64 = 1_000_000.0;
 // handled cache writes. Rather than keep that decoration, the omission
 // is documented here.
 pub fn cost(usage: &Usage, c: &Cost) -> f64 {
-    let prompt = usage.prompt_tokens as f64;
+    breakdown(
+        usage.prompt_tokens,
+        usage.cached_tokens.unwrap_or(0),
+        usage.completion_tokens,
+        c,
+    )
+    .total()
+}
+
+/// 四栏账单：**唯一的计价公式**（[`cost`] 是它的和，`/usage` 是它的四栏）。
+///
+/// 拆开而不是各算一遍：总额和分项必须是同一个式子的两种读法，否则
+/// "分项加起来对不上总额"这种账只有用户会发现。
+pub fn breakdown(prompt_tokens: u64, cached_tokens: u64, completion_tokens: u64, c: &Cost) -> Breakdown {
+    let prompt = prompt_tokens as f64;
     // Cache reads cannot exceed total input. Compatibility layers
     // occasionally emit dirty data (`cached_tokens > prompt_tokens`,
     // observed with cumulative counters stuffed in), so **clamp both
@@ -43,11 +76,18 @@ pub fn cost(usage: &Usage, c: &Cost) -> f64 {
     //
     // Clamping only one side still produces a wrong answer, hence the
     // explicit `min`.
-    let cache_read = (usage.cached_tokens.unwrap_or(0) as f64).min(prompt);
+    let cache_read = (cached_tokens as f64).min(prompt);
     let plain_input = prompt - cache_read;
-    let output = usage.completion_tokens as f64;
+    let output = completion_tokens as f64;
 
-    (plain_input * c.input + cache_read * c.cache_read + output * c.output) / PER_MILLION
+    Breakdown {
+        input: plain_input * c.input / PER_MILLION,
+        output: output * c.output / PER_MILLION,
+        cache_read: cache_read * c.cache_read / PER_MILLION,
+        // 协议不报写入，这里就没有可乘的数。写 `c.cache_write * 0.0` 只会
+        // 让人以为它在算——留 0，并把原因写在这里。
+        cache_write: 0.0,
+    }
 }
 
 // Session accumulator. The TUI calls record() once per TurnDone.

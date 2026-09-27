@@ -68,6 +68,9 @@ pub struct SessionState {
     // How the round in flight ended (`StopReason::as_str`); None while it is
     // live or when it died before the gateway answered. Written with the round.
     round_stop: Option<&'static str>,
+    /// 当前模型属于哪个服务商（models.yml 的段名）。`Session` 在装配与
+    /// `/switch` 时写，落盘按轮记它——同名模型可以挂两家，账单要认得出谁是谁。
+    model_provider: String,
     /// 转录**还没落盘**的那截尾巴：正在跑的那个回合（`pending` 里的那些）加上
     /// 永远不落盘的回声（通知、命名标记、落盘失败报告）。
     ///
@@ -94,6 +97,7 @@ impl SessionState {
             round_finalized: false,
             round_meta: None,
             round_stop: None,
+            model_provider: String::new(),
             live: Vec::new(),
         }
     }
@@ -108,6 +112,14 @@ impl SessionState {
         Change::Transcript
     }
 
+    /// 落盘即作废的条目：只有未钉住的系统通知。它们说的是"刚刚发生了什么"
+    /// （切了模型、换了目录、压缩了上下文），话说完就该退场——块一落盘，
+    /// 屏幕上留着的只是过期的告示。钉住的不算（`pin` 的语义就是"常住"），
+    /// 其余条目也不是（它们都有落盘的那一天）。
+    fn dies_on_persist(e: &Entry) -> bool {
+        matches!(e, Entry::System { pin: false, .. })
+    }
+
     /// 落盘成功后：把这批条目从 `live` 里摘掉（按顺序做子序列匹配，不是比长度
     /// ——回合中间可能夹着回声）。
     ///
@@ -117,6 +129,8 @@ impl SessionState {
     ///
     /// 匹配用相等判断就够：落盘的条目只有 User/Assistant/Reasoning/Tool*/Todo，
     /// 回声只有 System/Error/Name，两边的 `kind` 不相交，不会摘错。
+    ///
+    /// 顺手把**落盘即作废**的条目一并撤掉（见 [`Self::dies_on_persist`]）。
     fn note_persisted(&mut self, written: &[Entry]) -> bool {
         let mut j = 0;
         let mut prefix = true;
@@ -124,10 +138,15 @@ impl SessionState {
         for e in self.live.drain(..) {
             if j < written.len() && written[j] == e {
                 j += 1;
-            } else {
-                prefix = prefix && j >= written.len();
-                kept.push(e);
+                continue;
             }
+            // 撤掉的短命通知不算"顺序脏"：它不在留下的序列里，前端拿到整段
+            // 替换的 `live` 照样能对齐（少一次全量快照）。
+            if Self::dies_on_persist(&e) {
+                continue;
+            }
+            prefix = prefix && j >= written.len();
+            kept.push(e);
         }
         self.live = kept;
         prefix && j == written.len()
@@ -334,6 +353,7 @@ impl SessionState {
                 // with the round at finalize time.
                 self.round_meta = Some(RoundMeta {
                     model,
+                    provider: self.model_provider.clone(),
                     protocol,
                     base_url,
                     system,
@@ -391,6 +411,11 @@ impl SessionState {
             self.pending.push(r.clone());
             self.push_live(r);
         }
+        let round_usage = usage.as_ref().map(|u| crate::server::store::RoundUsage {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            cached_tokens: u.cached_tokens.unwrap_or(0),
+        });
         let e = Entry::Assistant {
             content,
             usage: usage.map(|u| Entry::usage_summary(&u)),
@@ -410,7 +435,7 @@ impl SessionState {
             // absent. That is what makes the DB alone sufficient to reproduce
             // the conversation byte for byte, with no profile/config lookup.
             let res = match &meta {
-                Some(m) => st.append_round(sid, &round, m, stop),
+                Some(m) => st.append_round(sid, &round, m, stop, round_usage),
                 // No header seen (in-memory callers, older front ends): store
                 // the entries anyway rather than lose the round.
                 None => st.append(sid, &round),
@@ -772,6 +797,8 @@ pub struct Session {
     context_window: u64,
     // Statusline display name (models.yml `name`, else the id). Display-only.
     model_name: String,
+    // 计价货币：金额的符号从它来（`¥` / `$` / `cr`）。和模型同寿命。
+    currency: crate::server::ai::config::Currency,
     cost_tracker: crate::server::ai::pricing::CostTracker,
     tx: std::sync::mpsc::Sender<SessionEvent>,
     // Profile tool roster (see `TurnRequest.tool_filter`). Set at
@@ -805,6 +832,35 @@ pub struct Session {
     // Read when a round starts, so a switch never splits one round's output
     // between two modes.
     stream_mode: crate::server::ai::config::StreamMode,
+    // 开场白体重的缓存（`context_estimate`）：算一次要查库 + 折字符，而状态帧
+    // 每跳都可能来问一次。`None` = 还没算过。
+    estimate: std::cell::Cell<Option<u64>>,
+    // 模型不可用就把会话卡在这里（`restore_model` 解析失败）：不静默降级，
+    // 换不到模型就别接着烧钱。`Some` = 拒绝开工，内容是要显示的原因。
+    model_block: Option<String>,
+    /// `/usage` 刚算好的账单面板，等 daemon 取走发给发起命令的那个前端。
+    ///
+    /// 不在会话里长期保存：面板是**那一刻**的一张快照，用户关掉就没了，
+    /// 下次 `/usage` 重新算（期间可能又跑了好几轮）。
+    usage_panel: Option<(crate::server::wire::UsageLang, Vec<crate::server::store::ModelUsage>)>,
+}
+
+/// 按字符折 token：DeepSeek 的口径，英文 0.3 token/字符、中文 0.6。
+///
+/// 宽字符（CJK、假名、全角标点）算中文那一档——它们本来就是同一类 token 的
+/// 粗粒度。这只是"还没实测过"时的占位，第一轮响应回来就被真值顶掉。
+fn estimate_by_chars(text: &str) -> u64 {
+    use unicode_width::UnicodeWidthChar;
+    let mut narrow = 0u64;
+    let mut wide = 0u64;
+    for c in text.chars() {
+        if UnicodeWidthChar::width(c).unwrap_or(0) >= 2 {
+            wide += 1;
+        } else {
+            narrow += 1;
+        }
+    }
+    ((narrow as f64) * 0.3 + (wide as f64) * 0.6).round() as u64
 }
 
 impl Session {
@@ -821,6 +877,8 @@ impl Session {
         cost: crate::server::ai::config::Cost,
         context_window: u64,
         model_name: String,
+        model_provider: String,
+        currency: crate::server::ai::config::Currency,
         cwd: std::path::PathBuf,
         tool_filter: Option<Vec<String>>,
         tools: crate::server::ai::config::ToolsConfig,
@@ -828,6 +886,10 @@ impl Session {
         db_path: Option<std::path::PathBuf>,
     ) -> (Self, std::sync::mpsc::Receiver<SessionEvent>) {
         let (tx, rx) = std::sync::mpsc::channel::<SessionEvent>();
+        // 服务商是落盘事实（`turns.provider`），归状态持有；会话层只负责在
+        // 装配与 `/switch` 时告诉它。
+        let mut state = state;
+        state.model_provider = model_provider;
         let s = Self {
             state,
             client: std::cell::RefCell::new(client),
@@ -839,6 +901,7 @@ impl Session {
             cost,
             context_window,
             model_name,
+            currency,
             cost_tracker: crate::server::ai::pricing::CostTracker::default(),
             tx,
             tool_filter,
@@ -849,6 +912,9 @@ impl Session {
             browser,
             artifact_db: db_path,
             stream_mode: crate::server::ai::config::StreamMode::Immediate,
+            estimate: std::cell::Cell::new(None),
+            model_block: None,
+            usage_panel: None,
         };
         (s, rx)
     }
@@ -1080,10 +1146,59 @@ impl Session {
                     .ok_or_else(|| anyhow!("模型解析器没接（这一侧还没有配置）"))?;
                 let sw = resolve(id).map_err(|e| anyhow!("{e}"))?;
                 self.apply_model(&sw);
+                // 落盘：这是**这个会话**在用什么模型，不是默认配置。resume 时
+                // 按它换回去，不然接着聊还得再敲一遍。
+                self.remember_model(&sw.provider, &sw.model_id);
                 self.notice(&format!(
-                    "本会话模型切到 {}（{}）——只对这次会话有效，落盘用 /model",
-                    sw.name, sw.model_id
+                    "Session Only Model Switched into: {}:{}/{}",
+                    sw.name, sw.provider, sw.model_id
                 ));
+            }
+            "/usage" => {
+                let lang = crate::server::wire::UsageLang::parse(args).map_err(|e| anyhow!("{e}"))?;
+                // 价格解析器要在借出 store 之前取到手（`persistence` 会把整个
+                // `self` 可变借走）。
+                let resolve = self.commands.resolve_model.clone();
+                let fx = self.commands.fx.clone();
+                let (st, sid) = self
+                    .persistence()
+                    .ok_or_else(|| anyhow!("这个会话还没落盘，没有账单可查"))?;
+                let mut groups = st.usage_by_model(sid)?;
+                if let Some(resolve) = resolve.as_ref() {
+                    for g in &mut groups {
+                        // 认服务商 + 裸 id 才是完整地址（同名模型可以挂两家）；
+                        // 认不出就留着 id 显示，金额那一栏说"没有价格表"。
+                        let Some(provider) = g.provider.as_deref() else {
+                            continue;
+                        };
+                        let Ok(sw) = resolve(&format!("{provider}:{}", g.id)) else {
+                            continue;
+                        };
+                        let b = crate::server::ai::pricing::breakdown(
+                            g.prompt_tokens,
+                            g.cached_tokens,
+                            g.completion_tokens,
+                            &sw.cost,
+                        );
+                        // 一个会话换过模型就可能横跨两种币种，一张表里的数字
+                        // 得同单位才可比：这里按汇率折成人民币（符号随第一栏）。
+                        let (input, symbol) = fx.to_display(b.input, sw.currency);
+                        let (output, _) = fx.to_display(b.output, sw.currency);
+                        let (cache_read, _) = fx.to_display(b.cache_read, sw.currency);
+                        let (cache_write, _) = fx.to_display(b.cache_write, sw.currency);
+                        g.name = sw.name;
+                        g.currency = Some(symbol.to_string());
+                        g.cost = Some(crate::server::store::UsageCost {
+                            input,
+                            output,
+                            cache_read,
+                            cache_write,
+                        });
+                    }
+                }
+                // 面板不是转录条目：不进历史、不落盘、不参与上下文。它存在
+                // 会话上，由 daemon 取走发给**敲命令的那个前端**。
+                self.usage_panel = Some((lang, groups));
             }
             "/profile" => {
                 let name = args.trim();
@@ -1145,7 +1260,117 @@ impl Session {
         self.cost = sw.cost;
         self.context_window = sw.context_window;
         self.model_name = sw.name.clone();
+        self.currency = sw.currency;
+        self.state.model_provider = sw.provider.clone();
         self.max_tokens = sw.max_tokens;
+        // 换到能用的模型了，卡住的原因消失。
+        self.model_block = None;
+    }
+
+    /// 把"这个会话在用什么模型"写进库（`/switch` 的落盘那一步）。
+    ///
+    /// 写失败只说一声，不回滚内存里的切换——屏幕上已经换了，为一次落盘失败
+    /// 把它退回去更让人困惑。代价是下次 resume 回到默认模型，那条提示正好
+    /// 交代了这件事。
+    fn remember_model(&mut self, provider: &str, model_id: &str) {
+        let Some(sid) = self.state.session_id() else {
+            return;
+        };
+        let failure = match self.state.store_mut() {
+            Some(st) => st.set_session_model(sid, Some((provider, model_id))).err(),
+            None => None,
+        };
+        if let Some(e) = failure {
+            self.notice(&format!("会话模型没能落盘（下次 resume 会回到默认）：{e:#}"));
+        }
+    }
+
+    /// resume 之后：会话行里记着上次 `/switch` 到的模型就换回去。
+    ///
+    /// 换不回去（模型从配置里删了、id 改了）就**卡住这个会话**，绝不静默降级：
+    /// 上下文一长，用错的模型接着跑就是真金白银。用户 `/switch` 到别的模型
+    /// 就能继续——这条错误本身必须一直看得见，所以它是 `Entry::Error` 而不是
+    /// 一条说完就撤的通知。
+    pub fn restore_model(&mut self) {
+        let Some(sid) = self.state.session_id() else {
+            return;
+        };
+        let Some((provider, model_id)) = self
+            .state
+            .store()
+            .and_then(|st| st.session_model(sid).ok().flatten())
+        else {
+            return;
+        };
+        let Some(resolve) = self.commands.resolve_model.clone() else {
+            return;
+        };
+        // 会话命令认的全局 id 是 `provider:model`；`provider/model` 只是给人看
+        // 的写法（模型 id 自己可能带斜杠，所以只有冒号那种拼法不歧义）。
+        match resolve(&format!("{provider}:{model_id}")) {
+            Ok(sw) => self.apply_model(&sw),
+            Err(e) => {
+                let text = format!(
+                    "Current model is not available, check your `models.yml`, \
+                     or use `/switch` to change your model\n（{provider}/{model_id}：{e}）"
+                );
+                self.model_block = Some(text.clone());
+                self.state.echo(Entry::Error { text });
+            }
+        }
+    }
+
+    /// resume 之后：把这本账**接上**——库里按轮记着 token，拿当前价格表重算
+    /// 一遍，就是重启前花掉的那些钱。
+    ///
+    /// 不接的话，状态栏的金额每次重启都从零开始，看起来像那个组件坏了；花过的
+    /// 钱是事实，不该因为进程重启就消失。
+    ///
+    /// 认不出价格表的模型（配置里删了/改了名）那部分算不出来，跳过：金额少算
+    /// 一点，比拿一个编出来的折扣价冒充事实强。那种会话本来也会被卡住（见
+    /// [`Self::restore_model`]）。
+    pub fn restore_spend(&mut self) {
+        let resolve = self.commands.resolve_model.clone();
+        let Some((st, sid)) = self.persistence() else {
+            return;
+        };
+        let Ok(groups) = st.usage_by_model(sid) else {
+            return;
+        };
+        let mut total = 0.0;
+        for g in &groups {
+            let (Some(provider), Some(resolve)) = (g.provider.as_deref(), resolve.as_ref()) else {
+                continue;
+            };
+            let Ok(sw) = resolve(&format!("{provider}:{}", g.id)) else {
+                continue;
+            };
+            total += crate::server::ai::pricing::breakdown(
+                g.prompt_tokens,
+                g.cached_tokens,
+                g.completion_tokens,
+                &sw.cost,
+            )
+            .total();
+        }
+        self.cost_tracker.total = total;
+    }
+
+    /// 会话被卡住的原因（模型不可用）。`None` = 可以正常发消息。
+    pub fn model_block(&self) -> Option<&str> {
+        self.model_block.as_deref()
+    }
+
+    /// 取走刚算好的 `/usage` 账单（取一次就没了：面板是一次性的快照）。
+    pub fn take_usage_panel(
+        &mut self,
+    ) -> Option<(crate::server::wire::UsageLang, Vec<crate::server::store::ModelUsage>)> {
+        self.usage_panel.take()
+    }
+
+    /// 当前计价货币的符号（状态栏金额用）。
+    pub fn currency_symbol(&self) -> &'static str {
+        self.currency.symbol()
     }
 
     /// Swap the system prompt and the tool roster.
@@ -1205,6 +1430,50 @@ impl Session {
 
     pub fn cwd(&self) -> std::path::PathBuf {
         self.cwd.read().expect("cwd 锁中毒").clone()
+    }
+
+    /// 用量表的起点（算一次、缓存住）：第一轮响应回来之前，表上显示的就是它。
+    ///
+    /// 两种处境，取法不同：
+    /// - **恢复了历史**（转录非空，而内存里还没有实测值——进程刚起来）：用库里
+    ///   最后一条回复记的 `prompt_tokens`。那段对话早就不止开场白那么长了，
+    ///   拿开场白的体重顶上去会指着一个明显偏小的数。
+    /// - **还没跑过回合**：借同一份开场白在历史里的最小实测值（`min_prompt_tokens`），
+    ///   一次都没记录过就按字符折（[`estimate_by_chars`]）。
+    pub fn context_estimate(&self) -> u64 {
+        if let Some(n) = self.estimate.get() {
+            return n;
+        }
+        let n = self.compute_estimate();
+        self.estimate.set(Some(n));
+        n
+    }
+
+    fn compute_estimate(&self) -> u64 {
+        // 恢复来的历史：库里最后一条回复记得这个上下文有多重。
+        if self.cost_tracker.last_prompt_tokens == 0
+            && !self.state.transcript().is_empty()
+            && let Some(st) = self.state.store()
+            && let Some(sid) = self.state.session_id()
+            && let Ok(Some(n)) = st.last_prompt_tokens(sid)
+        {
+            return n;
+        }
+        let (system, tools_json) = {
+            let Ok(chat) = self.chat.lock() else {
+                return 0;
+            };
+            (
+                crate::server::turn::system_message(&chat),
+                serde_json::to_string(&chat.tools).unwrap_or_default(),
+            )
+        };
+        if let Some(st) = self.state.store()
+            && let Ok(Some(n)) = st.min_prompt_tokens(&system, &tools_json, self.client.borrow().model())
+        {
+            return n;
+        }
+        estimate_by_chars(&system) + estimate_by_chars(&tools_json)
     }
 
     /// Current model's display price: total spent + latest prompt tokens.
@@ -1684,6 +1953,10 @@ mod tests {
                 intent: "跑个命令".into()
             }
         );
+        assert!(
+            s.stream_view().text.is_empty(),
+            "那半句已经随工具条目存档，流式槽位不该再留着它——留着就是屏幕上两份"
+        );
         let _ = s.handle(SessionEvent::ToolFinish {
             call_id: "c".into(),
             name: "bash".into(),
@@ -2148,6 +2421,17 @@ mod tests {
         );
     }
 
+    /// 没有历史可借时的字符折算：DeepSeek 的口径，英文 0.3 token/字符、
+    /// 中文 0.6，宽字符（CJK、全角）算中文那一档。
+    #[test]
+    fn the_char_estimate_follows_the_ds_ratio() {
+        assert_eq!(estimate_by_chars(""), 0);
+        assert_eq!(estimate_by_chars("abcdefghij"), 3, "10 个英文 → 3");
+        assert_eq!(estimate_by_chars("十个中文字符测试一下"), 6, "10 个中文 → 6");
+        // 混排各算各的：3 个英文 + 2 个中文 = 0.9 + 1.2 = 2.1 → 2
+        assert_eq!(estimate_by_chars("abc中文"), 2);
+    }
+
     #[test]
     fn echo_grows_transcript() {
         let mut s = st();
@@ -2156,6 +2440,47 @@ mod tests {
             Change::Transcript
         );
         assert_eq!(s.transcript().len(), 1);
+    }
+
+    /// 短命的系统通知：块一落盘就撤。`/switch` 的告示说的是"刚刚切了模型"，
+    /// 下一轮都写库了它还挂在屏幕上，那就只是过期的告示——而且它从不落盘，
+    /// 恢复历史时也不会回来，留着只有这一刻的屏幕看得见。
+    #[test]
+    fn an_unpinned_notice_dies_once_a_round_lands() {
+        let mut s = st();
+        let _ = s.echo(Entry::System {
+            text: "本会话模型切到 X".into(),
+            align: crate::server::entry::Align::Left,
+            pin: false,
+        });
+        assert_eq!(s.live().len(), 1);
+
+        // 真实顺序：告示在前，这一轮的用户消息在后（它才是要落盘的那条）。
+        let asked = Entry::User {
+            content: "下一问".into(),
+        };
+        let _ = s.push_live(asked.clone());
+        assert_eq!(s.live().len(), 2);
+
+        // 撤掉通知**不该**把顺序判成脏：留下的序列仍是干净的。
+        assert!(s.note_persisted(&[asked]), "撤通知不算顺序脏");
+        assert!(s.live().is_empty(), "落盘后告示该撤：{:?}", s.live());
+    }
+
+    /// 钉住的不算短命：`pin` 的语义就是"常住"。
+    #[test]
+    fn a_pinned_notice_outlives_the_round_it_preceded() {
+        let mut s = st();
+        let _ = s.echo(Entry::System {
+            text: "常住告示".into(),
+            align: crate::server::entry::Align::Left,
+            pin: true,
+        });
+        let landed = vec![Entry::User {
+            content: "问".into(),
+        }];
+        s.note_persisted(&landed);
+        assert_eq!(s.live().len(), 1, "钉住的留下");
     }
 
     #[test]

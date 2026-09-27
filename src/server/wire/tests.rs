@@ -156,8 +156,11 @@ fn every_server_msg_roundtrips() {
             name: Some("fix bug".into()),
             cwd: "/tmp".into(),
             spend_usd: 0.42,
+
+            currency: "¥".into(),
             last_prompt_tokens: 1200,
             context_window: 1_000_000,
+            ctx_estimate: 0,
             busy: true,
         },
         ServerMsg::Sessions {
@@ -577,4 +580,19 @@ fn a_reasoning_entry_keeps_its_kind_and_text() {
         .expect("思维链要出行");
     assert_eq!(kind, "reasoning");
     assert_eq!(summary, "我在想这件事");
+}
+
+/// `/usage` 的口径参数：空的按英文，`lang:` 前缀可省，大小写不敏感，认不出来
+/// 的**报错**而不是默默按默认——用户敲了 `lang:jp` 却拿到英文数字，只会以为
+/// 命令坏了。
+#[test]
+fn usage_lang_parses_the_argument_the_user_typed() {
+    use crate::server::wire::UsageLang;
+    assert_eq!(UsageLang::parse(""), Ok(UsageLang::En));
+    assert_eq!(UsageLang::parse("  "), Ok(UsageLang::En));
+    assert_eq!(UsageLang::parse("lang:zh"), Ok(UsageLang::Zh));
+    assert_eq!(UsageLang::parse("zh"), Ok(UsageLang::Zh));
+    assert_eq!(UsageLang::parse("LANG:ZH"), Ok(UsageLang::Zh));
+    assert_eq!(UsageLang::parse("lang:en"), Ok(UsageLang::En));
+    assert!(UsageLang::parse("lang:jp").is_err());
 }

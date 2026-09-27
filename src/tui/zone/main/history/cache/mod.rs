@@ -21,7 +21,7 @@
 //! Memory and per-frame work stay bounded by the **budget**, never by the
 //! conversation length: the window slides, and blocks that leave it leave
 //! the cache with it. The budget is a *scroll-back depth* knob
-//! ([`BlockCache::set_budget`], wired to `tui.renderMargin`), not a memory
+//! ([`BlockCache::set_budget`], wired to `tui.RenderMargin`), not a memory
 //! lever: measured on a full bottom-to-top traversal, cutting it from 256
 //! to 32 moved the process's resident size by only ~4 MB and did not slow
 //! frames down. The resident rows are the cheap part of what rendering
@@ -40,7 +40,7 @@ use super::render::blocks::{self, Range};
 use super::render::theme::HistoryTheme;
 use crate::server::entry::Entry;
 
-/// 渲染行缓存的默认预算（块数）。**可配**：`tui.renderMargin` 就是它 ——
+/// 渲染行缓存的默认预算（块数）。**可配**：`tui.RenderMargin` 就是它 ——
 /// 视口周围留多少块的行是画好待用的。
 pub(crate) const DEFAULT_BLOCK_BUDGET: usize = 64;
 
@@ -141,7 +141,7 @@ pub struct BlockCache {
     /// epoch; the next sync drops everything. omp's `themeEpoch` contract.
     theme_epoch: u64,
     stamp: u64,
-    /// Rendered-block budget（`tui.renderMargin`）。
+    /// Rendered-block budget（`tui.RenderMargin`）。
     budget: usize,
 }
 
@@ -166,7 +166,7 @@ impl BlockCache {
         self.slots.len()
     }
 
-    /// 渲染行的块数预算（`tui.renderMargin`）。
+    /// 渲染行的块数预算（`tui.RenderMargin`）。
     pub(crate) fn budget(&self) -> usize {
         self.budget
     }
