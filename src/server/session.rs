@@ -381,7 +381,7 @@ impl SessionState {
         self.round_finalized = true;
         let content = std::mem::take(&mut self.stream.text);
         let content = if content.is_empty() {
-            crate::server::entry::EMPTY_REPLY.into()
+            crate::server::entry::empty_reply().into()
         } else {
             content
         };
@@ -428,6 +428,24 @@ impl SessionState {
                 }
             }
         }
+    }
+
+    /// 抛下一轮：流式槽位、回合缓冲、收尾凭证全部归零，**不落盘**。
+    ///
+    /// 与 [`Self::finalize_round`] 相对：那个**收尾**（把这一轮存下来），这个
+    /// **丢弃**（这一轮不属于任何人了）。分叉用它——被抛下的那一轮属于旧
+    /// 分支，既不该继续占着 `busy()`（新分支要能立刻开工），也不该把它的
+    /// 半截回复写进新分支的转录。
+    pub fn abandon_turn(&mut self) {
+        self.stream = StreamView::default();
+        // 收尾闸门关死：旧回合线程随后飘来的 TurnDone / Error 到这里只会
+        // 提前返回。事件通道那边已经换掉了（见 `Session::abandon_turn`），
+        // 这是第二道闸。
+        self.round_finalized = true;
+        self.round_meta = None;
+        self.round_stop = None;
+        self.pending.clear();
+        self.pending_usage = None;
     }
 
     /// The last turn's usage (set by TurnDone). Cleared on read; the
@@ -649,6 +667,16 @@ impl SessionState {
         Change::Session
     }
 
+    /// 就地把这条会话挪到**另一行**（分叉）。
+    ///
+    /// 与 `adopt_session` 的区别：那个是"换成另一段对话"，这个是**同一段
+    /// 对话换一条分支**——内存态一概不动，只改 `session_id` 和转录前缀。
+    /// 改完之后写块归新分支（`persistence()` 读的就是这个 id）。
+    pub fn retarget(&mut self, id: i64, entries: Vec<Entry>) {
+        self.session_id = Some(id);
+        self.replace_transcript(entries);
+    }
+
     /// Record the effective session name (resume path).
     pub fn set_session_name(&mut self, name: Option<String>) {
         self.session_name = name;
@@ -726,12 +754,10 @@ pub struct Replay {
 /// turn viscera — it calls methods here and drains `Change`s.
 pub struct Session {
     pub state: SessionState,
-    // Turn resources (shared with the spawned runner thread).
     client: std::cell::RefCell<Client>,
     chat: Arc<Mutex<ChatContext>>,
-    pub max_tokens: u32,
-    pub interrupt: Arc<std::sync::atomic::AtomicBool>,
-    // Working directory (shared; /cd migrates it): the turn thread
+    max_tokens: u32,
+    interrupt: Arc<std::sync::atomic::AtomicBool>,
     // snapshots at start, the surface writes; the RwLock keeps reads and
     // writes from trampling each other.
     pub cwd: Arc<std::sync::RwLock<std::path::PathBuf>>,
@@ -1260,6 +1286,9 @@ impl Session {
     pub fn adopt_session(&mut self, id: i64, entries: Vec<Entry>, name: Option<String>) -> Change {
         self.state.adopt_session(id, entries, name)
     }
+    pub fn retarget(&mut self, id: i64, entries: Vec<Entry>) {
+        self.state.retarget(id, entries)
+    }
     pub fn set_session_name(&mut self, name: Option<String>) {
         self.state.set_session_name(name)
     }
@@ -1304,10 +1333,45 @@ impl Session {
         self.state.replay_round(session_id, round_seq)
     }
 
-    /// Esc during a turn: the runner stops reading and disconnects.
-    pub fn interrupt_turn(&self) {
+    /// 分叉：抛下在跑的回合，把这条会话接上新分支。
+    ///
+    /// 三件事缺一不可，顺序也有讲究：
+    ///
+    /// 1. **打断**（flag + 杀 worker）：旧回合的读循环立刻结束，不再烧 token。
+    /// 2. **换事件通道**：旧回合线程还握着旧 `tx`，它剩下的收尾事件（TurnDone
+    ///    / Error / Done）必须落进一个没人读的信道——否则它们会以**新分支**
+    ///    的 id 落盘（`persistence()` 读的是当前 id）。
+    /// 3. **换上下文副本**：旧线程握着旧 `Arc`，结束时写回的是**那一个**。不换
+    ///    的话，这里按新前缀重建的上下文会被被抛弃分支的消息覆盖。
+    ///
+    /// 最后复位流式/回合状态：`busy()` 读的就是 `stream.active`，不清的话新
+    /// 分支一开工就被"正在回复中"挡回去。
+    ///
+    /// 调用方（hub）**先** `retarget` 再调这里——上下文要按新前缀重建。
+    /// 返回新的接收端，由调用方持有。
+    pub fn abandon_turn(&mut self) -> std::sync::mpsc::Receiver<SessionEvent> {
         self.interrupt
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.client.borrow().interrupt_worker();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.tx = tx;
+        let system = {
+            let chat = self.chat.lock().expect("chat 锁中毒");
+            match chat.messages.first() {
+                Some(crate::server::ai::types::Message::System { content }) => content.clone(),
+                _ => crate::server::profile::BUILTIN_SYSTEM.to_string(),
+            }
+        };
+        let ctx = crate::server::turn::entries_to_context(&system, self.state.transcript());
+        self.chat = std::sync::Arc::new(std::sync::Mutex::new(ctx));
+        self.state.abandon_turn();
+        rx
+    }
+
+    /// Esc during a turn: the runner stops reading and disconnects.
+    pub fn interrupt_turn(&self) {
+        self.interrupt.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.client.borrow().interrupt_worker();
     }
 
     /// Drain protocol events into the session state. `Change::TurnDone`
@@ -2159,7 +2223,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(reply, crate::server::entry::EMPTY_REPLY);
+        assert_eq!(reply, crate::server::entry::empty_reply());
     }
 
     #[test]

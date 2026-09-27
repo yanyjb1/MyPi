@@ -32,6 +32,30 @@ pub struct Block {
     pub entries: Vec<Entry>,
 }
 
+/// 会话树上的一块：块本身 + 它**归属哪条会话**（也就是哪条 fork）。
+///
+/// 树状图要的就是这两样：块（画什么）和归属（缩进到哪一列）。归属是
+/// `blocks.session_id`，不是"沿链找出来的"——一层 fork 一行 `sessions`，
+/// 块自己记着它属于谁。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeNode {
+    pub block: Block,
+    /// `blocks.session_id`：这块归哪条会话（fork）。
+    pub session: i64,
+}
+
+/// 一条 fork 的元信息（画树要的那几列）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForkInfo {
+    pub id: i64,
+    /// 亲会话。`None` = 这条链的根（主干）。
+    pub parent: Option<i64>,
+    /// 从亲会话的哪一块岔出来（含）。`None` = 根。
+    pub fork_block: Option<i64>,
+    /// 自己最后一块（`None` = 还没写过自己的块）。
+    pub tip: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionMeta {
     pub id: i64,
@@ -50,6 +74,11 @@ pub struct SessionMeta {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRow {
     pub meta: SessionMeta,
+    /// 这一行的**根**（沿 `parent_id` 爬到顶）。同一个根的行是同一个对话的
+    /// 各条分支——选择器把它们合并成一条显示。
+    pub root: i64,
+    /// 这条分支自己的最后一块（`None` = 还没写过）。合并时用它比"谁最新"。
+    pub tip: Option<i64>,
     /// First user message, verbatim (preview line, and the fallback display
     /// name when the session was never named).
     pub first_user: Option<String>,
@@ -116,6 +145,7 @@ struct Seg {
 /// A stored block's raw columns, before decoding.
 struct RawBlock {
     id: i64,
+    session: i64,
     ts: String,
     kind: String,
     payload: String,
@@ -562,8 +592,96 @@ impl Store {
         Ok((out, missing))
     }
 
-    /// The branch's **last** `limit` blocks (ascending), plus "is there
-    /// anything above the oldest one".
+    /// 一整棵树里**所有**块，按时序（`block_id`）排，每块带着它的归属
+    /// 会话（fork）；外加树里每条 fork 的元信息。
+    ///
+    /// 「一棵树」= 从 `parent_id IS NULL` 的**原始主干**起，往下收全部后代。
+    /// `session_id` 只用来回答"我在哪一块"（`current`），不影响收哪些块——
+    /// 回到历史节点时，看得见的应当是全部分支，不是自己那一条。
+    ///
+    /// 块按 `block_id` 排就自然成了时序：`block_id` 是**全局自增主键**，
+    /// 跨会话唯一，所以"谁先谁后"不用另算时间戳，也**不可能重复**——
+    /// 一个块在 `blocks` 里就一行，树的公共前缀画一次就是一次。
+    pub fn lineage(&self, session_id: i64) -> Result<(Vec<TreeNode>, Vec<ForkInfo>, i64)> {
+        // 爬到根（`parent_id IS NULL` = 原始主干）。一个库可以有多棵树，
+        // 只收 `session_id` 所在的那一棵。
+        let root = self.root_of(session_id)?;
+
+        // 从根往下收整棵树，每层记下它继承的前缀上界（`chain` 的第一段）
+        // 与自己的 `tip`——收块的范围就是 (前缀上界, tip]。
+        let mut all: Vec<ForkInfo> = Vec::new();
+        let mut frontier = vec![root];
+        while let Some(sid) = frontier.pop() {
+            let (parent, fork, tip) = self.branch_row(sid)?;
+            all.push(ForkInfo {
+                id: sid,
+                parent,
+                fork_block: fork,
+                tip,
+            });
+            for child in self.children_of(sid)? {
+                frontier.push(child);
+            }
+        }
+        all.sort_by_key(|f| f.id);
+
+        // 每棵树只查一次全量、按 `block_id` 天然去重。逐 session 分开查再拼
+        // 会有两个坑：前缀块查不到（它存在祖先的 `session_id` 下）、以及
+        // 排序键跨会话不可比。这里的 `session_id` 只用来标记归属。
+        let ids: Vec<rusqlite::types::Value> = all.iter().map(|f| f.id.into()).collect();
+        let placeholders = (1..=ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut nodes = Vec::new();
+        for raw in self.read_raw(
+            &format!(
+                "SELECT {BLOCK_COLS}, session_id FROM blocks
+                  WHERE session_id IN ({placeholders}) ORDER BY block_id"
+            ),
+            ids,
+        )? {
+            let id = raw.id;
+            let session = raw.session;
+            let ts = raw.ts.clone();
+            let (entries, _ok) = raw.into_entries();
+            nodes.push(TreeNode {
+                block: Block { id, ts, entries },
+                session,
+            });
+        }
+
+        // "我在哪"：当前这条线自己的最后一块。树里可能同时有好几条平行分支，
+        // `session_id` 的 `tip` 才是"我停在的地方"。
+        let current = self
+            .tip(session_id)?
+            .or_else(|| nodes.last().map(|n| n.block.id))
+            .unwrap_or(0);
+        Ok((nodes, all, current))
+    }
+
+    /// 沿 `parent_id` 爬到顶，返回原始主干（`parent_id IS NULL`）的 id。
+    fn root_of(&self, session_id: i64) -> Result<i64> {
+        let mut cur = session_id;
+        loop {
+            let (parent, _, _) = self.branch_row(cur)?;
+            match parent {
+                Some(p) => cur = p,
+                None => return Ok(cur),
+            }
+        }
+    }
+
+    /// 直接以 `parent_id` 挂在这条会话下面的子会话。
+    fn children_of(&self, id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT id FROM sessions WHERE parent_id = ?1 ORDER BY id")?;
+        let rows = stmt.query_map([id], |r| r.get::<_, i64>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+
     ///
     /// 冷启动第一帧只要一屏：32k 块脏库上整读要 261 ms（读 81 + 解析 81 +
     /// 路径走查 ~100），而真正为第一帧服务的是最后那几十块。这条只读尾巴，
@@ -699,6 +817,7 @@ impl Store {
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |r| {
             Ok(RawBlock {
                 id: r.get(0)?,
+                session: r.get(6).unwrap_or(0),
                 ts: r.get(1)?,
                 kind: r.get(2)?,
                 payload: r.get(3)?,
@@ -793,18 +912,29 @@ impl Store {
     /// message (preview line + fallback display name) and the stored byte count
     /// (a running total on the row, not a scan of every block).
     pub fn list_session_rows(&self, under: Option<&std::path::Path>) -> Result<Vec<SessionRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.name, s.started_at, s.cwd,
-                    (SELECT b.payload FROM blocks b
-                      WHERE b.session_id = s.id AND b.kind = 'user'
-                      ORDER BY b.block_id LIMIT 1),
-                    s.bytes
-             FROM sessions s
-             WHERE s.deleted_at IS NULL
-               AND (?1 IS NULL
-                    OR s.id IN (SELECT DISTINCT session_id FROM cwd_history WHERE cwd = ?1))
-             ORDER BY s.id DESC",
-        )?;
+        // 一条 SQL 里把"根"算出来（递归 CTE 沿 parent_id 爬到顶），再在 Rust
+        // 侧按根分组。选择器一行 = 一个对话 = 一个根的全部分支。
+        //
+        // 每行的预览/体积/时间取自**该根里最新的那条分支**（tip_block_id 最大，
+        // 没有 tip 的算最旧）——用户上次停在哪儿，列表就该显示哪儿。
+        let sql = "WITH RECURSIVE up(id, root) AS (
+                        SELECT id, id FROM sessions WHERE parent_id IS NULL
+                        UNION ALL
+                        SELECT s.id, up.root FROM sessions s
+                          JOIN up ON s.parent_id = up.id
+                    )
+                    SELECT s.id, s.name, s.started_at, s.cwd,
+                           (SELECT b.payload FROM blocks b
+                             WHERE b.session_id = s.id AND b.kind = 'user'
+                             ORDER BY b.block_id LIMIT 1),
+                           s.bytes, up.root, s.tip_block_id
+                      FROM sessions s JOIN up ON up.id = s.id
+                     WHERE s.deleted_at IS NULL
+                       AND (?1 IS NULL
+                            OR s.id IN (SELECT DISTINCT session_id
+                                          FROM cwd_history WHERE cwd = ?1))
+                     ORDER BY s.id DESC";
+        let mut stmt = self.conn.prepare(sql)?;
         let under = under.map(|p| p.to_string_lossy().to_string());
         let rows = stmt.query_map(rusqlite::params![under], |r| {
             let payload: Option<String> = r.get(4)?;
@@ -817,10 +947,41 @@ impl Store {
                 },
                 first_user: payload.as_deref().and_then(first_user_text),
                 bytes: r.get(5)?,
+                root: r.get(6)?,
+                tip: r.get(7)?,
             })
         })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
+        let rows = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // 按根分组，每条分支留**最新**的那个（tip 大的赢；都没 tip 就留 id 大的，
+        // 也就是后建的）。分支自己的体积加总——"这个对话一共多大"。
+        let mut order: Vec<i64> = Vec::new();
+        let mut best: std::collections::HashMap<i64, SessionRow> = std::collections::HashMap::new();
+        for row in rows {
+            let key = row.root;
+            match best.get_mut(&key) {
+                None => {
+                    order.push(key);
+                    best.insert(key, row);
+                }
+                Some(prev) => {
+                    prev.bytes += row.bytes;
+                    let newer = (row.tip.unwrap_or(-1), row.meta.id)
+                        > (prev.tip.unwrap_or(-1), prev.meta.id);
+                    if newer {
+                        let summed = prev.bytes;
+                        let mut winner = row;
+                        winner.bytes = summed;
+                        *prev = winner;
+                    }
+                }
+            }
+        }
+        // 保持"新的在前"：按合并后那一行的 id 降序（id 全局自增，等价于建行时序）。
+        let mut out: Vec<SessionRow> = best.into_values().collect();
+        out.sort_by_key(|r| std::cmp::Reverse(r.meta.id));
+        let _ = order;
+        Ok(out)
     }
 
     /// Bench/diagnostic harness getter (doc-hidden, not API): the stored
@@ -1352,6 +1513,152 @@ mod tests {
         }
     }
 
+    /// 分叉之后，`lineage` 必须把**两条分支的块**都列出来（按时序），
+    /// 且每块带着自己的归属会话——这是节点树算缩进的唯一依据。
+    #[test]
+    fn lineage_lists_both_branches_with_their_own_session() {
+        let mut s = mem_store();
+        let a = s.create_session("t", "/tmp").unwrap();
+        // 主干：A1 A2
+        s.append(a, &[user("A1")]).unwrap();
+        let tip_a = s.tip(a).unwrap().unwrap();
+        s.append(a, &[user("A2")]).unwrap();
+        let fork_point = s.tip(a).unwrap().unwrap();
+
+        // 从 A2 岔出去，新会话写 B1 B2。
+        let b = s.fork_session(a, fork_point).unwrap();
+        assert_ne!(a, b);
+        s.append(b, &[user("B1"), user("B2")]).unwrap();
+
+        let (nodes, forks, _current) = s.lineage(a).unwrap();
+
+        // 两条会话都在 fork 列表里，b 认 a 做亲。
+        let fa = forks.iter().find(|f| f.id == a).expect("主干要在树里");
+        let fb = forks.iter().find(|f| f.id == b).expect("分支要在树里");
+        assert_eq!(fa.parent, None);
+        assert_eq!(fb.parent, Some(a));
+        assert_eq!(fb.fork_block, Some(fork_point));
+
+        // 块按时序（block_id 升序），归属各自正确。
+        let ids: Vec<i64> = nodes.iter().map(|n| n.block.id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted, "节点必须按时序排");
+
+        let text_and_owner: Vec<(String, i64)> = nodes
+            .iter()
+            .map(|n| {
+                let t = n
+                    .block
+                    .entries
+                    .iter()
+                    .map(|e| match e {
+                        Entry::User { content } => content.clone(),
+                        _ => String::new(),
+                    })
+                    .collect::<String>();
+                (t, n.session)
+            })
+            .collect();
+        assert!(
+            text_and_owner.iter().any(|(t, o)| t == "A1" && *o == a),
+            "A1 该归主干：{text_and_owner:?}"
+        );
+        assert!(
+            text_and_owner.iter().any(|(t, o)| t == "B1" && *o == b),
+            "B1 该归分支：{text_and_owner:?}"
+        );
+        // 主干自己后续的块（如果有）不会被分支顶替掉。
+        assert!(tip_a < fork_point, "前置条件：A1 早于 A2");
+    }
+
+    /// 回到历史节点时，树上要看得见**整棵树**：自己那条线 + 平行分支，
+    /// 公共前缀只出现一次。
+    ///
+    /// 这是这轮修的主 bug——以前 `lineage` 从当前会话往上收祖先、再各自
+    /// `WHERE session_id = ?1` 查块，于是从分支进去时前缀块查不到（它们存在
+    /// 主干的 `session_id` 下），树上就只剩新写的那两块。
+    #[test]
+    fn lineage_from_a_branch_still_shows_the_whole_tree() {
+        let mut s = mem_store();
+        let a = s.create_session("t", "/tmp").unwrap();
+        s.append(a, &[user("A1")]).unwrap();
+        let fork_point = s.tip(a).unwrap().unwrap();
+        s.append(a, &[user("A2")]).unwrap();
+
+        let b = s.fork_session(a, fork_point).unwrap();
+        s.append(b, &[user("B1")]).unwrap();
+
+        // 从**分支**进去：主干的前缀也要在。
+        let (nodes, _, current) = s.lineage(b).unwrap();
+        let texts: Vec<String> = nodes
+            .iter()
+            .map(|n| {
+                n.block
+                    .entries
+                    .iter()
+                    .map(|e| match e {
+                        Entry::User { content } => content.clone(),
+                        _ => String::new(),
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["A1".to_string(), "A2".to_string(), "B1".to_string()],
+            "分支进去要看到主干"
+        );
+        // 每块只出现一次（`block_id` 是全局主键，不可能重）。
+        let mut ids: Vec<i64> = nodes.iter().map(|n| n.block.id).collect();
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "块不能重复");
+        // 归属各自正确：A1/A2 归主干，B1 归分支。
+        let owner = |t: &str| {
+            nodes
+                .iter()
+                .find(|n| matches!(&n.block.entries[0], Entry::User { content } if content == t))
+                .map(|n| n.session)
+        };
+        assert_eq!(owner("A1"), Some(a));
+        assert_eq!(owner("B1"), Some(b));
+        // "我在哪" = 分支自己的 tip。
+        assert_eq!(
+            current,
+            s.tip(b).unwrap().unwrap(),
+            "current 要落在分支自己的最后一块"
+        );
+    }
+
+    /// 从主干中间（不是叶子）分叉：新会话只继承**到那一块为止**的前缀，
+    /// 主干后面写的块**不许**泄漏进分支。
+    #[test]
+    fn a_fork_only_inherits_the_prefix_up_to_its_point() {
+        let mut s = mem_store();
+        let a = s.create_session("t", "/tmp").unwrap();
+        s.append(a, &[user("A1")]).unwrap();
+        let mid = s.tip(a).unwrap().unwrap();
+        // 主干在分叉点之后又写了两块。
+        s.append(a, &[user("A2"), user("A3")]).unwrap();
+
+        let b = s.fork_session(a, mid).unwrap();
+        s.append(b, &[user("B1")]).unwrap();
+
+        // 分支自己的线：只有 A1 + B1，没有 A2/A3。
+        let own = texts_of(&s, b);
+        assert_eq!(own, vec!["A1".to_string(), "B1".to_string()]);
+
+        // 主干不受影响：三块都还在。
+        let trunk = texts_of(&s, a);
+        assert_eq!(
+            trunk,
+            vec!["A1".to_string(), "A2".to_string(), "A3".to_string()]
+        );
+    }
+
+
     fn texts_of(s: &Store, id: i64) -> Vec<String> {
         s.load_entries(id)
             .unwrap()
@@ -1783,6 +2090,34 @@ mod tests {
             started_at: "2026-09-22 14:30:05".into(),
         };
         assert_eq!(display_name(&named, None), "正式名");
+    }
+
+    /// 选择器把**同一根的分支合并成一行**：一个对话就是一行，不管它在
+    /// 存储上被切成了几条会话。点进去要进**最新的那条分支**（用户上次停的地方）。
+    #[test]
+    fn the_picker_merges_a_family_into_one_row() {
+        let mut s = mem_store();
+        let a = s.create_session("2026-09-22 14:00:00", "/proj/a").unwrap();
+        s.append(a, &[user("主干第一句")]).unwrap();
+        let fork_point = s.tip(a).unwrap().unwrap();
+        s.append(a, &[user("主干后面的话")]).unwrap();
+
+        // 从主干分叉：这应该是"最新的分支"。
+        let b = s.fork_session(a, fork_point).unwrap();
+        s.append(b, &[user("分支第一句")]).unwrap();
+
+        let rows = s.list_session_rows(None).unwrap();
+        assert_eq!(rows.len(), 1, "一个根只该出一行：{rows:?}");
+        let row = &rows[0];
+        assert_eq!(row.meta.id, b, "点进去要进最新的那条分支");
+        assert_eq!(row.root, a, "根是原始主干");
+        // 体积是所有分支加起来的。
+        let own = |id: i64| -> i64 {
+            s.conn
+                .query_row("SELECT bytes FROM sessions WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(row.bytes, own(a) + own(b), "体积要合并");
     }
 
     #[test]

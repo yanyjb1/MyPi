@@ -254,7 +254,7 @@ fn extract_intent(call: &ToolCall) -> String {
 pub(crate) fn recorded_message(m: &AssistantMessage, drop_calls: bool) -> Message {
     Message::Assistant {
         content: Some(if m.content.is_empty() {
-            crate::server::entry::EMPTY_REPLY.to_string()
+            crate::server::entry::empty_reply().to_string()
         } else {
             m.content.clone()
         }),
@@ -277,6 +277,7 @@ pub fn run(
     user_input: &str,
     cfg: &LoopConfig,
     tools: &mut dyn ToolExecutor,
+    cancel: &std::sync::atomic::AtomicBool,
     mut on_delta: impl FnMut(&str) -> bool,
     mut on_reasoning: impl FnMut(&str) -> bool,
     mut on_tool: impl FnMut(ToolEvent),
@@ -292,6 +293,7 @@ pub fn run(
         let assistant = client.stream(
             ctx,
             cfg.effective_max_tokens(ctx),
+            cancel,
             &mut on_delta,
             &mut on_reasoning,
         )?;
@@ -389,6 +391,7 @@ pub fn run(
             let last = client.stream(
                 ctx,
                 cfg.effective_max_tokens(ctx),
+                cancel,
                 &mut on_delta,
                 &mut on_reasoning,
             )?;
@@ -547,7 +550,7 @@ mod tests {
 
     #[test]
     fn an_empty_reply_is_recorded_as_the_persisted_placeholder() {
-        // Byte fidelity: the session stores `EMPTY_REPLY` for a reply that
+        // Byte fidelity: the session stores the placeholder for a reply that
         // arrived empty, so the live context must carry the same string —
         // otherwise a restart replays different bytes than the request that
         // produced them (cold prefix cache, and the model sees a history it
@@ -556,7 +559,7 @@ mod tests {
         match recorded_message(&m, false) {
             Message::Assistant { content, .. } => assert_eq!(
                 content.as_deref(),
-                Some(crate::server::entry::EMPTY_REPLY),
+                Some(crate::server::entry::empty_reply()),
                 "空回复必须与落盘内容一致"
             ),
             other => panic!("{other:?}"),

@@ -60,6 +60,13 @@ pub trait SessionView {
     /// The status line values.
     fn on_state(&mut self, frame: StateFrame);
 
+    /// 打断的明确回执（`ServerMsg::Interrupted`）：服务端**收下**了打断，
+    /// flag 已经设上。收到它前端就能立刻把界面切回可输入态——不必等 turn
+    /// 真正收尾（那取决于上游还有没有数据可读，可能再拖一会儿）。
+    fn on_interrupted(&mut self, session_id: i64) {
+        let _ = session_id;
+    }
+
     /// The session became known (draft submit / attach).
     fn on_attached(&mut self, session_id: i64);
 
@@ -141,6 +148,7 @@ pub fn dispatch(msg: ServerMsg, view: &mut dyn SessionView) {
             tool_output,
             run_state,
         }),
+        ServerMsg::Interrupted { session_id } => view.on_interrupted(session_id),
         ServerMsg::State {
             model,
             name,
@@ -161,6 +169,9 @@ pub fn dispatch(msg: ServerMsg, view: &mut dyn SessionView) {
         ServerMsg::Sessions { .. } | ServerMsg::Rounds { .. } => {}
         ServerMsg::Replay { .. } => {}
         ServerMsg::Logs { .. } => {}
+        // 节点树归 TreeZone 自己收（主循环直接派发，见 loop.rs）；
+        // 走到这里说明当前不是树页面，丢掉即可。
+        ServerMsg::Tree { .. } => {}
         ServerMsg::Error { code, message } => {
             view.on_error(code, message);
         }
@@ -277,16 +288,24 @@ impl SessionView for ZoneView<'_> {
     fn on_state(&mut self, frame: StateFrame) {
         // busy 驱动两件事：输入区的 Esc 语义（打断 vs 退出），状态栏的
         // 活动指示（ActivityStarted/Stopped 归 activity 组件消费）。
-        let was_busy = self.last_busy.replace(frame.busy);
-        if was_busy != Some(frame.busy) {
-            let ev = if frame.busy {
+        //
+        // 本地刚按了 Esc：Submit 的 `State{busy:true}` 回执可能还在路上，
+        // 不能拿它把刚清掉的忙碌态又点亮——用户已经看到"停了"。
+        let busy = frame.busy && !self.zone.history.interrupt_pending();
+        if !frame.busy {
+            // 服务端说回合结束了：打断占位让位给真条目。
+            self.zone.history.clear_interrupt();
+        }
+        let was_busy = self.last_busy.replace(busy);
+        if was_busy != Some(busy) {
+            let ev = if busy {
                 StatusEvent::ActivityStarted
             } else {
                 StatusEvent::ActivityStopped
             };
             self.zone.input.notify(&ev);
         }
-        self.zone.input.streaming = frame.busy;
+        self.zone.input.streaming = busy;
 
         // 状态栏事实下发：谁消费谁说了算（组件自己更新自己）。
         self.zone.input.notify(&StatusEvent::ModelChanged(&frame.model));
@@ -321,6 +340,13 @@ impl SessionView for ZoneView<'_> {
         if let Some(name) = &frame.name {
             self.last_name = name.clone();
         }
+    }
+
+    fn on_interrupted(&mut self, _session_id: i64) {
+        // 服务端收下打断的那一刻，界面就该回到"能打字"：把流式标志清掉。
+        // turn 真正收尾还会来一条 `State{busy:false}`，那是第二道闸。
+        self.zone.input.streaming = false;
+        self.zone.input.notify(&StatusEvent::ActivityStopped);
     }
 
     fn on_attached(&mut self, session_id: i64) {

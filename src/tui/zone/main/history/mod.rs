@@ -179,6 +179,11 @@ pub struct HistoryZone {
     /// 几十毫秒的后台读）。换转录（resume / 树跳转）时重置。
     no_more_above: bool,
     no_more_below: bool,
+    /// 「显示到这块为止」（节点树回车选的）。`None` = 不限制。
+    ///
+    /// **只影响显示**：库里的块一个没少，块 id 也没变，翻页照旧按 id 说话。
+    /// 把尾巴截掉之后想要回来，重新 resume 一次就够——数据从来没动过。
+    clip_after: Option<i64>,
     /// 这一帧要开口要的区间边界（一次一取，见 [`HistoryZone::take_want`]）。
     want_older: Option<i64>,
     want_newer: Option<i64>,
@@ -231,6 +236,16 @@ pub struct HistoryZone {
     live: LiveTail,
     /// 尾巴行的备忘（见 [`LiveRows`]）。
     live_rows: LiveRows,
+    /// 打断那一刻本地立刻补上的那条空回复（[`Self::note_interrupt`]）。
+    ///
+    /// 它**不在** `local` 里：`local` 装的是协议回声，生命周期与回合无关；
+    /// 这一条的命只有几百毫秒——服务端落盘的占位块一到就得消失，否则
+    /// 屏幕上会并排出现两条一模一样的回复。单独一列，才能精确地来、
+    /// 精确地走。排在活尾巴之后：那正是它将来被顶替的那个位置。
+    ///
+    /// 文案取 [`crate::server::entry::empty_reply`]——和落盘、和模型上下文
+    /// 同一枚值，不另存一份（存了就有一天会漂移）。
+    interrupt_row: Option<Entry>,
 }
 
 impl Default for HistoryZone {
@@ -245,6 +260,7 @@ impl Default for HistoryZone {
             scrolled_up: false,
             no_more_above: false,
             no_more_below: false,
+            clip_after: None,
             want_older: None,
             want_newer: None,
             pending: Pending::Rows(0),
@@ -262,6 +278,7 @@ impl Default for HistoryZone {
             cache: BlockCache::new_public(),
             live: LiveTail::default(),
             live_rows: LiveRows::default(),
+            interrupt_row: None,
         }
     }
 }
@@ -356,6 +373,7 @@ impl HistoryZone {
             .collect();
         self.live_entries = live;
         self.local.clear();
+        self.interrupt_row = None;
         self.rebuild_live();
         self.tail_id = self.window.iter().map(|b| b.key).max().unwrap_or(0);
         self.todo = self.current_todo();
@@ -381,6 +399,8 @@ impl HistoryZone {
     /// 活尾巴是"还没落盘的那些"，落盘之后它们变成块、离开这一列；服务端知道
     /// 具体少了哪些（只有它同时看着两边），所以这里收的是替换而不是增量。
     pub fn push_blocks(&mut self, blocks: Vec<crate::server::wire::WireBlock>, live: Vec<Entry>) {
+        // 回合落地：伪造的占位让位给服务端那条真回复。
+        self.clear_interrupt();
         for b in blocks {
             if !self.window.iter().any(|w| w.key == b.id) {
                 self.window.push_back(WindowBlock {
@@ -455,6 +475,88 @@ impl HistoryZone {
         self.rebuild_live();
     }
 
+    /// 用户按下了 Esc：**立刻**把服务端稍后会落盘的那条空回复摆上屏。
+    ///
+    /// 打断的后台链路（杀 worker → 落盘 → 推送）要走几百毫秒，屏幕不该
+    /// 等它。这里画的和服务端随后发来的是同一枚文案；真条目一到，
+    /// [`Self::clear_interrupt`] 就把它摘掉，界面上看不出接缝。
+    ///
+    /// 已经吐了正文的不占位——那半句才是服务端将要落盘的东西，插一条
+    /// 空回复会和它对不上（屏幕上并排两段，其中一段是假的）。调用方保证
+    /// 只在"确实在等回复"时点亮。
+    pub fn note_interrupt(&mut self) {
+        if !self.live.text.is_empty() {
+            return;
+        }
+        self.interrupt_row = Some(Entry::Assistant {
+            content: crate::server::entry::empty_reply().to_string(),
+            usage: None,
+        });
+        self.rebuild_live();
+    }
+
+    /// 服务端的真条目到了（块落盘 / 整体快照）：占位让位。
+    pub fn clear_interrupt(&mut self) {
+        if self.interrupt_row.take().is_some() {
+            self.rebuild_live();
+        }
+    }
+
+    /// 本地伪造的那条还在不在（视图据此门控忙碌态：从按下 Esc 到服务端
+    /// 回执之间，`State{busy:true}` 是 Submit 的异步回声，不能再点亮）。
+    pub fn interrupt_pending(&self) -> bool {
+        self.interrupt_row.is_some()
+    }
+
+    /// 「显示到这块为止」（节点树回车选的）。
+    ///
+    /// 把这块**之后**的块从本地视图里丢掉。库里的块一个没少——这只是
+    /// 前端把视野收窄，用户真发消息时服务端才知道要 fork。
+    ///
+    /// 收窄之后视口贴底（读者要看的是那块附近的内容，不是被截掉之后的尾巴）。
+    pub fn limit_to_block(&mut self, block_id: i64) {
+        self.clip_after = Some(block_id);
+        self.window.retain(|b| b.key <= block_id);
+        self.tail_id = self.window.iter().map(|b| b.key).max().unwrap_or(0);
+        // 活尾巴（还没落盘的）一律丢：它们都在那块之后。
+        self.live_entries.clear();
+        self.live_blocks.clear();
+        self.rebuild_live();
+        self.todo = self.current_todo();
+        self.anchor = None;
+        self.scroll_pinned = true;
+        self.no_more_below = true;
+        self.want_newer = None;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// 取消收窄（回到完整转录）。诊断/测试与"反悔"用。
+    pub fn clear_clip(&mut self) {
+        self.clip_after = None;
+    }
+
+    /// 当前是不是显示在某个块处收窄了。
+    pub fn clipped_at(&self) -> Option<i64> {
+        self.clip_after
+    }
+
+    /// 某块里那条**用户消息**的全文（节点树回车时塞回输入框用）。
+    ///
+    /// 只看本地窗口——树里能选到的块都在窗口里（树和窗口是同一份转录的
+    /// 两个视图）。块已经被窗口丢掉（滚得太远）时返回 `None`，调用方就只
+    /// 收窄范围、不回填文字。
+    pub fn user_text_of(&self, block_id: i64) -> Option<String> {
+        self.window
+            .iter()
+            .find(|b| b.key == block_id)?
+            .entries
+            .iter()
+            .find_map(|e| match e {
+                Entry::User { content } => Some(content.clone()),
+                _ => None,
+            })
+    }
+
     /// 只读访问（诊断/测试）：窗口 + 活尾巴的条目。
     #[doc(hidden)]
     pub fn entries(&self) -> Vec<Entry> {
@@ -504,6 +606,11 @@ impl HistoryZone {
     /// 只记「还没定稿的那半句」；正式条目由 [`Self::push_entries`] 走，
     /// 两者在服务端**同一时刻**交接（见 [`LiveTail`]）。
     pub fn set_live(&mut self, reasoning: String, text: String, tool_output: String) {
+        // 正文开始了：这一轮服务端落盘的将是这段正文，不是空回复——
+        // 伪造的占位到此作废（帧可能比用户的 Esc 晚到一步）。
+        if !text.is_empty() {
+            self.clear_interrupt();
+        }
         self.live.set(reasoning, text, tool_output);
     }
 
@@ -598,6 +705,12 @@ impl HistoryZone {
     fn rebuild_live(&mut self) {
         let mut all = self.live_entries.clone();
         all.extend(self.local.iter().cloned());
+        // 打断的伪造占位排在最后：它的位置就是服务端那条空回复将来出现在
+        // 的位置（紧跟刚发出的那条用户消息），所以它按普通条目参与分组和
+        // 渲染，不是贴在底部的钉子。
+        if let Some(row) = &self.interrupt_row {
+            all.push(row.clone());
+        }
         self.live_blocks = crate::grouping::chunks(&all)
             .into_iter()
             .enumerate()

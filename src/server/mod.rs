@@ -72,6 +72,7 @@ pub mod prompts;
 pub mod session;
 pub mod turn;
 pub mod wire;
+pub mod http_worker;
 
 /// The daemon's unix socket: `$XDG_RUNTIME_DIR/mypi.sock` (falls back to
 /// /tmp when XDG_RUNTIME_DIR is unset, e.g. some CI boxes).

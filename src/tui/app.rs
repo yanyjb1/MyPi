@@ -18,6 +18,8 @@ pub struct App {
     pub main: crate::tui::zone::MainZone,
     /// `/resume` 的全屏会话选择器。常驻（不每次 new），进页面时刷新。
     pub resume: crate::tui::zone::ResumeZone,
+    /// 节点树（两下 Esc）。常驻；每次进去重新拉树填充。
+    pub tree: crate::tui::zone::TreeZone,
     /// 会话出口请求队列（Submit/Interrupt/Quit）。deliver 后由事件
     /// 循环 `take_outcomes` 取走处理。
     outcomes: Vec<crate::tui::zone::main::input::ExitRequest>,
@@ -35,10 +37,13 @@ impl App {
         main.attach(size);
         let mut resume = crate::tui::zone::ResumeZone::default();
         resume.attach(size);
+        let mut tree = crate::tui::zone::TreeZone::default();
+        tree.attach(size);
         Self {
             ownership: Ownership::new(startup),
             main,
             resume,
+            tree,
             outcomes: Vec::new(),
         }
     }
@@ -59,6 +64,16 @@ impl App {
         self.resume.take_requests()
     }
 
+    /// 进节点树页面：把所有权交给它，并去服务端拉一次树。
+    ///
+    /// 拉树是**页面自己声明的事**（和 resume 拉列表一样），主循环随后取走
+    /// 执行 —— Zone 是纯 UI，够不着 socket。
+    pub fn open_tree(&mut self) {
+        self.ownership.register(crate::tui::zone::Handover {
+            new_owner: ZoneId::Tree,
+        });
+    }
+
     /// 终端 resize：广播给所有 Zone，谁怎么消化是 Zone 的私事。
     pub fn on_resize(&mut self, to: TermSize) {
         // 广播给所有 Zone（各自的旧尺寸自己记得）。
@@ -66,6 +81,7 @@ impl App {
         self.main.on_resize(SizeChange { from, to });
         let from = self.resume.size().unwrap_or(to);
         self.resume.on_resize(SizeChange { from, to });
+        self.tree.on_resize(SizeChange { from, to });
     }
 
     /// 归一化动作下发：按账本给当前所有者。返回 Some 表示发生了
@@ -75,15 +91,14 @@ impl App {
         let handover = match owner {
             ZoneId::Main => self.main.deliver(event),
             ZoneId::Resume => self.resume.deliver(event),
-            ZoneId::Tree => None, // 会话树 Zone 未实现
+                ZoneId::Tree => self.tree.deliver(event),
         };
         if let Some(h) = handover {
             self.ownership.register(h);
         }
-        // 出口请求逐级上报的最后一级：Zone → APP。
-        if let Some(x) = self.main.pending_exit.take() {
-            self.outcomes.push(x);
-        }
+        // 出口请求逐级上报的最后一级：Zone → APP。整个队列搬过来——
+        // 一次事件批次里可能有两条（两下 Esc 落在同一个批次）。
+        self.outcomes.append(&mut self.main.pending_exits);
     }
 
     /// 借出主区给 SessionView 消费服务端推送（同一循环内，借用不跨界），
@@ -111,6 +126,42 @@ mod tests {
     fn app_starts_with_main_as_owner() {
         let app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main);
         assert_eq!(app.current_owner(), ZoneId::Main);
+    }
+
+    /// 开树 → 数据到达 → **渲染出内容**。
+    ///
+    /// 这条把三个条件钉在一起：所有权真的切到 Tree、`ServerMsg::Tree` 真的
+    /// 填进了 zone、`render()` 真的产出行。任何一步断了都会空屏。
+    #[test]
+    fn opening_the_tree_then_feeding_it_renders_rows() {
+        use crate::server::wire::{ForkInfo, TreeNode};
+        use crate::tui::zone::Zone as _;
+        let mut app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main);
+        app.open_tree();
+        assert_eq!(
+            app.current_owner(),
+            ZoneId::Tree,
+            "开树必须把所有权切过去"
+        );
+
+        let nodes: Vec<TreeNode> = (1..=5)
+            .map(|i| TreeNode {
+                id: i,
+                session: 1,
+                summary: format!("第 {i} 块"),
+                kind: if i % 2 == 0 { "user".into() } else { "assistant".into() },
+            })
+            .collect();
+        let forks = vec![ForkInfo { id: 1, parent: None, fork_block: None }];
+        app.tree.on_tree(&nodes, &forks, 4);
+
+        let lines = app.tree.render();
+        let text: String = lines.iter().map(|l| l.to_string()).collect();
+        assert!(
+            text.contains("第 4 块") || text.contains("第 2 块"),
+            "渲染必须出内容，实际：{text:?}"
+        );
+        assert!(lines.len() >= 5, "至少 5 块 + 标题，实际 {}", lines.len());
     }
 
     #[test]

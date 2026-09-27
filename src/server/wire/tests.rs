@@ -48,7 +48,8 @@ fn every_client_msg_roundtrips() {
         ClientMsg::ListRounds { id: 7 },
         ClientMsg::Replay { id: 7, round: 3 },
         ClientMsg::Submit {
-            text: "你好\n第二行".into(),
+            text: "x".into(),
+            from_block: None,
         },
         ClientMsg::Interrupt,
         ClientMsg::Logs { limit: 50 },
@@ -483,4 +484,97 @@ fn scanning_a_growing_buffer_stays_linear() {
         elapsed < std::time::Duration::from_secs(2),
         "scanning 40 MB in 16 KiB chunks took {elapsed:?}"
     );
+}
+
+/// 节点树按**条目**出行：call 和 result 各占一行，不合并。
+///
+/// 这是回归——以前按"块挑一个最像主角的条目"，一次工具往返只剩 result
+/// 那一行，读的人看不到模型**要**干什么。
+#[test]
+fn a_tool_exchange_yields_one_row_per_half() {
+    use crate::server::entry::Entry;
+    let call = Entry::ToolRequest {
+        call_id: "c1".into(),
+        name: "read".into(),
+        args: "{}".into(),
+        intent: "读文件".into(),
+        text: String::new(),
+        first: true,
+    };
+    let result = Entry::ToolResult {
+        call_id: "c1".into(),
+        name: "read".into(),
+        ok: true,
+        result: "ok".into(),
+        details: None,
+        duration_ms: 1,
+    };
+    let a = crate::server::wire::summarize_entry_kind(&call).expect("call 要出行");
+    let b = crate::server::wire::summarize_entry_kind(&result).expect("result 要出行");
+    assert_eq!(a.0, "tool_call");
+    assert_eq!(b.0, "tool_result");
+    assert_ne!(a.1, b.1, "两行的文字不该一样");
+}
+
+/// 只有 call、没有 result 的（`read` 这类）**照样出行**。
+#[test]
+fn a_call_without_a_result_still_gets_a_row() {
+    use crate::server::entry::Entry;
+    let call = Entry::ToolRequest {
+        call_id: "c1".into(),
+        name: "read".into(),
+        args: "{}".into(),
+        intent: String::new(),
+        text: String::new(),
+        first: true,
+    };
+    let (kind, summary) = crate::server::wire::summarize_entry_kind(&call).expect("要出行");
+    assert_eq!(kind, "tool_call");
+    assert!(!summary.is_empty(), "空 intent 也要落回工具名：{summary:?}");
+}
+
+/// 状态类条目**不出行**：清单/会话名/压缩标记不是谁说过的话。
+///
+/// 回归：`tool_call: todo` 那一行下面以前还冒一行 `todo: todo`，
+/// 同一件事说两遍。
+#[test]
+fn state_markers_do_not_get_a_row() {
+    use crate::server::entry::{Align, Entry, TodoPhase, TodoStatus, TodoTask};
+    let todo = Entry::Todo {
+        phases: vec![TodoPhase {
+            name: "I".into(),
+            tasks: vec![TodoTask {
+                content: "x".into(),
+                status: TodoStatus::Pending,
+                blocker: None,
+            }],
+        }],
+    };
+    assert!(
+        crate::server::wire::summarize_entry_kind(&todo).is_none(),
+        "清单状态不该成为树上的一行"
+    );
+    let name = Entry::Name {
+        name: "会话名".into(),
+    };
+    assert!(crate::server::wire::summarize_entry_kind(&name).is_none());
+    let sys = Entry::System {
+        text: "提示".into(),
+        align: Align::Left,
+        pin: false,
+    };
+    assert!(crate::server::wire::summarize_entry_kind(&sys).is_none());
+}
+
+/// 思维链条目有自己的分类和内容（不能落成 `—: `）。
+#[test]
+fn a_reasoning_entry_keeps_its_kind_and_text() {
+    use crate::server::entry::Entry;
+    let (kind, summary) =
+        crate::server::wire::summarize_entry_kind(&Entry::Reasoning {
+            content: "我在想这件事".into(),
+        })
+        .expect("思维链要出行");
+    assert_eq!(kind, "reasoning");
+    assert_eq!(summary, "我在想这件事");
 }

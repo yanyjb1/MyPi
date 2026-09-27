@@ -83,6 +83,32 @@ fn send_resume_requests(app: &mut App, req: &mut crate::server::wire::ConnWriter
     }
 }
 
+/// 节点树回车之后落实"回到这块"。
+///
+/// 两件**纯本地**的事，一个字节不落盘：
+/// 1. 历史区的显示范围收到这块为止（库里的块一个没少）；
+/// 2. 选中的若是用户消息，全文塞回输入框让用户改。
+///
+/// fork/新开 session 要等用户真的按了发送 —— 那一天服务端自己知道当前
+/// 停在哪块，不需要前端先开个空会话（否则树上会有幽灵分支）。
+fn apply_return(app: &mut App, block: i64) {
+    let prefill = app.main_mut().history.user_text_of(block);
+    app.main_mut().history.limit_to_block(block);
+    if let Some(text) = prefill {
+        app.main_mut().input.editor = crate::tui::zone::main::input::editor::Editor::from_text(&text);
+    }
+}
+
+/// 两下 Esc 的窗口。超过这么久就没连上，作废。
+const ESC_WINDOW_MS: u64 = 500;
+
+/// 开节点树：把所有权交给它，并去服务端要一次树。
+fn open_tree(app: &mut App, req: &mut crate::server::wire::ConnWriter) {
+    app.open_tree();
+    req.request(&crate::server::wire::ClientMsg::Tree { session: None })
+        .ok();
+}
+
 fn draw_frame(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
@@ -94,7 +120,7 @@ fn draw_frame(
         let lines = match owner {
             crate::tui::zone::ZoneId::Main => app.main.render(),
             crate::tui::zone::ZoneId::Resume => app.resume.render(),
-            crate::tui::zone::ZoneId::Tree => Vec::new(), // 会话树 Zone 未实现
+            crate::tui::zone::ZoneId::Tree => app.tree.render(),
         };
         f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
         // 硬件光标：输入区报容器内的位置，主区换算成终端坐标（带钳制）。
@@ -347,6 +373,11 @@ pub fn run_tui(
         // Initial paint.
         draw_frame(&mut terminal, &mut app)?;
         let mut quit = false;
+        // 两下 Esc 的计时：上一次空闲 Esc 的时刻。过期作废。
+        let mut esc_armed: Option<std::time::Instant> = None;
+        // 节点树里选过"回到这块"。**只是记着**：真分叉要等用户按下发送，
+        // 那一刻才随 `submit` 一起带上（单按回车不建会话）。
+        let mut tree_target: Option<i64> = None;
         while !quit {
             // Block until something happens; coalesce queued signals.
             let first = sig_rx.recv()?;
@@ -382,6 +413,18 @@ pub fn run_tui(
                         // 什么都不用做：循环末尾无条件重绘一帧。
                     }
                     crate::tui::session::signal::Signal::Server(msg) => {
+                        // 节点树是**树页面**的输入：整帧到达就整帧重填。
+                        // 和 resume 一样——谁持有所有权就归谁。
+                        if app.current_owner() == crate::tui::zone::ZoneId::Tree
+                            && let crate::server::wire::ServerMsg::Tree {
+                                nodes,
+                                forks,
+                                current,
+                            } = &msg
+                        {
+                            app.tree.on_tree(nodes, forks, *current);
+                            continue;
+                        }
                         // 会话列表是**选择器**的输入，不是主区的：谁持有
                         // 所有权就归谁（APP 只认账本，不认消息类型）。
                         if app.current_owner() == crate::tui::zone::ZoneId::Resume {
@@ -454,19 +497,60 @@ pub fn run_tui(
                                         .on_notice(format!("未知命令 {word}（Tab 补全可看全部）"));
                                 }
                                 None => {
-                                    // Draft submit: the daemon creates the session
-                                    // row and answers `attached` (SERVER.md §1).
+                                    // 服务端的 State{busy:true} 是异步回来的；用户可能在
+                                    // 发出消息后立刻按 Esc，不能在这段窗口里把 Esc 当作空闲操作。
+                                    // 先在前端乐观置忙，真正状态仍由服务端回执校正。
+                                    app.main_mut().input.streaming = true;
+                                    // 上一轮留下的打断占位到这儿就过期了：新消息后面
+                                    // 不该再挂着一条属于上一轮的回复。
+                                    app.main_mut().history.clear_interrupt();
                                     req.request(&crate::server::wire::ClientMsg::Submit {
                                         text: text.clone(),
+                                        from_block: tree_target.take(),
                                     })
                                     .ok();
                                 }
                             }
                         }
                         crate::tui::zone::main::input::ExitRequest::Interrupt => {
+                            // 乐观反馈：**立刻**把界面切回可输入态、把
+                            // 「(无输出)」摆上屏，不等后台（杀 worker →
+                            // 落盘 → 推送回执要走几百毫秒）。服务端随后的
+                            // Stream / Blocks / State 帧按替换规则接管同一批
+                            // 字段，不会重复。
+                            {
+                                let main = app.main_mut();
+                                main.input.streaming = false;
+                                main.input.notify(
+                                    &crate::tui::zone::main::input::statusline::StatusEvent::ActivityStopped,
+                                );
+                                main.history.note_interrupt();
+                            }
                             req.request(&crate::server::wire::ClientMsg::Interrupt).ok();
                         }
+                        // 空闲时按了一下 Esc：数窗口。500ms 内来第二下 =
+                        // 两下 Esc = 开节点树；过期就作废（**不退出程序**——
+                        // 退出是 Ctrl+C/Ctrl+D 的事，Esc 的语义只有"打断"）。
+                        crate::tui::zone::main::input::ExitRequest::EscPressed => {
+                            let now = std::time::Instant::now();
+                            match esc_armed {
+                                Some(t)
+                                    if now.duration_since(t)
+                                        < std::time::Duration::from_millis(ESC_WINDOW_MS) =>
+                                {
+                                    esc_armed = None;
+                                    open_tree(&mut app, &mut req);
+                                }
+                                _ => esc_armed = Some(now),
+                            }
+                        }
                     }
+                }
+                // 节点树回车选的块：本地收窄 + 回填文字，不落盘。真分叉
+                // 记在 `tree_target` 里，等用户按下发送才随 `submit` 带走。
+                if let Some(block) = app.tree.take_return_to() {
+                    apply_return(&mut app, block);
+                    tree_target = Some(block);
                 }
                 // 选择器要主循环替它做的事（见函数）。
                 send_resume_requests(&mut app, &mut req);

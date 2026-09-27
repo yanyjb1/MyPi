@@ -40,7 +40,9 @@ pub struct MainZone {
     /// 最近一次仲裁结果。
     pub heights: Heights,
     /// 子区上报的会话出口请求（input → main → app 逐级取走）。
-    pub pending_exit: Option<ExitRequest>,
+    /// 出口请求队列（见 `InputZone::pending_exits`）。Zone 只搬运，
+    /// 不在这一层丢弃任何一条。
+    pub pending_exits: Vec<ExitRequest>,
 }
 
 impl MainZone {
@@ -182,10 +184,8 @@ impl Zone for MainZone {
                 self.input
                     .set_completion_open(self.reserved.completion_open());
             }
-            // 出口请求逐级上报：先到 Zone，APP 之后取走。
-            if self.pending_exit.is_none() {
-                self.pending_exit = self.input.pending_exit.take();
-            }
+            // 出口请求逐级上报：一次事件的全部产出都搬上来，不吞。
+            self.pending_exits.append(&mut self.input.pending_exits);
         }
         if self.reserved.accepts().contains(&kind) {
             self.reserved.deliver(&event);

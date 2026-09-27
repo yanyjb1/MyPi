@@ -15,7 +15,30 @@
 /// sent `content: null`, the store held this placeholder) the live
 /// conversation and its replay differed, so a restart changed the bytes the
 /// model saw and the prefix cache went cold.
-pub const EMPTY_REPLY: &str = "(无输出)";
+///
+/// **Configurable** (`config.yaml` → `tui.emptyReply`): the front end draws
+/// the same string the instant the user interrupts, hundreds of milliseconds
+/// before the persisted entry can arrive — three writers, one value. Pinned
+/// once at startup by [`set_empty_reply`]; every reader then sees the same
+/// bytes.
+pub const DEFAULT_EMPTY_REPLY: &str = "SYSTEM: UserInterrupted.";
+
+static EMPTY_REPLY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The placeholder an empty reply is recorded and drawn with.
+pub fn empty_reply() -> &'static str {
+    EMPTY_REPLY
+        .get()
+        .map(String::as_str)
+        .unwrap_or(DEFAULT_EMPTY_REPLY)
+}
+
+/// Pin the placeholder for this process (startup, from config). The first
+/// call wins: every writer must see one value, so a later one is ignored
+/// rather than desynchronizing what is stored from what is drawn.
+pub fn set_empty_reply(text: &str) {
+    let _ = EMPTY_REPLY.set(text.to_string());
+}
 
 /// One item on the model's todo list.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

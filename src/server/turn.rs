@@ -164,6 +164,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             &text,
             &cfg,
             &mut tools,
+            &interrupt,
             |delta| {
                 buf.borrow_mut().text.push_str(delta);
                 if immediate {
@@ -304,23 +305,23 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
                 let _ = text; // retained for signature parity; no longer projected
             }
             Err(e) => {
-                // Mid-flight death (network drop, malformed stream, tool round
-                // that already ran). The session persists whatever streamed, so
-                // the replica must record the same thing — otherwise the next
-                // request carries *less* than the database says happened, and
-                // replay stops matching reality. `recorded_message` is reused so
-                // the placeholder rule (empty reply) cannot drift.
-                //
-                // 读的是**本轮**剩下那截：前面几轮的文本已经在工具边界上
-                // 交出去并被会话清槽了（见上面的交付点），`run` 也把那些
-                // 轮的助手消息写进了 `chat`，再带一遍就重复了。
+                let was_interrupted = interrupt.load(std::sync::atomic::Ordering::Relaxed);
                 let partial = crate::server::ai::types::AssistantMessage {
                     content: buf.borrow().text.clone(),
                     ..Default::default()
                 };
                 chat.messages.push(crate::server::agent::loop_rs::recorded_message(&partial, true));
                 *chat_arc.lock().expect("chat 锁中毒") = chat;
-                let _ = send(SessionEvent::Error(format!("{e:#}")));
+                if was_interrupted {
+                    // worker 被杀后，管道 EOF/closed 是预期控制流，不是用户错误。
+                    // 只提交半截回合和 Interrupted 状态，不向 transcript 渲染内部错误。
+                    let _ = send(SessionEvent::TurnDone(
+                        crate::server::ai::types::Usage::default(),
+                        crate::server::ai::types::StopReason::Interrupted,
+                    ));
+                } else {
+                    let _ = send(SessionEvent::Error(format!("{e:#}")));
+                }
             }
         }
         let _ = send(SessionEvent::Done);

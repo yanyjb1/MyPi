@@ -701,15 +701,50 @@ impl Daemon {
                     ),
                 }
             }
-            ClientMsg::Submit { text } => self.submit(conn, text),
+            ClientMsg::Submit { text, from_block } => self.submit(conn, text, from_block),
             ClientMsg::Command { name, args } => self.command(conn, &name, &args),
             ClientMsg::Interrupt => {
                 if let Some(id) = self.conns.get(&conn).and_then(|c| c.attached) {
                     self.hub.interrupt(id);
                     crate::server::log::info("daemon", format!("interrupt session {id}"));
+                    // **立刻**回执：flag 已设，这就是服务端能给的全部保证。
+                    // turn 线程真正收尾是另一件事（它可能正卡在上游的 read
+                    // 上），前端不该为此干等——所以收到就回，不等 turn 结束。
+                    self.send(conn, ServerMsg::Interrupted { session_id: id });
+                    self.flush_outbox(conn);
                 }
                 // Interrupting nothing is not an error: the front end may have
                 // raced a just-finished round.
+            }
+            ClientMsg::Tree { session } => {
+                let att = self.conns.get(&conn).and_then(|c| c.attached);
+                let id = session.or(att);
+
+                let Some(id) = id else {
+                    // 没有会话可看（草稿态）：回一个空树，前端画"（空）"。
+                    self.send(
+                        conn,
+                        ServerMsg::Tree {
+                            nodes: Vec::new(),
+                            forks: Vec::new(),
+                            current: 0,
+                        },
+                    );
+                    return;
+                };
+                match self.hub.tree(id) {
+                    Ok((nodes, forks, current)) => {
+
+                        self.send(conn, ServerMsg::Tree { nodes, forks, current });
+                    }
+                    Err(e) => self.send(
+                        conn,
+                        ServerMsg::Error {
+                            code: ErrorCode::Internal,
+                            message: format!("读会话树失败：{e}"),
+                        },
+                    ),
+                }
             }
             ClientMsg::Logs { limit } => {
                 let records: Vec<LogRecord> = crate::server::log::recent(limit)
@@ -890,8 +925,42 @@ impl Daemon {
         }
     }
 
-    fn submit(&mut self, conn: u64, text: String) {
+    fn submit(&mut self, conn: u64, text: String, from_block: Option<i64>) {
         if let Some(id) = self.ensure_session(conn) {
+            // 节点树里选过"回到这块"：**现在**（用户真的发了消息）才分叉。
+            // 单按回车不建会话，否则树上会有没内容的幽灵分支。
+            //
+            // 分叉是**就地**的：同一个会话换个 tip，内存里那份 `Session`
+            // 原样留着（转录、cwd、运行时权柄都不动），只把 `session_id`
+            // 指到新行。所以这里不需要 resume，也不会撞上"会话没打开"。
+            let old_id = id;
+            let id = match from_block {
+                Some(block) => match self.hub.fork_in_place(id, block) {
+                    Ok(new_id) => {
+                        // 旧分支的 tip 冻住了，它不再产消息，也就没必要再挂
+                        // 这个连接。`unwatch` 里的"最后一个观察者走了就打断"
+                        // 打的是**旧 id**，而它已经不在 hub 里了，无副作用。
+                        self.unwatch(conn, old_id);
+                        new_id
+                    }
+                    Err(e) => {
+                        self.send(
+                            conn,
+                            ServerMsg::Error {
+                                code: ErrorCode::Internal,
+                                message: format!("从块 {block} 分叉失败：{e}"),
+                            },
+                        );
+                        return;
+                    }
+                },
+                None => id,
+            };
+            if let Some(c) = self.conns.get_mut(&conn) {
+                c.attached = Some(id);
+            }
+            self.watchers.entry(id).or_default().push(conn);
+            self.send(conn, ServerMsg::Attached { session_id: id });
             self.do_submit(conn, id, text);
         }
     }

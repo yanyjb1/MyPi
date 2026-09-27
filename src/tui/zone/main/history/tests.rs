@@ -1096,3 +1096,45 @@ fn the_first_frame_colors_only_what_the_viewport_shows() {
         .any(|s| s.style.fg == Some(key));
     assert!(painted, "视口里的那段该被上色：{rows:?}");
 }
+
+/// 打断的乐观占位：按 Esc 那一刻就上屏（服务端落盘还要几百毫秒），真条目
+/// 一到就让位——屏幕上永远只有一条空回复，不会并排两条。
+#[test]
+fn the_interrupt_placeholder_yields_to_the_real_block() {
+    let empty = crate::server::entry::empty_reply();
+    let mut z = zone_with(vec![user("问一句")]);
+    assert!(!rows_text(&mut z).contains(empty), "还没打断，不该有占位");
+
+    z.note_interrupt();
+    let rows = rows_text(&mut z);
+    assert!(rows.contains(empty), "按下 Esc 就该看到占位：\n{rows}");
+    assert!(z.interrupt_pending());
+
+    // 服务端把这条回复落了盘（Blocks 帧）。
+    z.push_blocks(
+        vec![WireBlock {
+            id: 9,
+            entries: vec![assistant(empty)],
+        }],
+        Vec::new(),
+    );
+    let rows = rows_text(&mut z);
+    assert_eq!(
+        rows.matches(empty).count(),
+        1,
+        "占位必须让位，不能并排两条：\n{rows}"
+    );
+    assert!(!z.interrupt_pending(), "真条目到了，占位就该走");
+}
+
+/// 正文已经开吐的回合不插占位：那半句才是服务端将要落盘的东西，伪造一条
+/// 空回复会和它对不上。
+#[test]
+fn an_interrupt_after_the_first_token_does_not_fake_an_empty_reply() {
+    let mut z = zone_with(vec![user("问一句")]);
+    z.set_live(String::new(), "答到一半".into(), String::new());
+    z.note_interrupt();
+    let rows = rows_text(&mut z);
+    assert!(rows.contains("答到一半"), "{rows}");
+    assert!(!z.interrupt_pending(), "有正文时不该伪造空回复");
+}

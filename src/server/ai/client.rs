@@ -6,6 +6,20 @@
 //! details — that is the point of pi's "ai layer / agent layer" split.
 
 use anyhow::{Context as _, anyhow};
+struct ChannelReader { rx: std::sync::mpsc::Receiver<String>, pending: Vec<u8> }
+impl std::io::Read for ChannelReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.pending.is_empty() {
+            let line = self.rx.recv().map_err(|_| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "worker closed"))?;
+            self.pending.extend_from_slice(line.as_bytes());
+            self.pending.push(b'\n');
+        }
+        let n = out.len().min(self.pending.len());
+        out[..n].copy_from_slice(&self.pending[..n]);
+        self.pending.drain(..n);
+        Ok(n)
+    }
+}
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,12 +28,13 @@ use crate::server::ai::types::{AssistantMessage, Context, StopReason, Usage};
 // Connection details for one provider.
 #[derive(Debug, Clone)]
 pub struct Client {
-    // Like https://host/v1 — requests go to {base_url}/chat/completions
     base_url: String,
     api_key: String,
     model: String,
     http: ureq::Agent,
     retry: RetryPolicy,
+    worker: std::sync::Arc<std::sync::Mutex<Option<crate::server::http_worker::SharedWorker>>>,
+    worker_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 /// The one protocol this client speaks. Stored with every round (see
@@ -356,14 +371,31 @@ impl Client {
         self.api_key = api_key.to_string();
         self.model = model.to_string();
     }
-
     pub fn new(base_url: &str, api_key: &str, model: &str) -> Self {
+        let worker = crate::server::http_worker::HttpWorker::spawn().ok();
+        let pid = worker.as_ref().and_then(crate::server::http_worker::HttpWorker::pid).unwrap_or(0);
         Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            api_key: api_key.to_string(),
-            model: model.to_string(),
-            http: Self::agent(),
-            retry: RetryPolicy::default(),
+            base_url: base_url.trim_end_matches('/').to_string(), api_key: api_key.to_string(), model: model.to_string(),
+            http: Self::agent(), retry: RetryPolicy::default(),
+            worker: std::sync::Arc::new(std::sync::Mutex::new(worker)),
+            worker_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(pid)),
+        }
+    }
+
+    pub fn interrupt_worker(&self) {
+        let pid = self.worker_pid.swap(0, std::sync::atomic::Ordering::AcqRel);
+        if pid != 0 { crate::server::http_worker::HttpWorker::kill_pid(pid); }
+        let fresh = crate::server::http_worker::HttpWorker::spawn();
+        let Ok(fresh) = fresh else { return };
+        let new_pid = crate::server::http_worker::HttpWorker::pid(&fresh).unwrap_or(0);
+        if let Ok(mut slot) = self.worker.lock() {
+            let old = slot.replace(fresh);
+            self.worker_pid.store(new_pid, std::sync::atomic::Ordering::Release);
+            if let Some(old) = old {
+                std::thread::spawn(move || {
+                    if let Ok(mut old) = old.lock() { old.reap(); }
+                });
+            }
         }
     }
 
@@ -382,14 +414,24 @@ impl Client {
     //    bounds the "gateway accepted but never answered" case that used to
     //    block the turn thread forever (the interrupt flag is only polled
     //    from `on_delta`, which never runs while the read is stuck).
-    // There is deliberately **no** body/global timeout: a reply may
-    // legitimately stream for minutes, and a total-body deadline would cut it
-    // off mid-sentence. A stall *after* the headers therefore still blocks the
-    // turn until the socket dies — accepted, documented tradeoff.
+    // 没有 body/global 总时限：一次回复可以合法地流好几分钟，总量 deadline
+    // 会把话说到一半掐断。
+    //
+    // 但**接收体的 `SO_RCVTIMEO` 必须设**——不是为了掐断长回复，而是为了让
+    // 打断能生效。`read` 是阻塞的，而打断只把原子 flag 设成 true；如果上游
+    // 恰好停在两个 chunk 之间（模型在思考、网关在缓冲），tur n 线程就卡在
+    // `read` 里，`on_delta` 永远不被调用，flag 永远是"没人看"——**按 Esc
+    // 没反应就是这个**。
+    //
+    // `recv_body` 在 ureq 里落到 `TcpStream::set_read_timeout`，是**每次
+    // read** 的超时（不是总量）。所以设成 1 秒：正常收流看不出区别（数据
+    // 到了就返回），空闲那 1 秒会返回 `TimedOut`，读循环据此查一次 flag
+    // 再继续读（见 `stream_once` 的 `RecvState`）。
     fn agent() -> ureq::Agent {
         ureq::Agent::config_builder()
             .timeout_connect(Some(std::time::Duration::from_secs(30)))
             .timeout_recv_response(Some(std::time::Duration::from_secs(120)))
+            .timeout_recv_body(Some(std::time::Duration::from_secs(1)))
             .build()
             .into()
     }
@@ -523,6 +565,7 @@ impl Client {
         &self,
         ctx: &Context,
         max_tokens: u32,
+        cancel: &std::sync::atomic::AtomicBool,
         mut on_delta: impl FnMut(&str) -> bool,
         // Returning false = interrupt: stop reading and disconnect. Same
         // contract as `on_delta`; a thinking-only stream (no content chunks)
@@ -535,6 +578,7 @@ impl Client {
             let r = self.stream_once(
                 ctx,
                 max_tokens,
+                cancel,
                 |d| {
                     emitted.set(true);
                     on_delta(d)
@@ -553,7 +597,14 @@ impl Client {
                 }
                 Err(e) => {
                     // Already streaming text: no retry, whatever the cause.
-                    let again = !emitted.get() && self.should_retry(n, &e);
+                    //
+                    // 打断同样不重试：那条错误是**我们**杀 worker 造成的
+                    // （预期控制流，不是故障）。重试会先按退避睡 400ms、
+                    // 再用替补 worker 发一次全新请求——用户按了 Esc，反而
+                    // 多等一次完整往返，这就是"刚发出就打断"的体感延迟。
+                    let again = !emitted.get()
+                        && !cancel.load(std::sync::atomic::Ordering::Relaxed)
+                        && self.should_retry(n, &e);
                     if !again {
                         return Err(e);
                     }
@@ -581,18 +632,32 @@ impl Client {
         &self,
         ctx: &Context,
         max_tokens: u32,
+        cancel: &std::sync::atomic::AtomicBool,
         mut on_delta: impl FnMut(&str) -> bool,
         mut on_reasoning: impl FnMut(&str) -> bool,
     ) -> anyhow::Result<AssistantMessage> {
-        let messages =
-            serde_json::to_value(&ctx.messages).expect("Message serialization is infallible");
-        let tools = serde_json::to_value(&ctx.tools).expect("tool serialization is infallible");
+        let messages = serde_json::to_value(&ctx.messages).expect("Message serialization is infallible");
+        let tools = serde_json::to_value(&ctx.tools).expect("Message serialization is infallible");
         let body = body_json(&self.model, max_tokens, true, &messages, &tools);
-
-        let resp = self.post(&body)?;
-
-        // into_reader() yields a byte-level Read; wrap in BufReader for line-wise framing
-        let reader = std::io::BufReader::new(resp.into_body().into_reader());
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let worker_slot = self.worker.lock().ok().and_then(|slot| slot.clone());
+        let worker_used = worker_slot.is_some();
+        if let Some(worker_slot) = worker_slot {
+            let base = self.base_url.clone();
+            let key = self.api_key.clone();
+            let request_body = body.clone();
+            std::thread::spawn(move || {
+                let result = worker_slot.lock().map_err(|_| anyhow!("HTTP worker 锁损坏")).and_then(|mut w| {
+                    w.stream(&base, &key, request_body, |line| tx.send(line.to_string()).is_ok())
+                });
+                if let Err(e) = result { let _ = tx.send(format!("__WORKER_ERROR__{e}")); }
+            });
+        }
+        let reader: Box<dyn std::io::BufRead> = if worker_used {
+            Box::new(std::io::BufReader::new(ChannelReader { rx, pending: Vec::new() }))
+        } else {
+            Box::new(std::io::BufReader::new(self.post(&body)?.into_body().into_reader()))
+        };
 
         let mut content = String::new();
         let mut reasoning = String::new();
@@ -601,9 +666,43 @@ impl Client {
         let mut interrupted = false;
         let mut tool_calls = ToolCallAccum::default();
 
-        for line in std::io::BufRead::lines(reader) {
-            let line = line.context("stream read interrupted")?;
-            // Blank lines separate SSE events; only `data:` lines carry payloads
+        // 读行必须**容得下空闲**：`recv_body` 是每次 read 的 1 秒超时，上游
+        // 两个 chunk 之间隔久了就是 `TimedOut`。那不是故障——是让本轮有机会
+        // 查一次打断 flag。真故障（连接断、协议错）照旧上抛。
+        //
+        // 用 `read_until` 而不是 `lines()`：后者把 `TimedOut` 直接当成
+        // `Err` 结束整个流，空闲一秒就等于"流断了"。
+        let mut reader = reader;
+        let mut pending: Vec<u8> = Vec::new();
+        loop {
+            pending.clear();
+            match std::io::BufRead::read_until(&mut reader, b'\n', &mut pending) {
+                Ok(0) => break, // 上游正常收流（EOF）
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    // 空闲。给打断一次机会：flag 已设 = 用户按了 Esc，
+                    // 立刻收工（当成本轮被中断，不是错误）。
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        interrupted = true;
+                        break;
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    // 打断：worker 被主动杀掉后，管道 EOF / closed 是**预期
+                    // 控制流**。当成中断收工，不产生错误文本——错误文本会
+                    // 进转录，用户看到的 `stream read interrupted: worker
+                    // closed` 就是这么来的。
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        interrupted = true;
+                        break;
+                    }
+                    return Err(e).context("stream read interrupted");
+                }
+            }
+            let line = String::from_utf8_lossy(&pending);
+            let line = line.strip_suffix('\n').unwrap_or(&line);
+            let line = line.strip_suffix('\r').unwrap_or(line);
             let Some(payload) = line.strip_prefix("data: ") else {
                 continue;
             };

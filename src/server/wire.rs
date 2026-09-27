@@ -82,7 +82,18 @@ pub enum ClientMsg {
     Replay { id: i64, round: i64 },
     /// Start a round. In the draft state this creates the session row first
     /// and pushes `Attached` back before anything else.
-    Submit { text: String },
+    ///
+    /// `from_block`: 前端在节点树里选过"回到这块"时带上它。服务端据此**在
+    /// 这一刻**把会话从这块分叉出去（`Store::fork_session`，一行 INSERT），
+    /// 新一轮接在这块之后。
+    ///
+    /// 为什么要等 submit 才带：单按回车**不建会话**。没有这条规矩，用户在
+    /// 树上点来点去就会攒出一堆没内容的幽灵分支。
+    Submit {
+        text: String,
+        #[serde(default)]
+        from_block: Option<i64>,
+    },
     /// Interrupt the running round of the attached session. Valid any time;
     /// it is the only message that is read even mid-stream.
     Interrupt,
@@ -90,6 +101,15 @@ pub enum ClientMsg {
     /// travels down in [`ServerMsg::Commands`]); the session owns the meaning,
     /// so the dispatch lives on this side of the wire.
     Command { name: String, args: String },
+    /// Ask for the **session tree**（节点树页面）. `session` = 要看哪个会话；
+    /// `None` = 当前附着的那个。
+    ///
+    /// 服务端沿 `parent_id` 把整棵 fork 树走一遍，块按时序排好，每块带上它的
+    /// 归属会话——前端只管画，不碰数据库。
+    Tree {
+        #[serde(default)]
+        session: Option<i64>,
+    },
     /// Fetch the in-memory narration ring (retries, timeouts).
     Logs { limit: usize },
     /// Finish the round in progress and close cleanly.
@@ -226,8 +246,27 @@ pub enum ServerMsg {
     Rounds { id: i64, rounds: Vec<RoundInfo> },
     /// `replay` answer.
     Replay { id: i64, replay: Replay },
+    /// `tree` answer：一条时间线 + 树上每条 fork 的元信息。
+    Tree {
+        /// 时序排好的节点。
+        nodes: Vec<TreeNode>,
+        /// 每条 fork 的挂载关系（id/亲/亲块）。
+        forks: Vec<ForkInfo>,
+        /// 用户当前所在的块（树里的下标，高亮用）。
+        current: usize,
+    },
     /// `logs` answer.
     Logs { records: Vec<LogRecord> },
+    /// **打断的明确回执**：`ClientMsg::Interrupt` 被收下、flag 已经设上。
+    ///
+    /// 为什么要有它：打断的生效依赖 turn 线程**下一次**去看那个原子 flag，
+    /// 而它可能正阻塞在上游的 `read` 上（两个 chunk 之间没有数据可读）。
+    /// 前端因此没东西可等——`Interrupt` 是个 fire-and-forget 的请求，服务端
+    /// 收没收到、认没认，之前一律靠"busy 有没有变 false"去猜。
+    ///
+    /// 这条消息把"收到了"和"停下了"分清：**收到就立刻回**，不用等 turn 真的
+    /// 收尾。前端据此可以马上把界面切回可输入态，而不是干等。
+    Interrupted { session_id: i64 },
     /// Protocol-level error (transport, unknown ids, bad state). A round's
     /// own errors travel as `Entry` instead.
     Error { code: ErrorCode, message: String },
@@ -248,6 +287,99 @@ pub enum ErrorCode {
     Busy,
     /// Anything else; the message text says what.
     Internal,
+}
+
+/// 树上的一块（wire 版）：画节点树需要的最小集——**不含**块正文。
+///
+/// 节点树只显示"这是一块什么"，所以正文留在服务端；带全文过来会把一条长
+/// 会话的整份转录再搬一遍，而那个页面一屏只看得见几十行。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TreeNode {
+    /// `block_id`：时序键，也是跳转要点的目标。
+    pub id: i64,
+    /// 归属会话（哪条 fork）。
+    pub session: i64,
+    /// 这一块的一条摘要（前端直接显示）。
+    pub summary: String,
+    /// 这条块里头的**角色分类**：user / assistant / tool_call / tool_result。
+    pub kind: String,
+}
+
+/// 一条 fork 的挂载点（wire 版）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ForkInfo {
+    pub id: i64,
+    pub parent: Option<i64>,
+    pub fork_block: Option<i64>,
+}
+
+/// 一条条目 → 节点树那一行要的两样；**没有可显示的**返回 `None`。
+///
+/// 树**按条目出行，不按块出行**。一块里可以两条（一次工具往返 = request +
+/// result），那就出两行 —— 调用和结果本来就是两件事，合成一行等于把
+/// "模型要干什么"和"干成了什么"糊在一起。
+///
+/// 也正因此，只有 call 没有 result 的（`read` 这类不发结果的工具）
+/// 照样有自己那一行。
+///
+/// 状态类条目（todo 清单、会话名、压缩标记）返回 `None`：它们是给会话状态
+/// 用的，不是谁说过的话。主区那边同样是 `paints() == false`——不显示。
+pub fn summarize_entry_kind(e: &crate::server::entry::Entry) -> Option<(String, String)> {
+    use crate::server::entry::Entry;
+    let kind = match e {
+        Entry::User { .. } => "user",
+        Entry::Assistant { .. } => "assistant",
+        Entry::Reasoning { .. } => "reasoning",
+        Entry::ToolRequest { .. } => "tool_call",
+        Entry::ToolResult { .. } => "tool_result",
+        _ => return None,
+    };
+    Some((kind.to_string(), summarize_entry(e)))
+}
+
+/// 一条条目的单行摘要（去换行、截断）。节点树一行一块，长文本没有意义。
+fn summarize_entry(e: &crate::server::entry::Entry) -> String {
+    use crate::server::entry::Entry;
+    let raw = match e {
+        Entry::User { content } => content.clone(),
+        Entry::Assistant { content, .. } => content.clone(),
+        Entry::Reasoning { content } => content.clone(),
+        Entry::ToolRequest { name, intent, .. } => {
+            if intent.trim().is_empty() {
+                name.clone()
+            } else {
+                format!("{name}: {intent}")
+            }
+        }
+        Entry::ToolResult { name, ok, .. } => {
+            if *ok {
+                name.clone()
+            } else {
+                format!("{name}（失败）")
+            }
+        }
+        Entry::Name { name } => format!("/name {name}"),
+        Entry::Todo { .. } => "todo".to_string(),
+        Entry::Compaction { .. } => "compaction".to_string(),
+        Entry::Error { text } => text.clone(),
+        Entry::System { text, .. } => text.clone(),
+    };
+    let one_line: String = raw
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string();
+    truncate_chars(&one_line, 60)
+}
+
+/// 按**字符**（不是字节）截断，末尾补省略号。
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().take(max).collect();
+    if s.chars().count() > max {
+        out.push('…');
+    }
+    out
 }
 
 /// `sessions` row — what a picker needs, computed server-side.

@@ -35,6 +35,9 @@ pub enum ExitRequest {
     Submit(String),
     /// 中断在途回复。
     Interrupt,
+    /// 空闲时按了一下 Esc。**没有语义**——会话层拿它数"两下"的窗口：
+    /// 500ms 内来第二下就开节点树，过期作废。它不退出程序。
+    EscPressed,
     /// 退出程序。
     Quit,
 }
@@ -66,7 +69,12 @@ pub struct InputZone {
     /// 每轮事件最多一条；Zone 取走后清空。
     pub pending_lend: Option<ToReserved>,
     /// 待上报的会话出口请求。Zone 逐级取走（input → main → app → loop）。
-    pub pending_exit: Option<ExitRequest>,
+    /// 出口请求**队列**，不是单槽。
+    ///
+    /// 一个事件批次里可能来两次 Esc（用户手快，或者两次按键被合并投递），
+    /// 单槽会吞掉第一次——两下 Esc 开节点树就永远凑不齐。队列让每一次
+    /// 都原样上报，什么时候处理是会话层的事。
+    pub pending_exits: Vec<ExitRequest>,
     /// 会话是否在回复中（daemon 的 wire state）。键位翻译要用：Esc 在
     /// streaming 时是「打断」，空闲时是「退出/树」。只有 app 能写。
     pub streaming: bool,
@@ -96,7 +104,7 @@ impl Default for InputZone {
             popup_open: false,
             goal_col: None,
             pending_lend: None,
-            pending_exit: None,
+            pending_exits: Vec::new(),
             streaming: false,
             cursor_col: geometry::BORDER_COLS as u16,
             cursor_row: 1,
@@ -198,7 +206,7 @@ impl InputZone {
                     Effect::Nothing // 空输入不提交
                 } else {
                     self.history.push(text.clone());
-                    self.pending_exit = Some(ExitRequest::Submit(text));
+                    self.pending_exits.push(ExitRequest::Submit(text));
                     self.editor.clear();
                     self.finished = true;
                     self_managed = true;
@@ -206,11 +214,18 @@ impl InputZone {
                 }
             }
             A::Interrupt => {
-                self.pending_exit = Some(ExitRequest::Interrupt);
+                self.pending_exits.push(ExitRequest::Interrupt);
                 Effect::Nothing
             }
-            A::Quit | A::EscIdle => {
-                self.pending_exit = Some(ExitRequest::Quit);
+            // 单按 Esc（空闲）：**什么都不做**。Esc 的语义只有"打断"，
+            // 没有 turn 在跑就无物可打；退出是 Ctrl+C / Ctrl+D 的事。
+            // 连按两下由会话层数出来（它才知道时间），这里只报"按了一下"。
+            A::EscIdle => {
+                self.pending_exits.push(ExitRequest::EscPressed);
+                Effect::Nothing
+            }
+            A::Quit => {
+                self.pending_exits.push(ExitRequest::Quit);
                 Effect::Nothing
             }
             A::ClearInput => {
@@ -628,30 +643,54 @@ mod exit_tests {
         type_str(&mut z, "hi");
         z.deliver(&key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
-            z.pending_exit,
-            Some(ExitRequest::Submit("hi".into()))
+            z.pending_exits,
+            vec![ExitRequest::Submit("hi".into())]
         );
         assert!(z.editor.is_empty(), "提交后编辑器必须清空");
         assert!(z.finished);
         assert_eq!(z.history.len(), 1);
     }
 
+    /// **两次 Esc 落在同一个事件批次里，必须两条都活下来。**
+    ///
+    /// 这是真机上的 bug：出口请求原来是单槽（`Option`），一次投递里的第二次
+    /// 被静默吞掉，于是"两下 Esc 开节点树"永远凑不齐——用户看到的就是
+    /// 按两下没反应。改成队列之后每一次都原样上报。
+    #[test]
+    fn two_escapes_in_one_batch_both_survive() {
+        let mut z = InputZone::default();
+        z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
+        z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            z.pending_exits,
+            vec![ExitRequest::EscPressed, ExitRequest::EscPressed],
+            "两次 Esc 都必须上报"
+        );
+    }
+
     #[test]
     fn empty_enter_does_not_submit() {
         let mut z = InputZone::default();
         z.deliver(&key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(z.pending_exit, None);
+        assert!(z.pending_exits.is_empty());
         // 纯空白同样不提交
         type_str(&mut z, "   ");
         z.deliver(&key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(z.pending_exit, None);
+        assert!(z.pending_exits.is_empty());
     }
 
     #[test]
-    fn esc_requests_quit() {
+    fn idle_esc_does_not_quit() {
+        // Esc 的语义只有"打断"。空闲时按它**什么都不做**——尤其不能退出
+        // 程序（那是 Ctrl+C / Ctrl+D 的事）。它只报"按了一下"，让会话层
+        // 数两下 Esc 的窗口。
         let mut z = InputZone::default();
         z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(z.pending_exit, Some(ExitRequest::Quit));
+        assert_eq!(z.pending_exits, vec![ExitRequest::EscPressed]);
+        assert!(
+            !z.pending_exits.contains(&ExitRequest::Quit),
+            "空闲 Esc 不许退出程序"
+        );
     }
 
     #[test]
@@ -662,7 +701,7 @@ mod exit_tests {
         z.deliver(&key(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(z.editor.is_empty());
         assert!(z.finished);
-        assert_eq!(z.pending_exit, None);
+        assert!(z.pending_exits.is_empty());
     }
 
     #[test]
@@ -882,9 +921,9 @@ mod confirm_roundtrip {
         down(&mut mz);
         enter(&mut mz);
         assert!(
-            mz.pending_exit.is_none(),
+            mz.pending_exits.is_empty(),
             "回车被拿去确认候选了，不该提交：{:?}",
-            mz.pending_exit
+            mz.pending_exits
         );
         let text = mz.input.editor.text();
         assert_eq!(
@@ -949,8 +988,8 @@ mod confirm_roundtrip {
         type_str(&mut mz, "/compact");
         assert!(mz.input.hang, "行首斜杠词必须挂起");
         enter(&mut mz);
-        match mz.pending_exit.take() {
-            Some(ExitRequest::Submit(text)) => assert_eq!(text, "/compact"),
+        match mz.pending_exits.as_slice() {
+            [ExitRequest::Submit(text)] => assert_eq!(text, "/compact"),
             other => panic!("回车必须提交，实际 {other:?}"),
         }
         std::fs::remove_dir_all(&tmp).ok();

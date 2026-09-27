@@ -329,7 +329,7 @@ fn draft_submit_creates_session_and_delivers_transcript() {
     let (path, h) = start_daemon("draft-submit", &base);
 
     let mut c = TestClient::connect(&path);
-    c.send(&ClientMsg::Submit { text: "问".into() });
+    c.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
     let id = c.attached_id();
     // Read until the assistant's reply lands (full snapshot or tail — both
     // legal; stream frames may interleave). The reply entry IS the round's
@@ -390,11 +390,11 @@ fn two_sessions_two_front_ends_stay_separate() {
     let (path, h) = start_daemon("two-sessions", &base);
 
     let mut a = TestClient::connect(&path);
-    a.send(&ClientMsg::Submit { text: "甲".into() });
+    a.send(&ClientMsg::Submit { text: "甲".into(), from_block: None });
     let id_a = a.attached_id();
 
     let mut b = TestClient::connect(&path);
-    b.send(&ClientMsg::Submit { text: "乙".into() });
+    b.send(&ClientMsg::Submit { text: "乙".into(), from_block: None });
     let id_b = b.attached_id();
     assert_ne!(id_a, id_b, "two drafts must become two sessions");
 
@@ -433,7 +433,7 @@ fn a_front_end_that_stops_reading_never_stalls_the_round() {
     let (path, h) = start_daemon("backpressure", &base);
 
     let mut fast = TestClient::connect(&path);
-    fast.send(&ClientMsg::Submit { text: "问".into() });
+    fast.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
     let id = fast.attached_id();
 
     // The dead weight: attaches, then never reads a byte.
@@ -483,7 +483,7 @@ fn list_sessions_and_rounds_answer_from_the_db() {
     let (path, h) = start_daemon("list", &base);
 
     let mut c = TestClient::connect(&path);
-    c.send(&ClientMsg::Submit { text: "问".into() });
+    c.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
     let id = c.attached_id();
     c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
 
@@ -576,7 +576,7 @@ fn state_frame_carries_model_metadata() {
     }
 
     let mut c = TestClient::connect(&path);
-    c.send(&ClientMsg::Submit { text: "问".into() });
+    c.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
     let _id = c.attached_id();
     c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
     let st = c
@@ -617,7 +617,7 @@ fn the_submitters_own_message_ships_before_the_round_does_anything() {
     let (path, h) = start_daemon("echo-on-submit", &base);
 
     let mut c = TestClient::connect(&path);
-    c.send(&ClientMsg::Submit { text: "问".into() });
+    c.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
     let _ = c.attached_id();
 
     // 第一条带转录内容的消息：只许有用户那条，不许已有回复/工具。

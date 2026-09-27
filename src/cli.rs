@@ -17,7 +17,8 @@
 pub struct Cli {
     /// Run the daemon only (--server).
     pub server: bool,
-    /// Attach to this session id (`attach <id>`).
+    /// Run the isolated HTTP worker.
+    pub http_worker: bool,
     pub attach: Option<i64>,
     /// One-shot `sessions` listing (no TUI).
     pub sessions: bool,
@@ -66,6 +67,7 @@ impl Cli {
                     std::process::exit(0);
                 }
                 "--server" => cli.server = true,
+                "--http-worker" => cli.http_worker = true,
                 "--resume" => cli.resume = true,
                 "--model" => {
                     let v = it.next().ok_or_else(|| {

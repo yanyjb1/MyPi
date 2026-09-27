@@ -550,7 +550,7 @@ impl Default for TodoFold {
 /// 历史区只留"看得见的那一段"：一段**已落盘**的连续窗口 + 还没落盘的活尾巴。
 /// 这两个数决定窗口多大、渲染行缓存留多少块。它们是**深度**旋钮，不是省内存
 /// 的旋钮：实测把渲染缓存从 256 块降到 32 块，进程 RSS 只差 ~4 MB。
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TuiConfig {
     /// 渲染行缓存留多少块（视口上下各一份）。
     ///
@@ -563,6 +563,13 @@ pub struct TuiConfig {
     /// 任务清单折叠策略。见 [`TodoFold`]。
     #[serde(default, rename = "todoFold")]
     pub todo_fold: TodoFold,
+    /// 空回复的占位文本（`config.yaml` → `tui.emptyReply`）。
+    ///
+    /// 一枚值、三个写者：落盘的 assistant 条目、下一轮请求里模型看到的
+    /// 上下文、以及打断瞬间前端先画出来的那一行。它们必须一模一样，
+    /// 所以文案从这里下发，不各写各的。
+    #[serde(default = "d_empty_reply", rename = "emptyReply")]
+    pub empty_reply: String,
 }
 
 fn d_render_margin() -> usize {
@@ -573,12 +580,17 @@ fn d_preload() -> usize {
     128
 }
 
+fn d_empty_reply() -> String {
+    crate::server::entry::DEFAULT_EMPTY_REPLY.to_string()
+}
+
 impl Default for TuiConfig {
     fn default() -> Self {
         Self {
             render_margin: d_render_margin(),
             preload: d_preload(),
             todo_fold: TodoFold::default(),
+            empty_reply: d_empty_reply(),
         }
     }
 }

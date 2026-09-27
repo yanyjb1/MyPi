@@ -163,6 +163,8 @@ pub enum RawEventKind {
 
 pub mod main;
 pub mod resume;
+pub mod tree;
 
 pub use main::MainZone;
 pub use resume::ResumeZone;
+pub use tree::TreeZone;

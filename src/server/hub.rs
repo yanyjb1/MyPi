@@ -327,6 +327,98 @@ impl SessionHub {
             s.session.interrupt_turn();
         }
     }
+
+    /// 从 `parent` 的 `block` 处**分叉**：新开一条会话，继承 `<= block` 的
+    /// 前缀（`Store::fork_session`，一行 INSERT，不拷数据）。
+    ///
+    /// 这是 server 侧对节点树**唯一**的写操作。谁调、什么时候调是前端的事
+    /// （"不发消息不建会话"由前端守，见 `ClientMsg::ForkAt` 的注释）。
+    pub fn fork_at(&mut self, parent: i64, block: i64) -> anyhow::Result<i64> {
+        let mut store = Store::open(&self.db)?;
+        store.fork_session(parent, block)
+    }
+
+    /// 就地把一个**已经开着的**会话分叉到 `block` 上，返回新的会话行 id。
+    ///
+    /// 分叉不是"开一个新会话"——**是同一个会话换个 tip**。内存里那份
+    /// `Session`（它的转录、cwd、模型上下文、运行时权柄）全部留着，只把
+    /// `session_id` 指到新行上：之后写块归新分支，`blocks.session_id`
+    /// 自己就是归属。这样回到历史节点发消息**不会**撞上"没打开/忙碌"，
+    /// 也不会把中间攒下的运行时状态扔掉。
+    ///
+    /// 转录要换成**选中的那块为止的前缀**（含），否则新分支会带着分叉点
+    /// 之后那些本该被抛下的块继续跑。
+    pub fn fork_in_place(&mut self, id: i64, block: i64) -> anyhow::Result<i64> {
+        let mut store = Store::open(&self.db)?;
+        let new_id = store.fork_session(id, block)?;
+        // 前缀 = 从会话根到 `block`（含）的全部条目，跨分叉点拼。
+        let (entries, _missing) = store.load_branch(id, Some(block))?;
+
+        let open = self
+            .sessions
+            .remove(&id)
+            .ok_or_else(|| anyhow::anyhow!("会话 {id} 不在内存里，无法就地分叉"))?;
+        let mut open = open;
+        // 先换 tip（转录变成新前缀），再抛下在跑的那一轮：上一轮属于被抛下的
+        // 分支——它不该继续把新分支堵成"忙"，也不该把半截回复写进新分支。
+        // 上下文副本也跟着新前缀重建（`abandon_turn` 内部做）。
+        open.session.retarget(new_id, entries);
+        open.rx = open.session.abandon_turn();
+        self.sessions.insert(new_id, open);
+        Ok(new_id)
+    }
+
+    /// 会话树（节点树页面）：整条 fork 线，块按时序排，附每条 fork 的挂载点。
+    ///
+    /// 只读。读的是 `sessions.parent_id` / `fork_block_id` 和 `blocks.session_id`
+    /// ——都是写块时就落好的既有列，不做任何推导。
+    pub fn tree(
+        &self,
+        id: i64,
+    ) -> Result<
+        (
+            Vec<crate::server::wire::TreeNode>,
+            Vec<crate::server::wire::ForkInfo>,
+            usize,
+        ),
+        String,
+    > {
+        let store = Store::open(&self.db).map_err(|e| e.to_string())?;
+        let (nodes, forks, current_block) =
+            store.lineage(id).map_err(|e| format!("{e:#}"))?;
+
+        // 逐**条目**展开：一块可能出两行（工具往返），也可能一行不出
+        // （一整块都是状态条目）。
+        let mut out = Vec::new();
+        // `current` 是**行**的位置，不是块的位置：一块能出两行。取"我停在哪块"
+        // 那一块**最后**出现的行——同块两行（call/result）时停在下面那行更自然。
+        let mut current = 0usize;
+        for n in nodes {
+            for e in &n.block.entries {
+                if let Some((kind, summary)) = crate::server::wire::summarize_entry_kind(e) {
+                    if n.block.id == current_block {
+                        current = out.len();
+                    }
+                    out.push(crate::server::wire::TreeNode {
+                        id: n.block.id,
+                        session: n.session,
+                        kind,
+                        summary,
+                    });
+                }
+            }
+        }
+        let nodes = out;
+        let forks = forks
+            .into_iter()
+            .map(|f| crate::server::wire::ForkInfo {
+                id: f.id,
+                parent: f.parent,
+                fork_block: f.fork_block,
+            })
+            .collect();
+        Ok((nodes, forks, current))
+    }
 }
 
 #[cfg(test)]
@@ -671,6 +763,76 @@ mod tests {
             .resume(id, spec("http://127.0.0.1:1/v1", "m", "S", &dir))
             .unwrap();
         assert_eq!(hub.get(id).unwrap().stream_mode(), StreamMode::Immediate);
+    }
+
+    /// 回到历史节点发消息 = **就地分叉**：同一个会话换 tip，内存态不丢。
+    ///
+    /// 这是这轮修的主 bug 的回归——以前分叉会 `close` 旧会话再 `resume` 新
+    /// 会话，而新会话内存态还没开，于是第一条消息被 `hub.submit` 打回来，
+    /// daemon 报成"会话 N 正在回复中"。用户看到的就是：回到历史节点发一条
+    /// 消息，屏幕说这个会话正忙。
+    #[test]
+    fn forking_in_place_keeps_the_session_usable() {
+        let dir = tmp("fork-in-place");
+        let (base, _srv) = fake_gateway(vec![sse(&["第一答"]), sse(&["分叉答"])]);
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let a = hub.open_new(spec(&base, "m", "S", &dir)).unwrap();
+        run_round(&mut hub, a, "第一问");
+
+        let store_blocks = {
+            let store = crate::server::store::Store::open(&hub.db).unwrap();
+            store.stored_blocks(a).unwrap()
+        };
+        let fork_point = store_blocks[0].id;
+
+        // 就地分叉：返回新行 id，**旧 id 不再在 hub 里**（同一份内存态换了名）。
+        let b = hub.fork_in_place(a, fork_point).expect("就地分叉");
+        assert_ne!(a, b);
+        assert!(hub.get(b).is_some(), "分叉后会话还在内存里");
+        assert!(
+            hub.get(b).unwrap().session_id() == Some(b),
+            "内存里的会话要指向新行"
+        );
+        // 关键断言：能提交。修之前这里是 false（"正在回复中"）。
+        assert!(hub.submit(b, "分叉后的新问题"), "分叉后必须能接着发");
+        // 分叉后的转录 = 到分叉点为止的前缀。
+        assert_eq!(
+            hub.get(b).unwrap().transcript().len(),
+            2,
+            "前缀应当是 用户问 + 模型答"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回合**进行中**分叉：旧回合还占着 `busy()`，新分支必须能立刻开工。
+    ///
+    /// 修之前这里 `submit` 返回 false（"正在回复中"）——分叉只换了 id 和
+    /// 转录，没有接管那一轮：`stream.active` 还亮着，前端也就一直显示忙。
+    #[test]
+    fn forking_mid_round_frees_the_new_branch() {
+        let dir = tmp("fork-mid-round");
+        let (base, _srv) = fake_gateway(vec![
+            sse(&["第一答"]),
+            sse(&["第二答"]),
+            sse(&["分叉答"]),
+        ]);
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let a = hub.open_new(spec(&base, "m", "S", &dir)).unwrap();
+        run_round(&mut hub, a, "第一问");
+
+        let fork_point = {
+            let store = crate::server::store::Store::open(&hub.db).unwrap();
+            store.stored_blocks(a).unwrap()[0].id
+        };
+
+        // 第二轮发出去但**不收事件**：回合还在跑，会话是忙的。
+        assert!(hub.submit(a, "第二问"));
+        assert!(hub.get(a).unwrap().busy(), "前提：这一轮真的在跑");
+
+        let b = hub.fork_in_place(a, fork_point).expect("就地分叉");
+        assert!(!hub.get(b).unwrap().busy(), "分叉后不许再显示忙");
+        assert!(hub.submit(b, "分叉后的新问题"), "新分支必须能立刻发消息");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // 跑一轮直到该会话的回合结束（Done）。

@@ -125,6 +125,24 @@ tokens! {
     SystemText,
     // 错误文本。
     ErrorText,
+
+    // ---- 节点树 ----
+    // 树上四类角色的名字（`user:` / `assistant:` …）。
+    //
+    // 四类必须**互不相同**：树的作用就是一眼看出这段对话是谁说的，
+    // 同色等于没标。取值全部落在既有语义色上（不新造颜色），
+    // 换主题时跟着走。
+    TreeUser,
+    TreeAssistant,
+    // 工具**调用**（模型要干什么）。
+    TreeToolCall,
+    // 工具**结果**（干成了什么）。
+    TreeToolResult,
+    TreeReasoning,
+    // 树上的分叉连线（竖线、拐点、横线）。
+    TreeLine,
+    // 树的轴（主干那条 + 分支那条），比连线亮一档。
+    TreeAxis,
 }
 
 /// 每帧的色号快照。渲染循环调一次 [`Self::resolve`]，往下传。
@@ -178,6 +196,20 @@ impl HistoryTheme {
         put(Token::SyntaxType, t.color(ColorToken::SyntaxType));
         put(Token::SyntaxOperator, t.color(ColorToken::SyntaxOperator));
         put(Token::SyntaxPunctuation, t.color(ColorToken::SyntaxPunctuation));
+        // 节点树：四类角色各占一个既有色，围栏用 dim 灰，轴稍亮。
+        put(Token::TreeUser, t.color(ColorToken::Success));
+        put(Token::TreeAssistant, t.color(ColorToken::Accent));
+        // 调用与结果**分开**：调用是"要做什么"，结果是"做成了什么"。
+        // 取色要避开另外三类的色（user 用 success、assistant 用 accent），
+        // 否则四类里有两类同色 = 白分。`SyntaxString` 是那之外的一档
+        // （本机主题 = titaniumGold `#d4c090`），冷暖也与 Warning 分得开。
+        put(Token::TreeToolCall, t.color(ColorToken::Warning));
+        put(Token::TreeToolResult, t.color(ColorToken::SyntaxString));
+        put(Token::TreeReasoning, t.color(ColorToken::ThinkingText));
+        // 结构线取 dim/muted 这两档灰，**不能取 border**——本机主题的
+        // border 是 `#2a3038`（近黑），在深色背景上等于没画。
+        put(Token::TreeLine, t.color(ColorToken::Dim));
+        put(Token::TreeAxis, t.color(ColorToken::Muted));
         put(Token::SystemText, t.color(ColorToken::Muted));
         put(Token::ErrorText, t.color(ColorToken::Error));
         Self { colors }

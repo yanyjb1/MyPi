@@ -15,7 +15,14 @@ use std::path::PathBuf;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse(std::env::args().skip(1))?;
+    if cli.http_worker {
+        return mypi::server::http_worker::run();
+    }
     let mut cfg = Config::load()?;
+    // 空回复的占位文本（`tui.emptyReply`）：落盘、上下文、打断占位三处
+    // 共用一枚值，进程启动时钉住。TUI 与 daemon 各跑一次 `main`，
+    // 读的是同一份配置，所以两边看到的永远是同一串。
+    mypi::server::entry::set_empty_reply(&cfg.app.tui.empty_reply);
     // --model overrides the default for this session only (never written
     // back; /model is the persistent path).
     if let Some(spec) = &cli.model {
