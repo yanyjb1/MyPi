@@ -1100,6 +1100,20 @@ impl BuiltinTools {
         self.todo.lock().ok().and_then(|mut st| st.pending.take())
     }
 
+    /// The todo slot itself, for a caller that must **poll it while the round is
+    /// still running**.
+    ///
+    /// [`take_todo`](Self::take_todo) can only be called after `run` returns (it
+    /// borrows the tools), but the todo list must reach the front end the moment
+    /// each `todo` call finishes — the whole point of the tool is that the model
+    /// works through the list *within one turn*. Cloning the `Arc` gives the
+    /// turn runner a second handle that does not fight `run`'s `&mut` borrow.
+    pub fn todo_handle(
+        &self,
+    ) -> std::sync::Arc<std::sync::Mutex<crate::server::agent::todo::TodoState>> {
+        std::sync::Arc::clone(&self.todo)
+    }
+
     /// The workspace root: `cd` may move within it, never out of it.
     pub fn with_workspace_root(mut self, root: std::path::PathBuf) -> Self {
         self.root = root;
@@ -1712,6 +1726,7 @@ fn run_todo(
     use crate::server::agent::todo as td;
     let a = td::TodoArgs::parse(args)?;
     let mut st = t.todo.lock().map_err(|_| anyhow!("todo 锁中毒"))?;
+    let before = st.current.clone();
     let (next, errors) = td::apply(&st.current, &a);
     if !errors.is_empty() {
         // 整批丢弃：状态一动不动，理由如实回报（模型据此改一次就能过）。
@@ -1725,9 +1740,16 @@ fn run_todo(
         st.current = next.clone();
         st.pending = Some(next.clone());
     }
+    // 折叠要用的「这次碰过哪些阶段」：读操作没有任何阶段被碰（`view` 只是
+    // 报告），所以跳过一次 diff。
+    let touched = if a.op.is_read_only() {
+        Vec::new()
+    } else {
+        td::touched_phases(&before, &next, a.op)
+    };
     Ok(ToolOutput::with_details(
         td::summary_text(&next),
-        td::details(&next, a.op),
+        td::details(&next, a.op, &touched),
     ))
 }
 

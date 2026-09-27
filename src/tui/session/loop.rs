@@ -182,6 +182,8 @@ pub fn run_tui(
     app.main_mut()
         .history
         .set_window(cfg.app.tui.preload, cfg.app.tui.render_margin);
+    // 任务清单的折叠策略（`tui.todoFold`）：同一处下发，同样是启动期常量。
+    app.main_mut().history.set_todo_fold(cfg.app.tui.todo_fold);
     // 命令表来自握手（`hello_ok`）：前端不再自己存一份。补全服务上岗之后再喂。
     app.main.reserved.set_commands(conn.commands().to_vec());
     // 参数的**合法值**：命令表只说形状（`model_id` / `profile_name`），
@@ -331,6 +333,14 @@ pub fn run_tui(
     let mut view = crate::tui::session::view::MainSessionView::new();
 
     let result = (|| -> Result<()> {
+        // 语法预热的后台线程靠这个回调叫醒我们重绘。装在首帧之前：
+        // 第一帧就可能撞上一条没预热的语言。
+        {
+            let tx = sig_tx.clone();
+            crate::tui::theme::set_repaint_hook(move || {
+                let _ = tx.send(crate::tui::session::signal::Signal::Repaint);
+            });
+        }
         // 进循环之前先把选择器（`--resume`）的请求发掉：第一帧要有内容，
         // 而主循环要等到有信号才会走到发送那一步。
         send_resume_requests(&mut app, &mut req);
@@ -366,6 +376,10 @@ pub fn run_tui(
                             cols: s.width,
                             rows: s.height,
                         });
+                    }
+                    crate::tui::session::signal::Signal::Repaint => {
+                        // 内容没变，只是后台（语法预热）说"现在能画得更好"。
+                        // 什么都不用做：循环末尾无条件重绘一帧。
                     }
                     crate::tui::session::signal::Signal::Server(msg) => {
                         // 会话列表是**选择器**的输入，不是主区的：谁持有

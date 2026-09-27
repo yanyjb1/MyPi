@@ -34,6 +34,12 @@ pub enum Signal {
     Git(Option<crate::git::GitStatus>),
     /// Terminal resized: all width-dependent caches are invalid.
     Resized,
+    /// 后台有事做完，请重绘一帧（内容本身没变）。
+    ///
+    /// 目前唯一的使用者：语法预热的后台线程编译完一条语法。那一帧原本
+    /// 出的是无色文本，重绘之后走正常的补色路径把颜色刷上去。它**不**推进
+    /// 主题世代——世代会整片作废块缓存，代价远大于"重画一帧"。
+    Repaint,
     /// A message pushed by the daemon (socket reader thread → main loop).
     /// Dispatched to the `SessionView`, which maps it onto zone calls.
     Server(crate::server::wire::ServerMsg),

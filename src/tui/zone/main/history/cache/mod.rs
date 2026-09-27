@@ -94,6 +94,10 @@ enum Switch {
 pub(crate) fn paints(entries: &[Entry], show_reasoning: bool) -> bool {
     match entries.first() {
         Some(Entry::Reasoning { content }) => show_reasoning && !content.trim().is_empty(),
+        // 清单是**状态**不是叙述：它贴在历史区底部（`render::todo`），
+        // 在这条流里占零行。不在这里判的话它会成为一个"空块"——画不出
+        // 东西，却仍然吃到块与块之间那条间隔，屏幕上凭空多出空行。
+        Some(Entry::Todo { .. }) => false,
         _ => true,
     }
 }

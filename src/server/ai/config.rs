@@ -493,6 +493,58 @@ pub struct AppConfig {
     pub tui: TuiConfig,
 }
 
+/// 任务清单的折叠策略（`config.yaml` → `tui.todoFold`）。
+///
+/// 三态，每一态都有存在的理由：
+/// - **缺省 / `false`** — 不折叠。每个阶段都完整展开。默认值就是它。
+/// - **`true`** — 折叠，用内置上限 [`TodoFold::DEFAULT_CAP`]。
+/// - **数字 `N`** — 折叠，上限 N 条。
+///
+/// 「折叠」指：本轮更新**没碰过**的阶段折成一行 `名字 · 3/5`；碰过的阶段
+/// 完整展开。这和「阶段全做完才折」（本模块早先的唯一规则）不是一回事：
+/// 那个规则下你正在做大任务一，二和三仍然全展开占地方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum TodoFold {
+    /// `true` = 折，用默认上限。
+    On(bool),
+    /// `N` = 折，上限 N 条。
+    Capped(usize),
+}
+
+impl TodoFold {
+    /// `true` 时展开阶段下最多显示几条。
+    ///
+    /// 8 是照 omp 的 `PREVIEW_LIMITS.COLLAPSED_ITEMS` 取的手感值：一屏
+    /// 能看见当前阶段多半的活，又不至于把对话顶没。
+    pub const DEFAULT_CAP: usize = 8;
+
+    /// 折叠开着吗？`false` 和 `0` 都是关。
+    pub fn is_on(self) -> bool {
+        match self {
+            TodoFold::On(on) => on,
+            TodoFold::Capped(n) => n > 0,
+        }
+    }
+
+    /// 展开阶段下最多显示几条（关着时无上限，返回 `usize::MAX`）。
+    pub fn cap(self) -> usize {
+        match self {
+            TodoFold::On(true) => Self::DEFAULT_CAP,
+            TodoFold::On(false) => usize::MAX,
+            TodoFold::Capped(0) => usize::MAX,
+            TodoFold::Capped(n) => n,
+        }
+    }
+}
+
+impl Default for TodoFold {
+    /// 不折叠。本机 `config.yaml` 里没写 `todoFold` 时就是这个。
+    fn default() -> Self {
+        TodoFold::On(false)
+    }
+}
+
 /// **窗口化**的两个数（见 `tui::zone::main::history`）。
 ///
 /// 历史区只留"看得见的那一段"：一段**已落盘**的连续窗口 + 还没落盘的活尾巴。
@@ -508,6 +560,9 @@ pub struct TuiConfig {
     /// 锚点上面预取/预保留多少**块**（再往上就该去库里取下一页了）。
     #[serde(default = "d_preload")]
     pub preload: usize,
+    /// 任务清单折叠策略。见 [`TodoFold`]。
+    #[serde(default, rename = "todoFold")]
+    pub todo_fold: TodoFold,
 }
 
 fn d_render_margin() -> usize {
@@ -523,6 +578,7 @@ impl Default for TuiConfig {
         Self {
             render_margin: d_render_margin(),
             preload: d_preload(),
+            todo_fold: TodoFold::default(),
         }
     }
 }
@@ -923,6 +979,37 @@ mod tests {
 
     fn parse_models(yaml: &str) -> anyhow::Result<ModelsConfig> {
         Ok(serde_yaml::from_str(yaml)?)
+    }
+
+    /// `tui.todoFold` 的三态：缺省 = 不折，`true` = 折用默认上限，
+    /// 数字 = 折用这个上限。`0` 和 `false` 同为「不折」。
+    #[test]
+    fn todo_fold_parses_all_three_shapes() {
+        let parse = |yaml: &str| -> TuiConfig { serde_yaml::from_str(yaml).unwrap() };
+
+        // 缺省（键不在）：不折。
+        let d = parse("preload: 8\n");
+        assert!(!d.todo_fold.is_on(), "缺省必须是不折");
+        assert_eq!(d.todo_fold.cap(), usize::MAX, "关着时无上限");
+
+        // 显式 false：不折。
+        let off = parse("todoFold: false\n");
+        assert!(!off.todo_fold.is_on());
+
+        // true：折，用默认上限。
+        let on = parse("todoFold: true\n");
+        assert!(on.todo_fold.is_on());
+        assert_eq!(on.todo_fold.cap(), TodoFold::DEFAULT_CAP);
+
+        // 数字：折，上限就是这个数。
+        let n = parse("todoFold: 3\n");
+        assert!(n.todo_fold.is_on());
+        assert_eq!(n.todo_fold.cap(), 3);
+
+        // 0 等价于关。
+        let zero = parse("todoFold: 0\n");
+        assert!(!zero.todo_fold.is_on(), "0 就是不折");
+        assert_eq!(zero.todo_fold.cap(), usize::MAX);
     }
 
     /// 改 `default:` 是**只动一个值**，行尾注释必须原样留下（用户看得到自己

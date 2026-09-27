@@ -29,6 +29,7 @@ use super::glyphs::{
     TREE_LAST, TREE_VERTICAL,
 };
 use super::theme::{HistoryTheme, Token};
+use crate::server::ai::config::TodoFold;
 use crate::server::entry::{TodoPhase, TodoStatus};
 
 /// 罗马数字（1 起）。显示层专用：状态与提示词里从来看不到它。
@@ -61,20 +62,19 @@ pub fn roman(one_based: usize) -> String {
     out
 }
 
-/// 一条任务算不算「收尾」（完成或放弃）。
-///
-/// 折起来的阶段按这个数进度：放弃的任务也算收尾——它不会再动了，
-/// 不计的话那个阶段的 `N/M` 会永远停在没做完的样子。
-pub fn is_closed(status: TodoStatus) -> bool {
-    matches!(status, TodoStatus::Done | TodoStatus::Abandoned)
-}
-
 /// 画整块（不含占用几行的裁剪；`budget` 是它能用的最大行数）。
 ///
 /// `budget` 太小就砍尾巴并补一行 `… 还有 N 行`——宁可少画也不能把
 /// 聊天区顶没。
+///
+/// `fold` 是折叠策略（`config.yaml` → `tui.todoFold`），`touched` 是**最近
+/// 一次 `todo` 调用碰过的阶段名**。折叠开着时，没被碰过的阶段折成一行
+/// `名字 · 3/5`，碰过的完整展开——所以你在做大任务一，二和三收起来。
+/// `touched` 为空 = 没有信号，全部展开（和关掉折叠一个效果）。
 pub fn rows(
     phases: &[TodoPhase],
+    touched: &[String],
+    fold: TodoFold,
     width: usize,
     t: &HistoryTheme,
     budget: usize,
@@ -82,6 +82,18 @@ pub fn rows(
     if phases.is_empty() || budget == 0 {
         return Vec::new();
     }
+    // 全收尾了就不占地方：这块是「正在做什么」的看板，活干完了它就该让位
+    // 给对话。注意是**收尾**（完成或放弃）而不是「完成」——放弃的也不会再动。
+    if phases
+        .iter()
+        .flat_map(|p| p.tasks.iter())
+        .all(|x| x.status.is_closed())
+    {
+        return Vec::new();
+    }
+    // 折叠只在「多于一阶段」时才有意义：只有一个阶段时折起来等于什么都不显示。
+    let folding = fold.is_on() && phases.len() > 1 && !touched.is_empty();
+    let cap = fold.cap();
     let clip = |line: Line<'static>| -> Line<'static> {
         if line.width() <= width {
             return line;
@@ -100,12 +112,15 @@ pub fn rows(
         let last_phase = idx + 1 == total;
         let branch = if last_phase { TREE_LAST } else { TREE_BRANCH };
         let name = format!("{}. {}", roman(idx + 1), phase.name);
-        let done = phase.tasks.iter().filter(|x| is_closed(x.status)).count();
+        let done = phase.tasks.iter().filter(|x| x.status.is_closed()).count();
         let progress = format!(" · {done}/{}", phase.tasks.len());
-        // 全收尾的阶段折成一行：没剩活的，展开只是占地方。
-        let live: Vec<_> = phase.tasks.iter().filter(|x| !is_closed(x.status)).collect();
+        // 折起来的两条理由：
+        //   1. 这个阶段全收尾了——没剩活的，展开只是占地方；
+        //   2. 折叠开着，而这次更新没碰过它——注意力在别处。
+        let live: Vec<_> = phase.tasks.iter().filter(|x| !x.status.is_closed()).collect();
+        let untouched = folding && !touched.iter().any(|n| n == &phase.name);
         let mut spans = vec![t.fg(format!(" {branch} "), Token::Dim)];
-        if live.is_empty() {
+        if live.is_empty() || untouched {
             // 折起来：整行 dim（omp 的 `formatPhaseSummary`）。
             spans.push(t.fg_mod(name, Token::Dim, Modifier::BOLD));
             spans.push(t.fg(progress, Token::Dim));
@@ -116,13 +131,23 @@ pub fn rows(
         spans.push(t.fg(progress, Token::Dim));
         body.push(Line::from(spans));
         // 展开：每条任务一行，挂在这个阶段的竖线下面。
+        // `cap` 只裁**展开**的列表（折叠本来就是上限的目的），折起来的那行
+        // 是摘要，不受影响。
+        let shown = phase.tasks.len().min(cap);
         let cont = if last_phase { "" } else { TREE_VERTICAL };
-        let n = phase.tasks.len();
-        for (ti, task) in phase.tasks.iter().enumerate() {
-            let sub = if ti + 1 == n { TREE_LAST } else { TREE_BRANCH };
+        for ti in 0..shown {
+            let task = &phase.tasks[ti];
+            let sub = if ti + 1 == shown { TREE_LAST } else { TREE_BRANCH };
             let mut line = vec![t.fg(format!(" {cont}  {sub} "), Token::Dim)];
             line.extend(task_spans(t, task));
             body.push(Line::from(line));
+        }
+        if shown < phase.tasks.len() {
+            let hidden = phase.tasks.len() - shown;
+            body.push(Line::from(vec![
+                t.fg(format!(" {cont}  "), Token::Dim),
+                t.fg(format!("… 还有 {hidden} 条"), Token::Muted),
+            ]));
         }
     }
     body.push(Line::from(t.fg(
@@ -167,26 +192,6 @@ fn task_spans(
     out
 }
 
-/// 这块要几行（渲染前先算高度用）。
-pub fn height(phases: &[TodoPhase], budget: usize) -> usize {
-    if phases.is_empty() || budget == 0 {
-        return 0;
-    }
-    if budget < 3 {
-        return 1;
-    }
-    let mut n = 1; // 标题
-    let total = phases.len();
-    for (idx, phase) in phases.iter().enumerate() {
-        let _ = total;
-        let _ = idx;
-        n += 1; // 阶段行
-        if phase.tasks.iter().any(|x| !is_closed(x.status)) {
-            n += phase.tasks.len();
-        }
-    }
-    n + 1 // `----
-}
 
 #[cfg(test)]
 mod tests {
@@ -222,7 +227,17 @@ mod tests {
     }
 
     fn text(phases: &[TodoPhase], budget: usize) -> Vec<String> {
-        rows(phases, 80, &HistoryTheme::resolve(), budget)
+        drawn(phases, &[], TodoFold::default(), budget)
+    }
+
+    /// 画一遍再看文本。默认 `touched` 空、折叠关——就是"全展开"。
+    fn drawn(
+        phases: &[TodoPhase],
+        touched: &[String],
+        fold: TodoFold,
+        budget: usize,
+    ) -> Vec<String> {
+        rows(phases, touched, fold, 80, &HistoryTheme::resolve(), budget)
             .iter()
             .map(|l| l.to_string())
             .collect()
@@ -256,19 +271,16 @@ mod tests {
         );
     }
 
-    /// 高度和实际行数必须一致：这块的行高是**预留**出去的（聊天窗口因此
-    /// 变矮），算多了会白留一片空白，算少了会把最后几行画到屏幕外。
+    /// 预算就是硬上限：画出来的行数**绝不**超过它。这块的行高是预留出去
+    /// 的（聊天窗口因此变矮），多画一行就会顶掉一行聊天。
     #[test]
-    fn the_claimed_height_is_the_drawn_height() {
-        for budget in [3usize, 4, 6, 40, 100] {
-            let phases = sample();
-            let drawn = rows(&phases, 80, &HistoryTheme::resolve(), budget).len();
-            let claimed = height(&phases, budget);
-            assert_eq!(drawn, claimed.min(budget), "budget {budget}");
+    fn the_drawn_height_never_exceeds_the_budget() {
+        for budget in [0usize, 1, 2, 3, 4, 6, 40, 100] {
+            let got = drawn(&sample(), &[], TodoFold::default(), budget);
+            assert!(got.len() <= budget, "budget {budget} 画了 {} 行", got.len());
         }
         // 空清单不占地方。
-        assert_eq!(height(&[], 40), 0);
-        assert!(rows(&[], 80, &HistoryTheme::resolve(), 40).is_empty());
+        assert!(rows(&[], &[], TodoFold::default(), 80, &HistoryTheme::resolve(), 40).is_empty());
     }
 
     /// 装不下时砍尾巴并**如实报**砍了几行，绝不超过预算。
@@ -294,12 +306,139 @@ mod tests {
         assert!(got[2].contains("[>] 正在做"), "{}", got[2]);
         assert!(got[3].contains("[!] 卡住了"), "{}", got[3]);
         assert!(got[4].contains("[-] 不要了"), "{}", got[4]);
-        let lines = rows(&phases, 80, &HistoryTheme::resolve(), 40);
+        let lines = rows(&phases, &[], TodoFold::default(), 80, &HistoryTheme::resolve(), 40);
         // 放弃的那条必须是删除线（红 + crossed out），不然和「待办」分不开。
         let aband = lines[4].spans.iter().any(|s| {
             s.style.add_modifier.contains(Modifier::CROSSED_OUT)
                 && s.content.contains("不要了")
         });
         assert!(aband, "放弃的条目该有删除线");
+    }
+
+    /// 折叠开着时，**没碰过**的阶段折成一行、碰过的那条完整展开。
+    /// 这就是「我在做第一个大任务，另外两个收起来」。
+    #[test]
+    fn fold_collapses_the_phases_this_update_did_not_touch() {
+        let phases = three_phases();
+        let touched = vec!["甲".to_string()];
+        let got = drawn(&phases, &touched, TodoFold::On(true), 60);
+        // 甲 展开，乙/丙 折成一行。
+        assert!(got.iter().any(|l| l.contains("甲")), "{got:#?}");
+        assert!(got.iter().any(|l| l.contains("[>] 做甲的活")), "{got:#?}");
+        assert!(
+            !got.iter().any(|l| l.contains("做乙的活")),
+            "乙没被碰过，该折起来：{got:#?}"
+        );
+        assert!(
+            !got.iter().any(|l| l.contains("做丙的活")),
+            "丙没被碰过，该折起来：{got:#?}"
+        );
+        // 折起来的那两行仍要报进度。
+        assert!(got.iter().any(|l| l.contains("乙") && l.contains("0/1")), "{got:#?}");
+        assert!(got.iter().any(|l| l.contains("丙") && l.contains("0/1")), "{got:#?}");
+    }
+
+    /// 折叠关着（默认）时全部展开——和早先的行为一致。
+    #[test]
+    fn fold_off_expands_every_phase() {
+        let phases = three_phases();
+        let touched = vec!["甲".to_string()];
+        let got = drawn(&phases, &touched, TodoFold::On(false), 60);
+        for needle in ["做甲的活", "做乙的活", "做丙的活"] {
+            assert!(got.iter().any(|l| l.contains(needle)), "缺 {needle}：{got:#?}");
+        }
+    }
+
+    /// 折叠开着但**没有任何触碰信号**（老转录）= 全展开，不能误折。
+    #[test]
+    fn fold_with_no_signal_expands_everything() {
+        let got = drawn(&three_phases(), &[], TodoFold::On(true), 60);
+        for needle in ["做甲的活", "做乙的活", "做丙的活"] {
+            assert!(got.iter().any(|l| l.contains(needle)), "缺 {needle}：{got:#?}");
+        }
+    }
+
+    /// 数字上限只裁**展开**的那个阶段，多出来的报条数。
+    #[test]
+    fn fold_cap_trims_the_expanded_phase_only() {
+        let phases = vec![
+            TodoPhase {
+                name: "甲".into(),
+                tasks: (1..=5).map(|i| task(&format!("活{i}"), TodoStatus::Pending)).collect(),
+            },
+            TodoPhase {
+                name: "乙".into(),
+                tasks: vec![task("乙的活", TodoStatus::Pending)],
+            },
+        ];
+        let touched = vec!["甲".to_string()];
+        let got = drawn(&phases, &touched, TodoFold::Capped(2), 60);
+        assert!(got.iter().any(|l| l.contains("活1")), "{got:#?}");
+        assert!(got.iter().any(|l| l.contains("活2")), "{got:#?}");
+        assert!(!got.iter().any(|l| l.contains("活3")), "超上限该裁掉：{got:#?}");
+        assert!(
+            got.iter().any(|l| l.contains("还有 3 条")),
+            "裁掉几条要如实报：{got:#?}"
+        );
+        // 乙 没被碰过，折成一行——注意它不在展开上限的账上。
+        assert!(!got.iter().any(|l| l.contains("乙的活")), "{got:#?}");
+    }
+
+    /// 清单一做完（全部收尾）就**整块消失**，一行都不占。
+    ///
+    /// 这块是"正在做什么"的看板，活干完了就该让位给对话。放弃也算收尾——
+    /// 它不会再动了。
+    #[test]
+    fn the_list_disappears_once_everything_is_closed() {
+        let mut phases = sample();
+        for p in &mut phases {
+            for t in &mut p.tasks {
+                t.status = TodoStatus::Done;
+            }
+        }
+        assert!(
+            rows(&phases, &[], TodoFold::default(), 80, &HistoryTheme::resolve(), 40).is_empty(),
+            "全做完了还占着地方"
+        );
+        // 放弃也算收尾。
+        let mut dropped = sample();
+        for p in &mut dropped {
+            for t in &mut p.tasks {
+                t.status = TodoStatus::Abandoned;
+            }
+        }
+        assert!(
+            rows(&dropped, &[], TodoFold::default(), 80, &HistoryTheme::resolve(), 40).is_empty(),
+            "全放弃也算收尾"
+        );
+        // 只要还剩一条没做完，整块就还在。
+        let mut one_left = sample();
+        for p in &mut one_left {
+            for t in &mut p.tasks {
+                t.status = TodoStatus::Done;
+            }
+        }
+        one_left[0].tasks[0].status = TodoStatus::Pending;
+        assert!(
+            !rows(&one_left, &[], TodoFold::default(), 80, &HistoryTheme::resolve(), 40).is_empty(),
+            "还剩一条就得继续显示"
+        );
+    }
+
+    fn three_phases() -> Vec<TodoPhase> {
+        vec![
+            TodoPhase {
+                name: "甲".into(),
+                tasks: vec![task("做甲的活", TodoStatus::InProgress)],
+            },
+            TodoPhase {
+                name: "乙".into(),
+                tasks: vec![task("做乙的活", TodoStatus::Pending)],
+            },
+            TodoPhase {
+                name: "丙".into(),
+                tasks: vec![task("做丙的活", TodoStatus::Pending)],
+            },
+        ]
     }
 }

@@ -36,6 +36,25 @@ use ColorToken as T;
 static THEME: RwLock<Option<Theme>> = RwLock::new(None);
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 
+/// 「请重绘一帧」的回调槽。
+///
+/// 渲染层（语法预热的后台线程）需要在不认识信号类型的前提下叫醒主循环；
+/// 主循环启动时装上真正的实现。没装 = 没有前端在跑（测试、纯服务端），
+/// 调用是空操作。
+static REPAINT: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// 装上报「重绘一帧」的实现（主循环启动时调一次；重复装忽略）。
+pub fn set_repaint_hook(f: impl Fn() + Send + Sync + 'static) {
+    let _ = REPAINT.set(Box::new(f));
+}
+
+/// 请前端重绘一帧。没有前端时是空操作。
+pub fn request_repaint() {
+    if let Some(f) = REPAINT.get() {
+        f();
+    }
+}
+
 /// Bundled themes, compiled in. The first entry is the startup fallback.
 const BUNDLED: &[(&str, &str)] = &[
     ("titanium", include_str!("titanium.json")),

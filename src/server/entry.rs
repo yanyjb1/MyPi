@@ -65,6 +65,14 @@ impl TodoStatus {
             _ => None,
         }
     }
+
+    /// 收尾了：做完或有意放弃。
+    ///
+    /// 放弃也算——它不会再动了。折叠视图和进度计数都按这个口径，
+    /// 否则放弃的任务会让它那个阶段永远显示成没做完。
+    pub fn is_closed(self) -> bool {
+        matches!(self, TodoStatus::Done | TodoStatus::Abandoned)
+    }
 }
 
 /// A named group of tasks. Phases are what keeps a long list readable — and

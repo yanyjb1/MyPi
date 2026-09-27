@@ -153,6 +153,11 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             }
         };
         // Callback returning false -> client stops reading and disconnects (a real interrupt; no wasted tokens)
+        //
+        // 清单那把手先借出来：`run` 会把 `tools` 可变借走，闭包里够不着它。
+        // 要的是「每个 `todo` 调用一落地就发出去」——`todo` 本来就是一轮之内
+        // 反复用的工具，憋到回合末才上屏等于整轮都看不见进度。
+        let todo_slot = tools.todo_handle();
         let r = run(
             &client,
             &mut chat,
@@ -231,14 +236,35 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
                         result,
                         details,
                         duration_ms,
-                    } => SessionEvent::ToolFinish {
-                        call_id,
-                        name,
-                        ok,
-                        result,
-                        details,
-                        duration_ms,
-                    },
+                    } => {
+                        let changed = (name == "todo" && ok)
+                            .then(|| {
+                                todo_slot
+                                    .lock()
+                                    .ok()
+                                    .and_then(|mut st| st.pending.take())
+                            })
+                            .flatten();
+                        let ev = SessionEvent::ToolFinish {
+                            call_id,
+                            name,
+                            ok,
+                            result,
+                            details,
+                            duration_ms,
+                        };
+                        // 清单改了就在**这一刻**发出去，不等到回合末——但要在
+                        // 它自己的工具结果**之后**：状态是结果产生的，反过来
+                        // 读者会先看到清单变化、再看到造成它的那次调用。
+                        // `pending` 是一次性的：谁取了谁负责发，回合末那次只
+                        // 会拿到「没有变化」。
+                        if let Some(phases) = changed {
+                            let _ = send(ev);
+                            let _ = send(SessionEvent::Todo { phases });
+                            return;
+                        }
+                        ev
+                    }
                 });
             },
         );
@@ -797,6 +823,56 @@ mod tests {
         );
         // 每轮一份，不是把整回合粘成一份。
         assert_eq!(deltas(&buf), vec!["我先看看", "读完了"]);
+    }
+
+    /// 清单事件必须在**下一个工具开始之前**发出来。
+    ///
+    /// `todo` 是一轮之内反复用的工具：模型许愿、定清单、然后一轮里一条条
+    /// 划掉。憋到回合末才发，整轮都看不见进度，功能等于废了。
+    ///
+    /// 断言点选「下一个 `ToolStart` 之前」而不是「`TurnDone` 之前」是刻意的：
+    /// 回合末那次兜底发布也能满足后者，测不出东西来。只有真·中途发布才过得了。
+    #[test]
+    fn the_todo_event_lands_before_the_next_tool_starts() {
+        // 三轮：先调 `todo`，再调 `read`，最后收尾。
+        let todo_round = format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{{\"name\":\"todo\",\"arguments\":{}}}}}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n",
+            serde_json::to_string(
+                r#"{"op":"init","list":[{"phase":"阶段一","items":["甲"]}]}"#
+            )
+            .unwrap(),
+        );
+        let read_round = format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"c2\",\"type\":\"function\",\"function\":{{\"name\":\"read\",\"arguments\":{}}}}}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n",
+            serde_json::to_string(r#"{"path":"x"}"#).unwrap(),
+        );
+        let events = run_turn(
+            vec![todo_round, read_round, crate::server::test_gateway::sse(&["完事"])],
+            StreamMode::Immediate,
+        );
+
+        let todo_at = events
+            .iter()
+            .position(|e| matches!(e, SessionEvent::Todo { .. }))
+            .unwrap_or_else(|| panic!("清单事件没发出来：{events:?}"));
+        // 第二个工具的 Start（`first` 为真的那条才是新调用，不是重复）。
+        let next_tool_at = events
+            .iter()
+            .position(|e| matches!(e, SessionEvent::ToolStart { name, first: true, .. } if name == "read"))
+            .unwrap_or_else(|| panic!("第二个工具没开始：{events:?}"));
+        assert!(
+            todo_at < next_tool_at,
+            "清单压到下一个工具之后了 = 根本没中途发：{events:?}"
+        );
+        // 而且要在工具**结果**之后（状态由结果产生）。
+        let finish_at = events
+            .iter()
+            .position(|e| matches!(e, SessionEvent::ToolFinish { name, .. } if name == "todo"))
+            .unwrap_or_else(|| panic!("工具结果没发出来：{events:?}"));
+        assert!(
+            finish_at < todo_at,
+            "清单事件跑到了它自己的工具结果前面：{events:?}"
+        );
     }
 
     #[test]

@@ -15,7 +15,8 @@
 //! deserializes a few MB of definitions, so it must never run per frame.
 //! Unknown languages degrade to plain text — a tool card must always render.
 
-use std::sync::LazyLock;
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
 
 use ratatui::text::{Line, Span};
 use syntect::parsing::ScopeStack;
@@ -222,6 +223,96 @@ impl ScopeMatchers {
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static MATCHERS: LazyLock<ScopeMatchers> = LazyLock::new(ScopeMatchers::new);
 
+// ---------------------------------------------------------------------------
+// 预热：把「编译一条语法」的百毫秒开销挡在渲染帧之外
+// ---------------------------------------------------------------------------
+//
+// syntect 的语法正则是**首次用到时才编译**的（实测：bash 178ms、rust 112ms、
+// python 131ms，之后每次 0.3~0.6ms）。这个开销如果落在渲染帧里，resume 时
+// 第一张带代码的卡片就会把整屏卡住——首帧卡顿的成因就在这里，与哪一类
+// 卡片无关。
+//
+// 所以：**谁的就绪状态谁记**。`highlight()` 先问一声 ready，没就绪就先出
+// 无色文本（一帧都不等），同时在后台线程里编译；编译完置位，下一帧走正常的
+// 延迟补色路径把颜色刷上去。预热只针对**转录里真实出现过的语言**，整个库
+// 里没用到的语法永远不编译。
+
+/// 已经编译好正则的语法（按 `SyntaxSet` 里的名字）。
+static READY: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// 正在后台编译的（避免同一个语言排两次队）。
+static WARMING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn syntax_name(lang: &str) -> Option<String> {
+    find_syntax(lang).map(|s| s.name.clone())
+}
+
+/// 这条语言现在就敢用吗？没就绪的返回 `false`，调用方出无色。
+fn is_ready(lang: &str) -> bool {
+    let Some(name) = syntax_name(lang) else {
+        // 找不到这条语法：本来也没得编译，当就绪处理（走 plain 兜底）。
+        return true;
+    };
+    READY.lock().expect("预热表锁中毒").contains(&name)
+}
+
+/// 把一条语法交给后台线程编译。同一条语言只会有一个任务在跑。
+///
+/// 编译方式就是**真喂一行代码**：syntect 的正则是在第一次 parse 该语法时
+/// 才构造的，没有"只编译不解析"的公开入口，所以这里用一个最小的样本来触发
+/// 它。目标不是产出，是把那次构造挪出渲染帧。
+pub fn warm(lang: &str) {
+    let Some(name) = syntax_name(lang) else { return };
+    {
+        let ready = READY.lock().expect("预热表锁中毒");
+        if ready.contains(&name) {
+            return;
+        }
+    }
+    {
+        let mut warming = WARMING.lock().expect("预热表锁中毒");
+        if !warming.insert(name.clone()) {
+            return; // 已经在编译了
+        }
+    }
+    std::thread::spawn(move || {
+        // 真正触发编译：一条最小样本过一遍 parse。
+        if let Some(syn) = SYNTAXES.syntaxes().iter().find(|s| s.name == name) {
+            let mut st = ParseState::new(syn);
+            let _ = st.parse_line("x\n", &SYNTAXES);
+        }
+        READY.lock().expect("预热表锁中毒").insert(name.clone());
+        WARMING.lock().expect("预热表锁中毒").remove(&name);
+        crate::tui::theme::request_repaint();
+    });
+}
+
+/// 按给定顺序预热（前面的优先）。转录里靠下的语言离视线更近，调用方据此排序。
+pub fn warm_in_order<'a>(langs: impl IntoIterator<Item = &'a str>) {
+    for l in langs {
+        warm(l);
+    }
+}
+
+/// 这条语言就绪了没（诊断/测试用）。
+#[doc(hidden)]
+pub fn ready(lang: &str) -> bool {
+    is_ready(lang)
+}
+
+/// 预热并**等到真的就绪**。给"断言颜色"的测试用。
+///
+/// 生产路径从不等待：没就绪就出无色、后台编译、下一帧补色。测试要断言
+/// "上色对不对"，就必须先让它就绪。
+#[doc(hidden)]
+pub fn warm_and_wait_for_test(lang: &str) {
+    warm(lang);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !is_ready(lang) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// Map a scope stack to a category, walking innermost → outermost.
 fn scope_to_category(stack: &ScopeStack) -> usize {
     for s in stack.as_slice().iter().rev() {
@@ -311,6 +402,12 @@ pub fn highlight(code: &str, language: Option<&str>, t: &HistoryTheme) -> Vec<Li
     let Some(lang) = language else {
         return plain(code);
     };
+    // 没预热过就先出无色，并把编译排到后台——绝不在这帧里等那几百毫秒。
+    // 编译完会敲一次重绘，下一帧这里就返回带色的。
+    if !is_ready(lang) {
+        warm(lang);
+        return plain(code);
+    }
     let Some(syntax) = find_syntax(lang) else {
         return plain(code);
     };
@@ -579,10 +676,68 @@ pub fn language_for_tool(tool: &str) -> Option<&'static str> {
     }
 }
 
+/// 围栏里写的语言标记 → 我们要喂给 `highlight` 的那个名字。
+///
+/// 别名表（`LANG_ALIASES`）认得的才返回 `Some`；认不得的**返回 `None`**，
+/// 预热侧据此跳过——预编译一条根本不存在的语法是白花时间。
+///
+/// 返回值是**别名本身**（不是 syntect 的语法名）：`highlight()` 的参数就是
+/// 围栏里那个词，用它查同一条语法，预热与使用才对得上。
+pub fn language_for_alias(alias: &str) -> Option<&'static str> {
+    let a = alias.trim();
+    if a.is_empty() {
+        return None;
+    }
+    // 只有别名表里写死的那些（以及 syntect 直接认得 token）才值得预热。
+    // 返回 `&'static str` 需要一个静态名字，所以这里从别名表里回一个规范名。
+    LANG_ALIASES
+        .iter()
+        .find(|(aliases, _)| aliases.iter().any(|x| x.eq_ignore_ascii_case(a)))
+        .map(|(aliases, _)| aliases[0])
+}
+
+/// 正文里 ``` 围栏声明的语言，按出现顺序、去重。
+///
+/// 只认「行首（可有空格）+ 三个反引号 + 语言名」这一种形状。这是预热用的
+/// **提示**，不是解析器：认漏了大不了那一刻现编，认错了也只是白编一条。
+pub fn fenced_languages(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim_start();
+        let Some(rest) = t.strip_prefix("```") else {
+            continue;
+        };
+        // ``` 后面紧跟语言名；带别的字符（比如 ```rust,no_run）取到第一个
+        // 非标识符为止。
+        let lang: String = rest
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '-' || *c == '#')
+            .collect();
+        if !lang.is_empty() && !out.iter().any(|x| x == &lang) {
+            out.push(lang);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::style::Color;
+
+    /// 等一条语法预热完（测试要断言颜色，就必须先让它就绪）。
+    ///
+    /// 生产路径**不等**：没就绪就出无色、后台编译，下一帧补色。这里同步等，
+    /// 是因为测试断言的对象是"上色对不对"，不是"首帧快不快"。
+    fn warmed(lang: &str) {
+        warm(lang);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready(lang) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(ready(lang), "{lang} 预热超时");
+    }
 
     #[test]
     fn unknown_language_renders_plain() {
@@ -590,6 +745,60 @@ mod tests {
         let lines = highlight("just text\n", Some("no-such-lang-xyz"), &t);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].spans.iter().all(|s| s.style.fg.is_none()));
+    }
+
+    /// 围栏语言扫描：只认行首 ``` + 语言名，去重，认不出的丢掉。
+    #[test]
+    fn fenced_languages_picks_up_markers() {
+        let text = "前言\n```rust\nfn a(){}\n```\n\n```python\nx=1\n```\n```rust\n\n```\n";
+        assert_eq!(fenced_languages(text), vec!["rust", "python"]);
+        // 没有语言标记的围栏不算。
+        assert!(fenced_languages("```\ncode\n```\n").is_empty());
+        // 带逗号参数（GitHub 风格 info string）取第一段。
+        assert_eq!(fenced_languages("```bash,no_run\nls\n```\n"), vec!["bash"]);
+    }
+
+    /// 没预热过的语言：这一帧出无色，**并立即排一个后台编译**。
+    ///
+    /// 这条是把首帧卡顿钉死的关键：`highlight` 在没就绪时绝不允许同步编译。
+    #[test]
+    fn an_unwarmed_language_paints_plain_and_schedules_warming() {
+        let t = HistoryTheme::resolve();
+        // 挑一条本项目肯定没预热的语法，避免测试间互相影响。
+        let lang = "haskell";
+        assert!(!ready(lang), "前置条件：这条语法此刻不该是就绪的");
+        let lines = highlight("main = putStrLn \"hi\"\n", Some(lang), &t);
+        assert!(lines[0].spans.iter().all(|s| s.style.fg.is_none()), "没预热就先出无色");
+
+        // 等后台编译完：颜色必须补上，而且不能再是"先出无色"。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready(lang) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(ready(lang), "后台预热必须在合理时间内完成");
+
+        // 就绪之后这一帧**同步**出彩色（不再返回 plain）。
+        let colored = highlight("main = putStrLn \"hi\"\n", Some(lang), &t);
+        assert!(
+            colored[0].spans.iter().any(|s| s.style.fg.is_some()),
+            "预热完之后必须出彩色：{:?}",
+            colored[0].spans
+        );
+    }
+
+    /// 预热的语言名与围栏别名对得上（否则预热和实际使用是两套名字，
+    /// 编了也用不上）。
+    #[test]
+    fn alias_resolution_matches_what_highlight_uses() {
+        for (alias, _) in [("rs", "rs"), ("bash", "sh"), ("py", "python")] {
+            let got = language_for_alias(alias).expect("别名表必须认");
+            // 用别名喂 highlight，和用这个规范名喂，得到的语法必须同一条。
+            let a = find_syntax(alias).map(|s| s.name.clone());
+            let b = find_syntax(got).map(|s| s.name.clone());
+            assert_eq!(a, b, "别名 {alias} 与规范名 {got} 解析到不同语法");
+        }
+        assert!(language_for_alias("").is_none());
+        assert!(language_for_alias("no-such-lang-xyz").is_none());
     }
 
     #[test]
@@ -602,6 +811,7 @@ mod tests {
     #[test]
     fn rust_keywords_and_strings_get_theme_colors() {
         let t = HistoryTheme::resolve();
+        warmed("rust");
         let lines = highlight("let s = \"hi\";\n", Some("rust"), &t);
         let all: Vec<Color> = lines
             .iter()
@@ -620,6 +830,7 @@ mod tests {
     #[test]
     fn comments_classify_as_comment() {
         let t = HistoryTheme::resolve();
+        warmed("rust");
         let lines = highlight("// hello\n", Some("rust"), &t);
         let fgs: Vec<Color> = lines
             .iter()
@@ -632,6 +843,7 @@ mod tests {
     fn diff_view_maps_inserted_and_deleted() {
         // diff text through syntect: + lines are markup.inserted.diff.
         let t = HistoryTheme::resolve();
+        warmed("diff");
         let lines = highlight("+ added line\n- removed line\n", Some("diff"), &t);
         let fgs: Vec<Color> = lines
             .iter()

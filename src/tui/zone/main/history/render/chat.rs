@@ -23,6 +23,8 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use super::cards::tool_card;
+use super::glyphs;
+use super::theme::Token;
 use super::tools::ToolOutcome;
 use super::system::system_block;
 use super::{BlockKind, Streaming, render_block};
@@ -46,8 +48,6 @@ fn push_block(
     }
     deferred.extend(d);
 }
-#[cfg(test)]
-use super::theme::Token;
 
 // Render entries into ratatui lines.
 //
@@ -168,6 +168,31 @@ pub(crate) fn single_node(
             first,
             ..
         } => {
+            // `todo` 不走卡片渠道：它的**清单本身就是展示**，贴在历史区
+            // 底部那块（`render::todo`）。这里只留**一行**标记，告诉读者
+            // "清单被动过一次"，正文里有据可查。
+            if name == "todo" {
+                let mut out = Vec::new();
+                let mut deferred = Vec::new();
+                // 调工具前那半句照常当正文（和别的工具一致）。
+                if *first && !text.trim().is_empty() {
+                    push_block(
+                        &mut out,
+                        &mut deferred,
+                        render_block(
+                            BlockKind::Assistant,
+                            text,
+                            Streaming::Final,
+                            width,
+                            t,
+                            defer,
+                        ),
+                    );
+                    out.push(super::blocks::block_gap());
+                }
+                out.extend(todo_marker(name, group, t));
+                return (out, deferred);
+            }
             // 组里只有调用 = 工具还在跑；成组的两条 = 调用 + 结果，一张卡。
             // 结果那一半带上工具交的结构化载荷与耗时 —— 卡片画什么由数据决定。
             let paired = group.get(1).and_then(|e| match e {
@@ -211,22 +236,43 @@ pub(crate) fn single_node(
             details,
             duration_ms,
             ..
-        } => (
-            tool_card(
-                name,
-                "",
-                Some(ToolOutcome {
-                    text: result.as_str(),
-                    ok: *ok,
-                    details: details.as_ref(),
-                    duration_ms: *duration_ms,
-                }),
-                t,
-                tools_expanded,
-                width,
-            ),
-            Vec::new(),
-        ),
+        } => {
+            // 同上：`todo` 的结果不进转录（清单位于底部那块）。孤立的
+            // 结果（调用那一半没进这个分组）也只有标记行。
+            if name == "todo" {
+                return (
+                    todo_marker(
+                        name,
+                        &[Entry::ToolResult {
+                            call_id: String::new(),
+                            name: name.clone(),
+                            ok: *ok,
+                            result: result.clone(),
+                            details: details.clone(),
+                            duration_ms: *duration_ms,
+                        }],
+                        t,
+                    ),
+                    Vec::new(),
+                );
+            }
+            (
+                tool_card(
+                    name,
+                    "",
+                    Some(ToolOutcome {
+                        text: result.as_str(),
+                        ok: *ok,
+                        details: details.as_ref(),
+                        duration_ms: *duration_ms,
+                    }),
+                    t,
+                    tools_expanded,
+                    width,
+                ),
+                Vec::new(),
+            )
+        }
         Entry::Error { text } => {
             let err = crate::tui::theme::theme().fg_style(crate::tui::theme::ColorToken::Error);
             let mut out = Vec::new();
@@ -254,6 +300,41 @@ pub(crate) fn single_node(
         ),
     }
 }
+
+/// `todo` 在转录里的**唯一**留痕：一行 `[*] Todo`。
+///
+/// 清单本体贴在历史区底部（`render::todo`），转录里不需要再复述一遍树。
+/// 但读者需要知道"模型动过清单"——否则正文里就会出现一段没有来由的状态
+/// 跳变。所以留一行：调用了就算数，成败由字形与颜色说。
+///
+/// - 成功 / 还没结果 → `[*] Todo`，accent（和"正在跑的工具"同一个色）；
+/// - 失败 → `[!!] Todo` **加错误正文**，红。失败必须看得见：清单没改动，
+///   而模型看到的理由是给模型的，人也要能读到。
+///
+/// `group` 是这个渲染分组：成组的 `[请求, 结果]` 给出成败，孤立请求 = 还没
+/// 结果。
+fn todo_marker(name: &str, group: &[Entry], t: &HistoryTheme) -> Vec<Line<'static>> {
+    debug_assert_eq!(name, "todo");
+    let outcome = group.iter().find_map(|e| match e {
+        Entry::ToolResult { ok, result, .. } => Some((*ok, result.clone())),
+        _ => None,
+    });
+    let (glyph, tok) = match &outcome {
+        None => (glyphs::PENDING, Token::ToolEdgePending),
+        Some((true, _)) => (glyphs::PENDING, Token::ToolEdgePending),
+        Some((false, _)) => (glyphs::ERR, Token::Err),
+    };
+    let mut out = vec![Line::from(vec![t.fg(glyph, tok), t.fg(" Todo", tok)])];
+    if let Some((false, why)) = outcome {
+        for part in why.split('\n').filter(|s| !s.trim().is_empty()) {
+            out.push(Line::from(t.fg(format!("  {part}"), Token::Err)));
+        }
+    }
+    // 不加间隔行：分组之间那条空行由渲染层统一给（`render_at`），
+    // 这里再补一条就是两条，屏幕上会出现双倍空行。
+    out
+}
+
 
 /// 流式尾巴的行：图里最下面那一块，**还没进转录**。
 ///
@@ -1198,5 +1279,92 @@ mod tests {
         assert_eq!(v.get("duration_ms").and_then(|d| d.as_u64()), Some(12));
         let back = Entry::from_payload("tool_result", &payload).unwrap();
         assert_eq!(back, e, "details 必须原样往返");
+    }
+
+    /// `todo` 在转录里**只留一行** `[*] Todo`，不画卡片。
+    ///
+    /// 清单本体贴在历史区底部；转录里留一行是为了让读者知道"模型动过清单"。
+    /// 卡片则不要 —— 同一个事实说两遍，而且卡会随对话滚走。
+    #[test]
+    fn the_todo_tool_leaves_one_marker_line_and_no_card() {
+        let p = HistoryTheme::resolve();
+        let call = Entry::ToolRequest {
+            call_id: "c1".into(),
+            name: "todo".into(),
+            args: r#"{"op":"init","list":[{"phase":"甲","items":["a"]}]}"#.into(),
+            intent: "定清单".into(),
+            text: String::new(),
+            first: true,
+        };
+        let result = Entry::ToolResult {
+            call_id: "c1".into(),
+            name: "todo".into(),
+            ok: true,
+            result: "清单已更新".into(),
+            details: Some(serde_json::json!({
+                "kind": "todo", "op": "init", "phases": [], "touched": ["甲"]
+            })),
+            duration_ms: 3,
+        };
+        let (lines, _) = single_node(&[call, result], &p, false, false, 40, false);
+        let text = text_of(&lines);
+        // 恰好一行：间隔行由渲染层统一给，这里加一条就会变成双倍空行。
+        assert_eq!(lines.len(), 1, "只该有标记行，不该自己加间隔：{text:?}");
+        assert!(text.contains("[*] Todo"), "要有标记行：{text:?}");
+        // 不许有卡片边框 —— 那是 `tool_card` 的痕迹。
+        assert!(!text.contains("+-"), "不该画卡片：{text:?}");
+        assert!(!text.contains("(in)"), "不该画卡片：{text:?}");
+        // accent 上色（和"正在跑的工具"同一个色）。
+        let colored = lines[0]
+            .spans
+            .iter()
+            .any(|s| s.content.contains("Todo") && s.style.fg == Some(p.get(Token::ToolEdgePending)));
+        assert!(colored, "标记行要用 accent：{:?}", lines[0]);
+
+        // 反证：别的工具照旧有卡。
+        let other = Entry::ToolResult {
+            call_id: "c2".into(),
+            name: "bash".into(),
+            ok: true,
+            result: "hi".into(),
+            details: None,
+            duration_ms: 1,
+        };
+        let (card, _) = single_node(&[other], &p, false, false, 40, false);
+        assert!(text_of(&card).contains("+-"), "其他工具的卡必须还在");
+    }
+
+    /// 失败必须**看得见**：`[!!] Todo` 加错误正文，红。
+    ///
+    /// 失败时清单一动不动（整批丢弃），所以屏幕上唯一能说明"出事了"的就是
+    /// 这一行。模型那边有 `Err` 的文本，人这边也得有。
+    #[test]
+    fn a_failed_todo_shows_the_error() {
+        let p = HistoryTheme::resolve();
+        let call = Entry::ToolRequest {
+            call_id: "c1".into(),
+            name: "todo".into(),
+            args: r#"{"op":"done","task":"不存在的事"}"#.into(),
+            intent: String::new(),
+            text: String::new(),
+            first: true,
+        };
+        let result = Entry::ToolResult {
+            call_id: "c1".into(),
+            name: "todo".into(),
+            ok: false,
+            result: "done 没做成，清单未改动：\n- 找不到这条任务".into(),
+            details: None,
+            duration_ms: 2,
+        };
+        let (lines, _) = single_node(&[call, result], &p, false, false, 40, false);
+        let text = text_of(&lines);
+        assert!(text.contains("[!!] Todo"), "失败要换字形：{text:?}");
+        assert!(text.contains("找不到这条任务"), "失败要说理由：{text:?}");
+        let err = p.get(Token::Err);
+        assert!(
+            lines.iter().any(|l| l.spans.iter().any(|s| s.style.fg == Some(err))),
+            "失败要用红色：{lines:?}"
+        );
     }
 }

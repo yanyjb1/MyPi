@@ -381,6 +381,9 @@ mod tests {
     /// 与文本，所以补色可以在任何一帧插进来，位置一个都不动。
     #[test]
     fn deferring_then_coloring_equals_coloring_immediately() {
+        // 这些用例断言的是"上色"本身，所以语言必须已预热——没预热的语言
+        // 现在按契约先出无色（首帧不卡），那是另一条路径，不是这里要测的。
+        crate::tui::zone::main::history::render::highlight::warm_and_wait_for_test("rust");
         let md = "前言一段，带 `行内代码`。\n\n```rust\nlet s = \"hi\";\nfn main() {}\n```\n\n后记。\n";
         let es = vec![Entry::Assistant {
             content: md.into(),
@@ -412,6 +415,7 @@ mod tests {
     /// 正确续传，最终每一格的颜色都要和一次性补完一模一样。
     #[test]
     fn incremental_coloring_matches_one_shot() {
+        crate::tui::zone::main::history::render::highlight::warm_and_wait_for_test("rust");
         // 内容必须**跨行带状态**，否则这条测试是空的：能"不续传也对"的
         // 代码测不出续传有没有坏。这里用三样东西制造状态：
         //   1. 一个跨 20 行的块注释 —— 里面的行全被染成注释色；

@@ -383,7 +383,7 @@ pub fn summary_text(phases: &[TodoPhase]) -> String {
 }
 
 /// The `details` payload the card renders from.
-pub fn details(phases: &[TodoPhase], op: TodoOp) -> serde_json::Value {
+pub fn details(phases: &[TodoPhase], op: TodoOp, touched: &[String]) -> serde_json::Value {
     let (done, total) = todo_counts(phases);
     serde_json::json!({
         "kind": "todo",
@@ -391,7 +391,58 @@ pub fn details(phases: &[TodoPhase], op: TodoOp) -> serde_json::Value {
         "phases": phases,
         "done": done,
         "total": total,
+        "touched": touched,
     })
+}
+
+/// 这次调用**碰过**哪些阶段（按名字）。
+///
+/// 「碰过」照 omp 的 `computeTouchedPhases` 来：
+/// - `init` 换掉整张表 → 全部阶段都算碰过；
+/// - 任何**还有 `in_progress`** 的阶段 —— 收尾一个任务会顺手把下一个推进
+///   `in_progress`，注意力就在那；
+/// - 这次从「未收尾」变成「已收尾」的任务所在的阶段也算 —— 乱序收工时，
+///   你刚划掉的那条也可能不在你正看的阶段里。
+///
+/// 返回空集 = 没有可用信号，调用方按「全展开」处理（等价于不折叠）。
+pub fn touched_phases(before: &[TodoPhase], after: &[TodoPhase], op: TodoOp) -> Vec<String> {
+    let mut touched: Vec<String> = Vec::new();
+    let push = |touched: &mut Vec<String>, name: &str| {
+        if !touched.iter().any(|x| x == name) {
+            touched.push(name.to_string());
+        }
+    };
+
+    if op == TodoOp::Init {
+        for p in after {
+            push(&mut touched, &p.name);
+        }
+        return touched;
+    }
+    // 还有在做的任务 = 注意力所在。
+    for p in after {
+        if p.tasks.iter().any(|t| t.status == TodoStatus::InProgress) {
+            push(&mut touched, &p.name);
+        }
+    }
+    // 这次刚收尾掉的（任务按内容对齐回它的阶段）。
+    for aft in after {
+        for t in &aft.tasks {
+            if !t.status.is_closed() {
+                continue;
+            }
+            let was_open = before
+                .iter()
+                .flat_map(|p| p.tasks.iter())
+                .find(|b| b.content == t.content)
+                .map(|b| !b.status.is_closed())
+                .unwrap_or(true);
+            if was_open {
+                push(&mut touched, &aft.name);
+            }
+        }
+    }
+    touched
 }
 
 #[cfg(test)]
@@ -540,5 +591,48 @@ mod tests {
         for needle in ["阶段一", "阶段二", "甲", "乙", "丙", "[x]", "[>]", "[ ]", "1/3 done"] {
             assert!(text.contains(needle), "缺 {needle}：\n{text}");
         }
+    }
+
+    /// `init` 换掉整张表：所有阶段都算碰过（计划全新）。
+    #[test]
+    fn init_touches_every_phase() {
+        let after = phases_of(&[("甲", &["a"]), ("乙", &["b"]), ("丙", &["c"])]);
+        let t = touched_phases(&[], &after, TodoOp::Init);
+        assert_eq!(t, vec!["甲", "乙", "丙"]);
+    }
+
+    /// 还有 `in_progress` 的阶段被碰到——注意力在那。
+    #[test]
+    fn the_in_progress_phase_is_touched() {
+        let mut after = phases_of(&[("甲", &["a"]), ("乙", &["b"])]);
+        after[1].tasks[0].status = TodoStatus::InProgress;
+        let t = touched_phases(&[], &after, TodoOp::Start);
+        assert_eq!(t, vec!["乙"]);
+    }
+
+    /// 乱序收工：划掉的是第三个阶段的活，那个阶段也得算碰过——
+    /// 否则你刚做完的那条会跟着它的阶段一起折起来，看不见了。
+    #[test]
+    fn finishing_out_of_order_touches_that_phase_too() {
+        let before = phases_of(&[("甲", &["a1", "a2"]), ("乙", &["b1"]), ("丙", &["c1"])]);
+        let mut after = before.clone();
+        // 第一个阶段还有活在做，注意力在甲。
+        after[0].tasks[0].status = TodoStatus::InProgress;
+        // 但同时把丙的活做完了——那个阶段也碰过。
+        after[2].tasks[0].status = TodoStatus::Done;
+        let t = touched_phases(&before, &after, TodoOp::Done);
+        assert!(t.contains(&"甲".to_string()), "注意力所在：{t:?}");
+        assert!(t.contains(&"丙".to_string()), "刚收尾的：{t:?}");
+        assert!(!t.contains(&"乙".to_string()), "乙没被动过：{t:?}");
+    }
+
+    /// 早就做完的任务不该每次都被当成"刚收尾"——否则它的阶段永远展开。
+    #[test]
+    fn an_already_closed_task_does_not_re_touch_its_phase() {
+        let mut before = phases_of(&[("甲", &["a1", "a2"])]);
+        before[0].tasks[0].status = TodoStatus::Done;
+        let after = before.clone(); // 没有任何变化
+        let t = touched_phases(&before, &after, TodoOp::View);
+        assert!(t.is_empty(), "没变化就不该碰任何阶段：{t:?}");
     }
 }

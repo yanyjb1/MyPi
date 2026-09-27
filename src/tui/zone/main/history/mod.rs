@@ -191,6 +191,14 @@ pub struct HistoryZone {
     /// 清单是**状态**不是叙述，所以它不进转录流，而是贴在历史区底部
     /// （见 [`HistoryZone::render_rows`]）——聊得再长也一眼看得见。
     pub todo: Vec<TodoPhase>,
+    /// 最近一次 `todo` 调用**碰过**的阶段名（`details.touched` 的副本）。
+    ///
+    /// 折叠决策靠它：没被碰过的阶段折成一行。它是**展示**状态（来自最新一次
+    /// 工具调用的 details），不是会话状态——所以不落盘、不进 `Entry::Todo`，
+    /// 换会话/整体替换时清空。空 = 没有信号 = 全展开。
+    pub todo_touched: Vec<String>,
+    /// 折叠策略（`config.yaml` → `tui.todoFold`）。启动时下发一次。
+    pub todo_fold: crate::server::ai::config::TodoFold,
 
     /// 已落盘的窗口：**连续**的一段，按 `block_id` 升序。
     ///
@@ -241,6 +249,8 @@ impl Default for HistoryZone {
             want_newer: None,
             pending: Pending::Rows(0),
             todo: Vec::new(),
+            todo_touched: Vec::new(),
+            todo_fold: crate::server::ai::config::TodoFold::default(),
             window: VecDeque::new(),
             live_blocks: Vec::new(),
             live_entries: Vec::new(),
@@ -298,6 +308,12 @@ impl HistoryZone {
         self.cache.set_budget(self.render_margin);
     }
 
+    /// 折叠策略（`config.yaml` → `tui.todoFold`）。启动时下发一次；
+    /// 之后是常量（配置改动要重启才生效，和窗口那两个旋钮一样）。
+    pub fn set_todo_fold(&mut self, fold: crate::server::ai::config::TodoFold) {
+        self.todo_fold = fold;
+    }
+
     pub fn preload(&self) -> usize {
         self.preload
     }
@@ -343,6 +359,9 @@ impl HistoryZone {
         self.rebuild_live();
         self.tail_id = self.window.iter().map(|b| b.key).max().unwrap_or(0);
         self.todo = self.current_todo();
+        self.todo_touched = self.current_todo_touched();
+        // 换了会话 = 换了一批语言：按「离视线近优先」预热，别等到渲染帧里现编。
+        self.warm_languages();
         self.generation = self.generation.wrapping_add(1);
         // 换了会话/分支：终止符、积压的滚动全是上一条转录的事实。
         self.no_more_above = false;
@@ -374,6 +393,8 @@ impl HistoryZone {
         self.live_entries = live;
         self.rebuild_live();
         self.todo = self.current_todo();
+        self.todo_touched = self.current_todo_touched();
+        self.warm_languages();
     }
 
     /// **更老的**块，前置（惰性历史）。空的一段 = 上面没有了。
@@ -424,6 +445,7 @@ impl HistoryZone {
             _ => None,
         }) {
             self.todo = phases;
+            self.todo_touched = self.current_todo_touched();
         }
     }
 
@@ -599,6 +621,79 @@ impl HistoryZone {
             .unwrap_or_default()
     }
 
+    /// 最近一次 `todo` 调用碰过的阶段名。
+    ///
+    /// 从后往前找：**最新**的 `Entry::Todo` 是当前清单，它前面最近的那条
+    /// `todo` `ToolResult` 的 `details.touched` 就是「这次碰了谁」。两者配对
+    /// 是工具结果的落盘顺序决定的（结果先落，状态条目紧跟）。
+    ///
+    /// 找不到（老转录、非本机产生的帧）= 空 = 全展开。
+    fn current_todo_touched(&self) -> Vec<String> {
+        self.window
+            .iter()
+            .chain(self.live_blocks.iter())
+            .rev()
+            .flat_map(|b| b.entries.iter())
+            .find_map(|e| match e {
+                Entry::ToolResult {
+                    name, details, ok, ..
+                } if name == "todo" && *ok => details
+                    .as_ref()
+                    .and_then(|d| d.get("touched"))
+                    .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// 按「离视线近的优先」预热转录里出现过的语法。
+    ///
+    /// 预热一次要 100~180 ms（syntect 首次编译该语法的正则），扔在渲染帧里
+    /// 就是首帧卡顿。所以提前做，而且要**聪明地做**：
+    ///
+    /// - 只预热**这份转录里真实出现过**的语言。整个语法库 75 种，用不到的一
+    ///   条都不编译——那是纯粹的浪费。
+    /// - 顺序按**从下往上**（`window` 的尾巴在前）。读者停在底部，最后几块
+    ///   就是下一帧要画的，先编它们。
+    /// - 语言去重，同一条只排一次队。
+    ///
+    /// 判断语言只花「看条目里的名字」，不解析 payload——扫一遍是微秒级。
+    pub fn warm_languages(&self) {
+        use crate::tui::zone::main::history::render::highlight as hl;
+        let mut seen: Vec<&'static str> = Vec::new();
+        let push = |l: Option<&'static str>, seen: &mut Vec<&'static str>| {
+            if let Some(l) = l
+                && !seen.contains(&l)
+            {
+                seen.push(l);
+            }
+        };
+        // 从下往上：活尾巴最该先编（它一定在视口附近），然后是已落盘的窗口。
+        for b in self.live_blocks.iter().rev().chain(self.window.iter().rev()) {
+            for e in b.entries.iter().rev() {
+                match e {
+                    Entry::ToolRequest { name, args, .. } => {
+                        push(hl::language_for_tool(name), &mut seen);
+                        // edit 类工具带 path，按扩展名定语言。
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(args)
+                            && let Some(p) = v.get("path").and_then(|p| p.as_str())
+                        {
+                            push(hl::language_for_path(p), &mut seen);
+                        }
+                    }
+                    Entry::Assistant { content, .. } | Entry::User { content } => {
+                        // 正文里的 ``` 围栏：只看语言标记，不解析内容。
+                        for lang in hl::fenced_languages(content) {
+                            push(hl::language_for_alias(&lang), &mut seen);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        hl::warm_in_order(seen);
+    }
+
     /// 读者是不是就停在尾巴附近（决定流式那半句要不要量）。
     fn near_tail(&self) -> bool {
         match self.anchor {
@@ -633,7 +728,14 @@ impl HistoryZone {
         // 任务清单贴在历史区**底部**：它占的是本子区自己的行高，聊天窗口
         // 相应变矮（贴底的预留行数——和流式尾巴同一个道理）。上限半个
         // 视口：清单不该把对话挤没。
-        let pin = render::todo::rows(&self.todo, width, t, usize::from(self.rows.max(1)) / 2);
+        let pin = render::todo::rows(
+            &self.todo,
+            &self.todo_touched,
+            self.todo_fold,
+            width,
+            t,
+            usize::from(self.rows.max(1)) / 2,
+        );
         let viewport = usize::from(self.rows.max(1)).saturating_sub(pin.len()).max(1);
         self.last_viewport = viewport;
 
