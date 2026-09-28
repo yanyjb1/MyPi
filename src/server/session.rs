@@ -332,7 +332,7 @@ impl SessionState {
                     .and_then(|(st, sid)| st.append(sid, std::slice::from_ref(&marker)).err());
                 if let Some(e) = write_err {
                     self.push_live(Entry::Error {
-                        text: format!("命名写入失败：{e:#}"),
+                        text: format!("failed to persist the name: {e:#}"),
                     });
                 }
                 if let Some((st, sid)) = self.persistence() {
@@ -450,7 +450,7 @@ impl SessionState {
                     self.blocks_clean = self.blocks_clean && clean;
                 }
                 Err(e) => {
-                    let msg = format!("落盘失败：{e:#}");
+                    let msg = format!("failed to persist: {e:#}");
                     self.push_live(Entry::Error { text: msg });
                 }
             }
@@ -574,25 +574,25 @@ impl SessionState {
         let store = self
             .store
             .as_ref()
-            .ok_or_else(|| "数据库不可用，无法复现".to_string())?;
+            .ok_or_else(|| "database unavailable; cannot reproduce".to_string())?;
         let row = store
             .round(session_id, round_seq)
-            .map_err(|e| format!("读请求头失败：{e:#}"))?
-            .ok_or_else(|| format!("会话 {session_id} 没有第 {round_seq} 回合的请求头"))?;
+            .map_err(|e| format!("failed to read the request headers: {e:#}"))?
+            .ok_or_else(|| format!("session {session_id} has no request headers for round {round_seq}"))?;
         // The branch as of *that* turn's tip: replaying after a fork must
         // rebuild the conversation that was live then, not today's branch.
         let (entries, unreadable) = store
             .load_branch(session_id, row.last_block)
-            .map_err(|e| format!("读条目失败：{e:#}"))?;
+            .map_err(|e| format!("failed to read entries: {e:#}"))?;
         if !unreadable.is_empty() {
             return Err(format!(
-                "有 {} 块读不出来（block {:?}），无法逐字节复现",
+                "{} block(s) unreadable ({:?}); cannot reproduce the request byte for byte",
                 unreadable.len(),
                 unreadable
             ));
         }
         let tools: serde_json::Value = serde_json::from_str(&row.tools_json)
-            .map_err(|e| format!("工具定义读不回来：{e}"))?;
+            .map_err(|e| format!("failed to read back the tool definitions: {e}"))?;
         let ctx = crate::server::turn::entries_to_context(&row.system, &entries);
         // The per-request ceiling is derived, not stored: the loop derives it
         // the same way from the same rebuilt context, so the value matches.
@@ -608,7 +608,7 @@ impl SessionState {
         let user_compat: Option<crate::server::ai::compat::Compat> = match row.compat_json.as_deref() {
             None => None,
             Some(json) => Some(serde_json::from_str(json).map_err(|e| {
-                format!("第 {} 回合的 compat 块读不回来（{e}），无法逐字节复现", row.seq)
+                format!("round {} compat block unreadable ({e}); cannot reproduce the request byte for byte", row.seq)
             })?),
         };
         let compat = crate::server::ai::compat::resolve(&row.base_url, &row.model, user_compat.as_ref());
@@ -751,7 +751,7 @@ impl SessionState {
             }
             Err(e) => {
                 self.push_live(Entry::Error {
-                    text: format!("会话创建失败：{e:#}"),
+                    text: format!("failed to create the session: {e:#}"),
                 });
                 None
             }
@@ -849,6 +849,9 @@ pub struct Session {
     // Compaction knobs (config.yaml → `compact:`), needed by `/compact` — the
     // one place a *command* starts background work.
     compact: crate::server::ai::config::CompactConfig,
+    // The active profile's own compaction instruction (`profiles/<name>/compact.md`),
+    // read at each compaction. `None` = the profile does not override one.
+    compact_instruction: Option<std::path::PathBuf>,
     // What session-scoped commands may reach outside the session (a model
     // resolver, a profile root, the config file). Empty = the commands say
     // "not wired" instead of pretending (see `run_command`).
@@ -938,6 +941,7 @@ impl Session {
             roster_source: None,
             tools,
             compact: crate::server::ai::config::CompactConfig::default(),
+            compact_instruction: None,
             commands: crate::server::commands::CommandEnv::default(),
             browser,
             artifact_db: db_path,
@@ -949,7 +953,11 @@ impl Session {
         (s, rx)
     }
 
-    /// `/compact [focus]`: run context compaction on a background thread.
+    /// `/compact [<n>[k]] [focus]`: run context compaction on a background
+    /// thread.
+    ///
+    /// `retention` is the parsed argument (see [`crate::server::compaction::parse_retention`]);
+    /// `None` means the config's `retain_tail`.
     ///
     /// The summarization round-trip is a blocking network call (the
     /// non-streaming `complete` — no per-character display needed), so it
@@ -964,7 +972,12 @@ impl Session {
     ///
     /// Returns false when a turn is already streaming (compaction shares
     /// the busy gate — two writers on one context is a torn read).
-    pub fn run_compact(&mut self, focus: &str, ccfg: &crate::server::ai::config::CompactConfig) -> bool {
+    pub fn run_compact(
+        &mut self,
+        retention: Option<crate::server::compaction::Retention>,
+        focus: &str,
+        ccfg: &crate::server::ai::config::CompactConfig,
+    ) -> bool {
         if self.state.busy() {
             return false;
         }
@@ -974,7 +987,7 @@ impl Session {
         let cwd_snapshot = self.state.transcript().to_vec();
         let system = chat
             .lock()
-            .expect("chat 锁中毒")
+            .expect("chat lock poisoned")
             .messages
             .first()
             .map(|m| match m {
@@ -983,6 +996,7 @@ impl Session {
             })
             .unwrap_or_default();
         let ccfg = ccfg.clone();
+        let profile_instruction = self.compact_instruction.clone();
         let focus = focus.to_string();
         let max_tokens = self.max_tokens;
         std::thread::spawn(move || {
@@ -994,6 +1008,8 @@ impl Session {
                 &system,
                 &cwd_snapshot,
                 &ccfg,
+                profile_instruction.as_deref(),
+                retention,
                 &focus,
                 &mut summarize,
             ) {
@@ -1034,7 +1050,7 @@ impl Session {
                     }
                     Err(e) => {
                         self.state.echo(crate::server::entry::Entry::Error {
-                            text: format!("数据库不可用：{e:#}"),
+                            text: format!("database unavailable: {e:#}"),
                         });
                     }
                 }
@@ -1060,7 +1076,7 @@ impl Session {
         match st.load_entries(sid) {
             Ok(all) => {
                 let system = {
-                    let chat = self.chat.lock().expect("chat 锁中毒");
+                    let chat = self.chat.lock().expect("chat lock poisoned");
                     match chat.messages.first() {
                         Some(crate::server::ai::types::Message::System { content }) => {
                             content.clone()
@@ -1068,13 +1084,13 @@ impl Session {
                         _ => crate::server::profile::BUILTIN_SYSTEM.to_string(),
                     }
                 };
-                *self.chat.lock().expect("chat 锁中毒") =
+                *self.chat.lock().expect("chat lock poisoned") =
                     crate::server::turn::entries_to_context(&system, &all);
                 self.state.replace_transcript(all);
             }
             Err(e) => {
                 self.state.echo(crate::server::entry::Entry::Error {
-                    text: format!("历史补齐失败：{e:#}"),
+                    text: format!("failed to backfill the history: {e:#}"),
                 });
             }
         }
@@ -1104,7 +1120,7 @@ impl Session {
                 cfg: crate::server::agent::loop_rs::LoopConfig::new(self.max_tokens),
                 stream_mode: self.stream_mode,
                 interrupt: self.interrupt.clone(),
-                cwd: self.cwd.read().expect("cwd 锁中毒").clone(),
+                cwd: self.cwd.read().expect("cwd lock poisoned").clone(),
                 workspace_root: self.workspace_root.clone(),
                 todo: self.state.current_todo(),
                 cwd_slot: self.cwd.clone(),
@@ -1152,13 +1168,13 @@ impl Session {
         match spec.name {
             "/name" => {
                 let name = args.trim();
-                anyhow::ensure!(!name.is_empty(), "用法：{} <名字>", spec.name);
+                anyhow::ensure!(!name.is_empty(), "usage: {} <name>", spec.name);
                 self.ingest(SessionEvent::NameMarker(name.to_string()));
-                self.notice(&format!("会话已命名为「{name}」"));
+                self.notice(&format!("session named {name:?}"));
             }
             "/cdp" | "/cd" => {
                 let raw = args.trim();
-                anyhow::ensure!(!raw.is_empty(), "用法：{} <目录>", spec.name);
+                anyhow::ensure!(!raw.is_empty(), "usage: {} <dir>", spec.name);
                 let path = self.resolve_dir(raw)?;
                 let previous = self.set_cwd(path.clone());
                 self.ingest(SessionEvent::SetCwd {
@@ -1171,19 +1187,21 @@ impl Session {
                 ));
             }
             "/compact" => {
-                let focus = args.trim().to_string();
+                // 参数是「保留多少」，其余是 focus。解析失败直接报错，不退回
+                // 默认值——用户敲了数字就是要那个数字。
+                let (retention, focus) = crate::server::compaction::parse_retention(args)?;
                 let ccfg = self.compact.clone();
-                let started = self.run_compact(&focus, &ccfg);
-                        anyhow::ensure!(started, "压缩没能启动（可能已经在跑）");
+                let started = self.run_compact(retention, &focus, &ccfg);
+                anyhow::ensure!(started, "compaction could not start (one may already be running)");
             }
             "/switch" => {
                 let id = args.trim();
-                anyhow::ensure!(!id.is_empty(), "用法：{} <模型 id，如 vendor:model>", spec.name);
+                anyhow::ensure!(!id.is_empty(), "usage: {} <model id, e.g. vendor:model>", spec.name);
                 let resolve = self
                     .commands
                     .resolve_model
                     .clone()
-                    .ok_or_else(|| anyhow!("模型解析器没接（这一侧还没有配置）"))?;
+                    .ok_or_else(|| anyhow!("model resolver not wired (this side has no config)"))?;
                 let sw = resolve(id).map_err(|e| anyhow!("{e}"))?;
                 self.apply_model(&sw);
                 // 落盘：这是**这个会话**在用什么模型，不是默认配置。resume 时
@@ -1202,7 +1220,7 @@ impl Session {
                 let fx = self.commands.fx.clone();
                 let (st, sid) = self
                     .persistence()
-                    .ok_or_else(|| anyhow!("这个会话还没落盘，没有账单可查"))?;
+                    .ok_or_else(|| anyhow!("this session is not persisted yet; there is no bill to read"))?;
                 let mut groups = st.usage_by_model(sid)?;
                 if let Some(resolve) = resolve.as_ref() {
                     for g in &mut groups {
@@ -1242,35 +1260,42 @@ impl Session {
             }
             "/profile" => {
                 let name = args.trim();
-                anyhow::ensure!(!name.is_empty(), "用法：{} <profile 名>", spec.name);
+                anyhow::ensure!(!name.is_empty(), "usage: {} <profile name>", spec.name);
                 let resolve = self
                     .commands
                     .resolve_profile
                     .clone()
-                    .ok_or_else(|| anyhow!("profile 解析器没接（这一侧还没有配置）"))?;
-                let (system, roster) = resolve(name).map_err(|e| anyhow!("{e}"))?;
-                self.apply_profile(&system, roster.clone());
+                    .ok_or_else(|| anyhow!("profile resolver not wired (this side has no config)"))?;
+                let profile = resolve(name).map_err(|e| anyhow!("{e}"))?;
+                let roster = profile.tools.clone();
+                let has_own_compact = profile.compact_instruction.is_some();
+                self.apply_profile(&profile);
                 self.notice(&format!(
-                    "profile 切到「{name}」（系统提示词已换；工具名册：{}）",
+                    "profile 切到「{name}」（系统提示词已换；工具名册：{}；压缩指令：{}）",
                     match &roster {
-                        Some(r) => format!("{} 个", r.len()),
+                        Some(r) => format!("{} tools", r.len()),
                         None => "全部".to_string(),
+                    },
+                    if has_own_compact {
+                        "profile 自带"
+                    } else {
+                        "跟随配置"
                     }
                 ));
             }
             "/model" => {
                 let id = args.trim();
-                anyhow::ensure!(!id.is_empty(), "用法：{} <模型 id>", spec.name);
+                anyhow::ensure!(!id.is_empty(), "usage: {} <model id>", spec.name);
                 let resolve = self
                     .commands
                     .resolve_model
                     .clone()
-                    .ok_or_else(|| anyhow!("模型解析器没接（这一侧还没有配置）"))?;
+                    .ok_or_else(|| anyhow!("model resolver not wired (this side has no config)"))?;
                 let write = self
                     .commands
                     .set_default_model
                     .clone()
-                    .ok_or_else(|| anyhow!("配置写入器没接（这一侧还没有配置）"))?;
+                    .ok_or_else(|| anyhow!("config writer not wired (this side has no config)"))?;
                 // 解析在前：id 不存在就直接拒，绝不写坏用户的下一份配置。
                 let sw = resolve(id).map_err(|e| anyhow!("{e}"))?;
                 // 落脚点一：本会话的元数据（立刻生效）。
@@ -1282,7 +1307,7 @@ impl Session {
                     sw.name, sw.model_id, where_
                 ));
             }
-            other => anyhow::bail!("{other} 还没接线（下一轮）"),
+            other => anyhow::bail!("{other} is not wired yet"),
         }
         let _ = ArgKind::None; // 参数形状由前端做补全，服务端只用它的值
         Ok(())
@@ -1321,7 +1346,7 @@ impl Session {
             None => None,
         };
         if let Some(e) = failure {
-            self.notice(&format!("会话模型没能落盘（下次 resume 会回到默认）：{e:#}"));
+            self.notice(&format!("session model not persisted (the next resume falls back to the default): {e:#}"));
         }
     }
 
@@ -1413,27 +1438,31 @@ impl Session {
         self.currency.symbol()
     }
 
-    /// Swap the system prompt and the tool roster.
+    /// Swap the system prompt, the tool roster, and the compaction instruction.
     ///
     /// The system prompt lives in the live chat replica (the next request is
     /// built from it), so the change takes effect on the next round. The
     /// provider's prefix cache goes cold once — which is why the roster and the
     /// prompt only ever change at a boundary or on an explicit user command.
-    fn apply_profile(&mut self, system: &str, roster: Option<Vec<String>>) {
+    ///
+    /// The compact instruction is a **path**, swapped here and read at each
+    /// compaction: no cache to cold, so it follows the profile immediately.
+    fn apply_profile(&mut self, p: &crate::server::profile::ResolvedProfile) {
         {
-            let mut chat = self.chat.lock().expect("chat 锁中毒");
+            let mut chat = self.chat.lock().expect("chat lock poisoned");
             match chat.messages.first_mut() {
                 Some(crate::server::ai::types::Message::System { content }) => {
-                    *content = system.to_string();
+                    *content = p.system.clone();
                 }
                 _ => chat
                     .messages
                     .insert(0, crate::server::ai::types::Message::System {
-                        content: system.to_string(),
+                        content: p.system.clone(),
                     }),
             }
         }
-        self.tool_filter = roster;
+        self.tool_filter = p.tools.clone();
+        self.compact_instruction = p.compact_instruction.clone();
     }
 
     /// A directory argument for `/cdp`: relative to the current cwd, `~`
@@ -1447,8 +1476,8 @@ impl Session {
         let p = if p.is_absolute() { p } else { self.cwd().join(p) };
         let real = p
             .canonicalize()
-            .with_context(|| format!("没有这个目录：{raw}"))?;
-        anyhow::ensure!(real.is_dir(), "不是目录：{raw}");
+            .with_context(|| format!("no such directory: {raw}"))?;
+        anyhow::ensure!(real.is_dir(), "not a directory: {raw}");
         Ok(real)
     }
 
@@ -1464,12 +1493,12 @@ impl Session {
 
     /// Migrate the working directory; returns the previous value.
     pub fn set_cwd(&self, next: std::path::PathBuf) -> std::path::PathBuf {
-        let mut w = self.cwd.write().expect("cwd 锁中毒");
+        let mut w = self.cwd.write().expect("cwd lock poisoned");
         std::mem::replace(&mut *w, next)
     }
 
     pub fn cwd(&self) -> std::path::PathBuf {
-        self.cwd.read().expect("cwd 锁中毒").clone()
+        self.cwd.read().expect("cwd lock poisoned").clone()
     }
 
     /// 用量表的起点（算一次、缓存住）：第一轮响应回来之前，表上显示的就是它。
@@ -1560,7 +1589,7 @@ impl Session {
     /// `/profile` swaps it; a resume preserves it. Read-only so tests and the
     /// daemon can observe what the provider is about to be told.
     pub fn system_prompt(&self) -> String {
-        match self.chat.lock().expect("chat 锁中毒").messages.first() {
+        match self.chat.lock().expect("chat lock poisoned").messages.first() {
             Some(crate::server::ai::types::Message::System { content }) => content.clone(),
             _ => String::new(),
         }
@@ -1665,7 +1694,7 @@ impl Session {
         let (tx, rx) = std::sync::mpsc::channel();
         self.tx = tx;
         let system = {
-            let chat = self.chat.lock().expect("chat 锁中毒");
+            let chat = self.chat.lock().expect("chat lock poisoned");
             match chat.messages.first() {
                 Some(crate::server::ai::types::Message::System { content }) => content.clone(),
                 _ => crate::server::profile::BUILTIN_SYSTEM.to_string(),
@@ -1721,6 +1750,14 @@ impl Session {
         self
     }
 
+    /// Attach the active profile's own compaction instruction, if it has one.
+    /// Called once, at assembly. The file is not read here: it is read at each
+    /// compaction, so editing it takes effect on the next `/compact`.
+    pub fn with_compact_instruction(mut self, path: Option<std::path::PathBuf>) -> Self {
+        self.compact_instruction = path;
+        self
+    }
+
     /// Let the roster be re-read at a legal boundary (see
     /// `tools.reloadOnCompaction`). Called once, at assembly.
     pub fn with_roster_source(
@@ -1757,7 +1794,7 @@ impl Session {
             Some((st, sid)) => match st.append(sid, &entries) {
                 Ok(_) => true,
                 Err(e) => {
-                    let msg = format!("压缩标记落盘失败：{e:#}");
+                    let msg = format!("failed to persist the compaction marker: {e:#}");
                     self.state.echo(Entry::Error { text: msg });
                     false
                 }
@@ -1767,7 +1804,7 @@ impl Session {
         // 2) Swap the live context replica: next turn starts from
         //    system + summary turn + kept region (prefix-cache cold
         //    once, then warm).
-        *self.chat.lock().expect("chat 锁中毒") = ctx;
+        *self.chat.lock().expect("chat lock poisoned") = ctx;
         // 3) Transcript: the divider marker + the display stats. 落盘成功的那份
         //    以"已落盘条目"上屏（daemon 随后按块 id 发，两边不会各发一条）。
         for e in entries {
@@ -2229,7 +2266,7 @@ mod tests {
         ));
         assert_eq!(s.store().unwrap().rounds(id).unwrap().len(), 0);
         let err = s.replay_round(id, 1).unwrap_err();
-        assert!(err.contains("请求头"), "错误必须点名缺什么：{err}");
+        assert!(err.contains("request headers"), "错误必须点名缺什么：{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

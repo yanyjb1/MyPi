@@ -93,7 +93,7 @@ fn resolve_path(
     if !zones.iter().any(|z| real.starts_with(z)) {
         anyhow::bail!(
             "denied: {} is outside the workspace ({}) and the temp dir — \
-             文件工具只能读写这两处",
+             file tools read and write only those two places",
             real.display(),
             zones
                 .first()
@@ -168,12 +168,12 @@ fn parse_read_args(raw: &str) -> Result<ReadArgs> {
         .to_string();
     let offset = match v.get("offset").and_then(|o| o.as_u64()) {
         None => 1,
-        Some(0) => return Err(anyhow!("offset 从 1 开始，收到 0")),
+        Some(0) => return Err(anyhow!("`offset` is 1-based; got 0")),
         Some(n) => n as usize,
     };
     let limit = v.get("limit").and_then(|l| l.as_u64()).map(|l| l as usize);
     if let Some(0) = limit {
-        return Err(anyhow!("limit 至少是 1"));
+        return Err(anyhow!("`limit` must be at least 1"));
     }
     Ok(ReadArgs {
         path,
@@ -224,8 +224,9 @@ pub fn read(
         if line_no < args.offset {
             continue;
         }
-        let line = std::str::from_utf8(&buf)
-            .map_err(|_| anyhow!("不是 UTF-8 文本文件（第 {line_no} 行无法解码）"))?;
+        let line = std::str::from_utf8(&buf).map_err(|_| {
+            anyhow!("not a UTF-8 text file (line {line_no} does not decode)")
+        })?;
         let line = line.trim_end_matches(['\n', '\r']);
         if shown >= max_lines {
             more = true;
@@ -243,18 +244,18 @@ pub fn read(
 
     if shown == 0 {
         out = if args.offset > 1 {
-            format!("（第 {} 行起没有内容）", args.offset)
+            format!("(no content from line {} on)", args.offset)
         } else {
             "(empty file)".to_string()
         };
     } else if more {
         out.push_str(&format!(
-            "\n[还有更多行；继续读用 offset={}]",
+            "\n[more lines; continue with offset={}]",
             args.offset + shown
         ));
         if by_bytes {
             out.push_str(&format!(
-                "（已到 {} 字节上限，未读到文件尾，总行数未知）",
+                " (hit the {} byte cap before EOF; total line count unknown)",
                 limits.max_bytes
             ));
         }
@@ -724,7 +725,7 @@ impl BuiltinTools {
             allowed
                 .iter()
                 .any(|z| !z.as_os_str().is_empty() && real.starts_with(z)),
-            "denied: {} 不在工作区、$HOME 或 /tmp 之内",
+            "denied: {} is outside the workspace, $HOME, and /tmp",
             real.display()
         );
         // 换之前站的地方。前端画 `cd` 那一行时要拿它当**相对化的基准**：
@@ -735,7 +736,7 @@ impl BuiltinTools {
         // Write back to the shared slot: the TUI statusline and the next
         // turn's spawn_turn snapshot both read it
         if let Some(slot) = &self.cwd_slot {
-            *slot.write().expect("cwd 锁中毒") = real.clone();
+            *slot.write().expect("cwd lock poisoned") = real.clone();
         }
         Ok(ToolOutput::with_details(
             format!("working directory changed to {}", real.display()),
@@ -832,7 +833,7 @@ pub fn write(
     if let Some(parent) = p.parent() {
         anyhow::ensure!(
             parent.is_dir(),
-            "目录不存在：{}（先用 bash mkdir -p 建目录）",
+            "parent directory does not exist: {} (create it with bash mkdir -p first)",
             parent.display()
         );
     }
@@ -847,8 +848,8 @@ pub fn write(
     });
     Ok(ToolOutput::with_details(
         format!(
-            "{} {}（{bytes} 字节）",
-            if existed { "已覆盖" } else { "已新建" },
+            "{} {} ({bytes} bytes)",
+            if existed { "overwrote" } else { "created" },
             p.display()
         ),
         details,
@@ -883,7 +884,7 @@ pub struct MassEditArgs {
 // ```
 pub fn parse_mass_edit_args(arguments: &str) -> Result<MassEditArgs> {
     let v: serde_json::Value =
-        serde_json::from_str(arguments).context("arguments 不是合法 JSON")?;
+        serde_json::from_str(arguments).context("`arguments` is not valid JSON")?;
     let path = need_str(&v, "path")?;
 
     if let Some(list) = v.get("edits").and_then(|x| x.as_array()) {
@@ -910,7 +911,7 @@ pub fn parse_mass_edit_args(arguments: &str) -> Result<MassEditArgs> {
                     .ok_or_else(|| anyhow!("non-numeric entry in `lines`"))?
                     as usize;
                 if line == 0 {
-                    return Err(anyhow!("行号从 1 开始，收到 0"));
+                    return Err(anyhow!("line numbers are 1-based; got 0"));
                 }
                 Ok(LineEdit {
                     line,
@@ -1370,7 +1371,7 @@ fn spec_to_def(spec: &ToolSpec) -> ToolDef {
             "intent".to_string(),
             serde_json::json!({
                 "type": "string",
-                "description": "一句话说明这次调用要干什么，中文，会显示给用户看"
+                "description": "Capitalized 2-6 word present-participle intent, e.g. Reading model role settings. Shown to the user while the call runs."
             }),
         );
         if spec.intent == IntentPolicy::Require {
@@ -1401,15 +1402,15 @@ fn schema_of(properties: serde_json::Value, required: &[&str]) -> serde_json::Va
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read",
-        description: "读文件（带行号，便于后面引用具体行）。改文件前先读，避免瞎猜原文。\
-                      只读文件，不读目录；只读工作区（会话起始目录）与 /tmp 里的文件。\
-                      文件超过本工具的上限时只读前面一段，末尾会提示用 offset 续读。",
+        description: "Read a file with line numbers so later turns can cite exact lines. MUST read before editing; NEVER guess the current text.\n\
+                      Files only, never directories; only inside the workspace (the session's start directory) and /tmp.\n\
+                      Past the line cap the output stops early and its footer names the offset to continue from.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "path": {"type": "string", "description": "文件路径，支持 ./ 与 ../"},
-                    "offset": {"type": "integer", "description": "从第几行开始读（1 起，默认 1）。输出末尾会给出续读用的 offset"},
-                    "limit": {"type": "integer", "description": "这次最多读几行，默认取配置上限"}
+                    "path": {"type": "string", "description": "File path. `./` and `../` allowed."},
+                    "offset": {"type": "integer", "description": "First line to read (1-based, default 1). The output footer names the offset for the next call."},
+                    "limit": {"type": "integer", "description": "Max lines this call; defaults to the configured cap."}
                 }),
                 &["path"],
             )
@@ -1423,14 +1424,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "edit",
-        description: "在文件里把一段文本替换成另一段。old 必须在文件里恰好出现一次。\
-                      适合改一个有唯一上下文的位置。只改工作区与 /tmp 里的文件。",
+        description: "Replace one run of text with another. `old` MUST match the file character for character and appear exactly once.\n\
+                      Use it when the target has unique surrounding context; when repeated lines make it ambiguous, use mass_edit.\n\
+                      Only files inside the workspace and /tmp.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "path": {"type": "string", "description": "文件路径，支持 ./ 与 ../"},
-                    "old": {"type": "string", "description": "要被替换的原文，必须逐字符匹配且唯一"},
-                    "new": {"type": "string", "description": "替换成的内容"}
+                    "path": {"type": "string", "description": "File path. `./` and `../` allowed."},
+                    "old": {"type": "string", "description": "Text to replace. MUST match exactly and be unique in the file."},
+                    "new": {"type": "string", "description": "Replacement text."}
                 }),
                 &["path", "old", "new"],
             )
@@ -1444,14 +1446,14 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "write",
-        description: "写入一个文件的全部内容；同名文件已存在就**整个覆盖**。\
-                      适合新建文件，或整份内容都要换掉的场合。只想改一处用 edit。\
-                      只写工作区（会话起始目录）与 /tmp 里的文件；父目录不存在会拒绝。",
+        description: "Write the whole file, **overwriting** any existing one. For new files, or when every line changes; a single-location\n\
+                      change is `edit`. Only inside the workspace (the session's start directory) and /tmp; a missing parent\n\
+                      directory is refused. NEVER create documentation or emojis unless asked.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "path": {"type": "string", "description": "文件路径，支持 ./ 与 ../"},
-                    "content": {"type": "string", "description": "文件的完整内容（会被原样写入）"}
+                    "path": {"type": "string", "description": "File path. `./` and `../` allowed."},
+                    "content": {"type": "string", "description": "The file's full content, written verbatim."}
                 }),
                 &["path", "content"],
             )
@@ -1465,13 +1467,13 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "cd",
-        description: "临时切换工作目录（本会话内有效）。之后的工具调用与相对路径都以新目录为基准。\
-                      只接受目录，且只能在当前工作区内迁移（工作区=会话起始目录）；\
-                      用 pwd 或 ls 确认切换结果。",
+        description: "Change the working directory for the rest of the session. Later tool calls and relative paths resolve from\n\
+                      the new one. Directories only, and only within the workspace (the session's start directory); confirm\n\
+                      with pwd or ls.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "path": {"type": "string", "description": "目标目录，支持 ./ ../ ~/ 与绝对路径"}
+                    "path": {"type": "string", "description": "Target directory. `./`, `../`, `~/`, and absolute paths allowed."}
                 }),
                 &["path"],
             )
@@ -1485,14 +1487,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "bash",
-        description: "执行 shell 命令（bash -c 语义，单条命令，不接受换行）。\
-                      管道、重定向、组合可用。工作目录就是许可区，删除/移动其中的东西随便；\
-                      但 rm/mv/find -delete 一旦触及工作区之外（包括 ~、/etc 等系统路径）会被直接拒绝。\
-                      dd 写盘、fork bomb、反弹 shell、curl|sh 等灾难模式同样被拦截。",
+        description: "Run one shell command (`bash -c` semantics; a single command, no newlines). Pipes, redirection, and\n\
+                      composition are fine. The working directory is the permitted zone: deleting or moving things inside it\n\
+                      is allowed, but rm/mv/find -delete that reaches outside (including ~ and system paths like /etc) is\n\
+                      refused outright. Catastrophic patterns are blocked the same way: `dd` to a block device, fork bombs,\n\
+                      reverse shells, `curl | sh`.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "command": {"type": "string", "description": "单条 shell 命令"}
+                    "command": {"type": "string", "description": "One shell command."}
                 }),
                 &["command"],
             )
@@ -1506,20 +1509,20 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "mass_edit",
-        description: "按行号把文件的指定行整行替换。不搜索不匹配，指哪改哪。\
-                      适合改动多行、或原文有重复行导致 edit 无法唯一定位的场合。\
-                      只改工作区与 /tmp 里的文件。",
+        description: "Replace whole lines by line number. No searching, no matching: you name the lines and they become the new\n\
+                      text. For multi-line rewrites, or when identical lines make `edit` unable to land uniquely.\n\
+                      Only files inside the workspace and /tmp.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "path": {"type": "string", "description": "文件路径"},
+                    "path": {"type": "string", "description": "File path."},
                     "edits": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "line": {"type": "integer", "description": "行号，从 1 开始"},
-                                "text": {"type": "string", "description": "这一行换成的内容"}
+                                "line": {"type": "integer", "description": "Line number, 1-based."},
+                                "text": {"type": "string", "description": "New content for that line."}
                             },
                             "required": ["line", "text"]
                         }
@@ -1538,14 +1541,14 @@ pub const TOOLS: &[ToolSpec] = &[
     #[cfg(feature = "web")]
     ToolSpec {
         name: "fetch",
-        description: "读取一个网页，返回干净的 Markdown 正文（自动去导航/广告/页脚）。\
-                      适合读文档、文章、搜到的结果页。JS 重渲染的页面会自动走浏览器兜底。\
-                      输出截断在 24K 字符；raw: true 时返回原始 HTML。",
+        description: "Read a web page and return clean Markdown (navigation, ads, and footers stripped).\n\
+                      For docs, articles, and search-result pages. A page that renders client-side falls back to the\n\
+                      browser automatically. Output truncates at 24K characters; `raw: true` returns the original HTML.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "url": {"type": "string", "description": "要读取的 URL（http/https，裸域名自动补 https://）"},
-                    "raw": {"type": "boolean", "description": "返回原始 HTML 而不是 markdown，默认 false"}
+                    "url": {"type": "string", "description": "URL to read (http/https; a bare domain gets https:// added)."},
+                    "raw": {"type": "boolean", "description": "Return the original HTML instead of Markdown. Default false."}
                 }),
                 &["url"],
             )
@@ -1560,23 +1563,23 @@ pub const TOOLS: &[ToolSpec] = &[
     #[cfg(feature = "web")]
     ToolSpec {
         name: "browser",
-        description: "操控真实浏览器（Chromium 内核，如 Helium）。四个命令：\
-                      open（打开 URL）、act（交互：navigate/click/fill/press/select/scroll/eval/net）、\
-                      read（把当前页面读成 markdown）、screenshot（截图存文件）。\
-                      适合 JS 重渲染的 SPA、需要登录的站、需要点击/滚动/抓网络请求的场合。\
-                      net 操作可列出页面发出的网络请求（找评论区的数据包接口就用它）。",
+        description: "Drive a real Chromium browser (Helium, for instance). Four commands: `open` a URL; `act` to interact\n\
+                      (navigate/click/fill/press/select/scroll/eval/net); `read` the current page as Markdown; `screenshot`\n\
+                      to a file. For client-rendered SPAs, sites behind a login, and anything needing real clicks, scrolls,\n\
+                      or network inspection. `act=net` lists the requests the page made — that is how you find the endpoint\n\
+                      behind a comment section.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "command": {"type": "string", "enum": ["open", "act", "read", "screenshot"], "description": "操作类型"},
-                    "url": {"type": "string", "description": "open/act=navigate: 要打开的 URL"},
-                    "op": {"type": "string", "enum": ["navigate", "click", "fill", "press", "select", "scroll", "eval", "net"], "description": "act 的具体操作"},
-                    "selector": {"type": "string", "description": "CSS 选择器（click/fill/select/scroll）或按键名（press，如 Enter）"},
-                    "value": {"description": "fill: 文本；select: 选项值；scroll: 像素；eval: JS 表达式"},
-                    "filter": {"type": "string", "description": "act=net: 只保留 URL 含此子串的请求"},
-                    "max": {"type": "integer", "description": "act=net: 最多返回几条请求，默认 20"},
-                    "path": {"type": "string", "description": "screenshot: PNG 保存路径；read: markdown 保存路径"},
-                    "full_page": {"type": "boolean", "description": "screenshot: 整页截图，默认只截视口"}
+                    "command": {"type": "string", "enum": ["open", "act", "read", "screenshot"], "description": "What to do."},
+                    "url": {"type": "string", "description": "open/act=navigate: URL to open."},
+                    "op": {"type": "string", "enum": ["navigate", "click", "fill", "press", "select", "scroll", "eval", "net"], "description": "The act to perform."},
+                    "selector": {"type": "string", "description": "CSS selector (click/fill/select/scroll) or key name (press, e.g. Enter)."},
+                    "value": {"description": "fill: the text; select: the option value; scroll: pixels; eval: a JS expression."},
+                    "filter": {"type": "string", "description": "act=net: keep only requests whose URL contains this substring."},
+                    "max": {"type": "integer", "description": "act=net: max requests returned. Default 20."},
+                    "path": {"type": "string", "description": "screenshot: PNG output path; read: Markdown output path."},
+                    "full_page": {"type": "boolean", "description": "screenshot: capture the whole page instead of the viewport."}
                 }),
                 &["command"],
             )
@@ -1593,14 +1596,14 @@ pub const TOOLS: &[ToolSpec] = &[
     #[cfg(feature = "web")]
     ToolSpec {
         name: "search",
-        description: "网页搜索，返回标题、链接与摘要。支持高级语法：\
-                      site:github.com（限定域名）、\"精确短语\"、-排除词、filetype:、inurl:、intitle:、before:/after:（YYYY-MM-DD）。\
-                      返回 5-10 条结果；查实时信息、文档定位、找源码仓库时用它。",
+        description: "Web search; returns titles, links, and snippets. Advanced syntax: site:github.com (limit to a domain),\n\
+                      `exact phrase`, -excluded, filetype:, inurl:, intitle:, before:/after: (YYYY-MM-DD).\n\
+                      5-10 results. For current facts, pinpointing documentation, and finding source repositories.",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "query": {"type": "string", "description": "搜索词，支持 site: \"短语\" -排除 filetype: inurl: intitle: before:/after:"},
-                    "limit": {"type": "integer", "description": "返回条数，默认 8，最大 20"}
+                    "query": {"type": "string", "description": "Search terms; supports site: `phrase` -excluded filetype: inurl: intitle: before:/after:"},
+                    "limit": {"type": "integer", "description": "Result count. Default 8, max 20."}
                 }),
                 &["query"],
             )
@@ -1614,34 +1617,35 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "todo",
-        description: "维护一份任务清单，当作**外部备忘录**用：长任务先 init 建清单，做到哪就 start/done 哪一项。\
-                      状态存在会话里（不靠你记），每次结果都会把**完整清单**回给你，随时可以 view 重读。\
-                      task 必须与写下时逐字一致。一次只能有一项 in_progress（start 会自动把上一项退回 pending）。\
-                      block 要带 reason；整批有错就整批不改。",
+        description: "Maintain a task checklist as an **external memo**: `init` a long task, then start/done each item as you go.\n\
+                      The state lives in the session, not in your head; every result returns the **full** checklist, and\n\
+                      `view` re-reads it any time. `task` MUST match the item's text verbatim. Only one item is in_progress\n\
+                      (`start` demotes the previous one to pending). `block` requires `reason`. One bad entry fails the whole\n\
+                      batch; nothing is applied.",
         schema: || {
             schema_of(
                 serde_json::json!({
                     "op": {
                         "type": "string",
                         "enum": ["init", "append", "start", "done", "drop", "block", "unblock", "rm", "view"],
-                        "description": "操作：init 建/换整份清单；append 加项；start/done/drop 改一项状态；block/unblock 卡住与解开；rm 删一项；view 只读"
+                        "description": "init: replace the whole list; append: add items; start/done/drop: move one item; block/unblock: park and release; rm: drop one item; view: read-only."
                     },
                     "list": {
                         "type": "array",
-                        "description": "init：阶段清单 [{phase, items}]",
+                        "description": "init: phased list of [{phase, items}].",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "phase": {"type": "string", "description": "阶段名"},
-                                "items": {"type": "array", "items": {"type": "string"}, "description": "这个阶段的任务"}
+                                "phase": {"type": "string", "description": "Phase name."},
+                                "items": {"type": "array", "items": {"type": "string"}, "description": "Tasks in this phase."}
                             },
                             "required": ["phase", "items"]
                         }
                     },
-                    "items": {"type": "array", "items": {"type": "string"}, "description": "init（平铺）或 append：任务文本"},
-                    "phase": {"type": "string", "description": "append 往哪个阶段加，缺省落默认阶段"},
-                    "task": {"type": "string", "description": "要操作的那一项的**原文**（逐字照抄）"},
-                    "reason": {"type": "string", "description": "block：卡住的原因"}
+                    "items": {"type": "array", "items": {"type": "string"}, "description": "init (flat) or append: task text."},
+                    "phase": {"type": "string", "description": "append: which phase; defaults to the default phase."},
+                    "task": {"type": "string", "description": "The item to act on, copied **verbatim**."},
+                    "reason": {"type": "string", "description": "block: why it is stuck."}
                 }),
                 &["op"],
             )
@@ -1656,20 +1660,19 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "context",
-        description: "查询会话历史的调用记录（只读，不执行）。主要用于压缩后自查：\
-                      巨物 #N（如 #1）是怎么产生的——传 anchor=\"#N\"（或工具结果的 call_id），\
-                      返回它前后的工具调用序列，含 cwd 变动轨迹。\
-                      anchor 也可以是一个 call_id 本身；before/after 控制前后各看几条；\
-                      include_user=true 时把用户消息也列出来（看需求变动）；\
-                      include_results=true 时附上每次调用的结果全文（看报错）。",
+        description: "Query this session's recorded tool calls (read-only; nothing is executed). Mainly for self-inspection after\n\
+                      compaction: where artifact #N came from — pass anchor=`#N` (or a tool result's call_id) and get the\n\
+                      surrounding call sequence, cwd changes included. anchor may be a call_id itself; before/after control how\n\
+                      many calls on each side; include_user=true also lists user messages (to see how the request moved);\n\
+                      include_results=true appends each call's full result (to see errors).",
         schema: || {
             schema_of(
                 serde_json::json!({
-                    "anchor": {"type": "string", "description": "锚点：巨物引用（\"#1\"）或某次工具结果的 call_id"},
-                    "before": {"type": "integer", "description": "锚点前看几条工具调用，默认 10"},
-                    "after": {"type": "integer", "description": "锚点后看几条工具调用，默认 10"},
-                    "include_user": {"type": "boolean", "description": "是否包含用户消息，默认 false"},
-                    "include_results": {"type": "boolean", "description": "是否包含工具结果全文，默认 false（只列调用）"}
+                    "anchor": {"type": "string", "description": "Anchor: an artifact reference (`#1`) or some tool result's call_id."},
+                    "before": {"type": "integer", "description": "Tool calls to show before the anchor. Default 10."},
+                    "after": {"type": "integer", "description": "Tool calls to show after the anchor. Default 10."},
+                    "include_user": {"type": "boolean", "description": "Also list user messages. Default false."},
+                    "include_results": {"type": "boolean", "description": "Append each call's full result instead of listing calls only. Default false."}
                 }),
                 &["anchor"],
             )
@@ -1757,13 +1760,13 @@ fn run_todo(
 ) -> Result<ToolOutput> {
     use crate::server::agent::todo as td;
     let a = td::TodoArgs::parse(args)?;
-    let mut st = t.todo.lock().map_err(|_| anyhow!("todo 锁中毒"))?;
+    let mut st = t.todo.lock().map_err(|_| anyhow!("todo lock poisoned"))?;
     let before = st.current.clone();
     let (next, errors) = td::apply(&st.current, &a);
     if !errors.is_empty() {
         // 整批丢弃：状态一动不动，理由如实回报（模型据此改一次就能过）。
         return Err(anyhow!(
-            "{} 没做成，清单未改动：\n- {}",
+            "{} not applied; the list is unchanged:\n- {}",
             a.op.as_str(),
             errors.join("\n- ")
         ));
@@ -1932,12 +1935,12 @@ pub fn context_query(
         let id = num
             .trim()
             .parse::<u64>()
-            .with_context(|| format!("巨物引用格式应为 #N：{anchor}"))?;
+            .with_context(|| format!("artifact reference must be #N; got {anchor}"))?;
         let needle = format!("#{id}");
         history
             .iter()
             .position(|e| matches!(e, Entry::ToolResult { result, .. } if result.contains(&needle)))
-            .with_context(|| format!("历史里没有巨物 {needle} 的产生记录"))?
+            .with_context(|| format!("no record of artifact {needle} being produced"))?
     } else {
         history
             .iter()
@@ -1947,7 +1950,7 @@ pub fn context_query(
                 }
                 _ => false,
             })
-            .with_context(|| format!("历史里没有 call_id {anchor}"))?
+            .with_context(|| format!("no call_id {anchor} in this history"))?
     };
 
     // Collect the (index, kind-of-row) pairs we will print: the anchor
@@ -1974,12 +1977,12 @@ pub fn context_query(
             .map(|(s, p)| (*s, p.clone()))
             .filter(|(s, _)| *s <= i as i64)
         {
-            out.push_str(&format!("cwd：{path}\n"));
+            out.push_str(&format!("cwd: {path}\n"));
             trail.next();
         }
         match &history[i] {
             Entry::User { content } => {
-                out.push_str(&format!("user：{}\n", first_line(content)));
+                out.push_str(&format!("user: {}\n", first_line(content)));
             }
             Entry::ToolRequest {
                 call_id,
@@ -1988,7 +1991,7 @@ pub fn context_query(
                 ..
             } => {
                 out.push_str(&format!(
-                    "#{i} 调用 {name}（{call_id}）：{}\n",
+                    "#{i} call {name} ({call_id}): {}\n",
                     first_line(args)
                 ));
             }
@@ -2001,7 +2004,7 @@ pub fn context_query(
             } => {
                 if args.include_results {
                     out.push_str(&format!(
-                        "#{} 结果 {}（{}）：\n{}\n",
+                        "#{} result {} ({}):\n{}\n",
                         i,
                         name,
                         if *ok { "ok" } else { "FAILED" },
@@ -2009,7 +2012,7 @@ pub fn context_query(
                     ));
                 } else {
                     out.push_str(&format!(
-                        "#{i} 结果 {name}（{}）{}\n",
+                        "#{i} result {name} ({}) {}\n",
                         call_id,
                         if *ok { "ok" } else { "FAILED" }
                     ));
@@ -2019,7 +2022,7 @@ pub fn context_query(
         }
     }
     if out.is_empty() {
-        out.push_str("（窗口内没有可显示的调用记录——放宽 before/after 试试）");
+        out.push_str("(no tool calls in this window — try widening before/after)");
     }
     Ok(ToolOutput::with_details(
         out,
@@ -2607,6 +2610,28 @@ mod tests {
         }
     }
 
+    /// 工具定义是**每一轮都发出去**的，而且模型要照着它行动——中文在这里
+    /// 既是 token 税（CJK 单字比英文词贵得多），也不是 omp 那套措辞的语法。
+    /// 工具**返回值和错误**同理，但它们散在各处，所以这里守住能守的那部分：
+    /// 名册里发出去的每一个字节。
+    #[test]
+    fn the_wire_roster_carries_no_cjk() {
+        let is_cjk = |c: char| ('\u{4e00}'..='\u{9fff}').contains(&c);
+        for d in BuiltinTools::definitions() {
+            let name = &d.function.name;
+            assert!(
+                !d.function.description.chars().any(is_cjk),
+                "{name} 的描述里还有中文：{}",
+                d.function.description
+            );
+            let schema = d.function.parameters.to_string();
+            assert!(
+                !schema.chars().any(is_cjk),
+                "{name} 的 schema 里还有中文：{schema}"
+            );
+        }
+    }
+
     fn hist() -> Vec<crate::server::entry::Entry> {
         use crate::server::entry::Entry;
         vec![
@@ -2660,8 +2685,8 @@ mod tests {
             include_results: false,
         };
         let out = context_query(&h, &[], &args).unwrap();
-        assert!(out.text.contains("调用 bash"), "{}", out.text);
-        assert!(out.text.contains("结果 bash"), "{}", out.text);
+        assert!(out.text.contains("call bash"), "{}", out.text);
+        assert!(out.text.contains("result bash"), "{}", out.text);
         // include_results=false must NOT embed the full result text
         assert!(!out.text.contains("50000 行"), "{}", out.text);
     }
@@ -2788,7 +2813,7 @@ mod tests {
         let out = read(&d, &licensed_zones(&d), limits, &args).unwrap();
         assert!(out.text.contains("offset=2"), "{}", out.text);
         assert!(
-            out.text.contains("总行数未知"),
+            out.text.contains("total line count unknown"),
             "字节上限截断时必须承认没读到尾: {}",
             out.text
         );
@@ -2850,7 +2875,7 @@ mod tests {
         )
         .unwrap();
         let out = write(&d, &zones, &first).unwrap();
-        assert!(out.text.contains("已新建"), "{}", out.text);
+        assert!(out.text.contains("created"), "{}", out.text);
         assert_eq!(out.details.unwrap()["created"], true);
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "one\n");
 
@@ -2860,7 +2885,7 @@ mod tests {
         )
         .unwrap();
         let out = write(&d, &zones, &second).unwrap();
-        assert!(out.text.contains("已覆盖"), "{}", out.text);
+        assert!(out.text.contains("overwrote"), "{}", out.text);
         let details = out.details.unwrap();
         assert_eq!(details["created"], false);
         assert_eq!(details["bytes"], 4);

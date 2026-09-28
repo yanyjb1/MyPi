@@ -47,6 +47,7 @@ fn spec(base: &str) -> SessionSpec {
         browser: BrowserConfig::default(),
         stream_mode: crate::server::ai::config::StreamMode::default(),
             compact: Default::default(),
+            compact_instruction: None,
             commands: Default::default(),
     }
 }

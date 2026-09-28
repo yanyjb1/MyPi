@@ -65,7 +65,7 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
         .models
         .providers
         .get(&rm.provider_name)
-        .ok_or_else(|| anyhow::anyhow!("provider {} 未定义", rm.provider_name))?
+        .ok_or_else(|| anyhow::anyhow!("provider {} is not defined", rm.provider_name))?
         .clone();
     let model = rm.entry.clone();
     let api_key = cfg.resolve_key(&provider);
@@ -74,11 +74,16 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
 
     // Session start is the first legal profile switch point.
     let profile_name = mypi::server::profile::active_name(cfg);
-    let (system_prompt, tool_filter) =
-        mypi::server::profile::resolve(cfg, &profile_name).unwrap_or_else(|e| {
-            eprintln!("profile 警告：{e:#}——使用内置提示词");
-            (mypi::server::profile::BUILTIN_SYSTEM.into(), None)
-        });
+    let profile = mypi::server::profile::resolve(cfg, &profile_name).unwrap_or_else(|e| {
+        eprintln!("profile warning: {e:#} — falling back to the built-in prompt");
+        mypi::server::profile::ResolvedProfile {
+            system: mypi::server::profile::BUILTIN_SYSTEM.into(),
+            tools: None,
+            compact_instruction: None,
+        }
+    });
+    let system_prompt = profile.system.clone();
+    let tool_filter = profile.tools.clone();
     // The roster's source, for the one boundary that may re-read it (a
     // compaction). Same resolver as above, so "what the profile says now" has
     // exactly one definition.
@@ -87,7 +92,7 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
         let profile_name = profile_name.clone();
         std::sync::Arc::new(move || {
             mypi::server::profile::resolve(&cfg, &profile_name)
-                .map(|(_, tools)| tools)
+                .map(|p| p.tools)
                 .unwrap_or(None)
         })
     };
@@ -113,7 +118,7 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
             move |name: &str| {
                 let known = mypi::server::profile::list(&cfg);
                 if !known.iter().any(|n| n == name) {
-                    return Err(format!("未知 profile：{name}。可用：{}", known.join("、")));
+                    return Err(format!("unknown profile: {name}. Available: {}", known.join(", ")));
                 }
                 mypi::server::profile::resolve(&cfg, name).map_err(|e| format!("{e:#}"))
             }
@@ -149,6 +154,7 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
         roster_source: Some(roster_source),
         tools: cfg.app.tools.clone(),
         compact: cfg.app.compact.clone(),
+        compact_instruction: profile.compact_instruction.clone(),
         commands,
         browser: cfg.app.browser.clone(),
         // 交付节拍：config.yaml 的 app.streaming（可用 MYPI_STREAM_MODE 覆盖）。
@@ -166,7 +172,7 @@ fn resolve_switch(cfg: &Config, id: &str) -> Result<mypi::server::commands::Mode
         .models
         .providers
         .get(&rm.provider_name)
-        .ok_or_else(|| format!("provider {} 未定义", rm.provider_name))?;
+        .ok_or_else(|| format!("provider {} is not defined", rm.provider_name))?;
     Ok(mypi::server::commands::ModelSwitch {
         base_url: provider.base_url.clone(),
         api_key: cfg.resolve_key(provider),

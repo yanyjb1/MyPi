@@ -25,6 +25,18 @@ pub fn sse(chunks: &[&str]) -> String {
     b
 }
 
+/// A **non-streaming** reply — the shape `/compact`'s summarization call gets,
+/// since it goes through `complete` (JSON body, not the SSE decoder).
+pub fn chat_json(content: &str) -> String {
+    serde_json::json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string()
+}
+
 /// One response that asks for a tool call, then one that finishes the round.
 pub fn tool_script(args: &str) -> Vec<String> {
     tool_script_named("read", args)

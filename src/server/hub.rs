@@ -72,6 +72,10 @@ pub struct SessionSpec {
     pub tools: ToolsConfig,
     /// Compaction knobs (`config.yaml → compact:`), for `/compact`.
     pub compact: crate::server::ai::config::CompactConfig,
+    /// The active profile's `profiles/<name>/compact.md`, when it has one.
+    /// Read fresh at each compaction; `None` falls through to
+    /// `compact.instruction_file`, then the built-in instruction.
+    pub compact_instruction: Option<PathBuf>,
     /// What session-scoped commands may reach outside the session
     /// (`/switch`, `/profile`, `/model`). Empty = not wired; the commands say
     /// so rather than pretend. See [`crate::server::commands::CommandEnv`].
@@ -165,7 +169,7 @@ impl SessionHub {
         let cwd = session.cwd();
         let id = session
             .ensure_session(&cwd)
-            .ok_or_else(|| anyhow::anyhow!("无法创建会话（数据库不可用）"))?;
+            .ok_or_else(|| anyhow::anyhow!("cannot create the session (database unavailable)"))?;
         self.sessions.insert(id, OpenSession { session, rx });
         Ok(id)
     }
@@ -250,6 +254,10 @@ impl SessionHub {
         // `/compact` 的旋钮来自配置：不接的话它会**静默**用默认值——
         // 用户改了 config.yaml 却没生效，最难看的一种失败。
         session = session.with_compact(spec.compact.clone());
+        // The profile may carry its own compaction instruction. Taken from the
+        // spec at assembly, so a resume keeps the profile it was started with.
+        // `/profile` swaps it later (see `Session::apply_profile`).
+        session = session.with_compact_instruction(spec.compact_instruction.clone());
         session = session.with_commands(spec.commands.clone());
         if let Some(src) = spec.roster_source.clone() {
             session = session.with_roster_source(src);
@@ -326,7 +334,7 @@ impl SessionHub {
         if let Some(s) = self.sessions.get(&id)
             && s.session.busy()
         {
-            anyhow::bail!("会话 {id} 正在跑一轮，先打断再删");
+            anyhow::bail!("session {id} is running a turn; interrupt it before deleting");
         }
         self.close(id);
         Store::open(&self.db)?.delete_session(id)
@@ -409,7 +417,7 @@ impl SessionHub {
         let mut open = self
             .sessions
             .remove(&id)
-            .ok_or_else(|| anyhow::anyhow!("会话 {id} 不在内存里，无法回退"))?;
+            .ok_or_else(|| anyhow::anyhow!("session {id} is not in memory; cannot rewind"))?;
         // 先换 tip（转录变成新前缀），再抛下在跑的那一轮：上一轮属于被抛下的
         // 分支——它不该继续把新分支堵成"忙"，也不该把半截回复写进新分支。
         // 上下文副本也跟着新前缀重建（`abandon_turn` 内部做）。
@@ -477,7 +485,7 @@ mod tests {
     use super::*;
     use crate::server::ai::client::Client;
     use crate::server::entry::Entry;
-    use crate::server::test_gateway::{fake_gateway, sse};
+    use crate::server::test_gateway::{chat_json, fake_gateway, sse};
 
     fn tmp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("mypi-hub-{name}-{}", std::process::id()));
@@ -501,6 +509,7 @@ mod tests {
             roster_source: None,
             tools: ToolsConfig::default(),
             compact: Default::default(),
+            compact_instruction: None,
             commands: Default::default(),
             browser: BrowserConfig::default(),
             stream_mode: StreamMode::default(),
@@ -598,7 +607,7 @@ mod tests {
             .unwrap()
             .run_command(cmd, "fake:model-b")
             .unwrap_err();
-        assert!(format!("{err:#}").contains("没接"), "{err:#}");
+        assert!(format!("{err:#}").contains("not wired"), "{err:#}");
     }
 
     /// `/switch` 要落盘：切过模型的会话关掉再开回来，模型自己回来——接着聊
@@ -828,7 +837,11 @@ mod tests {
         sp.commands = CommandEnv {
             resolve_profile: Some(std::sync::Arc::new(|name: &str| {
                 if name == "审阅" {
-                    Ok(("你现在是审阅者".to_string(), Some(vec!["read".into(), "grep".into()])))
+                    Ok(crate::server::profile::ResolvedProfile {
+                        system: "你现在是审阅者".to_string(),
+                        tools: Some(vec!["read".into(), "grep".into()]),
+                        compact_instruction: None,
+                    })
                 } else {
                     Err(format!("未知 profile {name}"))
                 }
@@ -962,7 +975,7 @@ mod tests {
         );
         assert!(hub.get(busy_id).unwrap().busy(), "跑着的时候才算忙");
         let err = hub.delete_session(busy_id).unwrap_err();
-        assert!(format!("{err:#}").contains("正在跑"), "{err:#}");
+        assert!(format!("{err:#}").contains("is running a turn"), "{err:#}");
         assert!(hub.get(busy_id).is_some(), "被拒时不许动状态");
     }
 
@@ -995,6 +1008,75 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(said, "后台失败必须落进转录，否则用户看不到任何反馈");
+    }
+
+    /// `/compact 2` 里的「2」真的当块数用了：压完的标记落在倒数第 2 个块的
+    /// 起点上。参数在会话层解析、切法在后台线程里算——中间任何一环掉了，这里
+    /// 看到的都会是默认预算的结果（那样会保下更多块，标记落在更前面）。
+    #[test]
+    fn compact_block_count_reaches_the_cut() {
+        use crate::server::entry::Entry;
+        let dir = tmp("compact-blocks");
+        let (base, _srv) = fake_gateway(vec![
+            sse(&["一答"]),
+            sse(&["二答"]),
+            sse(&["三答"]),
+            // 总结走的是非流式的 `complete`，所以这里要一个 JSON 响应体，
+            // 不是 SSE。内容要短过它替换掉的区域（shrink 检查会拒收变大的
+            // 总结），四个中文字符的区段配一个字就够。
+            chat_json("简"),
+        ]);
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let id = hub.open_new(spec(&base, "m", "S", &dir)).unwrap();
+        run_round(&mut hub, id, "一问");
+        run_round(&mut hub, id, "二问");
+        run_round(&mut hub, id, "三问");
+
+        // 压缩前的转录，用它算「倒数第 2 个块从哪开始」。
+        let before = hub.get(id).unwrap().state.transcript().to_vec();
+        let blocks = crate::grouping::chunks(&before);
+        assert!(blocks.len() > 2, "三轮至少要三块，实际 {}", blocks.len());
+        let expected = blocks[blocks.len() - 2].start;
+
+        let cmd = crate::server::commands::lookup("/compact").expect("/compact 在表里");
+        hub.get_mut(id).unwrap().run_command(cmd, "2").unwrap();
+
+        let mut seen = None;
+        for _ in 0..500 {
+            hub.drain(id);
+            seen = hub.get(id).unwrap().state.transcript().iter().find_map(|e| {
+                match e {
+                    Entry::Compaction {
+                        first_kept_entry, ..
+                    } => Some(*first_kept_entry),
+                    _ => None,
+                }
+            });
+            if seen.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            seen,
+            Some(expected),
+            "块数参数没走到 cut（转录里应当有落在倒数第 2 块起点的 Compaction 标记）"
+        );
+    }
+
+    /// 敲了一个解析不动的参数要**当场报错**，不能把它当焦点、更不能悄悄退回
+    /// 默认预算：用户打了数字，就得是那个数字。
+    #[test]
+    fn an_unparseable_compact_argument_is_refused_at_the_command() {
+        let dir = tmp("compact-bad-arg");
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let id = hub
+            .open_new(spec("http://127.0.0.1:1/v1", "m", "S", &dir))
+            .unwrap();
+        let cmd = crate::server::commands::lookup("/compact").expect("/compact 在表里");
+        let e = hub.get_mut(id).unwrap().run_command(cmd, "0").unwrap_err();
+        assert!(format!("{e:#}").contains("block count must be at least 1"), "错误要说清下限：{e:#}");
+        assert!(!hub.get(id).unwrap().state.busy(), "拒绝不该留下运行中的线程");
     }
 
     /// 工具名册只在一个会话开始时读一次，**除非**配置允许压缩后再读一次。

@@ -68,7 +68,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "/compact",
         aliases: &[],
-        detail: "把历史压缩成检查点（可带一句焦点）",
+        detail: "把历史压缩成检查点。`/compact 20k` 保留约 20k token 的尾巴，`/compact 18` 保留最新 18 个块，后面还能跟一句焦点",
         args: ArgKind::Text,
         scope: Scope::Session,
     },
@@ -130,7 +130,8 @@ pub const COMMANDS: &[CommandSpec] = &[
 pub struct CommandEnv {
     /// Resolve a model id (`<provider>:<id>`) into everything `/switch` needs.
     pub resolve_model: Option<ModelResolver>,
-    /// Resolve a profile name into (system prompt, tool roster).
+    /// Resolve a profile name into everything the session takes from it
+    /// (system prompt, tool roster, compaction instruction).
     pub resolve_profile: Option<ProfileResolver>,
     /// Persist a model id as the default — `/model`'s second landing point.
     ///
@@ -151,9 +152,10 @@ pub type ModelResolver =
 pub type DefaultModelWriter =
     std::sync::Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
-/// `Fn(&str) -> Result<(system prompt, tool roster), String>`.
-pub type ProfileResolver =
-    std::sync::Arc<dyn Fn(&str) -> Result<(String, Option<Vec<String>>), String> + Send + Sync>;
+/// `Fn(&str) -> Result<ResolvedProfile, String>`.
+pub type ProfileResolver = std::sync::Arc<
+    dyn Fn(&str) -> Result<crate::server::profile::ResolvedProfile, String> + Send + Sync,
+>;
 
 /// A model, resolved down to what the client and the status line need.
 ///
