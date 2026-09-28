@@ -1186,6 +1186,7 @@ mod tests {
             "已用 `edit` 工具将 `main.rs` 中的 `hi` 改为 `hello`。",
             &p,
             false,
+            100,
         );
         assert_eq!(lines.len(), 1, "行内代码不该换行: {:?}", text_of(&lines));
     }

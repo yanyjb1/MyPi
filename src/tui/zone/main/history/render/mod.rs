@@ -74,11 +74,11 @@ pub fn render_block(
         }
         // 流式与非流式在这里画法相同：markdown 直接吃「还没写完」的文本，
         // 未闭合的围栏照常画。两者的区别只在缓存策略（Live 不进缓存）。
-        BlockKind::Assistant => markdown::render_markdown(content, t, defer),
+        BlockKind::Assistant => markdown::render_markdown(content, t, defer, width),
         // 思考链的颜色**全部**被下面的灰色斜体覆盖掉：在这里高亮是白烧的钱。
         // 所以它永远按"推迟"渲染，而且不需要谁来补色。
         BlockKind::Reasoning => {
-            let (rows, _) = markdown::render_markdown(content, t, true);
+            let (rows, _) = markdown::render_markdown(content, t, true, width);
             (reasoning_fold(rows, t), Vec::new())
         }
     }
