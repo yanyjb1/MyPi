@@ -101,15 +101,15 @@
 #
 providers:
   local:
-    baseUrl: http://localhost:7863/v1
+    baseUrl: http://127.0.0.1:1/v1
     api: openai-completions          # the only protocol implemented today
     apiKey: ""                       # empty = no auth header
     # Models this provider serves — nested, ids are provider-internal.
     models:
-      - id: global:gpt-5.6-luna      # model id sent to the server
-        name: GPT5.6L(LC)            # display name (statusline); falls back to id
-        contextWindow: 1000000       # statusline ctx-gauge denominator
-        maxOutputTokens: 64000       # optional: actual max_tokens per request
+      - id: local:my-model           # model id sent to the server
+        name: My Model               # display name (statusline); falls back to id
+        contextWindow: 131072        # statusline ctx-gauge denominator
+        maxOutputTokens: 8192        # optional: actual max_tokens per request
         currency: Usd
         cost:
           input: 0.20
@@ -121,10 +121,10 @@ providers:
           temperature: 0.7
           topP: 0.95
 
-      - id: deepseek-ai/DeepSeek-V4.1-Flash
-        name: DSV4.1F(MS)
-        contextWindow: 1000000
-        maxOutputTokens: 128000      # take everything the model allows
+      - id: vendor-org/model-z
+        name: Model Z
+        contextWindow: 131072
+        maxOutputTokens: 16384       # take everything the model allows
         currency: Cny
         cost:
           input: 1
@@ -140,11 +140,11 @@ providers:
               enable_thinking: true
 
   vendor:
-    baseUrl: https://gateway.example.com:4000/v1
+    baseUrl: https://gateway.example.com/v1
     apiKey: ${VENDOR_API_KEY}        # reference the env var, never commit keys
     models:
       - id: vendor-a/model-x
-        name: ModelX(GW)
+        name: Model X
         contextWindow: 131072
         # maxOutputTokens omitted -> conservative 4096
         # No price sheet for this vendor -> leave all zeros: the

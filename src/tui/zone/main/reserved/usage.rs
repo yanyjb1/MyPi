@@ -11,8 +11,8 @@
 //!  Cache Hit Rate: 83.33%
 //!
 //!  Model              Total      Input      Output     CacheRead  CacheWrite
-//! >GLM5.3F(WB)        ¥4.62      ¥1.20      ¥3.40      ¥0.02      ¥0.00
-//!  DSV4.1F(WB)        ¥1.74      ¥0.50      ¥1.20      ¥0.04      ¥0.00
+//! >model-alpha        ¥4.62      ¥1.20      ¥3.40      ¥0.02      ¥0.00
+//!  model-beta         ¥1.74      ¥0.50      ¥1.20      ¥0.04      ¥0.00
 //! ```
 //!
 //! 前两行是**整个会话的合计**（不分模型），后面才是分模型的表。没有竖线的
@@ -399,7 +399,7 @@ mod tests {
         ModelUsage {
             name: name.into(),
             id: name.into(),
-            provider: Some("wb".into()),
+            provider: Some("p".into()),
             rounds: 3,
             prompt_tokens: prompt,
             completion_tokens: completion,
@@ -468,14 +468,14 @@ mod tests {
 
     #[test]
     fn the_table_has_a_model_column_and_four_money_columns() {
-        let p = panel(UsageLang::En, vec![group("GLM5.3F(WB)", 1000, 10, 0)]);
+        let p = panel(UsageLang::En, vec![group("model-alpha", 1000, 10, 0)]);
         let out = lines(&p);
         let head = &out[2];
         for col in ["Model", "Total", "Input", "Output", "CacheRead", "CacheWrite"] {
             assert!(head.contains(col), "缺 {col} 列：{head}");
         }
         let row = &out[3];
-        assert!(row.contains("GLM5.3F(WB)"), "{row}");
+        assert!(row.contains("model-alpha"), "{row}");
         assert!(row.contains("¥4.62"), "合计：{row}");
         assert!(row.contains("¥1.20"), "{row}");
     }
@@ -551,9 +551,9 @@ mod tests {
     /// 表头那一格留空才对得上。错一列，整张表就歪了。
     #[test]
     fn the_model_header_lines_up_with_the_name_under_it() {
-        let out = lines_at(&panel(UsageLang::En, vec![group("GLM5.3F(WB)", 1000, 10, 0)]), 100);
+        let out = lines_at(&panel(UsageLang::En, vec![group("model-alpha", 1000, 10, 0)]), 100);
         let head_col = out[2].find("Model").expect("表头");
-        let name_col = out[3].find("GLM5.3F(WB)").expect("模型行");
+        let name_col = out[3].find("model-alpha").expect("模型行");
         assert_eq!(head_col, name_col, "表头与名字错开了：\n{}\n{}", out[2], out[3]);
         assert!(
             out[3].trim_start().starts_with('>'),
@@ -617,7 +617,7 @@ mod tests {
     /// ——窄的行右边多留一点，那是表该有的样子，不是没对齐。
     #[test]
     fn the_whole_block_is_centred() {
-        let p = panel(UsageLang::En, vec![group("GLM5.3F(WB)", 1000, 10, 0)]);
+        let p = panel(UsageLang::En, vec![group("model-alpha", 1000, 10, 0)]);
         for width in [80u16, 120, 200] {
             let out = lines_at(&p, width);
             // 块的左边缘：`Model` 的位置减掉标记位。表头是块里最宽的一行
@@ -632,7 +632,7 @@ mod tests {
             assert!(left > 0, "@{width} 宽屏下居然贴着左边");
             // 每一行的名字/表头都落在同一条左边缘上。
             assert_eq!(
-                out[3].find('G').expect("模型行"),
+                out[3].find('m').expect("模型行"),
                 left,
                 "@{width} 模型行跟表头错开了"
             );
@@ -654,7 +654,7 @@ mod tests {
     /// 窄终端逐档收窄，但**五列一列都不许少**：用户要的是"一个模型一行看全"。
     #[test]
     fn a_narrow_terminal_steps_down_through_the_layouts_but_keeps_all_five_columns() {
-        let p = panel(UsageLang::En, vec![group("GLM5.3F(WB)", 1000, 10, 0)]);
+        let p = panel(UsageLang::En, vec![group("model-alpha", 1000, 10, 0)]);
         let header = |w: u16| lines_at(&p, w)[2].trim().to_string();
         assert_ne!(
             header(90),
@@ -735,12 +735,12 @@ mod tests {
     /// 坑——裁剪只丢 span 不截内容时，表头（整行一个 span）会变成空行。
     #[test]
     fn an_extremely_narrow_terminal_truncates_instead_of_swallowing_rows() {
-        let p = panel(UsageLang::En, vec![group("GLM5.3F(WB)", 1000, 10, 0)]);
+        let p = panel(UsageLang::En, vec![group("mdl-a", 1000, 10, 0)]);
         let out = lines_at(&p, 20);
         assert!(out[0].contains("Tot"), "头部那行被吞了：{:?}", out[0]);
         assert!(!out[2].trim().is_empty(), "表头被吞了");
         // 20 列时标记那一格腾不出来，于是它不画——但名字必须在。
-        assert!(out[3].contains("GLM"), "名字列该活下来：{:?}", out[3]);
+        assert!(out[3].contains("mdl"), "名字列该活下来：{:?}", out[3]);
     }
 
     #[test]

@@ -20,14 +20,14 @@
 //!
 //! providers:
 //!   local:
-//!     base_url: http://localhost:7863/v1
+//!     base_url: http://127.0.0.1:1/v1
 //!     api_key: ""                 # or a ${ENV_VAR} reference
 //!
-//! default: global:gpt-5.6-luna
+//! default: local:my-model
 //!
 //! models:
-//!   - id: global:gpt-5.6-luna     # model id sent to the server
-//!     name: GPT5.6L(LC)           # statusline display name
+//!   - id: local:my-model         # model id sent to the server
+//!     name: My Model              # statusline display name
 //!     provider: local
 //!     contextWindow: 1000000      # denominator of the statusline ctx gauge
 //!     maxOutputTokens: 128000
@@ -710,7 +710,7 @@ pub struct Provider {
     /// ```yaml
     /// providers:
     ///   local-gw:
-    ///     baseUrl: http://localhost:8788/v1
+    ///     baseUrl: http://127.0.0.1:1/v1
     ///     api: openai-completions
     ///     apiKey: sk-anything
     /// ```
@@ -764,7 +764,7 @@ pub struct ResolvedModel {
 pub struct ModelEntry {
     /// Model id sent to the server ("vendor:name" form).
     pub id: String,
-    /// Statusline display name (e.g. GLM5.3F(MS)).
+    /// Statusline display name (e.g. My Model).
     #[serde(default)]
     pub name: String,
     /// Context window (tokens); denominator of the statusline gauge.
@@ -790,7 +790,7 @@ pub struct ModelEntry {
     ///
     /// ```yaml
     /// models:
-    ///   - id: gpt-5.6-luna
+    ///   - id: local-model
     ///     compat:
     ///       supportsReasoningEffort: true
     ///       maxTokensField: max_completion_tokens
@@ -1428,7 +1428,7 @@ browser:
   profileDir: /tmp/mypi-profile
   headless: false
   userAgent: "UA/1"
-  extraArgs: ["--proxy-server=http://127.0.0.1:8080"]
+  extraArgs: ["--proxy-server=http://127.0.0.1:1"]
 "#,
         )
         .unwrap();
@@ -1448,7 +1448,7 @@ browser:
         assert!(!off.browser.persist_profile);
         assert_eq!(
             app.browser.extra_args,
-            vec!["--proxy-server=http://127.0.0.1:8080"]
+            vec!["--proxy-server=http://127.0.0.1:1"]
         );
 
         // Absent block: headless, nothing pinned — the launcher then falls
@@ -1466,7 +1466,7 @@ browser:
             r#"
 providers:
   local:
-    baseUrl: http://localhost:9999/v1
+    baseUrl: http://127.0.0.1:1/v1
     apiKey: ""
     models:
       - id: vendor-a/model-x
@@ -1563,7 +1563,7 @@ providers:
         }
     }
 
-    /// A model id may itself contain colons (`global:x` — legacy vendor
+    /// A model id may itself contain colons (`local:x` — legacy vendor
     /// prefixes live inside the id). Addressing splits on the **first**
     /// colon only.
     #[test]
@@ -1574,8 +1574,8 @@ providers:
   local:
     baseUrl: http://x/v1
     models:
-      - id: global:gpt-5.6-luna
-        name: GPT5.6L
+      - id: local:local-model
+        name: My Model
 "#,
         )
         .unwrap();
@@ -1585,7 +1585,7 @@ providers:
                 tui: TuiConfig::default(),
                 fx: FxConfig::default(),
                 usage: UsageConfig::default(),
-                default: Some("local:global:gpt-5.6-luna".into()),
+                default: Some("local:local:local-model".into()),
                 theme: Theme::default(),
                 compact: Default::default(),
                 tools: Default::default(),
@@ -1596,7 +1596,7 @@ providers:
         };
         let rm = cfg.default_model().unwrap();
         assert_eq!(rm.provider_name, "local");
-        assert_eq!(rm.entry.id, "global:gpt-5.6-luna");
+        assert_eq!(rm.entry.id, "local:local-model");
         // The wire id sent to the server keeps the colon.
         assert_eq!(rm.entry.id.split(':').count(), 2);
     }

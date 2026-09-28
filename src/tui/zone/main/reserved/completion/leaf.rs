@@ -19,7 +19,7 @@ pub enum LeafReason {
     /// submit in one step, not re-confirm the completion.
     ExactCommand,
     /// The single argument candidate reproduces the whole line verbatim
-    /// ("/switch global:..." applied → the id list offers the same line):
+    /// ("/switch local:..." applied → the id list offers the same line):
     /// nothing left to extend.
     ExactLine,
 }
@@ -45,7 +45,7 @@ pub fn leaf_state(
         return None; // nothing to show — the caller closes for "no candidates", not leaf
     }
     // 1. Argument leaf first: the single candidate reproduces the whole
-    //    line verbatim ("/switch global:x" applied → id list offers the
+    //    line verbatim ("/switch local:x" applied → id list offers the
     //    same line). When the word happens to be the whole line, this is
     //    the more precise reason than ExactWord.
     if items.len() == 1 && items[0].insert == text {
@@ -130,18 +130,18 @@ mod tests {
 
     #[test]
     fn exact_line_leaf_catches_model_argument() {
-        // The /switch regression: after applying "/switch global:m", the id
+        // The /switch regression: after applying "/switch local:m", the id
         // list re-offers the same line. Must be a leaf, not a re-open.
-        let line = "/switch global:gpt-5.6-luna";
+        let line = "/switch local:local-model";
         let items = vec![c(line)];
         assert_eq!(
             leaf_state(&items, line, true, line, &[]),
             Some(LeafReason::ExactLine)
         );
         // A partial id still lists real candidates: not a leaf.
-        let items = vec![c("/switch global:a"), c("/switch global:b")];
+        let items = vec![c("/switch local:a"), c("/switch local:b")];
         assert_eq!(
-            leaf_state(&items, "/switch global:", true, "/switch global:", &[]),
+            leaf_state(&items, "/switch local:", true, "/switch local:", &[]),
             None
         );
     }

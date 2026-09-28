@@ -156,7 +156,7 @@ pub enum ThinkingTokenBudgetField {
     ThinkingTokenBudget,
     /// Qwen / DashScope / SGLang。
     ThinkingBudget,
-    /// llama.cpp。
+    /// 另一派命名。
     ThinkingBudgetTokens,
 }
 
@@ -382,11 +382,10 @@ compat_table! {
 
     /// 每个带过推理的 assistant 轮都把推理内容原样回传。
     ///
-    /// 本地 llama.cpp 系后端（llama.cpp / LM Studio / vLLM / sglang /
-    /// Ollama）每轮都重新 tokenize 整个 chat template，Qwen3 / DeepSeek-R1
-    /// / GLM 的模板靠 `reasoning_content` 重建 `<think>` 块。丢掉这个字段
-    /// 会让 assistant 轮渲染出不一样的 token 序列，KV 缓存整段失效、提示词
-    /// 全部重算。
+    /// 有些后端每轮重新跑整个 chat template，Qwen3 / DeepSeek-R1 / GLM 的
+    /// 模板靠 `reasoning_content` 重建 `<think>` 块。丢掉这个字段会让
+    /// assistant 轮渲染出不一样的 token 序列，KV 缓存整段失效、提示词全部
+    /// 重算。
     value replay_reasoning_content: bool = false;
 
     /// Qwen3.6+：发 `preserve_thinking: true`，让模板为**每个** assistant
@@ -445,7 +444,7 @@ compat_table! {
     /// 支持具名工具的**对象**形式
     /// （`{ type: "function", function: { name } }`）。
     ///
-    /// llama.cpp 一类只认字符串形式的 `tool_choice`。
+    /// 有的宿主只认字符串形式的 `tool_choice`。
     value supports_named_tool_choice: bool = true;
 
     /// 强制工具调用时，把推理字段整个去掉。

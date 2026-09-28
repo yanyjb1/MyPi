@@ -485,7 +485,7 @@ mod tests {
             home: std::path::Path::new("/tmp"),
             models: Some(vec![ModelCandidate {
                 provider: "local".into(),
-                id: "global:m1".into(),
+                id: "local:m1".into(),
                 detail: String::new(),
             }]),
             profiles: &PROFILE_NAMES,
@@ -524,13 +524,13 @@ mod tests {
             args: "model_id".into(),
             scope: "local".into(),
         }]);
-        c.refresh(&cx("/model gl", 9));
-        // "/model gl" enters argument mode; the id list is filtered by
-        // "gl" and the insert text carries the full provider:id address.
+        c.refresh(&cx("/model lo", 9));
+        // "/model lo" enters argument mode; the id list is filtered by
+        // "lo" and the insert text carries the full provider:id address.
         assert!(c.is_open());
         let items = c.popup.items();
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].insert, "/model local:global:m1");
+        assert_eq!(items[0].insert, "/model local:local:m1");
     }
 
     /// `/profile` 的候选来自花名册（含内置的 `oh-my-pi`）。
@@ -569,6 +569,6 @@ mod tests {
         }]);
         c.refresh(&cx("/model ", 7));
         let ids: Vec<String> = c.popup.items().iter().map(|i| i.name.clone()).collect();
-        assert_eq!(ids, vec!["global:m1"], "模型那条走的是 models");
+        assert_eq!(ids, vec!["local:m1"], "模型那条走的是 models");
     }
 }

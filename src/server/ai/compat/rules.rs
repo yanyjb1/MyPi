@@ -124,14 +124,14 @@ impl Rule {
 /// 从 base url 里取出 host，小写、去端口。
 ///
 /// `https://api.deepseek.com/v1` → `api.deepseek.com`；
-/// `http://127.0.0.1:8788/v1` → `127.0.0.1`；裸 host 也接受。
+/// `http://127.0.0.1:1/v1` → `127.0.0.1`；裸 host 也接受。
 pub fn host_of(base_url: &str) -> String {
     let rest = base_url.split("://").nth(1).unwrap_or(base_url);
     let authority = rest.split('/').next().unwrap_or(rest);
     // user:pass@host  —— 取 @ 之后
     let authority = authority.rsplit('@').next().unwrap_or(authority);
     let host = if authority.starts_with('[') {
-        // IPv6 字面量：[::1]:8788 —— 端口在 ] 之后
+        // IPv6 字面量：[::1]:1 —— 端口在 ] 之后
         authority.split(']').next().unwrap_or(authority).trim_start_matches('[')
     } else {
         authority.split(':').next().unwrap_or(authority)
@@ -513,7 +513,7 @@ rules:
             "172.16.0.1",
             "172.31.255.1",
         ] {
-            assert!(is_local(&format!("http://{h}:8788/v1")), "{h} 应当算私网");
+            assert!(is_local(&format!("http://{h}:1/v1")), "{h} 应当算私网");
         }
         for h in ["api.deepseek.com", "8.8.8.8", "172.32.0.1", "172.15.0.1"] {
             assert!(!is_local(&format!("http://{h}/v1")), "{h} 不该算私网");

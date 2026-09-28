@@ -1149,49 +1149,4 @@ mod tests {
         );
     }
 
-    /// 真机探针：本机网关必须接受改造后发出的请求体。
-    #[test]
-    #[ignore = "真机：需要 127.0.0.1:8788 上的网关"]
-    fn the_live_gateway_accepts_what_we_send() {
-        use crate::server::ai::types::{Context, Message};
-
-        let mut c = Client::new("http://127.0.0.1:8788/v1", "sk-anything", "gpt-5.6-luna");
-        c.set_session_id("live-probe-1");
-
-        let mut ctx = Context::new();
-        ctx.messages.push(Message::User {
-            content: "只回两个字：收到".into(),
-        });
-
-        // 1. 保守基线：网关照常回答。
-        let msg = c.complete(&ctx, 64).expect("默认路径必须能被网关接受");
-        assert_eq!(msg.content.trim(), "收到", "网关的回复：{:?}", msg.content);
-
-        // 2. 打开缓存键（治命中率那一项）：网关必须接受，不 400。
-        let mut compat = c.compat().clone();
-        compat.supports_prompt_cache_key = true;
-        let body = crate::server::ai::assemble::body_json(
-            "gpt-5.6-luna", 64, false, &serde_json::json!([{"role":"user","content":"只回两个字：收到"}]),
-            &serde_json::json!([]), &compat, Some("live-probe-1"),
-        );
-        assert_eq!(body["prompt_cache_key"], "live-probe-1");
-        let plain_agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
-            .build()
-            .into();
-        let resp = plain_agent
-            .post("http://127.0.0.1:8788/v1/chat/completions")
-            .header("Authorization", "Bearer sk-anything")
-            .send_json(&body);
-        match resp {
-            Ok(r) => {
-                let v: serde_json::Value = r.into_body().read_json().expect("网关返回 JSON");
-                assert!(
-                    v["choices"][0]["message"]["content"].as_str().is_some_and(|s| !s.is_empty()),
-                    "网关回答了：{v}"
-                );
-            }
-            Err(e) => panic!("网关拒了带 prompt_cache_key 的请求：{e}"),
-        }
-    }
 }

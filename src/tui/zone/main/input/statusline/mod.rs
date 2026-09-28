@@ -227,7 +227,7 @@ mod tests {
     /// running session reaches after its first frame.
     pub(crate) fn sample() -> StatusLine {
         let mut s = StatusLine::new();
-        s.notify(&StatusEvent::ModelChanged("global:model-z"));
+        s.notify(&StatusEvent::ModelChanged("local:model-z"));
         s.notify(&StatusEvent::WorkspaceChanged(Path::new(
             "/home/Arisha/Utility/MyPi",
         )));
@@ -236,7 +236,7 @@ mod tests {
             unstaged: 0,
             staged: 0,
         })));
-        s.notify(&StatusEvent::SessionRenamed("GPT5.6L(LC)"));
+        s.notify(&StatusEvent::SessionRenamed("My Model"));
         s.notify(&StatusEvent::Usage(UsageSnapshot {
             total_cost: 1.2345,
             ctx_tokens: 80_000,
@@ -282,8 +282,8 @@ mod tests {
         let wide = at(200);
         assert!(wide.contains("@ main"), "{wide}");
         assert!(wide.contains("[D] Utility/MyPi"), "{wide}");
-        assert!(wide.contains("GPT5.6L(LC)"), "{wide}");
-        assert!(wide.contains("[M] global:model-z"), "{wide}");
+        assert!(wide.contains("My Model"), "{wide}");
+        assert!(wide.contains("[M] local:model-z"), "{wide}");
 
         // Narrow: non-base components drop in priority order — cwd (40) first,
         // then git (55; its compact branch-only form survives one tier
@@ -301,7 +301,7 @@ mod tests {
             if dropped_git.is_none() && !txt.contains("@ main") {
                 dropped_git = Some(w);
             }
-            if dropped_session.is_none() && !txt.contains("< GPT5.6L(LC)") {
+            if dropped_session.is_none() && !txt.contains("< My Model") {
                 dropped_session = Some(w);
             }
         }
@@ -352,7 +352,7 @@ mod tests {
         let pi = find("π").unwrap();
         assert_eq!(pi.style.fg, Some(t.get(Token::Muted)));
         assert_eq!(pi.style.bg, Some(capsule));
-        let model = find("[M] global:model-z").unwrap();
+        let model = find("[M] local:model-z").unwrap();
         assert_eq!(model.style.fg, Some(t.get(Token::Accent)));
         assert_eq!(model.style.bg, Some(capsule));
         let dir = find("[D] Utility/MyPi").unwrap();
@@ -361,7 +361,7 @@ mod tests {
         let br = find("@ main").unwrap();
         assert_eq!(br.style.fg, Some(t.get(Token::GitClean)));
         assert_eq!(br.style.bg, Some(capsule));
-        let session = find("GPT5.6L(LC)").unwrap();
+        let session = find("My Model").unwrap();
         assert_eq!(session.style.fg, Some(t.get(Token::Accent)));
         assert_eq!(session.style.bg, Some(capsule));
 
@@ -513,7 +513,7 @@ mod tests {
         let txt = text(&s.render(&t, 200));
         assert!(!txt.contains('¥'), "{txt}");
         assert!(!txt.contains("$0.00"), "{txt}");
-        assert!(txt.contains("[M] global:model-z"), "{txt}");
+        assert!(txt.contains("[M] local:model-z"), "{txt}");
         // The gauge's own denominator is independent of the price.
         assert!(txt.contains(":1K"), "{txt}");
     }

@@ -1606,7 +1606,7 @@ mod tests {
         // `messages_to_wire`'s call, and with no host asking for it, nothing
         // goes out.
         let ctx = entries_to_context("sys", &back);
-        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:8788/v1", "m", None);
+        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:1/v1", "m", None);
         let wire = crate::server::ai::assemble::messages_to_wire(&ctx.messages, &compat);
         let text = serde_json::to_string(&wire).unwrap();
         assert!(!text.contains("内心独白"), "没有宿主要求时不发推理内容：{text}");
@@ -1696,7 +1696,7 @@ mod tests {
         // Compare on the **wire** form: that is what the model saw, and it is
         // where the byte-identity contract lives. The internal context carries
         // reasoning the wire deliberately does not.
-        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:8788/v1", "m", None);
+        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:1/v1", "m", None);
         let wire = |m: &[crate::server::ai::types::Message]| {
             serde_json::to_string(&crate::server::ai::assemble::messages_to_wire(m, &compat))
                 .unwrap()

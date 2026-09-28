@@ -619,7 +619,7 @@ fn state_frame_carries_model_metadata() {
     let path = dir.join("d.sock");
     let hub = SessionHub::new(dir.join("sessions.sqlite3"));
     let mut sp = spec("http://127.0.0.1:1/v1");
-    sp.model_name = "GLM5.3F".into();
+    sp.model_name = "My Model".into();
     sp.context_window = 128_000;
     let daemon = Daemon::bind(
         path.clone(),
@@ -653,7 +653,7 @@ fn state_frame_carries_model_metadata() {
             _ => None,
         })
         .expect("a state frame must have arrived");
-    assert_eq!(st.0, "GLM5.3F", "display name comes from models.yml name");
+    assert_eq!(st.0, "My Model", "display name comes from models.yml name");
     assert_eq!(st.1, 128_000, "context window rides the wire");
     assert!(
         st.2 > 0,

@@ -151,7 +151,7 @@ pub(crate) fn body_json(
 
     // `tool_choice` has three downgrade paths, all documented in the compat
     // table: the host may not take the parameter at all, may not take a
-    // *forced* value, or may only take the string form (llama.cpp).
+    // *forced* value, or may only take the string form.
     if compat.supports_tool_choice && has_tools {
         // K3 原生推理激活时不能点名某个函数（宿主 400）：保住"必须调工具"
         // 的硬约束，但让模型自己在工具里挑。
@@ -445,8 +445,8 @@ pub(crate) fn body_json(
 /// * DeepSeek V4 要求**每个** assistant 轮都带 `reasoning_content`，而且校验
 ///   值的真实性——塞占位符直接 400。
 /// * Kimi / OpenRouter 只要求**工具调用轮**带，且接受 `.` 这样的占位符。
-/// * 本地 llama.cpp 系后端**不校验**，但丢掉这个字段会让 chat template 重新
-///   渲染 assistant 轮，token 序列和已有的 KV 缓存对不上，整段前缀重算。
+/// * 有些后端**不校验**，但丢掉这个字段会让 chat template 重新渲染 assistant
+///   轮，token 序列和已有的 KV 缓存对不上，整段前缀重算。
 /// * 有的宿主根本不认这个字段，多发一个就是 400。
 ///
 /// 所以默认**一个都不发**，由 `compat` 里的开关逐项打开——与 `body_json`
@@ -974,15 +974,11 @@ mod tests {
 
     // ---- compat: 探测、覆写、以及"字节不许变" ----
 
-    /// 本机地址是**转发网关**，上游可能是任何东西。所以不按 llama.cpp 那套
-    /// 本地特性推断（grammar schema、必回传推理内容……）。
-    ///
-    /// 这条锚定的是与 `oh-my-pi` 的**有意分歧**：它假设本地就是 llama.cpp，
-    /// 因为它的用户直接 slap 一个在本地；MyPi 的 127.0.0.1 通常是用户自己
-    /// 的网关，按 llama.cpp 推断会往云端发它不认的参数。
+    /// 本机地址是**转发网关**，上游可能是任何东西，所以不按"本地后端"推断
+    /// 它有哪些特性。
     #[test]
     fn a_local_gateway_gets_the_conservative_wire() {
-        let r = crate::server::ai::compat::resolve("http://127.0.0.1:8788/v1", "gpt-5.6-luna", None);
+        let r = crate::server::ai::compat::resolve("http://127.0.0.1:1/v1", "local-model", None);
         assert!(!r.supports_store, "默认不发 store");
         assert!(!r.supports_developer_role, "默认不假设认 developer 角色");
         assert!(r.supports_sampling_params, "采样参数是普遍支持的");
@@ -1019,10 +1015,10 @@ mod tests {
         use crate::server::ai::compat::resolve;
 
         // 私网地址 → 保守基线（`builtin.yaml` 没有匹配的规则）。
-        let compat = resolve("http://127.0.0.1:8788/v1", "gpt-5.6-luna", None);
+        let compat = resolve("http://127.0.0.1:1/v1", "local-model", None);
         let msgs = json!([{"role": "user", "content": "只回两个字：收到"}]);
 
-        let streamed = body_json("gpt-5.6-luna", 64, true, &msgs, &json!([]), &compat, None);
+        let streamed = body_json("local-model", 64, true, &msgs, &json!([]), &compat, None);
         let keys: Vec<&str> = streamed.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(
             keys,
@@ -1031,7 +1027,7 @@ mod tests {
         );
         assert_eq!(streamed["stream_options"], json!({"include_usage": true}));
 
-        let plain = body_json("gpt-5.6-luna", 64, false, &msgs, &json!([]), &compat, None);
+        let plain = body_json("local-model", 64, false, &msgs, &json!([]), &compat, None);
         let keys: Vec<&str> = plain.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(
             keys,
@@ -1212,10 +1208,10 @@ mod tests {
         .unwrap();
         // 私网地址拿的是保守基线（`builtin.yaml` 里没有匹配的规则）：不发
         // strict，所以 schema 也不该被动。
-        let compat = resolve("http://127.0.0.1:8788/v1", "gpt-5.6-luna", None);
+        let compat = resolve("http://127.0.0.1:1/v1", "local-model", None);
         assert!(!compat.supports_strict_mode, "保守基线不发 strict");
 
-        let body = body_json("gpt-5.6-luna", 100, true, &json!([]), &tools, &compat, None);
+        let body = body_json("local-model", 100, true, &json!([]), &tools, &compat, None);
         let read = body["tools"]
             .as_array()
             .unwrap()
@@ -1283,8 +1279,8 @@ mod tests {
             "temperature: 0.3\nextraBody:\n  temperature: 0.99\n  my_gateway_hint: route-a\n",
         )
         .unwrap();
-        let r = resolve("http://127.0.0.1:8788/v1", "gpt-5.6-luna", Some(&user));
-        let v = body_json("gpt-5.6-luna", 100, false, &json!([]), &json!([]), &r, None);
+        let r = resolve("http://127.0.0.1:1/v1", "local-model", Some(&user));
+        let v = body_json("local-model", 100, false, &json!([]), &json!([]), &r, None);
         assert_eq!(v["temperature"], 0.99, "逃生舱覆盖装配结果");
         assert_eq!(v["my_gateway_hint"], "route-a");
     }

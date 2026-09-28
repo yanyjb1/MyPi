@@ -2897,7 +2897,7 @@ mod tests {
         assert_eq!(back, round, "reopen must be byte-identical");
         assert_eq!(s.tip(id).unwrap(), tip);
         let ctx = crate::server::turn::entries_to_context("sys", &back);
-        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:8788/v1", "m", None);
+        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:1/v1", "m", None);
         let wire = serde_json::to_string(&crate::server::ai::assemble::messages_to_wire(
             &ctx.messages,
             &compat,

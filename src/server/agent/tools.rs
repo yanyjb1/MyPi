@@ -1812,17 +1812,6 @@ fn run_fetch(
         serde_json::json!({ "kind": "web", "url": a.url, "raw": a.raw.unwrap_or(false) }),
     ))
 }
-#[cfg(not(feature = "web"))]
-fn run_fetch(
-    _t: &mut BuiltinTools,
-    _args: &str,
-    _progress: &mut dyn FnMut(ToolProgress),
-) -> Result<ToolOutput> {
-    Err(anyhow!(
-        "tool `fetch` is not compiled in (rebuild with --features web)"
-    ))
-}
-
 #[cfg(feature = "web")]
 fn run_browser(
     t: &mut BuiltinTools,
@@ -1839,17 +1828,6 @@ fn run_browser(
     let text = crate::web::browser(&a, &t.browser)?;
     Ok(ToolOutput::with_details(text, details))
 }
-#[cfg(not(feature = "web"))]
-fn run_browser(
-    _t: &mut BuiltinTools,
-    _args: &str,
-    _progress: &mut dyn FnMut(ToolProgress),
-) -> Result<ToolOutput> {
-    Err(anyhow!(
-        "tool `browser` is not compiled in (rebuild with --features web)"
-    ))
-}
-
 #[cfg(feature = "web")]
 fn run_search(
     t: &mut BuiltinTools,
@@ -1865,17 +1843,6 @@ fn run_search(
     });
     Ok(ToolOutput::with_details(crate::web::render(&hits), details))
 }
-#[cfg(not(feature = "web"))]
-fn run_search(
-    _t: &mut BuiltinTools,
-    _args: &str,
-    _progress: &mut dyn FnMut(ToolProgress),
-) -> Result<ToolOutput> {
-    Err(anyhow!(
-        "tool `search` is not compiled in (rebuild with --features web)"
-    ))
-}
-
 // ---------------------------------------------------------------------------
 // context tool — the history window query
 // ---------------------------------------------------------------------------
@@ -2035,6 +2002,19 @@ fn first_line(s: &str) -> String {
     line.chars().take(120).collect()
 }
 
+/// The error for a tool name that is not in the table.
+///
+/// With `web` off the three network tools are **absent**, not disabled, so a
+/// naming mistake and a missing feature look identical from here. They are not
+/// the same problem for the reader: 「没有这个工具」sends them to the roster, while
+/// the real cause is that this binary was built without the network domain.
+fn unknown_tool(name: &str) -> anyhow::Error {
+    if !cfg!(feature = "web") && matches!(name, "fetch" | "browser" | "search") {
+        return anyhow!("tool `{name}` is not compiled in (this build has the `web` feature off)");
+    }
+    anyhow!("unknown tool: {name}")
+}
+
 impl super::loop_rs::ToolExecutor for BuiltinTools {
     fn execute(
         &mut self,
@@ -2044,7 +2024,7 @@ impl super::loop_rs::ToolExecutor for BuiltinTools {
         let spec = TOOLS
             .iter()
             .find(|t| t.name == call.name())
-            .ok_or_else(|| anyhow!("unknown tool: {}", call.name()))?;
+            .ok_or_else(|| unknown_tool(call.name()))?;
         // Gate one: compiled in. Gate two: allowed by the profile. Both read
         // the same table the roster was built from, so a call can never be
         // advertised and then refused (or hidden and then accepted) by a second
@@ -2351,7 +2331,7 @@ mod tests {
         }
         let mut t = BuiltinTools::new(std::env::temp_dir());
         let err = t
-            .execute(&ToolCall::new("c1", "fetch", "{}"))
+            .execute(&ToolCall::new("c1", "fetch", "{}"), &mut |_| {})
             .unwrap_err()
             .to_string();
         assert!(err.contains("not compiled in"), "{err}");
