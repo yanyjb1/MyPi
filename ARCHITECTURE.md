@@ -1,7 +1,7 @@
 # MyPi 架构
 
 一个终端编程 agent：会话服务（`server`，含网关 `ai`、执行引擎 `agent`、持久化 `store`）+ TUI（`tui`）。
-规模：`src/` 约 2.64 万行 / 90 个文件；单 crate，edition 2024；`cargo test` 495 项全绿。
+规模：`src/` 约 6.3 万行 / 133 个文件；单 crate，edition 2024；`cargo test` 958 项（1 ignored）全绿。
 
 本文只写**现在成立的事实与规则**。规则由 `src/lib.rs` 里的 `mod architecture`
 测试强制：写错一条依赖，`cargo test` 直接红。
@@ -133,7 +133,7 @@ browser:
   profileDir: ~/.local/share/mypi/browser/profile   # 登录态、扩展
   headless: true
   userAgent: ""                 # 留空 → 内置的稳定版桌面 UA
-  extraArgs: ["--proxy-server=http://127.0.0.1:8080"]
+  extraArgs: ["--proxy-server=http://127.0.0.1:1"]
 ```
 
 生效时机：`bin`/`headless`/`userAgent`/`extraArgs` 在下一次**启动**浏览器时生效；
@@ -141,16 +141,16 @@ browser:
 
 ---
 
-## 6. 模块地图（行数，2026-09-27）
+## 6. 模块地图（行数，2026-09-29）
 
 > 服务端要拆成 daemon、前端走 socket 的设计见 **[SERVER.md](SERVER.md)**（一页纸，未动代码）。
 
 | 模块 | 行数 | 内容 |
 |---|---|---|
-| `server/` | 11,006 | **服务端全部**：`events`（协议）、`session`（状态机 + facade）、`turn`（轮线程 + 上下文重建）、`hub`（多会话宿主）、`compaction`、`profile`、`log`（内存日志）、`store`（SQLite + 回合请求头）、`entry`（协议数据模型）、`ai/`（网关：client/types/config/pricing）、`agent/`（执行引擎：loop/tools/artifacts/bash_guard） |
-| `tui/` | 21,069 | 前端：`app`、`keys`、`zone/main/{history,input,reserved}`、`input/editor`、`statusline`、`theme`、`session/{loop,signal}`。历史区**窗口化**：只留一段已落盘的块窗口（`tui.preload` + `tui.renderMargin`）+ 一段还没落盘的活尾巴，视口位置记的是内容锚 `(block_id, 块内行)`，翻页按 id 点名要区间——见 `repo.md` §37 |
-| `web/` | 2,319 | `fetch` / `search` / `browser` 三域 + `utils/{cdp,session,html,url}` |
-| `grouping` `xdg` `git` `ansi` `cli` | 668 | 叶子层（块分组、平台目录、git 状态、ANSI 剥离、命令行） |
+| `server/` | 30,200 | **服务端全部**：`events`（协议）、`session`（状态机 + facade）、`turn`（轮线程 + 上下文重建）、`hub`（多会话宿主）、`compaction`、`profile`、`log`（内存日志）、`store`（SQLite + 回合请求头）、`entry`（协议数据模型）、`ai/`（网关：client/types/config/pricing/compat/inband/loop_guard）、`agent/`（执行引擎：loop/tools/artifacts/bash_guard） |
+| `tui/` | 27,359 | 前端：`zone/main/{history,input,reserved}`、`zone/{resume,tree}`、`session/{loop,signal}`、`theme`、`text`。历史区**窗口化**：只留一段已落盘的块窗口（`tui.Preload` + `tui.RenderMargin`）+ 一段还没落盘的活尾巴，视口位置记的是内容锚 `(block_id, 块内行)`，翻页按 id 点名要区间——见 `repo.md` §37 |
+| `web/` | 2,400 | `fetch` / `search` / `browser` 三域 + `utils/{cdp,session,html,url}` |
+| 根 + 叶子 | 3,010 | `cli` `oneshot` `bench` `grouping` `xdg` `git` `ansi` |
 
 **2026-09-25 搬家**：`entry` / `store` / `ai` / `agent` 从 crate 根目录收进 `server/`。
 前端（含 TUI）只认 `mypi::server`，服务端换内部结构不再牵动别人调用点。
@@ -202,8 +202,21 @@ config.yaml 的 schema（含 `tools` / `browser` / `compact` / `theme` / `profil
 
 - **bash 许可区是分类器，不是沙箱**：它按命令位置（而非子串）判定 `rm`/`mv`/`find -delete`/
   凭据写入/关机类，误杀已收敛，但挡不住铁了心的对手。
-- **聊天流没有 body 级超时**：只有 connect / 等响应两个超时。长回答不能被总时长砍断，
-  代价是「响应头到了之后卡死」仍会挂住轮线程（Esc 只在收到 delta 时轮询）。
+- **流式有事件间空闲超时，没有总时长上限**：`stream_idle_timeout_ms` 管「两个 SSE 事件之间
+  隔多久算卡死」，长回答不会被总时长砍断。响应头到达前另有首事件预算。两条都在
+  `Client` 的 agent 上，非流式路径（`complete`，压缩总结走它）没有 1 秒 `recv_body`，
+  整段读 body 慢于 1 秒不再算失败。
 - **工具能写任意路径**：`browser read/screenshot` 的 `path` 不受许可区约束，
   与 bash 的区外禁令不一致。
 - **无 CI**：`clippy 0 警告` 是手跑出来的结论。
+
+---
+
+## 10. 文档索引
+
+- **[SERVER.md](SERVER.md)** —— 服务端 daemon + 前端协议的一页纸设计（进程边界、消息表、
+  线程、打断、背压、落地顺序）。
+- **本文件** —— 分层规则、模块地图、线程与共享状态、落盘契约。
+- `repo.md` —— TUI 规模与滚动性能的多轮实测报告（含 `Store::load_path` 的 O(n²) 修复记录）。
+  **注意它的日期与代码版本**：结论成立，但引用到的配置键名可能已变。
+- `ABOUT_TESTS.txt`、`md-showcase.md`、`numbers.txt` —— 作者本人的笔记与素材，不过期也不必维护。
