@@ -172,7 +172,7 @@ pub fn replay_context(ctx: &crate::server::ai::types::Context) -> crate::server:
     req.messages = ctx.messages.clone();
     // The instruction as the last user turn.
     req.messages.push(Message::User {
-        content: String::new(), // filled by the caller (needs the instruction)
+        content: String::new().into(), // filled by the caller (needs the instruction)
     });
     req
 }
@@ -217,7 +217,7 @@ pub fn compact(
     // Fill the placeholder user turn.
     let last = req.messages.last_mut().expect("placeholder exists");
     *last = Message::User {
-        content: instruction,
+        content: instruction.into(),
     };
 
     // Summarize (the caller owns the client round-trip).
@@ -250,7 +250,8 @@ pub fn compact(
         content: system.to_string(),
     });
     new_ctx.messages.push(Message::User {
-        content: format!("{}\n\n<summary>\n{summary}\n</summary>", crate::server::prompts::COMPACT_CONTEXT),
+        content: format!("{}\n\n<summary>\n{summary}\n</summary>", crate::server::prompts::COMPACT_CONTEXT)
+        .into(),
     });
     let kept = &entries[cut.first_kept..];
     let mut kept_ctx = super::turn::entries_to_context(system, kept);
@@ -419,7 +420,7 @@ mod tests {
             let users = req
                 .messages
                 .iter()
-                .filter(|m| matches!(m, Message::User { content } if content.starts_with('y')))
+                .filter(|m| matches!(m, Message::User { content } if content.text().starts_with('y')))
                 .count();
             *shape.borrow_mut() = vec![req.messages.len(), users];
             Ok("## 当前工作\n\n无".into())

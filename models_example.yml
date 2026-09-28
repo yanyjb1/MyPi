@@ -23,14 +23,86 @@
 #     hides the spend column entirely.
 
 # ---- Providers -----------------------------------------------------------
-# Every provider speaks an OpenAI-compatible wire protocol: baseUrl, api_key,
-# models. (Older files carry an `api: openai-completions` line — it is ignored
-# now; it used to be required for no behavior, so it is no longer asked for.)
+# Every provider says: baseUrl, api, api_key, models.
+#   `api` picks the wire protocol. Only `openai-completions` (OpenAI's
+#   chat/completions wire format) is implemented; aliases `openai` and
+#   `openai-chat-completions` are accepted. Anything else fails at startup on
+#   purpose — an unknown protocol that silently sent requests would fail as
+#   "the model is misbehaving".
+#   Omit it and you get `openai-completions`.
 # baseUrl may be written `base_url` — both spellings are accepted.
 # api_key: literal string, or a ${ENV_VAR} reference (resolved at load).
+#
+# ---- `compat:` — per-model wire switches (all optional) ------------------
+#
+# If you write nothing, MyPi resolves the switches from a **rule table**:
+#
+#   1. the built-in one, `src/server/ai/compat/builtin.yaml`
+#   2. yours, `compat-rules.yaml` next to this file (applied on top of it)
+#
+# so adding a provider is adding a rule — no code change, no new release. The
+# built-in table covers OpenAI, OpenRouter, DeepSeek, Moonshot/Kimi, Z.AI/GLM,
+# Qwen/DashScope, Mistral, xAI, Groq, Cerebras, Together, Fireworks, Gemini,
+# GitHub Copilot and Anthropic. Whatever it does not recognise gets the
+# conservative standard-OpenAI-compatible shape: every optional field omitted
+# rather than guessed.
+#
+# Rules match on host and/or model id (`*` and `?` globs). Two rules that could
+# fire on the same request, at the same priority, disagreeing about the same
+# switch are a **startup error** — never a silent coin flip. The header of
+# `builtin.yaml` has the syntax; the fields under a rule's `set:` are exactly
+# the ones you can write under `compat:` below, so a rule can be copied into a
+# model entry and back.
+#
+# Anything you write under `compat:` overrides the rules item by item. Keys are
+# camelCase, matching the `OpenAICompat` interface of oh-my-pi / pi. The full
+# list (about 70 switches, each with a note saying which vendor it is for)
+# lives in `src/server/ai/compat/types.rs`. A misspelled key is an error at
+# load, not a silently ignored switch.
+#
+# Every switch in that table is wired to real code — there are no
+# write-it-and-nothing-happens knobs. Some worth knowing about:
+#
+#   reasoningContentField, requiresReasoningContentForAllAssistantTurns
+#       How the model's thinking is replayed in the history. DeepSeek V4 wants
+#       it on *every* assistant turn and validates the value; most hosts want
+#       nothing at all, which is the default.
+#   cacheControlFormat: anthropic
+#       Explicit prompt-cache breakpoint. Anthropic-style hosts cache nothing
+#       without it; writing the cache costs extra (+25%) while reading it is
+#       90% off, so it is opt-in rather than default.
+#   stripImageInput
+#       For hosts served as text-only: an image part becomes a one-line
+#       placeholder instead of an unknown part type.
+#   toolStrictMode / supportsStrictMode
+#       `all_strict` stamps `strict: true` on every tool definition. Off by
+#       default because a host that does not know the field may reject it.
+#   promptCacheSessionHeader
+#       Name of a request header that pins one session to one backend instance
+#       so its local KV cache is hit. The value is the session id.
+#
+# `extraBody:` is the escape hatch: whatever you put there is merged into the
+# request body **last**, so it wins over everything above. A vendor that is not
+# in any table is usable through it.
+#
+# `compat-rules.yaml` example — a self-hosted endpoint that wants the standard
+# shape plus one extra routing hint:
+#
+#   version: 1
+#   rules:
+#     - name: my-llm-box
+#       any:
+#         - host: ["llm.mycorp.internal"]
+#         - models: ["mycorp-*"]
+#       set:
+#         supportsStore: false
+#         extraBody:
+#           route: internal
+#
 providers:
   local:
     baseUrl: http://localhost:7863/v1
+    api: openai-completions          # the only protocol implemented today
     apiKey: ""                       # empty = no auth header
     # Models this provider serves — nested, ids are provider-internal.
     models:
@@ -44,6 +116,10 @@ providers:
           output: 1.20
           cacheRead: 0.02
           cacheWrite: 0.0
+        # 可选。写了的项覆盖探测结果，没写的项保持探测值。
+        compat:
+          temperature: 0.7
+          topP: 0.95
 
       - id: deepseek-ai/DeepSeek-V4.1-Flash
         name: DSV4.1F(MS)
@@ -55,6 +131,13 @@ providers:
           output: 4
           cacheRead: 0.02
           cacheWrite: 0.0
+        # 逃生舱示范：表里没有的参数用 extraBody 发；它最后合并，
+        # 覆盖前面所有装配结果。
+        compat:
+          reasoningEffort: high
+          extraBody:
+            chat_template_kwargs:
+              enable_thinking: true
 
   vendor:
     baseUrl: https://gateway.example.com:4000/v1

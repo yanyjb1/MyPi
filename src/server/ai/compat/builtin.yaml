@@ -1,0 +1,263 @@
+# 出厂兼容规则表。
+#
+# 加一个服务商 = 加一条规则，**不改代码**。规则里 `set:` 的字段名与
+# models.yml 里模型条目的 `compat:` 块**完全相同**（都来自 `Compat` 结构），
+# 所以任何一条规则的内容都能原样抄进某个模型的 `compat:` 里做局部覆盖，
+# 反过来也一样。
+#
+# # 选择器
+#
+#   any  [selector]  任一 selector 命中即算这条规则命中
+#
+# 一个 selector 内部：
+#
+#   hostIsPrivate  bool      回环 / 私网地址（127.x、10.x、192.168.x、172.16-31.x、localhost）
+#   host           [glob]    base url 的 host，不含 scheme 与端口
+#   models         [glob]    线上模型 id（`*` 任意串，`?` 一个字符）
+#
+# 一个 selector 内多个键是 **AND**，一个列表内多个 glob 是 **OR**，
+# 多个 selector 之间是 **OR**。`any` 整个省略 = 匹配一切（不推荐）。
+#
+# 写成 `any` 是因为"这家服务商的**域名**"和"这家服务商的**模型 id 前缀**"
+# 是两条独立的线索：OpenRouter 转发来的 deepseek 模型走 `api.openrouter.ai`，
+# 自建网关挂的 deepseek 走别的域名，两种情况都该命中同一条规则。
+#
+# # 叠加顺序
+#
+# 多条规则同时命中时依次叠加，**后面的覆盖前面的**：
+#
+#   1. `Resolved::conservative()` 打底（代码里的最保守基线）
+#   2. 本表 + 用户规则表，按 priority 升序；同 priority 按声明顺序
+#   3. models.yml 里那个模型的 `compat:` 块（最高优先级）
+#
+# `priority` 只在需要显式插队时写（数字大的后应用）。同一 priority 的两条
+# 规则若**可能同时命中**且向**同一字段**写**不同值**，加载时直接报错——
+# 不静默取一个，因为"静默取错的那个"在线上表现为"某个模型的怪癖突然
+# 不生效"，是最难查的一类问题。
+#
+# # 已知的不覆盖
+#
+# 全部规则都匹配不上时拿到的就是 `conservative()`。那是标准 OpenAI 兼容
+# 的形状，对绝大多数网关是对的。表里没有的服务商有两级逃生：写一条用户
+# 规则（不改代码、不用等发版），或临时用 `extraBody` 手发参数。
+
+version: 1
+
+rules:
+  # ---------- 官方 OpenAI ----------
+  #
+  # 新模型只认 max_completion_tokens，认 developer 角色，认 store。
+  - name: openai-official
+    priority: 10
+    any:
+      - host: ["api.openai.com"]
+    set:
+      supportsStore: true
+      supportsDeveloperRole: true
+      supportsMultipleSystemMessages: true
+      maxTokensField: max_completion_tokens
+      supportsReasoningEffort: true
+      usesOpenaiToolCallIdLimit: true
+      supportsStrictMode: true
+      supportsLongPromptCacheRetention: true
+      supportsImageDetailOriginal: true
+
+  # o 系 / gpt-5+ 在**所有**托管方（官方、Azure、Copilot）都拒绝显式采样
+  # 参数，回答 `400 Unsupported parameter: 'temperature' is not supported
+  # with this model`。
+  - name: openai-reasoning-models
+    priority: 20
+    any:
+      - host: ["api.openai.com"]
+        models: ["o1*", "o3*", "o4*", "gpt-5*"]
+    set:
+      supportsSamplingParams: false
+      supportsPenaltyAndStopParams: false
+
+  # ---------- OpenRouter ----------
+  #
+  # 转发层，`reasoning: { effort }` 是它自己发明的方言，不是上游的。
+  - name: openrouter
+    priority: 30
+    any:
+      - host: ["openrouter.ai"]
+    set:
+      supportsMultipleSystemMessages: true
+      thinkingFormat: openrouter
+      supportsReasoningEffort: true
+
+  # ---------- DeepSeek ----------
+  #
+  # `thinking: { type: "enabled" }`；推理内容回传时字段叫 reasoning_content；
+  # 工具调用轮**必须**带真实推理内容（发占位符它会校验失败）；带 tool_choice
+  # 时推理必须整个关掉；模板标记会泄漏到正文里。
+  - name: deepseek
+    priority: 40
+    any:
+      - host: ["api.deepseek.com"]
+      - models: ["deepseek*"]
+    set:
+      thinkingFormat: deepseek
+      reasoningContentField: reasoning_content
+      requiresReasoningContentForToolCalls: true
+      # DeepSeek V4 要的是**每个** assistant 轮都带，不只是工具轮。
+      requiresReasoningContentForAllAssistantTurns: true
+      allowsSyntheticReasoningContentForToolCalls: false
+      disableReasoningOnToolChoice: true
+      stripDeepseekSpecialTokens: true
+      streamMarkupHealingPattern: dsml
+      supportsDeveloperRole: false
+      # DeepSeek 不做图像理解；发了图它会当成未知部件拒掉。
+      stripImageInput: true
+
+  # ---------- Moonshot / Kimi ----------
+  #
+  # `thinking: { type, effort }`；工具 schema 要走 MFJS 规范化（它拒绝标准
+  # JSON Schema 的若干构造）；强制工具调用与 thinking 不能同时出现，否则
+  # `400 tool_choice 'specified' is incompatible with thinking enabled`；
+  # 按 max_tokens 算 TPM 额度，不发它就按默认值限流。
+  - name: moonshot-kimi
+    priority: 50
+    any:
+      - host: ["api.moonshot.cn", "api.moonshot.ai", "api.kimi.com"]
+      - models: ["kimi*", "moonshot*"]
+    set:
+      thinkingFormat: kimi
+      # 不发 `toolSchemaFlavor`：MyPi 的工具 schema 是手写的简单形状
+      # （`type`/`properties`/`required`/`items`/字符串枚举），Moonshot 的
+      # MFJS 子集本来就认——那个开关存在的理由是"从 ArkType/TypeBox 生成
+      # 的 schema 里带非标量枚举"，MyPi 不产这种 schema。
+      disableReasoningOnForcedToolChoice: true
+      requiresReasoningContentForToolCalls: true
+      streamMarkupHealingPattern: kimi
+      # 不需要 `alwaysSendMaxTokens`：MyPi 每一轮都算得出 `max_tokens` 并
+      # 无条件发出去，那个开关在这里永远为真。
+
+  # ---------- Z.ai / GLM ----------
+  #
+  # `thinking: { type }`（不是 openai 的 reasoning_effort）；强制工具调用与
+  # thinking 互斥。
+  - name: zai-glm
+    priority: 60
+    any:
+      - host: ["api.z.ai", "open.bigmodel.cn", "bigmodel.cn"]
+      - models: ["glm*"]
+    set:
+      thinkingFormat: zai
+      disableReasoningOnForcedToolChoice: true
+
+  # GLM-5.2 起认自己的 reasoning_effort 方言。
+  - name: zai-reasoning-effort
+    priority: 70
+    any:
+      - host: ["api.z.ai", "open.bigmodel.cn", "bigmodel.cn"]
+        models: ["glm-5.2*", "glm-5.3*", "glm-6*", "glm5.2*", "glm5.3*"]
+    set:
+      supportsReasoningEffort: true
+
+  # ---------- Qwen / DashScope ----------
+  #
+  # 顶层 `enable_thinking: true`，不是对象也不是 reasoning_effort。
+  - name: qwen-dashscope
+    priority: 80
+    any:
+      - host: ["dashscope.aliyuncs.com", "aliyuncs.com"]
+      - models: ["qwen*"]
+    set:
+      thinkingFormat: qwen
+      reasoningContentField: reasoning_content
+
+  # ---------- Mistral ----------
+  #
+  # 工具调用 id 必须恰好 9 位字母数字，别家的 call_abc123def456 直接拒绝。
+  - name: mistral
+    priority: 90
+    any:
+      - host: ["api.mistral.ai", "mistral.ai"]
+      - models: ["mistral*", "codestral*"]
+    set:
+      requiresMistralToolIds: true
+      supportsDeveloperRole: false
+
+  # ---------- xAI ----------
+  #
+  # 结果里的 presence/frequency 惩罚与 stop 序列全被拒。推理走标准 openai 形状。
+  - name: xai
+    priority: 100
+    any:
+      - host: ["api.x.ai"]
+      - models: ["grok*"]
+    set:
+      supportsPenaltyAndStopParams: false
+      thinkingFormat: openai
+
+  # ---------- 标准形状的托管方 ----------
+  #
+  # 请求体形状是标准 OpenAI，不发 store 最安全（它们要么不认、要么会存）。
+  - name: standard-hosts
+    priority: 110
+    any:
+      - host:
+          [
+            "api.groq.com",
+            "api.cerebras.ai",
+            "api.together.xyz",
+            "api.together.ai",
+            "api.fireworks.ai",
+          ]
+    set:
+      supportsStore: false
+
+  # ---------- Gemini 的 OpenAI 兼容层 ----------
+  #
+  # 不认 developer 角色。
+  - name: google-gemini
+    priority: 120
+    any:
+      - host: ["generativelanguage.googleapis.com", "googleapis.com"]
+      - models: ["gemini*"]
+    set:
+      supportsDeveloperRole: false
+      supportsSamplingParams: true
+
+  # ---------- GitHub Copilot ----------
+  #
+  # 它的 chat/completions 端点完全不接受推理参数——不是降级，是拒绝。
+  - name: github-copilot
+    priority: 130
+    any:
+      - host: ["api.githubcopilot.com", "githubcopilot.com"]
+      - host: ["github.com"]
+        models: ["copilot*"]
+    set:
+      supportsReasoningParams: false
+      supportsReasoningEffort: false
+      omitReasoningEffort: true
+
+  # ---------- Anthropic 官方的 OpenAI 兼容层 ----------
+  #
+  # 不认 developer 角色。它的 prompt cache 是**显式**的：不标 `cache_control`
+  # 就一个 token 都不缓存，所以这里打开断点。注意写缓存要额外付费（+25%），
+  # 读便宜 90%——OpenAI 系是隐式缓存，不需要这个开关。
+  - name: anthropic
+    priority: 140
+    any:
+      - host: ["api.anthropic.com"]
+    set:
+      supportsDeveloperRole: false
+      cacheControlFormat: anthropic
+
+  # ---------- 私网 / 回环 ----------
+  #
+  # 明示一条：私网地址**不开**任何可选特性，与认不出来的地址一样拿保守
+  # 基线。想开什么（grammar schema、必回传推理内容……）就自己写一条规则
+  # 声明，不要指望从地址推断——地址不携带"上游是谁"的信息。
+  #
+  # 这一条在语义上等于 `conservative()`，写出来是为了让"这里什么都没有"
+  # 是一个显式的决定，而不是一个看起来像遗漏的空白。
+  - name: private-host
+    priority: 150
+    any:
+      - hostIsPrivate: true
+    set:
+      supportsStore: false

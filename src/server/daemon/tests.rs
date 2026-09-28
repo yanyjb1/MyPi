@@ -849,6 +849,7 @@ fn usage_answers_the_asking_front_end_with_the_session_bill() {
                 name: "FAKE-1M".into(),
                 context_window: 1_000_000,
                 max_tokens: 4096,
+                compat: None,
                 cost: Cost {
                     input: 1.0,
                     output: 4.0,

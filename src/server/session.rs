@@ -347,6 +347,7 @@ impl SessionState {
                 system,
                 tools_json,
                 max_tokens,
+                compat_json,
             } => {
                 // Parked, not displayed and not part of the transcript: it is
                 // the *request*, which no transcript row represents. Written
@@ -359,6 +360,7 @@ impl SessionState {
                     system,
                     tools_json,
                     max_tokens,
+                    compat_json,
                 });
                 Change::None
             }
@@ -592,13 +594,41 @@ impl SessionState {
         let tools: serde_json::Value = serde_json::from_str(&row.tools_json)
             .map_err(|e| format!("工具定义读不回来：{e}"))?;
         let ctx = crate::server::turn::entries_to_context(&row.system, &entries);
-        let messages = serde_json::to_value(&ctx.messages)
-            .map_err(|e| format!("messages 序列化失败：{e}"))?;
         // The per-request ceiling is derived, not stored: the loop derives it
         // the same way from the same rebuilt context, so the value matches.
         let max_tokens = crate::server::agent::loop_rs::LoopConfig::new(row.max_tokens)
             .effective_max_tokens(&ctx);
-        let body = crate::server::ai::client::body_json(&row.model, max_tokens, true, &messages, &tools);
+        // Half the switches are re-derived and half are stored, and the split
+        // is the point: detection is a pure function of (base_url, model id),
+        // both of which the round row carries; the user's `compat:` block is
+        // not recoverable once the config is edited, so it was stored. An
+        // unparsable block is an error rather than a silent fallback to
+        // detection — that would hand back a *nearly* right request, which
+        // looks right and is worse than none.
+        let user_compat: Option<crate::server::ai::compat::Compat> = match row.compat_json.as_deref() {
+            None => None,
+            Some(json) => Some(serde_json::from_str(json).map_err(|e| {
+                format!("第 {} 回合的 compat 块读不回来（{e}），无法逐字节复现", row.seq)
+            })?),
+        };
+        let compat = crate::server::ai::compat::resolve(&row.base_url, &row.model, user_compat.as_ref());
+        // Same two-step as the live path: the wire shape of the messages array
+        // depends on the host, so it is built from the switches, not straight
+        // from the internal types.
+        let messages = crate::server::ai::assemble::messages_to_wire(&ctx.messages, &compat);
+        // 会话 id 同时喂两个地方：`prompt_cache_key`（请求体）和会话亲和头。
+        // 这里必须用**同一个**字符串，否则 replay 出来的字节和当时发出去
+        // 的对不上——而"逐字节复现"正是这个函数存在的理由。
+        let session_key = session_id.to_string();
+        let body = crate::server::ai::assemble::body_json(
+            &row.model,
+            max_tokens,
+            true,
+            &messages,
+            &tools,
+            &compat,
+            Some(&session_key),
+        );
         Ok(Replay {
             round: row.seq,
             model: row.model,
@@ -1058,7 +1088,17 @@ impl Session {
         crate::server::turn::spawn_turn(
             self.tx.clone(),
             crate::server::turn::TurnRequest {
-                client: self.client.borrow().clone(),
+                // 会话 id 在客户端上只在宿主声明了 `promptCacheSessionHeader`
+                // 时才有用——它让宿主把同一会话粘到同一个后端实例，命中那边的
+                // KV 缓存。每次开回合都重新喂一遍，是因为 client 是可以被
+                // `switch_model` 换掉的。
+                client: {
+                    let mut c = self.client.borrow().clone();
+                    if let Some(id) = self.state.session_id() {
+                        c.set_session_id(id.to_string());
+                    }
+                    c
+                },
                 chat: self.chat.clone(),
                 text: text.to_string(),
                 cfg: crate::server::agent::loop_rs::LoopConfig::new(self.max_tokens),
@@ -1256,7 +1296,7 @@ impl Session {
     fn apply_model(&mut self, sw: &crate::server::commands::ModelSwitch) {
         self.client
             .borrow_mut()
-            .switch_model(&sw.base_url, &sw.api_key, &sw.model_id);
+            .switch_model(&sw.base_url, &sw.api_key, &sw.model_id, sw.compat.as_ref());
         self.cost = sw.cost;
         self.context_window = sw.context_window;
         self.model_name = sw.name.clone();
@@ -1999,6 +2039,7 @@ mod tests {
             system: system.into(),
             tools_json: r#"[{"type":"function","function":{"name":"bash"}}]"#.into(),
             max_tokens: 4096,
+            compat_json: None,
         }
     }
 
@@ -2024,6 +2065,7 @@ mod tests {
                     system: "你是助手".into(),
                     tools_json: r#"[{"type":"function"}]"#.into(),
                     max_tokens: 1234,
+                    compat_json: None,
                 },
                 SessionEvent::Delta("答".into()),
                 SessionEvent::TurnDone(Usage::default(), crate::server::ai::types::StopReason::Stop),

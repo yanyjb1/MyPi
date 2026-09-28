@@ -108,6 +108,11 @@ pub enum SessionEvent {
         system: String,
         tools_json: String,
         max_tokens: u32,
+        /// The `compat:` block as written in `models.yml`, already serialized
+        /// (`None` = the entry had none). Travels with the header because it is
+        /// part of what the request *is*, and because detection alone cannot
+        /// reproduce a hand-written override.
+        compat_json: Option<String>,
     },
     /// Compaction finished on the background thread: apply the fork.
     /// `entries` is the marker to persist; `ctx` replaces the live chat

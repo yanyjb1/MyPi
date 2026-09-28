@@ -556,6 +556,7 @@ mod tests {
                         name: "FAKE-B".into(),
                         context_window: 999,
                         max_tokens: 1234,
+                        compat: None,
                         cost: Cost::default(),
                         currency: crate::server::ai::config::Currency::Cny,
                     })
@@ -620,6 +621,7 @@ mod tests {
                             name: "FAKE-B".into(),
                             context_window: 999,
                             max_tokens: 1234,
+                            compat: None,
                             cost: Cost::default(),
                             currency: crate::server::ai::config::Currency::Cny,
                         })
@@ -676,6 +678,7 @@ mod tests {
                     name: "FAKE-B".into(),
                     context_window: 999,
                     max_tokens: 1234,
+                    compat: None,
                     cost: Cost::default(),
                     currency: crate::server::ai::config::Currency::Cny,
                 }),
@@ -687,6 +690,7 @@ mod tests {
                     name: "FAKE-C".into(),
                     context_window: 111,
                     max_tokens: 55,
+                    compat: None,
                     cost: Cost::default(),
                     currency: crate::server::ai::config::Currency::Cny,
                 }),
@@ -759,6 +763,7 @@ mod tests {
                 name: "M".into(),
                 context_window: 1_000_000,
                 max_tokens: 4096,
+                compat: None,
                 cost: price,
                 currency: crate::server::ai::config::Currency::Cny,
             })
@@ -786,6 +791,7 @@ mod tests {
                 system: "S".into(),
                 tools_json: "[]".into(),
                 max_tokens: 4096,
+                compat_json: None,
             });
             s.ingest(SessionEvent::Delta("答".into()));
             s.ingest(SessionEvent::TurnDone(
@@ -870,6 +876,7 @@ mod tests {
                         name: "FAKE-B".into(),
                         context_window: 42,
                         max_tokens: 1,
+                        compat: None,
                         cost: Cost::default(),
                         currency: crate::server::ai::config::Currency::Cny,
                     })

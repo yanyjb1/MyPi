@@ -149,8 +149,15 @@ pub enum Entry {
     },
     // The thinking chain, **its own entry/block** (split from Assistant:
     // one block per display unit means the cache never renders the same
-    // block in two forms). Display + persistence only; never sent back
-    // in requests. Ordered immediately before its Assistant reply.
+    // block in two forms). Display and persistence.
+    //
+    // It *is* carried into the rebuilt protocol message (see
+    // `turn::entries_to_context`): whether it then reaches the wire depends on
+    // the host — DeepSeek V4 requires `reasoning_content` on every assistant
+    // turn and rejects a synthetic placeholder, while most hosts want nothing.
+    // That decision lives in `assemble::messages_to_wire`, not here.
+    //
+    // Ordered immediately before its Assistant reply or tool-call run.
     Reasoning {
         content: String,
     },

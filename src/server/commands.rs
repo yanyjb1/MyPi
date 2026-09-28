@@ -175,6 +175,11 @@ pub struct ModelSwitch {
     pub context_window: u64,
     /// Output ceiling for the next requests.
     pub max_tokens: u32,
+    /// The model's compat switches as written in `models.yml` (`None` = the
+    /// entry had no `compat:` block, so detection alone decides). Carried
+    /// alongside the endpoint because switching models switches the wire
+    /// quirks too.
+    pub compat: Option<crate::server::ai::compat::Compat>,
     /// Price sheet of the new model.
     pub cost: crate::server::ai::config::Cost,
     /// 计价货币。`/usage` 的账单要写对符号：同一个数在 `¥` 和 `$` 下不是一回事，

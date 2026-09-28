@@ -263,6 +263,9 @@ pub(crate) fn recorded_message(m: &AssistantMessage, drop_calls: bool) -> Messag
         } else {
             m.tool_calls.clone()
         },
+        // Kept alongside the reply so a later turn can replay it. Whether it
+        // reaches the wire is decided per host in `assemble::messages_to_wire`.
+        reasoning: m.reasoning.clone().filter(|r| !r.is_empty()),
     }
 }
 // Run one full turn (see [`ToolEvent`] for the event contract).
@@ -283,7 +286,7 @@ pub fn run(
     mut on_tool: impl FnMut(ToolEvent),
 ) -> Result<TurnOutcome> {
     ctx.messages.push(Message::User {
-        content: user_input.to_string(),
+        content: user_input.to_string().into(),
     });
 
     let mut tool_calls_made = 0usize;
@@ -482,6 +485,7 @@ mod tests {
                     "read_file",
                     json!({"path": "a"}).to_string()
                 )],
+                reasoning: None,
             }
         );
     }
@@ -535,6 +539,7 @@ mod tests {
             Message::Assistant {
                 content,
                 tool_calls,
+                ..
             } => {
                 assert_eq!(content.as_deref(), Some("还得再查"), "文本必须保留");
                 assert!(tool_calls.is_empty(), "未执行的调用不得进上下文");

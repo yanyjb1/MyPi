@@ -28,6 +28,97 @@ use serde_json::Value;
 // Why a tagged enum instead of four separate structs: the messages
 // array mixes roles and is discriminated by the "role" field on the
 // wire — exactly serde's internally-tagged representation.
+
+// What a user message carries: plain text, or text plus images.
+//
+// `untagged`, so the text-only case serializes exactly as it always did
+// (`"content": "..."`, a bare string). That matters beyond tidiness: a
+// request that happens to carry no image must be byte-identical to one from
+// before images existed, or the whole prompt prefix changes and the server's
+// cache misses on it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UserContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl UserContent {
+    /// The text half. Image parts contribute nothing — this is what a
+    /// text-only consumer (the context estimate, the transcript) should read.
+    pub fn text(&self) -> String {
+        match self {
+            Self::Text(t) => t.clone(),
+            Self::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    ContentPart::ImageUrl { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+
+    fn text_len(&self) -> usize {
+        match self {
+            Self::Text(t) => t.len(),
+            Self::Parts(parts) => parts
+                .iter()
+                .map(|p| match p {
+                    ContentPart::Text { text } => text.len(),
+                    // An image costs tokens roughly proportional to its
+                    // payload; counting the URL length keeps the estimate
+                    // monotone without pretending to know the tokenizer.
+                    ContentPart::ImageUrl { image_url } => image_url.url.len(),
+                })
+                .sum(),
+        }
+    }
+
+    pub fn has_images(&self) -> bool {
+        matches!(self, Self::Parts(parts)
+            if parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. })))
+    }
+}
+
+impl From<String> for UserContent {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
+impl From<&str> for UserContent {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+
+/// One part of a multimodal user message.
+///
+/// Only the two part types the OpenAI-compatible wire actually defines are
+/// modelled; anything else a host invents goes through `extraBody`-style
+/// escape hatches, not here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text {
+        text: String,
+    },
+    /// A remote URL or a `data:` URI.
+    ImageUrl {
+        image_url: ImageUrl,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageUrl {
+    pub url: String,
+    /// OpenAI's resolution hint (`"auto"` / `"low"` / `"high"`). Some hosts
+    /// reject `"original"` outright — that is `supports_image_detail_original`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum Message {
@@ -36,8 +127,15 @@ pub enum Message {
         content: String,
     },
     // User input.
+    //
+    // `content` is either plain text or an array of parts (text + images).
+    // `UserContent` is `untagged`, so the wire shape is unchanged for the
+    // text-only case — `"content": "..."` stays a string. Keeping that byte
+    // identical matters: a request that happens not to carry an image must
+    // look exactly like one from before images existed, or every prompt
+    // prefix changes and the server's cache misses on all of them.
     User {
-        content: String,
+        content: UserContent,
     },
     // The model reply.
     //
@@ -61,6 +159,15 @@ pub enum Message {
         content: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ToolCall>,
+        // Reasoning content captured from the model this round.
+        //
+        // Deliberately **not** part of the wire shape: whether it goes out,
+        // and under which field name, is decided per host by
+        // `assemble::messages_to_wire` (see `Resolved::reasoning_content_field`).
+        // Skipped here so the field never leaks under a name no gateway
+        // understands — and so a host that wants nothing gets nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning: Option<String>,
     },
     // Tool execution result. `tool_call_id` pairs it with the call that
     // started it.
@@ -82,10 +189,11 @@ impl Message {
     /// the gateway reports back.
     pub fn approx_chars(&self) -> usize {
         match self {
-            Message::User { content } => content.len(),
+            Message::User { content } => content.text_len(),
             Message::Assistant {
                 content,
                 tool_calls,
+                reasoning: _,
             } => {
                 content.as_deref().unwrap_or("").len()
                     + tool_calls
@@ -343,6 +451,9 @@ impl AssistantMessage {
                 Some(self.content.clone())
             },
             tool_calls: self.tool_calls.clone(),
+            // Kept here so a later turn *can* replay it. Whether it actually
+            // goes on the wire is `messages_to_wire`'s call, per host.
+            reasoning: self.reasoning.clone().filter(|r| !r.is_empty()),
         }
     }
 }
@@ -384,6 +495,7 @@ mod tests {
         let msg = Message::Assistant {
             content: None,
             tool_calls: vec![ToolCall::new("call_1", "read_file", r#"{"path":"a.txt"}"#)],
+            reasoning: None,
         };
         let v = serde_json::to_value(&msg).unwrap();
         assert_eq!(
@@ -408,6 +520,7 @@ mod tests {
         let msg = Message::Assistant {
             content: Some("你好".into()),
             tool_calls: vec![],
+            reasoning: None,
         };
         let v = serde_json::to_value(&msg).unwrap();
         assert_eq!(v, json!({"role": "assistant", "content": "你好"}));
@@ -426,6 +539,7 @@ mod tests {
             Message::Assistant {
                 content,
                 tool_calls,
+                ..
             } => {
                 assert_eq!(content, None);
                 assert_eq!(tool_calls.len(), 1);
@@ -458,6 +572,7 @@ mod tests {
         let msg = Message::Assistant {
             content: None,
             tool_calls: vec![call],
+    reasoning: None,
         };
         let v = serde_json::to_value(&msg).unwrap();
         assert_eq!(v["tool_calls"][0]["function"]["arguments"], messy);
@@ -486,7 +601,8 @@ mod tests {
             a.to_message(),
             Message::Assistant {
                 content: None,
-                tool_calls: vec![ToolCall::new("c", "f", "{}")]
+                tool_calls: vec![ToolCall::new("c", "f", "{}")],
+                reasoning: None,
             }
         );
 
@@ -495,7 +611,8 @@ mod tests {
             a.to_message(),
             Message::Assistant {
                 content: Some("说了句话".into()),
-                tool_calls: vec![ToolCall::new("c", "f", "{}")]
+                tool_calls: vec![ToolCall::new("c", "f", "{}")],
+                reasoning: None,
             }
         );
     }

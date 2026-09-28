@@ -8,7 +8,16 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Request {
-    Stream { id: u64, base_url: String, api_key: String, body: serde_json::Value },
+    Stream {
+        id: u64,
+        base_url: String,
+        api_key: String,
+        body: serde_json::Value,
+        /// 父进程算好的额外请求头。worker 不认识它们的意思，只是发出去——
+        /// 这是它"不知道 body 是什么"那条边界的同一条边。
+        #[serde(default)]
+        headers: Vec<(String, String)>,
+    },
     Shutdown,
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -85,10 +94,23 @@ impl HttpWorker {
         self.input.flush()?;
         Ok(())
     }
-    pub fn stream<F>(&mut self, base_url: &str, api_key: &str, body: serde_json::Value, mut on_line: F) -> Result<()>
+    pub fn stream<F>(
+        &mut self,
+        base_url: &str,
+        api_key: &str,
+        body: serde_json::Value,
+        headers: &[(String, String)],
+        mut on_line: F,
+    ) -> Result<()>
     where F: FnMut(&str) -> bool {
         let id = self.next_id; self.next_id += 1;
-        self.send(&Request::Stream { id, base_url: base_url.into(), api_key: api_key.into(), body })?;
+        self.send(&Request::Stream {
+            id,
+            base_url: base_url.into(),
+            api_key: api_key.into(),
+            body,
+            headers: headers.to_vec(),
+        })?;
         let mut raw = String::new();
         loop {
             raw.clear();
@@ -132,15 +154,18 @@ pub fn run() -> Result<()> {
     while { raw.clear(); input.read_line(&mut raw)? != 0 } {
         let req: Request = serde_json::from_str(raw.trim_end())?;
         match req {
-            Request::Stream { id, base_url, api_key, body } => {
+            Request::Stream { id, base_url, api_key, body, headers } => {
                 let agent: ureq::Agent = ureq::Agent::config_builder()
                     .timeout_connect(Some(std::time::Duration::from_secs(30)))
                     .timeout_recv_response(Some(std::time::Duration::from_secs(120)))
                     .build().into();
-                let resp = agent
+                let mut req = agent
                     .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
-                    .header("Authorization", &format!("Bearer {api_key}"))
-                    .send_json(&body);
+                    .header("Authorization", &format!("Bearer {api_key}"));
+                for (name, value) in &headers {
+                    req = req.header(name, value);
+                }
+                let resp = req.send_json(&body);
                 match resp {
                     Ok(response) => {
                         let mut reader = BufReader::new(response.into_body().into_reader());

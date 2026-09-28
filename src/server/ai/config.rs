@@ -692,15 +692,37 @@ impl FxConfig {
 
 /// Connection details for one provider.
 ///
-/// Note there is **no** `api:` key: it used to be required and fed a
-/// `Dialect` accessor that nothing called, so a hand-maintained models.yml
-/// without it could not start the program at all (the error was
-/// `missing field api`). Files that still carry the key keep loading — serde
-/// ignores unknown fields.
+/// The `api` key names the wire protocol (see [`Provider::api`]). It went
+/// through one wrong turn: it used to be a **required** field feeding a
+/// `Dialect` accessor nothing called, so a hand-maintained `models.yml`
+/// without it refused to start (`missing field api`) — for no behavior. It was
+/// then dropped entirely. Now it is back *because it decides something*: which
+/// request assembler and response parser run. Defaulted, never required.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Provider {
     #[serde(alias = "baseUrl")]
     pub base_url: String,
+    /// 这条 provider 说哪种线协议。**决定用哪套请求装配与响应解析**，
+    /// 所以挂在 provider 上而不是模型上：同一个网关下的模型说同一种协议。
+    ///
+    /// 现在只有一种实现，也只认这一个值：
+    ///
+    /// ```yaml
+    /// providers:
+    ///   local-gw:
+    ///     baseUrl: http://localhost:8788/v1
+    ///     api: openai-completions
+    ///     apiKey: sk-anything
+    /// ```
+    ///
+    /// `openai-chat-completions`、`openai` 是同一个东西的别名。
+    /// **不写就是 `openai-completions`**——没有这个键的老文件照旧能跑。
+    ///
+    /// 别的值（`openai-responses`、`anthropic-messages`、将来的
+    /// `deepseek`）现在是**启动即报错**，不是静默忽略：写了一个程序不
+    /// 认识的协议却照常发请求，会以最难查的方式失败。
+    #[serde(default = "default_api")]
+    pub api: String,
     #[serde(default, alias = "apiKey")]
     pub api_key: String,
     /// Models this provider serves — **nested inside the provider**, never
@@ -709,6 +731,24 @@ pub struct Provider {
     /// `deepseek-chat`; ids are written per provider by the user.
     #[serde(default, rename = "models")]
     pub models: Vec<ModelEntry>,
+}
+
+/// 协议键的缺省值：唯一实现的那一种。
+pub fn default_api() -> String {
+    crate::server::ai::client::PROTOCOL.to_string()
+}
+
+/// 配置里能写的协议名 → 程序内那一个协议 id。
+///
+/// 只认 chat/completions 这一种。Responses API 不在范围内（它的请求体、
+/// 事件流、状态机都是另一套东西，共用一个 `api` 选择器只会混淆）。
+pub fn normalize_api(name: &str) -> Option<&'static str> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "openai-completions" | "openai-chat-completions" | "openai" | "" => {
+            Some(crate::server::ai::client::PROTOCOL)
+        }
+        _ => None,
+    }
 }
 
 /// A model plus the provider it lives under (the config nests models
@@ -741,6 +781,24 @@ pub struct ModelEntry {
     pub currency: Currency,
     #[serde(default)]
     pub cost: Cost,
+    /// 这个模型的兼容开关。**不写就按 `baseUrl` + 模型 id 探测**；写了
+    /// 的项逐条覆盖探测结果，没写的项保持探测值。
+    ///
+    /// 键名用 camelCase，与 `oh-my-pi` / `pi` 的 `OpenAICompat` 接口
+    /// 逐字对应（见 `ai::compat::Compat` 的字段注释，每条都写了它治什么
+    /// 病）。例：
+    ///
+    /// ```yaml
+    /// models:
+    ///   - id: gpt-5.6-luna
+    ///     compat:
+    ///       supportsReasoningEffort: true
+    ///       maxTokensField: max_completion_tokens
+    ///       extraBody:
+    ///         chat_template_kwargs: { enable_thinking: true }
+    /// ```
+    #[serde(default)]
+    pub compat: Option<crate::server::ai::compat::Compat>,
 }
 
 impl ModelEntry {
@@ -815,6 +873,11 @@ impl Config {
         let models_path = Self::models_path()?;
         let app_path = Self::app_path()?;
 
+        // 规则表在这里定形：坏掉的规则表（语法错、拼错的字段、两条规则以
+        // 同一优先级抢同一个开关）必须在启动时拦住，不能等到某个请求发出
+        // 去了才发现。改规则表要重启，与 models.yml 同待遇。
+        crate::server::ai::compat::rules::rules()?;
+
         const TEMPLATE_URL: &str =
             "https://raw.githubusercontent.com/yanyjb1/MyPi/main/models_example.yml";
         let models_text = std::fs::read_to_string(&models_path).with_context(|| {
@@ -827,6 +890,22 @@ impl Config {
         })?;
         let models: ModelsConfig = serde_yaml::from_str(&models_text)
             .with_context(|| format!("invalid models.yml format: {}", models_path.display()))?;
+
+        // Every provider's `api` must name a protocol this binary implements.
+        // Checked **here**, at load, for two reasons: a typo should fail loudly
+        // at startup rather than as "the model is misbehaving" on the first
+        // request; and `models.yml` is hand-written, so the only place the user
+        // finds out is an error message they can act on.
+        for (name, provider) in &models.providers {
+            if normalize_api(&provider.api).is_none() {
+                let known = "openai-completions";
+                anyhow::bail!(
+                    "provider `{name}` 的 api 写的是 `{}`，程序不认识。目前只实现了 {known} \
+                     （chat/completions 线协议）；responses、anthropic-messages 一类不支持。",
+                    provider.api
+                );
+            }
+        }
 
         let app: AppConfig = match std::fs::read_to_string(&app_path) {
             Ok(text) => serde_yaml::from_str(&text)
@@ -1454,22 +1533,34 @@ providers:
         assert_eq!(models.providers["local"].models.len(), 1);
     }
 
-    /// Files that still carry the old `api:` key keep loading (unknown keys
-    /// are ignored) — including the `deepseek` value, which never had a
-    /// behavior behind it.
+    /// Omitting `api` means the one protocol that exists. Every file written
+    /// before the key came back lands here.
     #[test]
-    fn a_legacy_wire_dialect_key_is_tolerated() {
+    fn api_defaults_to_the_only_protocol() {
         let models = parse_models(
             r#"
 providers:
   local:
     baseUrl: http://x/v1
-    api: deepseek
     models: [{ id: m1 }]
 "#,
         )
         .unwrap();
-        assert_eq!(models.providers["local"].models[0].id, "m1");
+        assert_eq!(models.providers["local"].api, super::default_api());
+    }
+
+    /// The three accepted spellings, and everything else rejected. The
+    /// rejection is what makes a typo fail at startup instead of turning into
+    /// "the model misbehaves" on the first request.
+    #[test]
+    fn only_chat_completions_is_a_known_protocol() {
+        use super::normalize_api;
+        for ok in ["openai-completions", "openai-chat-completions", "openai", "", " OpenAI "] {
+            assert!(normalize_api(ok).is_some(), "{ok:?} should be accepted");
+        }
+        for bad in ["openai-responses", "deepseek", "anthropic-messages"] {
+            assert!(normalize_api(bad).is_none(), "{bad:?} should be rejected");
+        }
     }
 
     /// A model id may itself contain colons (`global:x` — legacy vendor

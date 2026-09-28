@@ -18,6 +18,12 @@ fn main() -> anyhow::Result<()> {
     if cli.http_worker {
         return mypi::server::http_worker::run();
     }
+    // 基准：不读配置、不开 socket、不碰终端。它自己造数据、自己数帧，
+    // 所以在 `Config::load` 之前就把它送走——免得一份基准的读数取决于
+    // 用户机器上恰好配了什么。
+    if let Some(args) = &cli.bench {
+        return mypi::bench::run(args);
+    }
     let mut cfg = Config::load()?;
     // 空回复的占位文本（`tui.emptyReply`）：落盘、上下文、打断占位三处
     // 共用一枚值，进程启动时钉住。TUI 与 daemon 各跑一次 `main`，
@@ -63,7 +69,8 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
         .clone();
     let model = rm.entry.clone();
     let api_key = cfg.resolve_key(&provider);
-    let client = Client::new(&provider.base_url, &api_key, &model.id);
+    let client =
+        Client::new(&provider.base_url, &api_key, &model.id).with_compat(model.compat.as_ref());
 
     // Session start is the first legal profile switch point.
     let profile_name = mypi::server::profile::active_name(cfg);
@@ -172,6 +179,7 @@ fn resolve_switch(cfg: &Config, id: &str) -> Result<mypi::server::commands::Mode
         },
         context_window: rm.entry.context_window,
         max_tokens: rm.entry.max_output_tokens.unwrap_or(4096) as u32,
+        compat: rm.entry.compat.clone(),
         cost: rm.entry.cost,
         currency: rm.entry.currency,
     })

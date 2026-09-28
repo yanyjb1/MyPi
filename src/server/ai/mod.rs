@@ -1,4 +1,10 @@
+pub mod assemble;
 pub mod client;
+pub mod compat;
 pub mod config;
+pub mod inband;
+pub mod loop_guard;
 pub mod pricing;
+pub mod stream_patch;
 pub mod types;
+pub mod wire;

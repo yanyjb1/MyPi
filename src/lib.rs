@@ -3,6 +3,7 @@
 //! The module graph is a contract, and `mod architecture` below enforces it.
 
 pub mod ansi;
+pub mod bench;
 pub mod cli;
 pub mod git;
 pub mod grouping;

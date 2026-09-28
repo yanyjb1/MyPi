@@ -126,6 +126,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             system: system_message(&chat),
             tools_json: serde_json::to_string(&chat.tools).unwrap_or_else(|_| "[]".to_string()),
             max_tokens: cfg.max_tokens,
+            compat_json: client.user_compat_json(),
         });
 
         // Streamed text accumulates here in both modes: the error path needs it
@@ -366,24 +367,40 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
             complete.insert(call_id.clone());
         }
     }
+    // The thinking chain for the reply we are about to rebuild. Persisted as
+    // its own entry, positioned immediately before the message it belongs to.
+    let mut pending_reasoning: Option<String> = None;
+    // 同一个工具调用 id 在**整个历史**里出现了几次。跨轮次共享：分叉和导入
+    // 造出的重名往往隔着好几轮 assistant 消息，只在一段连续的调用块里查会漏。
+    let mut id_seen: std::collections::BTreeMap<String, u32> = Default::default();
     let mut i = 0;
     while i < entries.len() {
         match &entries[i] {
             Entry::User { content } => {
                 rebuilt = rebuilt.push(crate::server::ai::types::Message::User {
-                    content: content.clone(),
+                    content: content.clone().into(),
                 });
                 i += 1;
             }
-            // Reasoning never re-enters the protocol: display-only.
             Entry::Assistant { content, .. } => {
                 rebuilt = rebuilt.push(crate::server::ai::types::Message::Assistant {
                     content: Some(content.clone()),
                     tool_calls: Vec::new(),
+                    reasoning: pending_reasoning.take(),
                 });
                 i += 1;
             }
-            Entry::Reasoning { .. } => i += 1,
+            // Reasoning is persisted as its own entry, immediately before the
+            // assistant reply or the tool-call run it belongs to. It is held
+            // here and attached to that message: whether the host wants it on
+            // the wire is `messages_to_wire`'s call, but it has to *be* in the
+            // context first — dropping it here made replay impossible for the
+            // hosts that require it (DeepSeek V4 validates every assistant
+            // turn).
+            Entry::Reasoning { content } => {
+                pending_reasoning = Some(content.clone());
+                i += 1;
+            }
             // The todo list never re-enters the protocol as an entry: it is
             // re-injected as a note after the loop (see below), so a compaction
             // cannot take the model's own memo away from it.
@@ -411,11 +428,61 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
                     Vec<crate::server::ai::types::ToolCall>,
                     Vec<(String, String)>,
                 );
-                let mut groups: Vec<Group> = Vec::new();
+                // 这一段同时解决两件会让**整个请求被拒**的事，因为改名必须
+                // 在调用和它的结果之间保持一致：
+                //
+                // 1. **坏调用**——`id` 或函数名是空的/纯空白。模型真的会发
+                //    （GLM-5.2 开着 thinking 的长轮次上见过）。宿主对它的反应
+                //    是拒收整个请求，于是会话卡在 400 循环里，只能靠清空历史
+                //    脱身。它的结果也要一起跳过：没有对应调用的结果同样是非法
+                //    形状。
+                // 2. **重复 id**——分叉、导入、或模型自己重发，都会让同一个 id
+                //    出现两次。同样被拒。加 `_dup{n}` 后缀区分开。
+                //
+                // 配对按 `(id, 第几次出现)` 而不是只按 id：重名的那一个不能
+                // 抢走另一个的结果。
+                let mut plan: std::collections::BTreeMap<(String, u32), (String, bool)> =
+                    Default::default();
+                // 键是 `(call_id, 在这个块里第几次出现)`——块内序号，因为下面的
+                // 主循环是按块遍历的。**改名**用的是跨历史的全局序号（`id_seen`）。
+                let mut in_block: std::collections::BTreeMap<String, u32> = Default::default();
                 for e in block {
+                    if let Entry::ToolRequest { call_id, name, .. } = e {
+                        let global = *id_seen.entry(call_id.clone()).or_insert(0);
+                        *id_seen.get_mut(call_id).expect("刚插进去") += 1;
+                        let local = *in_block.entry(call_id.clone()).or_insert(0);
+                        *in_block.get_mut(call_id).expect("刚插进去") += 1;
+                        let malformed = call_id.trim().is_empty() || name.trim().is_empty();
+                        let wire = if global == 0 {
+                            call_id.clone()
+                        } else {
+                            format!("{call_id}_dup{global}")
+                        };
+                        plan.insert((call_id.clone(), local), (wire, malformed));
+                    }
+                }
+
+                let mut groups: Vec<Group> = Vec::new();
+                // 请求与结果**各自**按块内出现次序计数：同一个 id 的第 n 次
+                // 请求对应它的第 n 次结果，两个序列各数各的。
+                let mut req_nth: std::collections::BTreeMap<String, u32> = Default::default();
+                let mut res_nth: std::collections::BTreeMap<String, u32> = Default::default();
+                for e in block {
+                    let (call_id, is_request) = match e {
+                        Entry::ToolRequest { call_id, .. } => (call_id.clone(), true),
+                        Entry::ToolResult { call_id, .. } => (call_id.clone(), false),
+                        _ => unreachable!("block holds only tool entries"),
+                    };
+                    let counter = if is_request { &mut req_nth } else { &mut res_nth };
+                    let n = *counter.entry(call_id.clone()).or_insert(0);
+                    *counter.get_mut(&call_id).expect("刚插进去") += 1;
+                    let (wire_id, malformed) = plan
+                        .get(&(call_id.clone(), n))
+                        .map(|(w, m)| (w.clone(), *m))
+                        .unwrap_or_else(|| (call_id.clone(), false));
+
                     match e {
                         Entry::ToolRequest {
-                            call_id,
                             name,
                             args,
                             text,
@@ -425,9 +492,12 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
                             if *first || groups.is_empty() {
                                 groups.push((text.clone(), Vec::new(), Vec::new()));
                             }
-                            if complete.contains(call_id) {
+                            if malformed {
+                                continue;
+                            }
+                            if complete.contains(&call_id) {
                                 let call = crate::server::ai::types::ToolCall {
-                                    id: call_id.clone(),
+                                    id: wire_id,
                                     kind: "function".into(),
                                     function: crate::server::ai::types::FunctionCall {
                                         name: name.clone(),
@@ -439,11 +509,12 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
                                 groups.last_mut().expect("just pushed").1.push(call);
                             }
                         }
-                        Entry::ToolResult {
-                            call_id, result, ..
-                        } => {
+                        Entry::ToolResult { result, .. } => {
+                            if malformed {
+                                continue;
+                            }
                             if let Some(g) = groups.last_mut() {
-                                g.2.push((call_id.clone(), result.clone()));
+                                g.2.push((wire_id, result.clone()));
                             }
                         }
                         _ => unreachable!("block holds only tool entries"),
@@ -460,6 +531,10 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
                     rebuilt = rebuilt.push(crate::server::ai::types::Message::Assistant {
                         content: (!text.is_empty()).then_some(text),
                         tool_calls: calls,
+                        // `take` means only the first group of a run carries
+                        // it, which is right: the thinking preceded the whole
+                        // run, and its `first` call opened it.
+                        reasoning: pending_reasoning.take(),
                     });
                     for (call_id, result) in results {
                         rebuilt = rebuilt.push(crate::server::ai::types::Message::Tool {
@@ -476,7 +551,7 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
             // turn (see compact.rs for why not System).
             Entry::Compaction { summary, .. } => {
                 rebuilt = rebuilt.push(crate::server::ai::types::Message::User {
-                    content: summary.clone(),
+                    content: summary.clone().into(),
                 });
                 i += 1;
             }
@@ -504,7 +579,8 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
             content: format!(
                 "[任务清单（当前状态）]\n{}\n（这是你自己的备忘录，用 todo 工具维护）",
                 crate::server::agent::todo::summary_text(&todo)
-            ),
+            )
+            .into(),
         });
     }
     rebuilt
@@ -597,6 +673,244 @@ mod tests {
             .collect()
     }
 
+
+    /// **只在正文里的工具调用也必须被执行。**
+    ///
+    /// 有的宿主不提供结构化的 `tool_calls` 字段：模型只能把调用写进正文，
+    /// 而且宿主的 `finish_reason` 报的是 `stop`（它压根不知道模型调了工具）。
+    ///
+    /// 这是最贵的一种失败：调用不执行 → 模型拿不到结果 → 它重复输出或者开始
+    /// 编 → 每一轮都白花钱，而用户看到的是"模型今天不太行"。所以这条从两头
+    /// 验：**网关必须收到第二次请求**（说明工具真的跑了），**文本里那段标记
+    /// 不能出现在用户看到的正文里**。
+    #[test]
+    fn a_tool_call_that_exists_only_in_the_text_still_runs() {
+        use crate::server::ai::compat::Compat;
+        use crate::server::test_gateway::inband_script;
+
+        let dir = std::env::temp_dir().join(format!("mypi-inband-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.txt"), "文件内容\n").unwrap();
+
+        let args = r#"{"intent":"看一眼","path":"./x.txt"}"#;
+        let (base, srv) = fake_gateway(inband_script("read", args));
+
+        // 这个宿主把工具调用塞在正文里 —— 声明出来，解析器才会接上。
+        let user: Compat =
+            serde_yaml::from_str("streamMarkupHealingPattern: kimi\n").unwrap();
+        let client = Client::new(&base, "k", "model-test").with_compat(Some(&user));
+
+        let chat = Arc::new(Mutex::new(
+            ChatContext::new().push(Message::System {
+                content: "SYS".into(),
+            }),
+        ));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cwd = dir.clone();
+        spawn_turn(
+            tx,
+            TurnRequest {
+                client,
+                chat,
+                text: "读一下 x.txt".into(),
+                cfg: LoopConfig::new(4096),
+                interrupt: Arc::new(AtomicBool::new(false)),
+                cwd: cwd.clone(),
+                workspace_root: cwd.clone(),
+                todo: Vec::new(),
+                cwd_slot: Arc::new(RwLock::new(cwd)),
+                history: Arc::new(Vec::new()),
+                cwd_trail: Arc::new(Vec::new()),
+                tool_filter: None,
+                artifacts: None,
+                tools: ToolsConfig::default(),
+                browser: Default::default(),
+                stream_mode: StreamMode::Immediate,
+            },
+        );
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            let done = matches!(ev, SessionEvent::Done);
+            events.push(ev);
+            if done {
+                break;
+            }
+        }
+
+        let bodies = srv.join().unwrap();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "工具必须被执行：没有第二次请求就说明调用被当成了普通文字"
+        );
+
+        let shown = deltas(&events).join("");
+        let leaked = shown.contains("tool_calls_section") || shown.contains("<|tool_call");
+        assert!(leaked == false, "标记不该泄漏到用户看到的正文里：{shown:?}");
+        assert!(shown.contains("我看看"), "正文里的普通文字要保留：{shown:?}");
+
+        // 第二次请求里必须带上第一次调用的结果 —— 那是"工具真的跑了"的证据。
+        let second: serde_json::Value = serde_json::from_str(&bodies[1]).unwrap();
+        let msgs = second["messages"].as_array().unwrap();
+        assert!(
+            msgs.iter().any(|m| m["role"] == "tool"),
+            "第二次请求里要有工具结果：{}",
+            serde_json::to_string_pretty(msgs).unwrap()
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m["role"] == "assistant" && m["tool_calls"].is_array()),
+            "第二次请求里要有那次工具调用：{}",
+            serde_json::to_string_pretty(msgs).unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 坏调用（id 或函数名空/纯空白）连同它的结果一起从历史里剔掉。
+    ///
+    /// 模型真的会发这种调用。宿主对它的反应是拒收**整个**请求，于是会话卡
+    /// 在 400 循环里，只能靠清空历史脱身——而错误信息说的是 schema 或
+    /// `function.name`，跟"某个历史轮次里有个空名字"完全对不上。
+    #[test]
+    fn malformed_tool_calls_are_dropped_with_their_results() {
+        use crate::server::ai::types::Message;
+        use crate::server::entry::Entry;
+
+        let entries = vec![
+            Entry::User { content: "跑一下".into() },
+            Entry::ToolRequest {
+                call_id: "".into(),
+                name: "bash".into(),
+                args: "{}".into(),
+                intent: String::new(),
+                text: String::new(),
+                first: true,
+            },
+            Entry::ToolResult {
+                call_id: "".into(),
+                ok: true,
+                name: "bash".into(),
+                result: "结果".into(),
+                details: None,
+
+                duration_ms: 0,
+            },
+            Entry::Assistant { content: "好了".into(), usage: None },
+        ];
+        let ctx = entries_to_context("sys", &entries);
+        // 绑出来再断言：`!` 开头的行在这个环境里会被当成 shell 展开。
+        let has_tool = ctx.messages.iter().any(|m| matches!(m, Message::Tool { .. }));
+        assert!(has_tool == false, "坏调用的结果必须一起走：{:?}", ctx.messages);
+        let has_calls = ctx.messages.iter().any(|m| match m {
+            Message::Assistant { tool_calls, .. } => tool_calls.is_empty() == false,
+            _ => false,
+        });
+        assert!(has_calls == false, "坏调用本身也不能上线：{:?}", ctx.messages);
+        assert!(
+            ctx.messages
+                .iter()
+                .any(|m| matches!(m, Message::Assistant { content, .. } if content.as_deref() == Some("好了"))),
+            "这轮里正常的 assistant 不受影响"
+        );
+    }
+
+    /// 函数名为空同样算坏调用。
+    #[test]
+    fn a_blank_tool_name_is_malformed_too() {
+        use crate::server::ai::types::Message;
+        use crate::server::entry::Entry;
+
+        let entries = vec![
+            Entry::User { content: "跑一下".into() },
+            Entry::ToolRequest {
+                call_id: "c1".into(),
+                name: "   ".into(),
+                args: "{}".into(),
+                intent: String::new(),
+                text: String::new(),
+                first: true,
+            },
+            Entry::ToolResult {
+                call_id: "c1".into(),
+                ok: true,
+                name: "bash".into(),
+                result: "结果".into(),
+                details: None,
+
+                duration_ms: 0,
+            },
+        ];
+        let ctx = entries_to_context("sys", &entries);
+        let has_tool = ctx.messages.iter().any(|m| matches!(m, Message::Tool { .. }));
+        assert!(has_tool == false, "纯空白函数名也是坏的：{:?}", ctx.messages);
+    }
+
+    /// 同一个 id 出现两次时，第二次加 `_dup1`，并且两条结果各归各的。
+    ///
+    /// 分叉和导入都会造出这种历史。宿主对重复 id 的反应和坏调用一样：
+    /// 拒收整个请求。
+    #[test]
+    fn a_repeated_tool_call_id_is_suffixed_and_still_pairs_up() {
+        use crate::server::ai::types::Message;
+        use crate::server::entry::Entry;
+
+        let call = |id: &str, text: &str, first: bool| Entry::ToolRequest {
+            call_id: id.into(),
+            name: "bash".into(),
+            args: r#"{"command":"ls"}"#.into(),
+            intent: String::new(),
+            text: text.into(),
+            first,
+        };
+        let result = |id: &str, out: &str| Entry::ToolResult {
+            call_id: id.into(),
+            ok: true,
+                name: "bash".into(),
+            result: out.into(),
+            details: None,
+
+            duration_ms: 0,
+        };
+        let entries = vec![
+            Entry::User { content: "第一次".into() },
+            call("c1", "", true),
+            result("c1", "第一份输出"),
+            Entry::Assistant { content: "继续".into(), usage: None },
+            Entry::User { content: "第二次".into() },
+            call("c1", "", true),
+            result("c1", "第二份输出"),
+        ];
+        let ctx = entries_to_context("sys", &entries);
+
+        let calls: Vec<&str> = ctx
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                Message::Assistant { tool_calls, .. } => {
+                    tool_calls.first().map(|c| c.id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, vec!["c1", "c1_dup1"], "第二次出现要改名：{calls:?}");
+
+        let tools: Vec<(&str, &str)> = ctx
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                Message::Tool { tool_call_id, content } => {
+                    Some((tool_call_id.as_str(), content.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tools,
+            vec![("c1", "第一份输出"), ("c1_dup1", "第二份输出")],
+            "结果要跟着改名，否则配对断掉：{tools:?}"
+        );
+    }
 
     #[test]
     fn a_tool_round_stores_every_message_the_model_saw() {
@@ -782,7 +1096,9 @@ mod tests {
                 tools_json,
                 max_tokens,
                 base_url,
+                compat_json,
             } => {
+                assert_eq!(compat_json, &None, "没写 compat 就只有探测，不落空对象");
                 assert_eq!(model, "model-test");
                 assert_eq!(protocol, "openai-chat-completions");
                 assert_eq!(system, "SYS", "系统提示词按原文进库");
@@ -912,6 +1228,7 @@ mod tests {
         let ctx = entries_to_context("SYS", st.transcript());
         let note = ctx.messages.iter().find_map(|m| match m {
             crate::server::ai::types::Message::User { content } => {
+                let content = content.text();
                 content.contains("任务清单").then_some(content.clone())
             }
             _ => None,
@@ -1128,7 +1445,7 @@ mod tests {
         assert_eq!(rows[0].stop_reason, None, "没拿到停因就留空");
         // 副本里那条必须和库里那条对得上
         match chat.lock().unwrap().messages.last() {
-            Some(Message::Assistant { content, tool_calls }) => {
+            Some(Message::Assistant { content, tool_calls, .. }) => {
                 assert_eq!(content.as_deref(), Some("半"));
                 assert!(tool_calls.is_empty(), "半截回复不许带工具调用");
             }
@@ -1200,6 +1517,7 @@ mod tests {
             Message::Assistant {
                 content,
                 tool_calls,
+                ..
             } => {
                 assert_eq!(content.as_deref(), Some("我先跑两个命令"), "文本必须还原");
                 let ids: Vec<&str> = tool_calls.iter().map(|c| c.id.as_str()).collect();
@@ -1281,13 +1599,18 @@ mod tests {
         let back = s.load_entries(id).unwrap();
         assert_eq!(&back, round, "落盘→读回必须逐字节还原");
 
-        // And the protocol rebuild skips the reasoning entirely:
+        // The reasoning *is* carried into the rebuilt context — a host that
+        // requires it on every assistant turn (DeepSeek V4 validates the
+        // field's presence and its value) needs it there or replay is wrong.
+        // What it must never do is reach the wire **by default**: that is
+        // `messages_to_wire`'s call, and with no host asking for it, nothing
+        // goes out.
         let ctx = entries_to_context("sys", &back);
-        let has_reasoning_text = ctx
-            .messages
-            .iter()
-            .any(|m| format!("{m:?}").contains("内心独白"));
-        assert!(!has_reasoning_text, "推理不得进入协议上下文");
+        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:8788/v1", "m", None);
+        let wire = crate::server::ai::assemble::messages_to_wire(&ctx.messages, &compat);
+        let text = serde_json::to_string(&wire).unwrap();
+        assert!(!text.contains("内心独白"), "没有宿主要求时不发推理内容：{text}");
+        assert!(text.contains("最终答案"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1358,6 +1681,7 @@ mod tests {
             .push(Message::Assistant {
                 content: Some("我先列个目录".into()),
                 tool_calls: vec![ToolCall::new("c1", "bash", r#"{"command":"ls"}"#)],
+                reasoning: None,
             })
             .push(Message::Tool {
                 tool_call_id: "c1".into(),
@@ -1366,11 +1690,20 @@ mod tests {
             .push(Message::Assistant {
                 content: Some("有两个文件".into()),
                 tool_calls: vec![],
+    reasoning: None,
             });
 
+        // Compare on the **wire** form: that is what the model saw, and it is
+        // where the byte-identity contract lives. The internal context carries
+        // reasoning the wire deliberately does not.
+        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:8788/v1", "m", None);
+        let wire = |m: &[crate::server::ai::types::Message]| {
+            serde_json::to_string(&crate::server::ai::assemble::messages_to_wire(m, &compat))
+                .unwrap()
+        };
         assert_eq!(
-            serde_json::to_string(&replayed.messages).unwrap(),
-            serde_json::to_string(&expected.messages).unwrap(),
+            wire(&replayed.messages),
+            wire(&expected.messages),
             "回放必须与原始 wire 逐字节一致\n回放: {:?}\n期望: {:?}",
             replayed.messages,
             expected.messages

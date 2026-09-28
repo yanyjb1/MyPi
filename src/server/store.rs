@@ -112,6 +112,12 @@ pub struct RoundMeta {
     /// Token ceiling sent with this turn's requests (the configured one;
     /// the per-request value the loop derives from it is recomputable).
     pub max_tokens: u32,
+    /// The `compat:` block exactly as `models.yml` had it, or `None` when the
+    /// entry carried none. Stored because detection is a pure function of
+    /// `(base_url, model)` — recomputable — while a *hand-written override* is
+    /// not: edit the config and a stored round would silently replay with
+    /// different switches.
+    pub compat_json: Option<String>,
 }
 
 /// 一轮的用量，按轮落盘（`turns` 的三个 token 列）。
@@ -143,6 +149,9 @@ pub struct RoundRow {
     /// Block span this turn wrote (`None` when the turn stored no blocks).
     pub first_block: Option<i64>,
     pub last_block: Option<i64>,
+    /// The `compat:` block as `models.yml` had it, serialized. `None` = the
+    /// entry carried none (detection alone decided).
+    pub compat_json: Option<String>,
     /// 这一轮的用量（`None` = 没拿到：半途死掉、网关不报）。
     pub usage: Option<RoundUsage>,
 }
@@ -242,7 +251,8 @@ impl RawBlock {
 const BLOCK_COLS: &str = "block_id, ts, kind, payload, kind2, payload2";
 
 const ROUND_COLS: &str = "seq, ts, model, protocol, base_url, system, tools_json, max_tokens,
-     stop_reason, first_block, last_block, provider, prompt_tokens, completion_tokens, cached_tokens";
+     stop_reason, first_block, last_block, provider, prompt_tokens, completion_tokens, cached_tokens,
+     compat_json";
 
 fn round_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RoundRow> {
     // 三个 token 列同生同死：网关要么整块报 usage，要么一个字都不报，所以
@@ -268,6 +278,7 @@ fn round_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RoundRow> {
         stop_reason: r.get(8)?,
         first_block: r.get(9)?,
         last_block: r.get(10)?,
+        compat_json: r.get(15)?,
         usage,
     })
 }
@@ -293,7 +304,7 @@ impl Store {
         // 别的布局**直接扔掉**：项目未发布、只有一个用户、没有要保留的历史，
         // 迁移代码只会变成负担。`user_version` 对不上就把表全删了重建——
         // 开发期改 schema 只需把这个数字加一。
-        const SCHEMA_VERSION: i64 = 3;
+        const SCHEMA_VERSION: i64 = 4;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != SCHEMA_VERSION {
             // Foreign keys are on (the bundled SQLite turns them on by
@@ -387,6 +398,11 @@ impl Store {
                 system      TEXT NOT NULL,
                 tools_json  TEXT NOT NULL,
                 max_tokens  INTEGER NOT NULL,
+                -- 这一轮用的兼容开关（`models.yml` 里那个 `compat:` 块）。
+                -- 存**用户写的**那份，不存探测结果：探测是 (baseUrl, model)
+                -- 的纯函数，重放时重算即可；用户写的那份在配置改掉之后就
+                -- 找不回来了，所以它是数据，得落盘。
+                compat_json TEXT,
                 stop_reason TEXT,
                 first_block INTEGER,
                 last_block  INTEGER,
@@ -762,8 +778,9 @@ impl Store {
         tx.execute(
             "INSERT INTO turns (session_id, seq, ts, model, protocol, base_url, system,
                                 tools_json, max_tokens, stop_reason, first_block, last_block,
-                                provider, prompt_tokens, completion_tokens, cached_tokens)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                                provider, prompt_tokens, completion_tokens, cached_tokens,
+                                compat_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             rusqlite::params![
                 session_id,
                 seq,
@@ -781,6 +798,7 @@ impl Store {
                 usage.map(|u| u.prompt_tokens as i64),
                 usage.map(|u| u.completion_tokens as i64),
                 usage.map(|u| u.cached_tokens as i64),
+                meta.compat_json,
             ],
         )?;
         tx.commit()?;
@@ -1841,6 +1859,7 @@ mod tests {
             system: system.into(),
             tools_json: "[]".into(),
             max_tokens: 4096,
+            compat_json: None,
         };
         let used = |n: u64| Entry::Assistant {
             content: "答".into(),
@@ -1903,6 +1922,7 @@ mod tests {
             system: "SYS".into(),
             tools_json: "[]".into(),
             max_tokens: 4096,
+            compat_json: None,
         };
         let used = |n: u64| Entry::Assistant {
             content: "答".into(),
@@ -1948,6 +1968,7 @@ mod tests {
             system: "SYS".into(),
             tools_json: "[]".into(),
             max_tokens: 4096,
+            compat_json: None,
         };
         let u = |p: u64, c: u64, r: u64| RoundUsage {
             prompt_tokens: p,
@@ -2876,9 +2897,17 @@ mod tests {
         assert_eq!(back, round, "reopen must be byte-identical");
         assert_eq!(s.tip(id).unwrap(), tip);
         let ctx = crate::server::turn::entries_to_context("sys", &back);
-        let wire = serde_json::to_string(&ctx.messages).unwrap();
+        let compat = crate::server::ai::compat::resolve("http://127.0.0.1:8788/v1", "m", None);
+        let wire = serde_json::to_string(&crate::server::ai::assemble::messages_to_wire(
+            &ctx.messages,
+            &compat,
+        ))
+        .unwrap();
         assert!(wire.contains("ok"), "{wire}");
-        assert!(!wire.contains("先想"), "reasoning stays out of the protocol");
+        assert!(
+            !wire.contains("先想"),
+            "没有宿主要求时推理不上线：{wire}"
+        );
     }
 }
 

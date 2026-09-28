@@ -9,6 +9,7 @@
 //!   mypi sessions             list sessions (script-friendly; goes through
 //!                             the daemon's socket, never touches the db)
 //!   mypi replay <id> <round>  rebuild one stored round's request (audit)
+//!   mypi bench <scenario> …   render benchmarks (see src/bench.rs)
 //!
 //! Flags: --help/-h, --version/-V, --resume, --model <spec>.
 
@@ -24,6 +25,12 @@ pub struct Cli {
     pub sessions: bool,
     /// One-shot `replay <id> <round>` (no TUI).
     pub replay: Option<(i64, i64)>,
+    /// One-shot `bench <scenario> [args…]` (no TUI). Everything after the
+    /// word `bench` rides along untouched — the bench module owns its own
+    /// vocabulary, and a second parser here would only drift from it.
+    /// `Some(vec![])` = bare `mypi bench`, which is a legal request (the
+    /// module picks the full sweep).
+    pub bench: Option<Vec<String>>,
     /// Open the resume picker immediately (--resume).
     pub resume: bool,
     /// Model override for this session (`provider:id`).
@@ -38,6 +45,7 @@ Usage:
   mypi attach <id>           attach the TUI to a stored session
   mypi sessions              list sessions (through the daemon socket)
   mypi replay <id> <round>   rebuild a stored round's request (read-only)
+  mypi bench <scenario> …    render benchmarks (try `mypi bench all`)
   mypi --server              run the daemon in the foreground
 
 Options:
@@ -87,6 +95,11 @@ impl Cli {
                     })?);
                 }
                 "sessions" => cli.sessions = true,
+                "bench" => {
+                    // 剩下的一律归它：bench 有自己的词表，在这里再解一遍
+                    // 只会跟着它一起漂。
+                    cli.bench = Some(it.by_ref().collect());
+                }
                 "replay" => {
                     let v = it.next().ok_or_else(|| {
                         anyhow::anyhow!("replay needs: mypi replay <session id> <round>")
@@ -154,6 +167,19 @@ mod tests {
         assert_eq!(c.attach, Some(42));
         assert!(parse(&["attach"]).is_err(), "missing id rejected");
         assert!(parse(&["attach", "abc"]).is_err(), "non-numeric rejected");
+    }
+
+    #[test]
+    fn bench_takes_everything_after_it() {
+        let c = parse(&["bench", "gen", "32000", "/tmp/x.db", "dirty"]).unwrap();
+        assert_eq!(
+            c.bench.as_deref(),
+            Some(["gen", "32000", "/tmp/x.db", "dirty"].map(String::from).as_slice())
+        );
+        // 光一个 bench 也是合法的：模块自己决定默认跑什么。
+        assert_eq!(parse(&["bench"]).unwrap().bench, Some(Vec::new()));
+        // 没敲 = 没有这次请求（和"敲了但没给参数"不是一回事）。
+        assert_eq!(parse(&[]).unwrap().bench, None);
     }
 
     #[test]

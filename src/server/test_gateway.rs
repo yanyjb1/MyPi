@@ -40,6 +40,20 @@ pub fn tool_script_named(name: &str, args: &str) -> Vec<String> {
     vec![first, sse(&["读完了"])]
 }
 
+/// A host that puts the tool call **only in the visible text** — no structured
+/// `tool_calls` field, and `finish_reason: "stop"` rather than `"tool_calls"`.
+///
+/// This is the shape that used to make tools silently never run: the caller
+/// sees a normal completion, the round ends, and the model is left waiting for
+/// a result that never comes.
+pub fn inband_script(name: &str, args: &str) -> Vec<String> {
+    let text = format!(
+        "我看看。<|tool_calls_section_begin|><|tool_call_begin|>{name}:0\
+         <|tool_call_argument_begin|>{args}<|tool_call_end|><|tool_calls_section_end|>"
+    );
+    vec![sse(&[&text]), sse(&["读完了"])]
+}
+
 /// A gateway that answers `responses` in order (one connection each) and
 /// returns the base URL plus a handle yielding every request body it saw.
 pub fn fake_gateway_status(
