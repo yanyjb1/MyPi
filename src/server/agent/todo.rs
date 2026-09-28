@@ -124,13 +124,13 @@ impl TodoArgs {
     /// the accepted shapes, not a serde message.
     pub fn parse(raw: &str) -> Result<TodoArgs> {
         let v: serde_json::Value =
-            serde_json::from_str(raw).map_err(|e| anyhow!("arguments 不是合法 JSON：{e}"))?;
+            serde_json::from_str(raw).map_err(|e| anyhow!("`arguments` is not valid JSON: {e}"))?;
         let op_name = v
             .get("op")
             .and_then(|o| o.as_str())
-            .ok_or_else(|| anyhow!("缺 `op`（init/append/start/done/drop/block/unblock/rm/view）"))?;
+            .ok_or_else(|| anyhow!("missing `op` (init/append/start/done/drop/block/unblock/rm/view)"))?;
         let op = TodoOp::parse(op_name)
-            .ok_or_else(|| anyhow!("未知的 op `{op_name}`（init/append/start/done/drop/block/unblock/rm/view）"))?;
+            .ok_or_else(|| anyhow!("unknown op `{op_name}` (init/append/start/done/drop/block/unblock/rm/view)"))?;
 
         let mut list = Vec::new();
         if let Some(arr) = v.get("list").and_then(|l| l.as_array()) {
@@ -138,7 +138,7 @@ impl TodoArgs {
                 let name = entry
                     .get("phase")
                     .and_then(|p| p.as_str())
-                    .ok_or_else(|| anyhow!("list 里每一项都要有 `phase` 名字"))?
+                    .ok_or_else(|| anyhow!("every entry in `list` needs a `phase` name"))?
                     .to_string();
                 let items = entry
                     .get("items")
@@ -187,21 +187,21 @@ impl TodoArgs {
             TodoOp::Init => {
                 anyhow::ensure!(
                     !self.list.is_empty() || !self.items.is_empty(),
-                    "init 需要 `list: [{{phase, items}}]` 或 `items: [..]`"
+                    "init needs `list: [{{phase, items}}]` or `items: [..]`"
                 );
                 anyhow::ensure!(
                     self.list.iter().all(|(_, i)| !i.is_empty()),
-                    "init 里每个阶段至少一项"
+                    "every phase in `init` needs at least one item"
                 );
             }
             TodoOp::Append => {
-                anyhow::ensure!(!self.items.is_empty(), "append 需要 `items: [..]`");
+                anyhow::ensure!(!self.items.is_empty(), "append needs `items: [..]`");
             }
             TodoOp::Start | TodoOp::Done | TodoOp::Drop | TodoOp::Block | TodoOp::Unblock
             | TodoOp::Rm => {
                 anyhow::ensure!(
                     self.task.is_some(),
-                    "{} 需要 `task`：那一项的原文（照抄你写下时的那句）",
+                    "{} needs `task`: the item's exact text, copied verbatim",
                     self.op.as_str()
                 );
             }
@@ -239,7 +239,7 @@ pub fn apply(phases: &[TodoPhase], args: &TodoArgs) -> (Vec<TodoPhase>, Vec<Stri
                     .collect()
             } else {
                 vec![TodoPhase {
-                    name: "任务".to_string(),
+                    name: "Tasks".to_string(),
                     tasks: args
                         .items
                         .iter()
@@ -253,7 +253,7 @@ pub fn apply(phases: &[TodoPhase], args: &TodoArgs) -> (Vec<TodoPhase>, Vec<Stri
             };
         }
         TodoOp::Append => {
-            let phase = args.phase.clone().unwrap_or_else(|| "任务".to_string());
+            let phase = args.phase.clone().unwrap_or_else(|| "Tasks".to_string());
             let target = match next.iter_mut().find(|p| p.name == phase) {
                 Some(p) => p,
                 None => {
@@ -266,7 +266,7 @@ pub fn apply(phases: &[TodoPhase], args: &TodoArgs) -> (Vec<TodoPhase>, Vec<Stri
             };
             for content in &args.items {
                 if target.tasks.iter().any(|t| &t.content == content) {
-                    errors.push(format!("「{content}」已经在清单里了"));
+                    errors.push(format!("{content:?} is already in the list"));
                     continue;
                 }
                 target.tasks.push(TodoTask {
@@ -285,7 +285,7 @@ pub fn apply(phases: &[TodoPhase], args: &TodoArgs) -> (Vec<TodoPhase>, Vec<Stri
                 removed |= phase.tasks.len() != before;
             }
             if !removed {
-                errors.push(format!("清单里没有「{task}」"));
+                errors.push(format!("no item named {task:?} in the list"));
             }
             next.retain(|p| !p.tasks.is_empty());
         }
@@ -317,7 +317,7 @@ pub fn apply(phases: &[TodoPhase], args: &TodoArgs) -> (Vec<TodoPhase>, Vec<Stri
                             t.blocker = Some(
                                 args.reason
                                     .clone()
-                                    .unwrap_or_else(|| "（未说明原因）".to_string()),
+                                    .unwrap_or_else(|| "(no reason given)".to_string()),
                             );
                         }
                         TodoOp::Unblock => {
@@ -330,7 +330,7 @@ pub fn apply(phases: &[TodoPhase], args: &TodoArgs) -> (Vec<TodoPhase>, Vec<Stri
             }
             if !found {
                 errors.push(format!(
-                    "清单里没有「{task}」——`task` 必须与写下时逐字一致（用 view 看当前清单）"
+                    "no item named {task:?} — `task` MUST match the text you wrote, verbatim (use view to read the current list)"
                 ));
             }
             // One thing at a time: starting an item retires whatever was
@@ -357,7 +357,7 @@ pub fn apply(phases: &[TodoPhase], args: &TodoArgs) -> (Vec<TodoPhase>, Vec<Stri
 /// The list as the **model** reads it: plain text, whole list every time.
 pub fn summary_text(phases: &[TodoPhase]) -> String {
     if phases.is_empty() {
-        return "（清单是空的）".to_string();
+        return "(the list is empty)".to_string();
     }
     let (done, total) = todo_counts(phases);
     let mut out = String::new();
@@ -373,7 +373,7 @@ pub fn summary_text(phases: &[TodoPhase]) -> String {
             };
             out.push_str(&format!("  {mark} {}", t.content));
             if let Some(b) = &t.blocker {
-                out.push_str(&format!("（卡住：{b}）"));
+                out.push_str(&format!(" (blocked: {b})"));
             }
             out.push('\n');
         }
@@ -522,7 +522,7 @@ mod tests {
         let (next, _) = apply(&cur, &block);
         assert_eq!(next[0].tasks[0].status, TodoStatus::Blocked);
         assert_eq!(next[0].tasks[0].blocker.as_deref(), Some("等上游"));
-        assert!(summary_text(&next).contains("卡住：等上游"));
+        assert!(summary_text(&next).contains("blocked: 等上游"));
 
         let unblock = TodoArgs::parse(r#"{"op":"unblock","task":"甲"}"#).unwrap();
         let (next, _) = apply(&next, &unblock);

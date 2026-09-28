@@ -900,8 +900,8 @@ impl Config {
             if normalize_api(&provider.api).is_none() {
                 let known = "openai-completions";
                 anyhow::bail!(
-                    "provider `{name}` 的 api 写的是 `{}`，程序不认识。目前只实现了 {known} \
-                     （chat/completions 线协议）；responses、anthropic-messages 一类不支持。",
+                    "provider `{name}` declares api `{}`, which this program does not know. Implemented: {known} \
+                     (the chat/completions wire protocol); responses and anthropic-messages are not supported.",
                     provider.api
                 );
             }
@@ -963,8 +963,8 @@ impl Config {
         {
             let fallback = Self::alphabetical_default(&cfg.models);
             eprintln!(
-                "mypi: 默认模型 {stale} 已无法解析（{e:#}）；本次改用 {}，用 /model 重新指定",
-                fallback.as_deref().unwrap_or("(无)")
+                "mypi: default model {stale} no longer resolves ({e:#}); using {} this time — re-pick it with /model",
+                fallback.as_deref().unwrap_or("(none)")
             );
             cfg.app.default = fallback;
         }

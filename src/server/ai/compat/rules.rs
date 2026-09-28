@@ -230,8 +230,8 @@ pub fn check_conflicts(rules: &[Rule]) -> anyhow::Result<()> {
                 continue;
             }
             let (va, vb) = (
-                serde_json::to_value(&a.set).context("规则 set 序列化失败")?,
-                serde_json::to_value(&b.set).context("规则 set 序列化失败")?,
+                serde_json::to_value(&a.set).context("failed to serialize the rule set")?,
+                serde_json::to_value(&b.set).context("failed to serialize the rule set")?,
             );
             let (Some(oa), Some(ob)) = (va.as_object(), vb.as_object()) else {
                 continue;
@@ -243,8 +243,8 @@ pub fn check_conflicts(rules: &[Rule]) -> anyhow::Result<()> {
                 }
                 match ob.get(key) {
                     Some(y) if !y.is_null() && y != x => bail!(
-                        "兼容规则冲突：`{key}` 被 `{a}`（{x}）与 `{b}`（{y}）以同一优先级 \
-                         设为不同的值。给其中一条加 `priority`，或删掉一条。",
+                        "compat rule conflict: `{key}` is set to different values at the same priority by `{a}` ({x}) \
+                         and `{b}` ({y}). Give one of them a `priority`, or drop one.",
                         a = a.name,
                         b = b.name,
                     ),
@@ -259,10 +259,10 @@ pub fn check_conflicts(rules: &[Rule]) -> anyhow::Result<()> {
 /// 解析一张规则表文本。`origin` 只用于错误信息。
 pub fn parse(text: &str, origin: &str) -> anyhow::Result<Vec<Rule>> {
     let set: RuleSet =
-        serde_yaml::from_str(text).with_context(|| format!("解析兼容规则表 {origin} 失败"))?;
+        serde_yaml::from_str(text).with_context(|| format!("failed to parse the compat rule table {origin}"))?;
     if set.version != 1 {
         bail!(
-            "兼容规则表 {origin} 的 version 是 {}，本版本只认 1",
+            "compat rule table {origin} has version {}, but this build only understands 1",
             set.version
         );
     }
@@ -271,12 +271,12 @@ pub fn parse(text: &str, origin: &str) -> anyhow::Result<Vec<Rule>> {
 
 /// 出厂表 + 用户表（存在才读）。
 pub fn load() -> anyhow::Result<Vec<Rule>> {
-    let mut all = parse(BUILTIN, "（内置）")?;
+    let mut all = parse(BUILTIN, "(built-in)")?;
     if let Some(path) = user_path()
         && path.exists()
     {
         let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("读取 {} 失败", path.display()))?;
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let mut user = parse(&text, &path.display().to_string())?;
         for r in &mut user {
             r.source = 1;
@@ -286,8 +286,8 @@ pub fn load() -> anyhow::Result<Vec<Rule>> {
     for r in &all {
         if r.any.is_empty() {
             bail!(
-                "兼容规则 `{}` 没有任何选择器，会匹配一切。要么删掉它，\
-                 要么给它加 `any:`。",
+                "compat rule `{}` has no selectors and would match everything. Either delete it, \
+                 or give it an `any:`.",
                 r.name
             );
         }

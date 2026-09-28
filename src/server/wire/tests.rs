@@ -390,7 +390,7 @@ fn a_silent_daemon_names_the_wait_it_gave_up_on() {
         .wait_for_within(|_| true, std::time::Duration::from_millis(200))
         .expect_err("no reply must eventually give up");
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
-    assert_eq!(err.to_string(), "daemon 在 0.2 秒内没有回应");
+    assert_eq!(err.to_string(), "the daemon did not answer within 0.2 seconds");
 }
 
 #[test]

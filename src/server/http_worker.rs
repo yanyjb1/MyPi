@@ -53,8 +53,8 @@ impl HttpWorker {
     }
     pub fn replace(slot: &SharedWorker) -> Result<()> {
         let fresh = Self::spawn()?;
-        let mut old = slot.lock().map_err(|_| anyhow::anyhow!("HTTP worker 锁损坏"))?;
-        let mut new = fresh.lock().map_err(|_| anyhow::anyhow!("HTTP worker 锁损坏"))?;
+        let mut old = slot.lock().map_err(|_| anyhow::anyhow!("HTTP worker lock poisoned"))?;
+        let mut new = fresh.lock().map_err(|_| anyhow::anyhow!("HTTP worker lock poisoned"))?;
         let _ = old.child.kill();
         let _ = old.child.wait();
         std::mem::swap(&mut *old, &mut *new);
@@ -62,14 +62,14 @@ impl HttpWorker {
     }
 
     pub fn spawn() -> Result<SharedWorker> { 
-        let exe = std::env::current_exe().context("无法定位 mypi 可执行文件")?;
+        let exe = std::env::current_exe().context("cannot locate the mypi executable")?;
         let mut child = Command::new(exe)
             .arg("--http-worker")
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
-            .spawn().context("启动 HTTP worker 失败")?;
+            .spawn().context("failed to start the HTTP worker")?;
         let pid = Arc::new(AtomicU32::new(child.id()));
-        let input = child.stdin.take().context("HTTP worker stdin 不可用")?;
-        let mut output = BufReader::new(child.stdout.take().context("HTTP worker stdout 不可用")?);
+        let input = child.stdin.take().context("HTTP worker stdin unavailable")?;
+        let mut output = BufReader::new(child.stdout.take().context("HTTP worker stdout unavailable")?);
         // 握手：确认子进程真的在跑 worker。只看"进程起来了"会误判——
         // 不认识参数的二进制（测试里 `current_exe()` 就是测试二进制）、
         // 被换掉的二进制、启动即崩的，都会得到一个不干活的子进程，之后
@@ -84,7 +84,7 @@ impl HttpWorker {
         if !ok {
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!("HTTP worker 没有就绪");
+            anyhow::bail!("HTTP worker never became ready");
         }
         Ok(Arc::new(Mutex::new(Self { child, pid, input, output, next_id: 1 })))
     }
@@ -115,7 +115,7 @@ impl HttpWorker {
         loop {
             raw.clear();
             let n = self.output.read_line(&mut raw)?;
-            if n == 0 { anyhow::bail!("HTTP worker 已退出") }
+            if n == 0 { anyhow::bail!("HTTP worker exited") }
             let msg: Response = serde_json::from_str(raw.trim_end())?;
             match msg {
                 Response::Chunk { id: got, line } if got == id => {
@@ -128,11 +128,11 @@ impl HttpWorker {
         }
     }
     pub fn kill_and_replace(slot: &SharedWorker) -> Result<()> {
-        let mut old = slot.lock().map_err(|_| anyhow::anyhow!("HTTP worker 锁损坏"))?;
+        let mut old = slot.lock().map_err(|_| anyhow::anyhow!("HTTP worker lock poisoned"))?;
         let _ = old.child.kill();
         let _ = old.child.wait();
         let fresh = Self::spawn()?;
-        let mut replacement = fresh.lock().map_err(|_| anyhow::anyhow!("HTTP worker 锁损坏"))?;
+        let mut replacement = fresh.lock().map_err(|_| anyhow::anyhow!("HTTP worker lock poisoned"))?;
         std::mem::swap(&mut *old, &mut *replacement);
         Ok(())
     }

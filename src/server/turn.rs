@@ -109,7 +109,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             .with_browser(browser)
             .with_enabled(tool_filter);
         // Snapshot for this turn: the lock is held only for the clone, never during network I/O
-        let mut chat = chat.lock().expect("chat 锁中毒").clone();
+        let mut chat = chat.lock().expect("chat lock poisoned").clone();
         // Tool manuals ship with the request — without them the model does not know the tools exist
         chat.tools = tools.definitions_for();
 
@@ -289,7 +289,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
             Ok(outcome) => {
                 if outcome.hit_round_limit {
                     let _ = send(SessionEvent::Error(format!(
-                        "工具调用轮数撞上限（{}），被强制收工",
+                        "hit the tool-round limit ({}) and was cut short",
                         cfg.max_rounds
                     )));
                 }
@@ -302,7 +302,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
                 // this context. We still write the finalized history back so
                 // the **next request** carries it (the model must remember
                 // this turn, and the prefix cache keys on it).
-                *chat_arc.lock().expect("chat 锁中毒") = chat;
+                *chat_arc.lock().expect("chat lock poisoned") = chat;
                 let _ = text; // retained for signature parity; no longer projected
             }
             Err(e) => {
@@ -312,7 +312,7 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
                     ..Default::default()
                 };
                 chat.messages.push(crate::server::agent::loop_rs::recorded_message(&partial, true));
-                *chat_arc.lock().expect("chat 锁中毒") = chat;
+                *chat_arc.lock().expect("chat lock poisoned") = chat;
                 if was_interrupted {
                     // worker 被杀后，管道 EOF/closed 是预期控制流，不是用户错误。
                     // 只提交半截回合和 Interrupted 状态，不向 transcript 渲染内部错误。
@@ -449,9 +449,9 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
                 for e in block {
                     if let Entry::ToolRequest { call_id, name, .. } = e {
                         let global = *id_seen.entry(call_id.clone()).or_insert(0);
-                        *id_seen.get_mut(call_id).expect("刚插进去") += 1;
+                        *id_seen.get_mut(call_id).expect("just inserted") += 1;
                         let local = *in_block.entry(call_id.clone()).or_insert(0);
-                        *in_block.get_mut(call_id).expect("刚插进去") += 1;
+                        *in_block.get_mut(call_id).expect("just inserted") += 1;
                         let malformed = call_id.trim().is_empty() || name.trim().is_empty();
                         let wire = if global == 0 {
                             call_id.clone()
@@ -475,7 +475,7 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
                     };
                     let counter = if is_request { &mut req_nth } else { &mut res_nth };
                     let n = *counter.entry(call_id.clone()).or_insert(0);
-                    *counter.get_mut(&call_id).expect("刚插进去") += 1;
+                    *counter.get_mut(&call_id).expect("just inserted") += 1;
                     let (wire_id, malformed) = plan
                         .get(&(call_id.clone(), n))
                         .map(|(w, m)| (w.clone(), *m))
@@ -577,7 +577,7 @@ pub fn entries_to_context(system: &str, entries: &[Entry]) -> ChatContext {
     if !todo.is_empty() {
         rebuilt = rebuilt.push(crate::server::ai::types::Message::User {
             content: format!(
-                "[任务清单（当前状态）]\n{}\n（这是你自己的备忘录，用 todo 工具维护）",
+                "[Task list (current state)]\n{}\n(This is your own memo; maintain it with the todo tool)",
                 crate::server::agent::todo::summary_text(&todo)
             )
             .into(),
@@ -1053,8 +1053,8 @@ mod tests {
             2,
             "两次失败各记一条：{logged:?}"
         );
-        assert!(logged[0].text.contains("第 1/3 次"), "{:?}", logged[0]);
-        assert!(logged.iter().any(|r| r.text.contains("成功")));
+        assert!(logged[0].text.contains("request 1/3 failed"), "{:?}", logged[0]);
+        assert!(logged.iter().any(|r| r.text.contains("succeeded")));
     }
 
     #[test]
@@ -1229,7 +1229,7 @@ mod tests {
         let note = ctx.messages.iter().find_map(|m| match m {
             crate::server::ai::types::Message::User { content } => {
                 let content = content.text();
-                content.contains("任务清单").then_some(content.clone())
+                content.contains("Task list").then_some(content.clone())
             }
             _ => None,
         });

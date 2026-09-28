@@ -102,7 +102,7 @@ impl ThinkingLoopGuard {
             self.since_check = 0;
             if let Some((unit, times)) = detect_exact_suffix_cycle(&self.tail) {
                 return Some(format!(
-                    "同一段 {} 字符的内容连续重复了 {} 次",
+                    "the same {} characters repeated {} times in a row",
                     unit.chars().count(),
                     times
                 ));
@@ -172,7 +172,7 @@ impl ThinkingLoopGuard {
                 .count();
             if similar >= SEGMENT_MIN_CLUSTER {
                 return Some(format!(
-                    "连续 {} 段内容高度重复（换了个说法说同一件事）",
+                    "{} consecutive segments are near-duplicates (the same thing said again)",
                     similar + 1
                 ));
             }

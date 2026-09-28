@@ -477,7 +477,7 @@ impl Store {
     pub fn fork_session(&mut self, parent_id: i64, fork_block_id: i64) -> Result<i64> {
         anyhow::ensure!(
             self.block_on_branch(parent_id, fork_block_id)?,
-            "会话 {parent_id} 的分支上没有块 {fork_block_id}"
+            "no block {fork_block_id} on session {parent_id}'s branch"
         );
         let cwd = self.session(parent_id)?.cwd.unwrap_or_default();
         let tx = self.conn.transaction()?;
@@ -521,11 +521,11 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        let owner = owner.ok_or_else(|| anyhow::anyhow!("块 {block_id} 不存在"))?;
+        let owner = owner.ok_or_else(|| anyhow::anyhow!("block {block_id} does not exist"))?;
         if owner != session_id {
             anyhow::ensure!(
                 !self.is_descendant(owner, session_id)?,
-                "不能回退到自己的后代（块 {block_id} 属于会话 {owner}）"
+                "cannot rewind onto a descendant (block {block_id} belongs to session {owner})"
             );
         }
         // **整棵树一起砍**，不只看自己名下那几块：前几次回退岔出去的分支和
@@ -1174,7 +1174,7 @@ impl Store {
                 [id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .with_context(|| format!("会话 {id} 不存在"))
+            .with_context(|| format!("session {id} does not exist"))
     }
 
     fn read_raw(&self, sql: &str, params: Vec<rusqlite::types::Value>) -> Result<Vec<RawBlock>> {

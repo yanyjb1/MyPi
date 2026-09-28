@@ -452,7 +452,7 @@ impl Client {
             crate::server::log::warn(
                 &self.model,
                 format!(
-                    "第 {n}/{} 次请求失败：{e:#}；{}ms 后重试",
+                    "request {n}/{} failed: {e:#}; retrying in {}ms",
                     self.retry.attempts,
                     self.retry.delay_ms(n)
                 ),
@@ -464,9 +464,9 @@ impl Client {
                 format!(
                     "{e:#}（{}）",
                     if n >= self.retry.attempts {
-                        format!("已试 {} 次，放弃", self.retry.attempts)
+                        format!("gave up after {} attempts", self.retry.attempts)
                     } else {
-                        "不可重试的错误".to_string()
+                        "not a retryable error".to_string()
                     }
                 ),
             );
@@ -487,7 +487,7 @@ impl Client {
                     if n > 1 {
                         crate::server::log::info(
                             &self.model,
-                            format!("第 {n} 次尝试成功"),
+                            format!("attempt {n} succeeded"),
                         );
                     }
                     return Ok(resp);
@@ -589,7 +589,7 @@ impl Client {
             match r {
                 Ok(msg) => {
                     if n > 1 {
-                        crate::server::log::info(&self.model, format!("第 {n} 次尝试成功"));
+                        crate::server::log::info(&self.model, format!("attempt {n} succeeded"));
                     }
                     return Ok(msg);
                 }
@@ -598,7 +598,7 @@ impl Client {
                 Err(e) if !emitted.get() && !no_strict && is_strict_rejection(&e) => {
                     crate::server::log::warn(
                         &self.model,
-                        format!("宿主拒了 strict 的工具 schema，去掉 strict 重试一次：{e:#}"),
+                        format!("host rejected the strict tool schema; retrying once without strict: {e:#}"),
                     );
                     no_strict = true;
                     n += 1;
@@ -675,7 +675,7 @@ impl Client {
             let request_body = body.clone();
             let headers = self.extra_headers();
             std::thread::spawn(move || {
-                let result = worker_slot.lock().map_err(|_| anyhow!("HTTP worker 锁损坏")).and_then(|mut w| {
+                let result = worker_slot.lock().map_err(|_| anyhow!("HTTP worker lock poisoned")).and_then(|mut w| {
                     w.stream(&base, &key, request_body, &headers, |line| tx.send(line.to_string()).is_ok())
                 });
                 if let Err(e) = result { let _ = tx.send(format!("__WORKER_ERROR__{e}")); }
@@ -753,8 +753,8 @@ impl Client {
                         && started.elapsed() > budget
                     {
                         anyhow::bail!(
-                            "上游 {:?} 内没有吐出第一个事件，判定为卡住（{} 的首事件超时；\
-                             本地冷启动慢的宿主不该设这个值）",
+                            "no first event from upstream within {:?}; treating it as stuck ({}'s first-event timeout — \
+                             do not set this for a host that is slow to start locally)",
                             budget,
                             self.model,
                         );
@@ -765,7 +765,7 @@ impl Client {
                         && last_event.elapsed() > budget
                     {
                         anyhow::bail!(
-                            "上游 {:?} 内没有新事件，判定为卡死（{} 的事件间空闲超时）",
+                            "no new event from upstream within {:?}; treating it as hung ({}'s inter-event idle timeout)",
                             budget,
                             self.model,
                         );
@@ -842,7 +842,7 @@ impl Client {
                         // 明确报错而不是静默截断：本轮丢了，调用方会按可重试
                         // 失败处理，用户可以重发。
                         anyhow::bail!(
-                            "推理陷入循环，本轮丢弃（{reason}；{}）",
+                            "reasoning fell into a loop; this round is discarded ({reason}; {})",
                             self.model
                         );
                     }
@@ -980,7 +980,7 @@ impl Client {
             && finish_reason.as_deref() == Some("length")
         {
             anyhow::bail!(
-                "模型以 length 收尾且没有输出任何内容：上下文窗口多半已经满了（这个宿主用空响应表示它）"
+                "the model stopped on `length` with no output at all: the context window is most likely full (this host says so with an empty reply)"
             );
         }
 

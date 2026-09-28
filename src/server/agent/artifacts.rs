@@ -68,7 +68,7 @@ impl ArtifactStore {
     /// Spill `content` into the table; returns (id, total_lines).
     pub fn spill(&self, tool_name: &str, content: &str) -> Result<(i64, usize)> {
         let lines = content.lines().count();
-        let mut st = self.inner.lock().expect("store 锁中毒");
+        let mut st = self.inner.lock().expect("artifact store lock poisoned");
         let id = st.put_artifact(self.session_id, tool_name, content)?;
         Ok((id, lines))
     }
@@ -78,7 +78,7 @@ impl ArtifactStore {
     /// Deliberately not scoped to this session: a forked session reads blocks it
     /// inherited, whose `#N` references point at the parent's artifacts.
     pub fn fetch(&self, id: i64) -> Result<Option<(String, i64, String)>> {
-        let st = self.inner.lock().expect("store 锁中毒");
+        let st = self.inner.lock().expect("artifact store lock poisoned");
         st.get_artifact(id)
     }
 }
@@ -100,8 +100,8 @@ pub fn placeholder(id: i64, tool_name: &str, total_lines: usize, result: &str) -
     let bytes = result.len();
     let kb = bytes / 1024;
     format!(
-        "[工具输出共 {total_lines} 行 / {kb}KB，过大已存为巨物 #{id}（{tool_name}）。\
-取用：#{id}（等价文件内容，参与管道：#{id} | grep 关键词 | head -50；裸 #{id} 无过滤会再次巨物化）。前 3 行：\n{}]",
+        "[tool output: {total_lines} lines / {kb}KB — too large, stored as artifact #{id} ({tool_name}). \
+Use it: #{id} (stands in for the file's contents and takes part in pipelines: #{id} | grep PATTERN | head -50; a bare unfiltered #{id} becomes an artifact again). First 3 lines:\n{}]",
         preview.join("\n"),
     )
 }
@@ -172,7 +172,7 @@ fn materialize(
         return Ok(p.clone());
     }
     let Some((name, _lines, content)) = artifacts.fetch(id)? else {
-        anyhow::bail!("巨物 #{id} 不存在（或不属于当前会话）");
+        anyhow::bail!("artifact #{id} does not exist (or belongs to another session)");
     };
     // Per-command dir; the caller removes it after the command exits.
     let dir = std::env::temp_dir().join(format!(

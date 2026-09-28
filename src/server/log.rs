@@ -102,7 +102,7 @@ pub fn push(level: Level, scope: impl Into<String>, text: impl Into<String>) {
         scope: scope.into(),
         text: text.into(),
     };
-    ring().lock().expect("日志锁中毒").push(rec, CAPACITY);
+    ring().lock().expect("log lock poisoned").push(rec, CAPACITY);
 }
 
 pub fn info(scope: impl Into<String>, text: impl Into<String>) {
@@ -119,7 +119,7 @@ pub fn error(scope: impl Into<String>, text: impl Into<String>) {
 
 /// The most recent records, oldest first. `limit` = 0 means "everything held".
 pub fn recent(limit: usize) -> Vec<Record> {
-    ring().lock().expect("日志锁中毒").recent(limit)
+    ring().lock().expect("log lock poisoned").recent(limit)
 }
 
 /// The records the `scope` produced, newest last. Lets a caller (a UI pane, a
@@ -127,7 +127,7 @@ pub fn recent(limit: usize) -> Vec<Record> {
 pub fn by_scope(scope: &str) -> Vec<Record> {
     ring()
         .lock()
-        .expect("日志锁中毒")
+        .expect("log lock poisoned")
         .recs
         .iter()
         .filter(|r| r.scope == scope)
@@ -137,7 +137,7 @@ pub fn by_scope(scope: &str) -> Vec<Record> {
 
 /// How many records we currently hold (tests and a statusline counter).
 pub fn len() -> usize {
-    ring().lock().expect("日志锁中毒").recs.len()
+    ring().lock().expect("log lock poisoned").recs.len()
 }
 
 #[cfg(test)]

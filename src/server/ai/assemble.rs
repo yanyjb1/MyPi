@@ -473,8 +473,8 @@ pub(crate) fn messages_to_wire(
 
     let mut out: Vec<Value> = Vec::with_capacity(messages.len());
     for m in messages {
-        let mut v = serde_json::to_value(m).expect("Message 序列化不会失败");
-        let obj = v.as_object_mut().expect("Message 序列化成对象");
+        let mut v = serde_json::to_value(m).expect("Message serialization is infallible");
+        let obj = v.as_object_mut().expect("Message serializes to an object");
 
         match m {
             crate::server::ai::types::Message::Assistant {
@@ -620,7 +620,7 @@ fn maybe_patch_images(
                 // 占位文字而不是直接删掉：整条 content 变成空数组时，
                 // 有的宿主会当成格式错误，而"这里本来有张图"对模型是有用
                 // 的信息。
-                *part = json!({ "type": "text", "text": "[图片已省略]" });
+                *part = json!({ "type": "text", "text": "[image omitted]" });
                 continue;
             }
             let Some(detail) = part.get_mut("image_url").and_then(|i| i.get_mut("detail")) else {
@@ -1679,7 +1679,7 @@ mod tests {
         };
         let wire = messages_to_wire(&[msg], &r);
         assert_eq!(wire[0]["content"][1]["type"], "text");
-        assert!(wire[0]["content"][1]["text"].as_str().unwrap().contains("省略"));
+        assert!(wire[0]["content"][1]["text"].as_str().unwrap().contains("omitted"));
         let text = serde_json::to_string(&wire).unwrap();
         assert!(
             !text.contains("base64"),

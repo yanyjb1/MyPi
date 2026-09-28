@@ -253,7 +253,7 @@ fn is_ready(lang: &str) -> bool {
         // 找不到这条语法：本来也没得编译，当就绪处理（走 plain 兜底）。
         return true;
     };
-    READY.lock().expect("预热表锁中毒").contains(&name)
+    READY.lock().expect("warm-up table lock poisoned").contains(&name)
 }
 
 /// 把一条语法交给后台线程编译。同一条语言只会有一个任务在跑。
@@ -264,13 +264,13 @@ fn is_ready(lang: &str) -> bool {
 pub fn warm(lang: &str) {
     let Some(name) = syntax_name(lang) else { return };
     {
-        let ready = READY.lock().expect("预热表锁中毒");
+        let ready = READY.lock().expect("warm-up table lock poisoned");
         if ready.contains(&name) {
             return;
         }
     }
     {
-        let mut warming = WARMING.lock().expect("预热表锁中毒");
+        let mut warming = WARMING.lock().expect("warm-up table lock poisoned");
         if !warming.insert(name.clone()) {
             return; // 已经在编译了
         }
@@ -281,8 +281,8 @@ pub fn warm(lang: &str) {
             let mut st = ParseState::new(syn);
             let _ = st.parse_line("x\n", &SYNTAXES);
         }
-        READY.lock().expect("预热表锁中毒").insert(name.clone());
-        WARMING.lock().expect("预热表锁中毒").remove(&name);
+        READY.lock().expect("warm-up table lock poisoned").insert(name.clone());
+        WARMING.lock().expect("warm-up table lock poisoned").remove(&name);
         crate::tui::theme::request_repaint();
     });
 }

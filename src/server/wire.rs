@@ -317,7 +317,7 @@ impl UsageLang {
         match value {
             "" | "en" => Ok(Self::En),
             "zh" => Ok(Self::Zh),
-            other => Err(format!("不认识的语言：{other}（可选 en / zh）")),
+            other => Err(format!("unknown language: {other} (en or zh)")),
         }
     }
 }
@@ -405,7 +405,7 @@ fn summarize_entry(e: &crate::server::entry::Entry) -> String {
             if *ok {
                 name.clone()
             } else {
-                format!("{name}（失败）")
+                format!("{name} (failed)")
             }
         }
         Entry::Name { name } => format!("/name {name}"),
@@ -718,7 +718,7 @@ impl ClientConn {
                         };
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::TimedOut,
-                            format!("daemon 在 {named} 秒内没有回应"),
+                            format!("the daemon did not answer within {named} seconds"),
                         ));
                     }
                 }

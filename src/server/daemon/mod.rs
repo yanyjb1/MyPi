@@ -375,7 +375,7 @@ impl Daemon {
             std::fs::create_dir_all(dir)?;
         }
         let listener = std::os::unix::net::UnixListener::bind(&path)
-            .map_err(|e| anyhow::anyhow!("无法绑定 {}: {e}", path.display()))?;
+            .map_err(|e| anyhow::anyhow!("cannot bind {}: {e}", path.display()))?;
         let (tx, cmd_rx) = std::sync::mpsc::channel::<Command>();
         let (reg_tx, reg_rx) = std::sync::mpsc::channel::<ConnectionHandle>();
         // Accept loop: one thread, forever. Each accepted connection gets a
@@ -646,7 +646,7 @@ impl Daemon {
                         conn,
                         ServerMsg::Error {
                             code: ErrorCode::Internal,
-                            message: format!("删除会话 {id} 失败：{e:#}"),
+                            message: format!("failed to delete session {id}: {e:#}"),
                         },
                     );
                 }
@@ -672,7 +672,7 @@ impl Daemon {
                             conn,
                             ServerMsg::Error {
                                 code: ErrorCode::Internal,
-                                message: format!("list_sessions 失败：{e:#}"),
+                                message: format!("list_sessions failed: {e:#}"),
                             },
                         );
                         return;
@@ -703,7 +703,7 @@ impl Daemon {
                         conn,
                         ServerMsg::Error {
                             code: ErrorCode::Internal,
-                            message: format!("list_rounds 失败：{e:#}"),
+                            message: format!("list_rounds failed: {e:#}"),
                         },
                     ),
                 }
@@ -762,7 +762,7 @@ impl Daemon {
                         conn,
                         ServerMsg::Error {
                             code: ErrorCode::Internal,
-                            message: format!("读会话树失败：{e}"),
+                            message: format!("failed to read the session tree: {e}"),
                         },
                     ),
                 }
@@ -857,7 +857,7 @@ impl Daemon {
                 conn,
                 ServerMsg::Error {
                     code: ErrorCode::NoSuchSession,
-                    message: format!("无法附着会话 {id}：{e:#}"),
+                    message: format!("cannot attach to session {id}: {e:#}"),
                 },
             );
             return;
@@ -905,16 +905,16 @@ impl Daemon {
                 let session = self.hub.get_mut(id);
                 match session {
                     Some(s) => s.run_command(spec, args),
-                    None => Err(anyhow::anyhow!("会话 {id} 不在内存里")),
+                    None => Err(anyhow::anyhow!("session {id} is not in memory")),
                 }
             }
-            None => Err(anyhow::anyhow!("未知命令 {name}")),
+            None => Err(anyhow::anyhow!("unknown command {name}")),
         };
         if let Err(e) = outcome {
             // A refused command is narrated, not raised: the wire stays up and
             // the user sees why nothing happened.
             if let Some(s) = self.hub.get_mut(id) {
-                s.notice(&format!("{name} 没做成：{e:#}"));
+                s.notice(&format!("{name} did not go through: {e:#}"));
             }
         }
         // `/usage` 的账单是**给敲命令的这个前端**的一张面板，不是转录条目：
@@ -951,7 +951,7 @@ impl Daemon {
                     conn,
                     ServerMsg::Error {
                         code: ErrorCode::Internal,
-                        message: format!("无法创建会话：{e:#}"),
+                        message: format!("cannot create the session: {e:#}"),
                     },
                 );
                 None
@@ -982,7 +982,7 @@ impl Daemon {
                             conn,
                             ServerMsg::Error {
                                 code: ErrorCode::Internal,
-                                message: format!("从块 {block} 分叉失败：{e}"),
+                                message: format!("failed to fork from block {block}: {e}"),
                             },
                         );
                         return;
@@ -1026,7 +1026,7 @@ impl Daemon {
             conn,
             ServerMsg::Error {
                 code: ErrorCode::Busy,
-                message: format!("会话 {id} 正在回复中"),
+                message: format!("session {id} is in the middle of a reply"),
             },
         );
     }

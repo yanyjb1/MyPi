@@ -311,7 +311,7 @@ impl Scanner for KimiScanner {
                     continue;
                 }
                 // 不认识的形状：当正文吐出去，别卡住。
-                let ch = self.buf.chars().next().expect("非空");
+                let ch = self.buf.chars().next().expect("non-empty");
                 self.buf.drain(..ch.len_utf8());
                 out.extend(self.via_thinking(vec![ScanEvent::Text(ch.to_string())]));
                 continue;
