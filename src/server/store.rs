@@ -497,6 +497,79 @@ impl Store {
         Ok(id)
     }
 
+    /// Where a rewind to `block_id` should actually cut.
+    ///
+    /// Picking a node that holds a **user message** means "take this back, I
+    /// want to send it again" — so that message has to go too. Kept, the next
+    /// request carries it twice: once from the retained history and once from
+    /// the text the user just re-sent, and the model reads the question as
+    /// asked twice. Everything from the pick onward is a branch the user
+    /// abandoned anyway.
+    ///
+    /// Picking anything else (an assistant reply, a tool round) is a place to
+    /// *continue from*, so that block stays.
+    ///
+    /// A user message with nothing before it cuts at 0 — the whole branch goes.
+    pub fn rewind_cut_point(&self, block_id: i64) -> Result<i64> {
+        // 0 是"退到开头"这个位置本身，不是一块——回退到第一块之前就用它。
+        if block_id <= 0 {
+            return Ok(0);
+        }
+        let owner: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT session_id FROM blocks WHERE block_id = ?1",
+                [block_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let owner = owner.ok_or_else(|| anyhow::anyhow!("block {block_id} does not exist"))?;
+        let kind: String = self.conn.query_row(
+            "SELECT kind FROM blocks WHERE block_id = ?1",
+            [block_id],
+            |r| r.get(0),
+        )?;
+        if kind != "user" {
+            return Ok(block_id);
+        }
+        // The block before it **on the branch it belongs to** — that is where
+        // the retained prefix has to end.
+        let prev: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(block_id), 0) FROM blocks WHERE session_id = ?1 AND block_id < ?2",
+            rusqlite::params![owner, block_id],
+            |r| r.get(0),
+        )?;
+        Ok(prev)
+    }
+
+    /// 选中节点里那条**用户消息**的原文（回退收回到输入框的那句话）。
+    ///
+    /// 只认用户块：回到 assistant / tool 节点是"接着它说"，没有可收回的
+    /// 东西。非用户块、不存在的块、正文解析失败都返回 `None`——调用方把
+    /// `None` 当"没有 prefill"，不是错误。
+    ///
+    /// 必须在剪枝**之前**调用：剪枝模式下那块自己也在被删的范围里。
+    pub fn user_text_of(&self, block_id: i64) -> Result<Option<String>> {
+        let row: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT kind, payload FROM blocks WHERE block_id = ?1",
+                [block_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((kind, payload)) = row else {
+            return Ok(None);
+        };
+        if kind != "user" {
+            return Ok(None);
+        }
+        let text = serde_json::from_str::<serde_json::Value>(&payload)
+            .ok()
+            .and_then(|v| v.get("content")?.as_str().map(str::to_string));
+        Ok(text)
+    }
+
     /// **截断**会话到 `block_id`（含）——「回退」的剪枝做法。
     ///
     /// 与 [`Self::fork_session`] 相对：分叉是**留下**被抛下的内容（新开一行，
@@ -513,15 +586,24 @@ impl Store {
     /// 返回**被整条砍掉的会话 id**（回退点之后岔出去的那些）——调用方要把
     /// 还开在内存里的句柄一并丢掉。
     pub fn prune_session(&mut self, session_id: i64, block_id: i64) -> Result<Vec<i64>> {
-        let owner: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT session_id FROM blocks WHERE block_id = ?1",
-                [block_id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let owner = owner.ok_or_else(|| anyhow::anyhow!("block {block_id} does not exist"))?;
+        // 0 = "退到开头"：不是一块，没有 owner 可查。整棵树只留 block_id 0
+        // （cwd 原点行），其余全走下面的 `> 0` 区间删——正是 cut=0 的字面义。
+        let owner: Option<i64> = if block_id > 0 {
+            self.conn
+                .query_row(
+                    "SELECT session_id FROM blocks WHERE block_id = ?1",
+                    [block_id],
+                    |r| r.get(0),
+                )
+                .optional()?
+        } else {
+            None
+        };
+        let owner = match owner {
+            Some(o) => o,
+            None if block_id == 0 => session_id, // 自己的名字下没有块了，退到根
+            None => anyhow::bail!("block {block_id} does not exist"),
+        };
         if owner != session_id {
             anyhow::ensure!(
                 !self.is_descendant(owner, session_id)?,
@@ -2205,6 +2287,39 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// **回退到第一块（用户消息）= 退到 0**，那不是一块，剪枝必须把它当成
+    /// "退到开头"接住——把它当真实块查 owner 会当场报 "block 0 does not
+    /// exist"（真机幽灵打断的根因之一：rewind 静默失败，什么都没剪）。
+    /// 顺带锁 `user_text_of`：收回输入框的那句话从用户块读出来，别的块不算。
+    #[test]
+    fn pruning_to_the_beginning_takes_block_zero_for_an_empty_cut() {
+        let mut s = mem_store();
+        let a = s.create_session("t", "/tmp").unwrap();
+        s.append(a, &[user("第一问"), assistant("第一答"), user("第二问")])
+            .unwrap();
+        let blocks = s.stored_blocks(a).unwrap();
+        let first = blocks[0].id;
+
+        // 归一化：选第一块（用户消息）→ 退到它之前 = 0。
+        assert_eq!(s.rewind_cut_point(first).unwrap(), 0, "第一块之前没有块");
+
+        // prefill 读取（daemon 在剪枝**前**做同样的事）：用户块读出原文；
+        // 不存在的块、assistant 块都是 None。
+        assert_eq!(s.user_text_of(first).unwrap().as_deref(), Some("第一问"));
+        let assistant_block = blocks[1].id;
+        assert_eq!(s.user_text_of(assistant_block).unwrap(), None);
+        assert_eq!(s.user_text_of(0).unwrap(), None);
+
+        // cut=0 是合法的：全部清空，不报错。
+        s.prune_session(a, 0).unwrap();
+        let after = s.stored_blocks(a).unwrap();
+        assert!(
+            after.is_empty(),
+            "退到开头 = 一块不留：{:?}",
+            user_texts(&s.load_branch(a, None).unwrap().0)
+        );
     }
 
     /// 回到历史节点时，树上要看得见**整棵树**：自己那条线 + 平行分支，

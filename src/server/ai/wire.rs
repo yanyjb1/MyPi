@@ -342,4 +342,28 @@ mod tests {
         }
         assert!(acc.finish().is_empty());
     }
+
+    #[test]
+    fn a_chunk_with_empty_content_still_feeds_the_accumulator() {
+        // The exact shape that killed the Neko session: Qwen via several
+        // gateways streams tool calls in chunks that ALSO carry
+        // `content: ""`. The wire delta itself is fine; the bug was in the
+        // stream loop, which skipped this feed when the content filter
+        // produced nothing. Pinned here at the accumulator contract level:
+        // such a chunk MUST contribute its fragments when fed.
+        let mut acc = ToolCallAccum::default();
+        let pieces = [
+            // One chunk: empty content AND the call's opening fragment.
+            r#"{"content":"","tool_calls":[{"index":0,"id":"call_72c3f22a636645c8892be64d","type":"function","function":{"name":"bash","arguments":""}}]}"#,
+            r#"{"content":"","tool_calls":[{"index":0,"function":{"arguments":"{\"command\": \"pwd && ls\"}"}}]}"#,
+        ];
+        for piece in pieces {
+            let v: Value = serde_json::from_str(piece).unwrap();
+            acc.feed(&v);
+        }
+        let calls = acc.finish();
+        assert_eq!(calls.len(), 1, "empty-content chunk must not drop the call");
+        assert_eq!(calls[0].name(), "bash");
+        assert_eq!(calls[0].function.arguments, r#"{"command": "pwd && ls"}"#);
+    }
 }

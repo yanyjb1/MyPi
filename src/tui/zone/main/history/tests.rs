@@ -1098,10 +1098,11 @@ fn the_first_frame_colors_only_what_the_viewport_shows() {
 }
 
 /// 打断的乐观占位：按 Esc 那一刻就上屏（服务端落盘还要几百毫秒），真条目
-/// 一到就让位——屏幕上永远只有一条空回复，不会并排两条。
+/// 一到就让位——屏幕上永远只有一条空回复，不会并排两条。占位固定说
+/// "被打断"（按下 Esc 才会点亮它）；服务端随后落盘哪条以真实停止原因为准。
 #[test]
 fn the_interrupt_placeholder_yields_to_the_real_block() {
-    let empty = crate::server::entry::empty_reply();
+    let empty = crate::server::entry::INTERRUPTED_REPLY;
     let mut z = zone_with(vec![user("问一句")]);
     assert!(!rows_text(&mut z).contains(empty), "还没打断，不该有占位");
 

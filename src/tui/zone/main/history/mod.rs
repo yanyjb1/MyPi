@@ -179,11 +179,6 @@ pub struct HistoryZone {
     /// 几十毫秒的后台读）。换转录（resume / 树跳转）时重置。
     no_more_above: bool,
     no_more_below: bool,
-    /// 「显示到这块为止」（节点树回车选的）。`None` = 不限制。
-    ///
-    /// **只影响显示**：库里的块一个没少，块 id 也没变，翻页照旧按 id 说话。
-    /// 把尾巴截掉之后想要回来，重新 resume 一次就够——数据从来没动过。
-    clip_after: Option<i64>,
     /// 这一帧要开口要的区间边界（一次一取，见 [`HistoryZone::take_want`]）。
     want_older: Option<i64>,
     want_newer: Option<i64>,
@@ -245,8 +240,8 @@ pub struct HistoryZone {
     /// 屏幕上会并排出现两条一模一样的回复。单独一列，才能精确地来、
     /// 精确地走。排在活尾巴之后：那正是它将来被顶替的那个位置。
     ///
-    /// 文案取 [`crate::server::entry::empty_reply`]——和落盘、和模型上下文
-    /// 同一枚值，不另存一份（存了就有一天会漂移）。
+    /// 文案由启动配置注入（[`Self::set_empty_reply`]）——和 daemon 落盘、
+    /// 和模型上下文同一份 `tui.emptyReply`，不另设全局。
     interrupt_row: Option<Entry>,
 }
 
@@ -262,7 +257,6 @@ impl Default for HistoryZone {
             scrolled_up: false,
             no_more_above: false,
             no_more_below: false,
-            clip_after: None,
             want_older: None,
             want_newer: None,
             pending: Pending::Rows(0),
@@ -491,8 +485,13 @@ impl HistoryZone {
         if !self.live.text.is_empty() {
             return;
         }
+        // The optimistic row is drawn **because** the user pressed Esc, so it
+        // names the interrupt (`INTERRUPTED_REPLY`) — never the generic
+        // `empty_reply`: if the round turns out to have died empty for another
+        // reason, the persisted entry that replaces this row carries that
+        // text instead, and the swap is invisible.
         self.interrupt_row = Some(Entry::Assistant {
-            content: crate::server::entry::empty_reply().to_string(),
+            content: crate::server::entry::INTERRUPTED_REPLY.to_string(),
             usage: None,
         });
         self.rebuild_live();
@@ -509,55 +508,6 @@ impl HistoryZone {
     /// 回执之间，`State{busy:true}` 是 Submit 的异步回声，不能再点亮）。
     pub fn interrupt_pending(&self) -> bool {
         self.interrupt_row.is_some()
-    }
-
-    /// 「显示到这块为止」（节点树回车选的）。
-    ///
-    /// 把这块**之后**的块从本地视图里丢掉。库里的块一个没少——这只是
-    /// 前端把视野收窄，用户真发消息时服务端才知道要 fork。
-    ///
-    /// 收窄之后视口贴底（读者要看的是那块附近的内容，不是被截掉之后的尾巴）。
-    pub fn limit_to_block(&mut self, block_id: i64) {
-        self.clip_after = Some(block_id);
-        self.window.retain(|b| b.key <= block_id);
-        self.tail_id = self.window.iter().map(|b| b.key).max().unwrap_or(0);
-        // 活尾巴（还没落盘的）一律丢：它们都在那块之后。
-        self.live_entries.clear();
-        self.live_blocks.clear();
-        self.rebuild_live();
-        self.todo = self.current_todo();
-        self.anchor = None;
-        self.scroll_pinned = true;
-        self.no_more_below = true;
-        self.want_newer = None;
-        self.generation = self.generation.wrapping_add(1);
-    }
-
-    /// 取消收窄（回到完整转录）。诊断/测试与"反悔"用。
-    pub fn clear_clip(&mut self) {
-        self.clip_after = None;
-    }
-
-    /// 当前是不是显示在某个块处收窄了。
-    pub fn clipped_at(&self) -> Option<i64> {
-        self.clip_after
-    }
-
-    /// 某块里那条**用户消息**的全文（节点树回车时塞回输入框用）。
-    ///
-    /// 只看本地窗口——树里能选到的块都在窗口里（树和窗口是同一份转录的
-    /// 两个视图）。块已经被窗口丢掉（滚得太远）时返回 `None`，调用方就只
-    /// 收窄范围、不回填文字。
-    pub fn user_text_of(&self, block_id: i64) -> Option<String> {
-        self.window
-            .iter()
-            .find(|b| b.key == block_id)?
-            .entries
-            .iter()
-            .find_map(|e| match e {
-                Entry::User { content } => Some(content.clone()),
-                _ => None,
-            })
     }
 
     /// 只读访问（诊断/测试）：窗口 + 活尾巴的条目。

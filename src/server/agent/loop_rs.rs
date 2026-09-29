@@ -30,6 +30,9 @@ pub struct LoopConfig {
     // "call tool → read result → call it again" loops, and without a
     // brake that is a bottomless money pit. pi has similar protection.
     pub max_rounds: usize,
+    /// 空回复占位（`tui.emptyReply`，从 spec 传入）。写进上下文的空回复
+    /// 与会话落盘的条目字节必须一致——同一次构造里下发同一枚值。
+    pub empty_reply: String,
 }
 
 impl LoopConfig {
@@ -40,6 +43,7 @@ impl LoopConfig {
         Self {
             max_tokens,
             max_rounds: 16,
+            empty_reply: crate::server::entry::DEFAULT_EMPTY_REPLY.to_string(),
         }
     }
 
@@ -244,17 +248,25 @@ fn extract_intent(call: &ToolCall) -> String {
 // byte, the entry the session will persist for the same reply.
 //
 // Two deliberate differences from `AssistantMessage::to_message`:
-//  * an empty reply becomes `entry::EMPTY_REPLY` (the session's placeholder),
-//    not `content: null`;
+//  * an empty reply becomes the session's empty-reply placeholder, not
+//    `content: null`;
 //  * `drop_calls` strips the tool calls, for replies whose calls are **not
 //    executed** (the round brake). A `tool_calls` message with no matching
 //    `tool` result is rejected outright by strict gateways, and the persisted
 //    entries never carried those calls either — so keeping them would both
 //    break the next request and desynchronize live context from replay.
-pub(crate) fn recorded_message(m: &AssistantMessage, drop_calls: bool) -> Message {
+pub(crate) fn recorded_message(m: &AssistantMessage, drop_calls: bool, empty_reply: &str) -> Message {
     Message::Assistant {
         content: Some(if m.content.is_empty() {
-            crate::server::entry::empty_reply().to_string()
+            // Same split as `Session::finalize_round`: a real interrupt says
+            // so; any other empty body stays the (configurable) generic
+            // placeholder. The live context and the persisted entry must
+            // agree byte for byte or the prefix cache goes cold on restart.
+            if m.stop_reason == StopReason::Interrupted {
+                crate::server::entry::INTERRUPTED_REPLY.to_string()
+            } else {
+                empty_reply.to_string()
+            }
         } else {
             m.content.clone()
         }),
@@ -315,7 +327,7 @@ pub fn run(
             // projects the persisted entries out of this very context — so
             // without this push, model replies were never persisted at all
             // (the DB held user/tool rows and nothing the model said).
-            ctx.messages.push(recorded_message(&assistant, false));
+            ctx.messages.push(recorded_message(&assistant, false, &cfg.empty_reply));
             return Ok(TurnOutcome {
                 message: assistant,
                 tool_calls_made,
@@ -398,7 +410,7 @@ pub fn run(
                 &mut on_delta,
                 &mut on_reasoning,
             )?;
-            ctx.messages.push(recorded_message(&last, true));
+            ctx.messages.push(recorded_message(&last, true, &cfg.empty_reply));
             return Ok(TurnOutcome {
                 message: last,
                 tool_calls_made,
@@ -535,7 +547,7 @@ mod tests {
             stop_reason: StopReason::ToolCalls,
             ..Default::default()
         };
-        match recorded_message(&m, true) {
+        match recorded_message(&m, true, "X") {
             Message::Assistant {
                 content,
                 tool_calls,
@@ -547,7 +559,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         // An executed round keeps its calls.
-        match recorded_message(&m, false) {
+        match recorded_message(&m, false, "X") {
             Message::Assistant { tool_calls, .. } => assert_eq!(tool_calls.len(), 1),
             other => panic!("{other:?}"),
         }
@@ -561,12 +573,10 @@ mod tests {
         // produced them (cold prefix cache, and the model sees a history it
         // never sent).
         let m = AssistantMessage::default();
-        match recorded_message(&m, false) {
-            Message::Assistant { content, .. } => assert_eq!(
-                content.as_deref(),
-                Some(crate::server::entry::empty_reply()),
-                "空回复必须与落盘内容一致"
-            ),
+        match recorded_message(&m, false, "X") {
+            Message::Assistant { content, .. } => {
+                assert_eq!(content.as_deref(), Some("X"), "空回复必须取占位文本");
+            }
             other => panic!("{other:?}"),
         }
     }

@@ -29,15 +29,22 @@ pub enum ToReserved {
 
 /// 会话层出口请求：编辑器不解释这些动作的"之后"，只声明"要出去"。
 /// 去向（提交给谁、中断什么、退不退程序）是 Zone/APP/会话层的事。
+/// 两下 Esc 的窗口。**300ms**：人手连着敲两下就在这个量级，再放宽会把
+/// "随手按两下"也算成"我要看节点树"。
+pub const ESC_TREE_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitRequest {
     /// 提交当前输入（携带全文）。
     Submit(String),
     /// 中断在途回复。
     Interrupt,
-    /// 空闲时按了一下 Esc。**没有语义**——会话层拿它数"两下"的窗口：
-    /// 500ms 内来第二下就开节点树，过期作废。它不退出程序。
-    EscPressed,
+    /// 空闲时在 [`ESC_TREE_WINDOW`] 之内按了两下 Esc = 开节点树。
+    ///
+    /// **窗口在输入区里数**，不在会话层：Esc 的归属（面板 / 补全 / hang /
+    /// 打断 / 空闲）只有输入区知道，会话层拿到一个"按了一下"是没法判断
+    /// 那一下该不该计入的。详见 [`InputZone::route_esc`]。
+    OpenTree,
     /// 退出程序。
     Quit,
 }
@@ -80,9 +87,15 @@ pub struct InputZone {
     /// 单槽会吞掉第一次——两下 Esc 开节点树就永远凑不齐。队列让每一次
     /// 都原样上报，什么时候处理是会话层的事。
     pub pending_exits: Vec<ExitRequest>,
-    /// 会话是否在回复中（daemon 的 wire state）。键位翻译要用：Esc 在
-    /// streaming 时是「打断」，空闲时是「退出/树」。只有 app 能写。
+    /// 会话是否在回复中（daemon 的 wire state）。Esc 在 streaming 时是
+    /// 「打断」。只有 app 能写。
     pub streaming: bool,
+    /// 上一次「留在本区的空闲 Esc」的时刻。两下之内再来一下 = 开节点树。
+    ///
+    /// **借出去的 Esc 不进来**：面板、补全弹窗、hang 都会先把 Esc 借走，
+    /// 那几下是"把上面这层收掉"，不是"我要开树"。借走的同时本字段被清空，
+    /// 免得半截的双击接上后面那一下。
+    esc_armed: Option<std::time::Instant>,
     /// 光标的终端绝对列（含 `+- ` 边框 2 格铺垫）。补全弹窗锚定用；
     /// 每次渲染后重算。
     pub cursor_col: u16,
@@ -112,6 +125,7 @@ impl Default for InputZone {
             pending_lend: None,
             pending_exits: Vec::new(),
             streaming: false,
+            esc_armed: None,
             cursor_col: geometry::BORDER_COLS as u16,
             cursor_row: 1,
             statusline: StatusLine::new(),
@@ -207,11 +221,17 @@ impl InputZone {
             }
             // 出口三动作：编辑器只声明"要出去"，去向归会话层。
             A::Submit => {
-                let text = self.editor.text();
+                // What goes out is the **expanded** text. The editor holds
+                // folded markers; their originals live only in `PasteStore`,
+                // which `clear()` below drops — so reading `text()` here would
+                // send `[paste #1 +23 lines]` to the model and lose the paste.
+                let text = self.editor.expanded_text();
                 if text.trim().is_empty() {
                     Effect::Nothing // 空输入不提交
                 } else {
-                    self.history.push(text.clone());
+                    // History keeps the folded form: ↑ should recall one line,
+                    // not thirty.
+                    self.history.push(self.editor.text());
                     self.pending_exits.push(ExitRequest::Submit(text));
                     self.editor.clear();
                     self.finished = true;
@@ -219,19 +239,12 @@ impl InputZone {
                     Effect::Content
                 }
             }
-            A::Interrupt => {
-                self.pending_exits.push(ExitRequest::Interrupt);
-                Effect::Nothing
-            }
-            // 单按 Esc（空闲）：**什么都不做**。Esc 的语义只有"打断"，
-            // 没有 turn 在跑就无物可打；退出是 Ctrl+C / Ctrl+D 的事。
-            // 连按两下由会话层数出来（它才知道时间），这里只报"按了一下"。
-            A::EscIdle => {
-                self.pending_exits.push(ExitRequest::EscPressed);
-                Effect::Nothing
-            }
             A::Quit => {
                 self.pending_exits.push(ExitRequest::Quit);
+                Effect::Nothing
+            }
+            A::Interrupt => {
+                self.pending_exits.push(ExitRequest::Interrupt);
                 Effect::Nothing
             }
             A::ClearInput => {
@@ -244,16 +257,12 @@ impl InputZone {
             // 以下动作的解释权不在编辑器内（折叠归历史区，补全/hang
             // 归保留区联动——接线后逐条归位）。
             A::HistoryPrev | A::HistoryNext => Effect::Nothing,
-            A::SelectorUp | A::SelectorDown | A::SelectorConfirm | A::SelectorCancel => {
-                Effect::Nothing
-            }
             A::Complete | A::CompleteUp | A::CompleteDown | A::DismissCompletion => {
                 Effect::Nothing
             }
             // 面板的 Esc：不是编辑动作，解释权在保留区（借出去，见 `deliver`）。
             A::DismissPanel => Effect::Nothing,
             A::ToggleReasoning | A::ToggleTools => Effect::Nothing,
-            A::TreeUp | A::TreeDown | A::TreeConfirm | A::TreeCancel => Effect::Nothing,
             A::None => Effect::Nothing,
         };
         match eff {
@@ -280,6 +289,20 @@ impl InputZone {
         self.editor.text().contains('\n')
     }
 
+    /// 回退收回了那句话：原样放进输入框，光标在末尾。编辑器里已有的草稿
+    /// **不覆盖**——收回的是"这句话"，不是"清空你正在写的东西"；两者都
+    /// 在的话，新文本接在草稿后面，用户自己删。
+    pub fn prefill(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.editor.is_empty() {
+            self.editor = Editor::from_text(text);
+            self.finished = false;
+            self.history.on_edit();
+        }
+    }
+
     /// 同步补全弹窗的开合（Zone 每轮调用）。弹窗开着时 ↑↓/Tab/Enter/Esc
     /// 归补全服务——见 `deliver` 里那条分支。
     pub fn set_completion_open(&mut self, open: bool) {
@@ -289,6 +312,79 @@ impl InputZone {
     /// 同步 `/usage` 面板的开合（Zone 每轮调用）。开着时 Esc 归面板。
     pub fn set_panel_open(&mut self, open: bool) {
         self.panel_open = open;
+    }
+
+    /// **Esc 的归属判定，全程序唯一一处。**
+    ///
+    /// 落在本区的 Esc 有五种去向，按上到下的层级排：
+    ///
+    /// 1. `/usage` 面板开着 → 借出去关面板。
+    /// 2. 补全弹窗开着 → 借出去关弹窗。
+    /// 3. hang（光标在触发词里）→ 借出去关弹窗（同一条路，弹窗可能已经
+    ///    关了，那就没人接，丢掉）。理由：人正写着半截路径，那一下的
+    ///    意思不可能是"打断远处那条回复"。
+    /// 4. 在回复中 → **打断**。
+    /// 5. 其余（空闲）→ 数窗口：`ESC_TREE_WINDOW` 内第二下 = 开节点树。
+    ///
+    /// 前三类**借走即清窗口**，且不产生任何出口请求。第四类同理。只有
+    /// 第五类才进窗口计数——所以"两下 Esc 开树"在面板/弹窗/hang 之下
+    /// 天然不成立，不需要在会话层再判一次状态。
+    ///
+    /// 返回 true = 已消费。带 Alt/Ctrl 的 Esc 不归这里（组合键另有归宿）。
+    fn route_esc(&mut self, key: &ratatui::crossterm::event::KeyEvent) -> bool {
+        use ratatui::crossterm::event::KeyModifiers;
+        if key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
+        {
+            return false;
+        }
+        // **现场重算**，不用缓存：`hang` 只在编辑动作之后刷新，而 Esc 走的是
+        // 提前返回那条路——它会一直看到上一次编辑留下的值。真机症状就是
+        // "resume 之后空了输入框，两下 Esc 没反应，先敲一个空格再删掉又好了"：
+        // 空格和删除都会重算 `hang`，Esc 不会。
+        self.refresh_hang();
+        use semantics::Action as A;
+        let borrowed = if self.panel_open {
+            Some(A::DismissPanel)
+        } else if self.popup_open || self.hang {
+            Some(A::DismissCompletion)
+        } else {
+            None
+        };
+        crate::tui::session::keylog(&format!(
+            "  route_esc panel={} popup={} hang={} streaming={} borrowed={} armed={}",
+            self.panel_open,
+            self.popup_open,
+            self.hang,
+            self.streaming,
+            borrowed.is_some(),
+            self.esc_armed.is_some(),
+        ));
+        if let Some(action) = borrowed {
+            // 半截的双击不许接上后面那一下：借走就作废。
+            self.esc_armed = None;
+            self.pending_lend = Some(ToReserved::Lend(action));
+            return true;
+        }
+        // 回合在跑：打断。Esc 的打断语义是固定的，别处没有开关。
+        if self.streaming {
+            self.esc_armed = None;
+            self.pending_exits.push(ExitRequest::Interrupt);
+            return true;
+        }
+        let now = std::time::Instant::now();
+        match self.esc_armed.take() {
+            Some(t) if now.duration_since(t) < ESC_TREE_WINDOW => {
+                crate::tui::session::keylog(&format!(
+                    "    -> OpenTree (gap {}ms)",
+                    now.duration_since(t).as_millis()
+                ));
+                self.pending_exits.push(ExitRequest::OpenTree);
+            }
+            _ => self.esc_armed = Some(now),
+        }
+        true
     }
 
     /// 补全确认回执：把保留区服务算出的替换写回编辑器，随后自然
@@ -354,8 +450,11 @@ impl InputZone {
     }
 }
 
-/// hang 状态下可让给保留区所有者的动作集合：↑↓（历史/光标移动）与
-/// Tab（补全触发）。借出清单归这里——它是输入区"我此刻不解释"的知识。
+/// hang 状态下**翻译之后**还能让给保留区的动作：只有 ↑↓。
+///
+/// Tab / Enter（确认候选）与 Esc（收起补全）不在这里——它们在 `deliver`
+/// 的挂起分支里就被截下来了，根本走不到翻译表。留在这里的这两个是"翻译成
+/// 了编辑器动作、但解释权其实在补全服务"的：↑↓ 在补全服务手里是换高亮。
 fn hang_lendable(action: &semantics::Action) -> Option<semantics::Action> {
     use semantics::Action as A;
     match action {
@@ -402,6 +501,15 @@ impl SubZone for InputZone {
     /// 保留区（Zone 代传达，收件人写死）；保留区不收的动作退回，
     /// 本子区自己消化。hang 触发点未实现，现恒 false。
     fn deliver(&mut self, event: &crate::tui::zone::RawEvent) -> bool {
+        // **Esc 先过归属判定**：这一步在所有人之前，因为借走它的那几家
+        // （面板 / 补全 / hang）都只处理"别的键"，Esc 落到它们手里会被
+        // 当成没认出来。归属在这里一次定死——见 `route_esc`。
+        if let crate::tui::zone::RawEvent::Key { key } = event
+            && key.code == KeyCode::Esc
+            && self.route_esc(key)
+        {
+            return true;
+        }
         // 补全弹窗**开着**：↑↓/Tab/Enter/Esc 全归补全服务。确认（Tab/Enter）
         // 走 Confirm——服务把选中项算成替换文本，Zone 带回编辑器写回；其余
         // （↑↓ 换高亮、Esc 关弹窗）原样借出去。
@@ -420,7 +528,8 @@ impl SubZone for InputZone {
                 ..Default::default()
             };
             let action = semantics::translate_with(*key, cx);
-            if matches!(action, A::DismissPanel | A::Up | A::Down | A::Complete) {
+            // Esc 不在这里——它在 `route_esc` 里就归了面板。
+            if matches!(action, A::Up | A::Down | A::Complete) {
                 self.pending_lend = Some(ToReserved::Lend(action));
                 return true;
             }
@@ -443,7 +552,7 @@ impl SubZone for InputZone {
                     self.pending_lend = Some(ToReserved::Confirm);
                     return true;
                 }
-                A::CompleteUp | A::CompleteDown | A::DismissCompletion => {
+                A::CompleteUp | A::CompleteDown => {
                     self.pending_lend = Some(ToReserved::Lend(action));
                     return true;
                 }
@@ -646,6 +755,60 @@ mod tests {
         assert!(z2.pending_lend.is_none());
     }
 
+    /// **挂起时 Esc 不许打断。**
+    ///
+    /// 真机 bug：正在写半截路径（补全挂着），按 Esc 想收掉补全，结果远处那条
+    /// 回复被打断了。挂起意味着"用户此刻在输入框里干活"，那一下 Esc 的解释权
+    /// 不在会话层的"打断"上。
+    #[test]
+    fn esc_while_hung_lends_instead_of_interrupting() {
+        let esc = || RawEvent::Key {
+            key: KeyEvent {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            },
+        };
+        // 用**真的触发词**把 hang 立起来，而不是伪造字段——`route_esc` 现在
+        // 现场重算 hang，伪造的 `hang: true` 配空编辑器会被一眼看穿。
+        let mut z = InputZone {
+            streaming: true,
+            ..InputZone::default()
+        };
+        for c in "/mode".chars() {
+            z.deliver(&key(c));
+        }
+        assert!(z.hang, "前提：行首斜杠词必须挂起");
+        assert!(z.deliver(&esc()));
+        assert!(
+            z.pending_exits.is_empty(),
+            "挂起时 Esc 不该打断：{:?}",
+            z.pending_exits
+        );
+        assert!(
+            matches!(z.pending_lend, Some(ToReserved::Lend(_))),
+            "Esc 该被借给保留区（没人接就丢掉），而不是落回翻译表"
+        );
+
+        // 没挂起：Esc 照旧打断正在跑的回复。
+        let mut z2 = InputZone {
+            streaming: true,
+            ..InputZone::default()
+        };
+        z2.deliver(&esc());
+        assert_eq!(z2.pending_exits, vec![ExitRequest::Interrupt]);
+
+        // 挂起且空闲：借出去关补全，不产生任何出口请求（不该去数窗口）。
+        let mut z3 = InputZone::default();
+        for c in "/mode".chars() {
+            z3.deliver(&key(c));
+        }
+        assert!(z3.hang, "前提：挂起");
+        z3.deliver(&esc());
+        assert!(z3.pending_exits.is_empty(), "挂起时 Esc 只借不报");
+    }
+
     #[test]
     fn accepts_declares_key_and_paste_only() {
         let z = InputZone::default();
@@ -692,21 +855,114 @@ mod exit_tests {
         assert_eq!(z.history.len(), 1);
     }
 
-    /// **两次 Esc 落在同一个事件批次里，必须两条都活下来。**
+    /// **大段粘贴必须展开后才发出去。**
     ///
-    /// 这是真机上的 bug：出口请求原来是单槽（`Option`），一次投递里的第二次
-    /// 被静默吞掉，于是"两下 Esc 开节点树"永远凑不齐——用户看到的就是
-    /// 按两下没反应。改成队列之后每一次都原样上报。
+    /// 这是真机上的 bug：编辑器里存的是折叠标记 `[paste #1 +30 lines]`，原文
+    /// 只在 `PasteStore` 里，而提交会 `clear()` 把它一起丢掉。提交路径读了
+    /// `text()`（未展开），于是模型收到的只有一个标记，粘贴的内容整个消失。
     #[test]
-    fn two_escapes_in_one_batch_both_survive() {
+    fn submit_sends_the_expanded_paste_not_the_marker() {
         let mut z = InputZone::default();
+        let body: String = (0..30).map(|i| format!("code line {i}\n")).collect();
+        z.editor.insert_paste(&body);
+        assert!(z.editor.text().contains("[paste #1"), "这么多行该折叠成标记");
+
+        z.deliver(&key(KeyCode::Enter, KeyModifiers::NONE));
+
+        let sent = match &z.pending_exits[0] {
+            ExitRequest::Submit(t) => t.clone(),
+            other => panic!("应该是 Submit，实际 {other:?}"),
+        };
+        assert!(sent.contains("code line 29"), "原文必须在：{sent}");
+        assert!(!sent.contains("[paste #"), "标记本身不该发出去：{sent}");
+        assert!(sent.contains("```pasted content"), "要带围栏：{sent}");
+        assert!(sent.trim_end().ends_with("```"), "围栏要闭合：{sent}");
+    }
+
+    /// 空闲时两下 Esc = 开节点树。
+    ///
+    /// 真机上这里是"按两下没反应"。两个原因：出口请求原来是单槽（第二次被
+    /// 静默吞掉），以及窗口数在会话层（它看不见面板/补全/hang 把 Esc 借走
+    /// 这件事）。现在窗口在输入区里，两下连着到就是一条 `OpenTree`。
+    #[test]
+    fn two_escapes_open_the_tree() {
+        let mut z = InputZone::default();
+        z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(z.pending_exits.is_empty(), "第一下只是记时刻，不产生请求");
+        z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            z.pending_exits,
+            vec![ExitRequest::OpenTree],
+            "两下连着到 = 开树"
+        );
+    }
+
+    /// **被借走的 Esc 不参与双击窗口。**
+    ///
+    /// 面板 / 补全弹窗 / hang 都会先拿走 Esc，那几下的意思是"把上面这层
+    /// 收掉"，不是"我要看节点树"。它们既不能开树，也不能把窗口里的半截
+    /// 双击接上——否则"关弹窗 + 随手再按一下"会莫名其妙跳出全屏树。
+    #[test]
+    fn borrowed_escapes_do_not_open_the_tree() {
+        // 挂起时连按三下：全部借走，一条出口请求都没有。
+        let mut z = InputZone::default();
+        type_str(&mut z, "/mode");
+        assert!(z.hang, "前提：挂起");
+        for _ in 0..3 {
+            z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
+        }
+        assert!(z.pending_exits.is_empty(), "{:?}", z.pending_exits);
+
+        // 窗口里已经有一下，再来的一下被借走 → 窗口作废，
+        // 借走之后的那一下必须重新起算。
+        let mut z = InputZone::default();
+        z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
+        z.popup_open = true;
+        z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
+        z.popup_open = false;
+        z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            z.pending_exits.is_empty(),
+            "被借走作废窗口后，剩下的那一下只是新的第一下：{:?}",
+            z.pending_exits
+        );
+    }
+
+    /// **陈旧的 `hang` 不许拦住两下 Esc。**
+    ///
+    /// 真机症状：resume 之后输入框是空的，两下 Esc 不开树；先敲一个空格、
+    /// 再删掉，就好了。根因是 `hang` 只在**编辑动作之后**重算，而 Esc 走
+    /// `route_esc` 提前返回那条路——它会一直看到上一次编辑留下的值。空格
+    /// 和删除都会重算，Esc 不会，所以看起来像"敲一下才好"。
+    #[test]
+    fn a_stale_hang_does_not_block_the_tree() {
+        let mut z = InputZone {
+            hang: true, // 陈旧值：输入框其实已经空了
+            ..InputZone::default()
+        };
+        assert!(z.editor.is_empty(), "前提：输入框是空的");
         z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
         z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(
             z.pending_exits,
-            vec![ExitRequest::EscPressed, ExitRequest::EscPressed],
-            "两次 Esc 都必须上报"
+            vec![ExitRequest::OpenTree],
+            "空的输入框 + 陈旧的 hang，两下 Esc 照样开树"
         );
+    }
+
+    /// **`Ctrl+C` 在回合进行中是打断**，不是清空。
+    #[test]
+    fn ctrl_c_interrupts_while_a_reply_is_running() {
+        let mut z = InputZone {
+            streaming: true,
+            ..InputZone::default()
+        };
+        for c in "草稿".chars() {
+            z.deliver(&key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        z.deliver(&key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(z.pending_exits, vec![ExitRequest::Interrupt]);
+        assert_eq!(z.editor.text(), "草稿", "打断不该顺手清掉草稿");
     }
 
     #[test]
@@ -722,15 +978,14 @@ mod exit_tests {
 
     #[test]
     fn idle_esc_does_not_quit() {
-        // Esc 的语义只有"打断"。空闲时按它**什么都不做**——尤其不能退出
-        // 程序（那是 Ctrl+C / Ctrl+D 的事）。它只报"按了一下"，让会话层
-        // 数两下 Esc 的窗口。
+        // Esc 的语义只有"打断"和"连按两下开树"。空闲单按**什么请求都不
+        // 产生**——尤其不能退出程序（那是 Ctrl+C / Ctrl+D 的事）。
         let mut z = InputZone::default();
         z.deliver(&key(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(z.pending_exits, vec![ExitRequest::EscPressed]);
         assert!(
-            !z.pending_exits.contains(&ExitRequest::Quit),
-            "空闲 Esc 不许退出程序"
+            z.pending_exits.is_empty(),
+            "空闲单按 Esc 只是记时刻：{:?}",
+            z.pending_exits
         );
     }
 

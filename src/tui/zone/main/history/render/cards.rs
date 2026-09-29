@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 
 use super::theme::{HistoryTheme, Token};
 use super::tools;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // ---------------------------------------------------------------------------
 // card scaffolding
@@ -285,6 +285,51 @@ pub(crate) fn exchange_has_two_states(
 // The black is the palette's truecolor black (`0,0,0`), never the ANSI
 // indexed black — indexed black is what terminals map to gray, which is
 // exactly the look we are avoiding here.
+/// The user card's left gutter. Two cells wide, on every row.
+const GUTTER: &str = "▌ ";
+const GUTTER_COLS: usize = 2;
+
+/// Fold one logical markdown row into visual rows that each fit `avail` cells.
+///
+/// The markdown renderer hands back **logical** rows and leaves folding to
+/// ratatui. That fold costs the card: the continuation row gets no `▌ `
+/// gutter, and its background stops at the last styled cell, so the tail of a
+/// long Chinese line lands on the terminal default — a card that is black,
+/// then suddenly transparent, then black again. Folding here keeps every
+/// visual row a real card row.
+///
+/// Breaks by cell, not by word: a long Chinese run has no spaces to break on,
+/// and it is the case this exists for. A cell is never split, so a width-2
+/// character that does not fit moves to the next row whole.
+fn fold_row(spans: Vec<Span<'static>>, avail: usize) -> Vec<Vec<Span<'static>>> {
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut cur: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for sp in spans {
+        let style = sp.style;
+        let mut buf = String::new();
+        for ch in sp.content.chars() {
+            let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            // Always take at least one character per row: an `avail` too
+            // small for even one cell must not spin here.
+            if used + w > avail && (used > 0 || !cur.is_empty()) {
+                if !buf.is_empty() {
+                    cur.push(Span::styled(std::mem::take(&mut buf), style));
+                }
+                rows.push(std::mem::take(&mut cur));
+                used = 0;
+            }
+            buf.push(ch);
+            used += w;
+        }
+        if !buf.is_empty() {
+            cur.push(Span::styled(buf, style));
+        }
+    }
+    rows.push(cur);
+    rows
+}
+
 pub(super) fn user_card(content: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'static>> {
     let bg = Style::new().bg(t.get(Token::UserCardBg));
     let mut out = Vec::new();
@@ -297,22 +342,31 @@ pub(super) fn user_card(content: &str, t: &HistoryTheme, width: usize) -> Vec<Li
     ));
     // 用户卡的每个 span 颜色都会被下面覆盖成统一的黑底白字：在这里高亮是
     // 白烧的钱。纯文本出图，且不需要谁来补色。
-    for line in super::markdown::render_markdown(content, t, true, width).0 {
-        // Force the card's own foreground/background: markdown may have
-        // decided on a color for a code span, but a user message is
-        // uniformly black-on-… white-on-black.
-        let mut spans = vec![Span::styled("▌ ", Style::new().bg(t.get(Token::UserCardBg)).fg(t.get(Token::UserCardBar)))];
-        for sp in line.spans {
+    //
+    // 宽度扣掉竖条再交给 markdown：表格按这个宽度算列宽，不扣的话表格会
+    // 比卡片本身还宽。
+    let avail = width.saturating_sub(GUTTER_COLS);
+    for line in super::markdown::render_markdown(content, t, true, avail).0 {
+        for row in fold_row(line.spans, avail) {
+            let mut spans = vec![Span::styled(
+                GUTTER,
+                Style::new().bg(t.get(Token::UserCardBg)).fg(t.get(Token::UserCardBar)),
+            )];
+            // Force the card's own foreground/background: markdown may have
+            // decided on a color for a code span, but a user message is
+            // uniformly white-on-black.
             let body_fg = match t.get(Token::UserCardText) {
                 ratatui::style::Color::Reset => Color::White,
                 c => c,
             };
-            spans.push(Span::styled(
-                sp.content,
-                Style::new().bg(t.get(Token::UserCardBg)).fg(body_fg),
-            ));
+            for sp in row {
+                spans.push(Span::styled(
+                    sp.content,
+                    Style::new().bg(t.get(Token::UserCardBg)).fg(body_fg),
+                ));
+            }
+            out.push(pad_to(Line::from(spans), width, bg));
         }
-        out.push(pad_to(Line::from(spans), width, bg));
     }
     out.push(pad_to(
         Line::from(Span::styled("▌ ", Style::new().bg(t.get(Token::UserCardBg)).fg(t.get(Token::UserCardBar)))),

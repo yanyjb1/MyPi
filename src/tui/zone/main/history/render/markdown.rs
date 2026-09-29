@@ -956,6 +956,46 @@ mod tests {
         assert!(lines.len() >= 3);
     }
 
+    /// **长中文行必须在卡片内部折行。**
+    ///
+    /// 这是真机上的 bug：markdown 交出一条逻辑行，折行留给 ratatui——而它
+    /// 折出来的续行没有 `▌ ` 竖条，背景也止于最后一个上色单元格。用户看到
+    /// 的是同一行的前半黑底白字、后半落在终端默认上，下面一行连竖条都没了。
+    /// 根因是 `user_card` 没有按自己真正能用的宽度折行。
+    #[test]
+    fn long_cjk_wraps_inside_the_card() {
+        let text = "据我所知，角色扮演常用的（尾巴摇了摇）这种通过括号来展现非对话内容的做法，这个你熟悉吗？如果熟悉的话，基于你给出的这一版，然后，在当前工作区下写个文件吧。";
+        let width = 60;
+        let lines = super::super::cards::user_card_public_for_test(text, &t(), width);
+        assert!(
+            lines.len() >= 4,
+            "这么长的中文该折行（留白 + 正文 >1 行 + 留白），实际 {} 行",
+            lines.len()
+        );
+        // 每一行都必须是完整的卡片行：恰好铺满 width，带竖条，竖条有底色。
+        for (i, l) in lines.iter().enumerate() {
+            let w: usize = l.spans.iter().map(|s| display_width(&s.content)).sum();
+            assert_eq!(w, width, "第 {i} 行宽 {w} 不等于 {width}：没铺满卡片");
+            assert_eq!(l.spans[0].content, "▌ ", "第 {i} 行缺竖条");
+            assert_eq!(
+                l.spans[0].style.bg,
+                Some(HistoryTheme::resolve().get(Token::UserCardBg)),
+                "第 {i} 行的竖条没有卡片底色"
+            );
+        }
+        // 折行不许吞字。
+        let got: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect::<String>()
+            .chars()
+            .filter(|c| *c != '▌' && *c != ' ')
+            .collect();
+        let want: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        assert_eq!(got, want, "折行丢了字");
+    }
+
     #[test]
     fn link_autolink_renders_plain() {
         let all = text_of(&render_markdown_at("<https://example.com>", &t()));

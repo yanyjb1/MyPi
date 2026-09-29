@@ -311,7 +311,9 @@ pub fn spawn_turn(tx: Sender<SessionEvent>, req: TurnRequest) {
                     content: buf.borrow().text.clone(),
                     ..Default::default()
                 };
-                chat.messages.push(crate::server::agent::loop_rs::recorded_message(&partial, true));
+                chat.messages.push(crate::server::agent::loop_rs::recorded_message(
+                    &partial, true, &cfg.empty_reply,
+                ));
                 *chat_arc.lock().expect("chat lock poisoned") = chat;
                 if was_interrupted {
                     // worker 被杀后，管道 EOF/closed 是预期控制流，不是用户错误。

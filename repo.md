@@ -50,14 +50,17 @@
 
 ## 2. 测试方法
 
-### 2.1 两个测试装置（新增，均在 `examples/` 下）
+### 2.1 两个测试装置
+
+压测**装进二进制本体**（`mypi bench …`）而不是留在 `examples/`：规格里那六档要反复跑，
+example 每次都得敲一长串路径、还得为它单独 `cargo build --example`。
 
 | 装置 | 作用 | 说明 |
 |---|---|---|
-| `examples/tui_scale_bench.rs` | 进程内全帧压测 | 合成转录 → 真实 `App` → `MainZone` → 子区 → ratatui 缓冲 diff → ANSI 编码（写入计数 sink，不走 syscall）。带计数分配器，能分别测「转录占用」与「缓存占用」；并先预热 syntect 语法集、单独报告那笔一次性成本。 |
+| `src/bench.rs`（`mypi bench`） | 进程内全帧压测 | 合成转录 → 真实 `App` → `MainZone` → 子区 → ratatui 缓冲 diff → ANSI 编码（写入计数 sink，不走 syscall）。内存取 `/proc/self/status` 的 VmRSS/VmHWM（内核读数、零开销），**不装计数分配器**——那是给包括用户真在用的 TUI 在内的每个进程、每次 malloc 都加一道原子操作。先预热 syntect 语法集，单独报告那笔一次性成本。 |
 | `examples/tui_real_bench.py` | 真实进程测量 | 隔离 XDG 根，起真 daemon，pty 里跑真 `mypi`，采 `/proc/<pid>/status` 的 VmRSS/VmHWM，分别量「状态栏上屏」和「转录真正上屏」两个时间点。 |
 
-两个装置都只**读**现有代码，没有改动 `src/` 下任何一行。
+`mypi bench` 只在 `src/bench.rs` 里，不碰渲染路径；`tui_real_bench.py` 只**读**现有代码。
 
 ### 2.2 合成数据
 
@@ -93,18 +96,18 @@
 ```bash
 cargo build --release --examples
 # 流式尾巴的每帧代价：off（没尾巴）/ scrolled（尾巴在视野外）/ pinned（视野内）
-./target/release/examples/tui_scale_bench stream 8000 4000
+./target/release/mypi bench stream 8000 4000
 
 # 帧耗时 + 内存（每个规模单独进程，避免跨规模残留）
 # 每档跑两个 profile：
 #   full  从转录最底部滚到最顶部再滚回（每帧 60 行），这一档才会把 256 块缓存填满
 #   mixed 随机游走（滚轮 + Ctrl-T/Ctrl-O + 打字），600 帧
-for s in 8000 12000 16000 24000 32000; do ./target/release/examples/tui_scale_bench $s; done
+for s in 8000 12000 16000 24000 32000; do ./target/release/mypi bench $s; done
 # 终端尺寸敏感性
-BENCH_COLS=80 BENCH_ROWS=24 ./target/release/examples/tui_scale_bench 32000
+BENCH_COLS=80 BENCH_ROWS=24 ./target/release/mypi bench 32000
 # 服务端 attach 成本
-./target/release/examples/tui_scale_bench gen 32000 /tmp/x/mypi/sessions.db3
-./target/release/examples/tui_scale_bench load /tmp/x/mypi/sessions.db3
+./target/release/mypi bench gen 32000 /tmp/x/mypi/sessions.db3
+./target/release/mypi bench load /tmp/x/mypi/sessions.db3
 # 真实进程冷启动 / 常驻内存
 python3 examples/tui_real_bench.py draft 8000
 python3 examples/tui_real_bench.py attach 32000
@@ -683,7 +686,7 @@ if self.chat_scroll < self.bottom_height().saturating_add(viewport) {
 等它重新滚进「可能上屏」区、真的量出高度时，那次高度跳跃**一次性**补进偏移，
 所以滚回来内容只按滚动量平移，不跳。
 
-实测（`tui_scale_bench stream <转录条数> <回复字符数>`，120x40，600 帧）：
+实测（`mypi bench stream <转录条数> <回复字符数>`，120x40，600 帧）：
 
 | 场景 | 无尾巴 | 尾巴在视野外 | 尾巴在视野内 |
 |---|---|---|---|
@@ -2117,7 +2120,7 @@ daemon 的诊断本来就走内存 ring，不写终端）。真机 `banner_check
 
 ### 27.5 §8-21 的归因是错的：尖峰是**冷走查**，不是变体失效
 
-`tui_scale_bench` 复现（8000 条）：`mean 4.07 / p99 11.37 / max 48.85 ms`，
+`mypi bench` 复现（8000 条）：`mean 4.07 / p99 11.37 / max 48.85 ms`，
 最差帧全部落在 ctrl-T/ctrl-O 上——和 §8-21 记的一致。但插桩之后：
 
 ```
@@ -2170,7 +2173,7 @@ tree 的两列现在**直接写在 `CREATE TABLE` 里**（`sessions.leaf`、`ent
 
 ### 28.2 历史渲染：实测（32000 条，120×40，60 fps 输入）
 
-`tui_scale_bench` 现在永久打印**帧的两个半场**（子区出行 vs ratatui 差分/ANSI）和
+`mypi bench` 现在永久打印**帧的两个半场**（子区出行 vs ratatui 差分/ANSI）和
 **块行命中 vs 现渲染**：
 
 ```
@@ -2218,7 +2221,7 @@ tree 的两列现在**直接写在 `CREATE TABLE` 里**（`sessions.leaf`、`ent
 ### 29.1 口径统一：规模 = **块**
 
 用户口径：规模按**块**（一条消息 / 一条回复 / 一次工具往返），不是条目、不是行、
-不是字节。`tui_scale_bench` 现在接受块数：先按经验比例生成条目，再用真实的
+不是字节。`mypi bench` 现在接受块数：先按经验比例生成条目，再用真实的
 `blocks()` 校正到正好 target 块（截到块边界），并同时报块数/条目数/载荷。
 `gen` 子命令同样按块（`gen <blocks> <db> [dirty]`），真机测量用它铺库。
 
@@ -2307,7 +2310,7 @@ A/B（32 000 块，真实滚动档 = 一帧 1~4 个滚轮刻度 + 随机展开/�
 
 ### 30.2 真因：daemon 在 attach 时把整条转录读进来、解析、再编码发出去
 
-`tui_scale_bench load <db>`（32k 块脏库：50 195 条目 / 77.1 MB 载荷 / 91.5 MB 文件）：
+`mypi bench load <db>`（32k 块脏库：50 195 条目 / 77.1 MB 载荷 / 91.5 MB 文件）：
 
 | 阶段 | 耗时 |
 |---|---|
@@ -2651,7 +2654,7 @@ artifacts(id, session_id, block_id, name, total_lines, content)
 - `Entry::Compaction.first_kept_seq` → `first_kept_entry`：它一直是**条目下标**，不是 seq。
 - `artifacts.get_artifact(id, session_id)` 的 session 过滤。
 - `examples/gen_bench_db.py`、`examples/gen_compact_dbg.py`：手写旧 schema 的生成器，
-  被 `tui_scale_bench gen`（走真 `Store`，不会跟 schema 漂）取代。
+  被 `mypi bench gen`（走真 `Store`，不会跟 schema 漂）取代。
 - `cwd_trail` 的**条目下标**在写入时算好（`cwd_history.entry_index`）：只有存储知道一块
   是一条还是两条；放在读路径上就是每次开回合扫一遍全库（32k 块实测 16 ms）。
 
@@ -2814,7 +2817,7 @@ older_pages_on_demand` 改成"点名边界 → 一段一段要，末段空的收
 内容含用户/回复/思考/工具往返/巨物溢出/todo（todo 随机穿插、状态随机变化）。脏库 =
 真工具输出 + 大概率的超大输出（1/3 溢出成巨物，其余仍是大块正文）。
 跑法：`/tmp/mypi-fake/scale_report.py 1500`（造库 → 真 daemon → 真 TUI pty 附着 →
-进程内 `tui_scale_bench user`）。
+进程内 `mypi bench user`）。
 
 **冷启动 / 附着**
 
@@ -3006,12 +3009,12 @@ repo.md 的 **§27、§30–§38** —— 也就是说这次提交不是一件�
 | `src/tui/zone/main/mod.rs` | 行高仲裁与子区布局跟着窗口走 | §37 |
 | `src/tui/session/{loop,view}.rs` | 按值分发（不再克隆整条转录）；`tui.preload/renderMargin` 接进历史区 | §37 |
 | `src/tui/mod.rs`、`src/tui/theme/*`、`src/tui/zone/mod.rs`、`src/cli.rs`、`src/xdg.rs`、`src/tui/zone/main/{input/editor/separators.rs,reserved/area.rs}`、`src/tui/zone/main/history/render/theme.rs` | 死代码普查的删除（`fg_on_bg`/`muted_span`/`is_background`/`HeightNotice`/`is_oneshot`/`config_base`/`release` 等） | §27 |
-| `examples/tui_scale_bench.rs` (+613) | 进程内全帧压测：`user <db> [会话] [帧] [种子]`、`BENCH_TRACE`；生成器覆盖 Todo 档 | §37/§38 |
+| `src/bench.rs` (+613) | 进程内全帧压测：`user <db> [会话] [帧] [种子]`、`BENCH_TRACE`；生成器覆盖 Todo 档 | §37/§38 |
 | `ARCHITECTURE.md` | 模块地图（tui 行数、`tui` 配置节） | §37 |
 
 ### 39.2 删除与新增
 
-- 删 `examples/gen_bench_db.py`、`examples/gen_compact_dbg.py`（已被 `tui_scale_bench gen` 取代）。
+- 删 `examples/gen_bench_db.py`、`examples/gen_compact_dbg.py`（已被 `mypi bench gen` 取代）。
 - 新 `src/tui/zone/main/history/tests.rs`（36 条窗口/锚/滚动/尾巴行为测试）
   与 `src/tui/zone/main/history/cache/tests.rs`（缓存键、预算、变体）。
 
@@ -3044,7 +3047,7 @@ TUI 窗口化 + 首帧上色切段；服务端按块分页；清兼容与死代�
 
 **新增（测试装置）**：
 
-- `examples/tui_scale_bench.rs` — 进程内全帧压测 + 合成数据生成 + 服务端 load 探针
+- `src/bench.rs` — 进程内全帧压测 + 合成数据生成 + 服务端 load 探针
 - `examples/tui_real_bench.py` — 真实进程冷启动 / 常驻内存测量
 
 **修改**：
@@ -3066,7 +3069,7 @@ TUI 窗口化 + 首帧上色切段；服务端按块分页；清兼容与死代�
 | `src/tui/zone/main/history/render/blocks.rs`（第四次） | `wrap_rows` 提到 `pub(super)`，让尾巴的折行与缓存逐字节同路 |
 | `src/tui/zone/main/history/mod.rs`（第四次） | 新增 `LiveTail` / `LiveRows`（尾巴 + 行备忘）、`Anchor`（未跟随时的视野锚）、`set_live`；`replace_transcript` 清尾巴；`render_rows` 拆出 `cut_window`（切窗前预留尾巴行数）；新增 `block_budget()` |
 | `src/tui/session/view.rs`（第四次） | `on_stream` 从空实现改为 `history.set_live(...)`（按值移动，零拷贝）；新增接线单测 |
-| `examples/tui_scale_bench.rs`（第四次） | 缓存行打印真实预算而非硬编码 256；新增 `stream` 子命令与 `reply_text`，量「尾巴在视野内 / 视野外」的每帧代价 |
+| `src/bench.rs`（第四次） | 缓存行打印真实预算而非硬编码 256；新增 `stream` 子命令与 `reply_text`，量「尾巴在视野内 / 视野外」的每帧代价 |
 | `src/server/hub.rs`（第六次） | `SessionSpec` 新增 `stream_mode`；`assemble` 建完会话 `set_stream_mode`（`open_new` / `resume` 同一条路）|
 | `src/main.rs`（第六次） | `session_spec` 填 `stream_mode: cfg.app.streaming` |
 | `src/server/turn.rs`（第六次） | buffered 的交付点从「回合末」改成「每块文本写完」：工具边界上把攒的整份交出去（并修掉由此暴露的『工具调用前那半句被粘进最终回复』）。见 §7.8 |
@@ -3224,7 +3227,7 @@ handler 里什么都不做（注释已写明这是刻意的）。
 
 两套装置，口径不同，互补：
 
-- **`scale_report.py`（已有）**：跑 `tui_scale_bench user`，**进程内**直接读库，
+- **`scale_report.py`（已有）**：跑 `mypi bench user`，**进程内**直接读库，
   量纯渲染成本。`user` 模式复刻规格里的用户行为：滚轮随机游走、随机
   Ctrl+T/Ctrl+O、随机打字。这是「一帧画多久」最干净的口径。
 - **`scroll_cpu.py`（本轮新写）**：跑**真链路**（真 daemon + 真 TUI + pty），
@@ -3267,7 +3270,7 @@ handler 里什么都不做（注释已写明这是刻意的）。
 
 #### 一个规格线外的既有问题（非本轮引入）
 
-`tui_scale_bench user` 报的**首帧**在 128000 档是 **222–238 ms**，超过规格写的
+`mypi bench user` 报的**首帧**在 128000 档是 **222–238 ms**，超过规格写的
 「大于 200ms 可以直接自刎归天」。
 
 - 已确认**不是本轮引入**：HEAD 234.6 ms，本轮构建 221.9 ms，略快。

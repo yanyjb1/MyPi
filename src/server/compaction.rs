@@ -16,10 +16,11 @@
 //!   verbatim) and appends the instruction as a final user turn. The
 //!   gateway's prefix cache serves everything but that last turn —
 //!   the summary costs output tokens only.
-//! - **Instruction look-up.** The active profile's `compact.md` first,
-//!   then `config.yaml → compact.instruction_file`, then the built-in.
-//!   The profile's file is read at every compaction; a named-but-unreadable
-//!   one is an error, not a silent fall back.
+//! - **Instruction look-up.** The active profile's own instruction first
+//!   (its `compact.md` re-read every time, or the string the binary ships
+//!   for a built-in profile), then `config.yaml → compact.instruction_file`,
+//!   then the built-in. A named-but-unreadable file is an error, not a
+//!   silent fall back.
 //! - **Shrink check.** If the summary is not smaller than the region it
 //!   replaces, the compaction is rejected and the session untouched.
 //! - **Persisted fork point.** A single [`Entry::Compaction`] marker
@@ -36,6 +37,7 @@ use anyhow::{Context as _, anyhow, bail};
 use crate::server::ai::config::CompactConfig;
 use crate::server::ai::types::Message;
 use crate::server::entry::Entry;
+use crate::server::profile::CompactSource;
 
 /// The compaction plan, computed from the live context + transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,21 +174,25 @@ pub fn render_instruction(template: &str, focus: &str) -> String {
 }
 
 /// Load the compaction instruction. The look-up order is the profile's own
-/// `compact.md`, then `config.yaml → compact.instruction_file`, then the
-/// built-in default.
+/// (a `compact.md` re-read every time, or a string shipped in the binary),
+/// then `config.yaml → compact.instruction_file`, then the built-in default.
 ///
-/// The profile file is read **eagerly and fallibly**: naming a file that
-/// cannot be read is a mistake the user must see, not a silent slide back to
-/// the built-in prompt. The config file keeps its historical degrade (a
-/// missing `instruction_file` falls back), because that path is the older,
-/// documented one and callers rely on it.
+/// The profile side is **fallible on purpose**: naming a file that cannot be
+/// read is a mistake the user must see, not a silent slide back to the
+/// built-in prompt. The config file keeps its historical degrade (a missing
+/// `instruction_file` falls back), because that path is the older, documented
+/// one and callers rely on it.
 pub fn load_instruction(
-    profile_file: Option<&std::path::Path>,
+    profile: Option<&CompactSource>,
     instruction_file: Option<&std::path::Path>,
 ) -> anyhow::Result<String> {
-    if let Some(p) = profile_file {
-        return std::fs::read_to_string(p)
-            .with_context(|| format!("failed to read the profile compact.md: {}", p.display()));
+    if let Some(src) = profile {
+        return match src {
+            CompactSource::File(p) => std::fs::read_to_string(p).with_context(|| {
+                format!("failed to read the profile compact.md: {}", p.display())
+            }),
+            CompactSource::Builtin(text) => Ok((*text).into()),
+        };
     }
     Ok(match instruction_file {
         Some(p) => std::fs::read_to_string(p).unwrap_or_else(|_| DEFAULT_INSTRUCTION.into()),
@@ -300,7 +306,7 @@ pub fn compact(
     system: &str,
     entries: &[Entry],
     cfg: &CompactConfig,
-    profile_instruction: Option<&std::path::Path>,
+    profile_instruction: Option<&CompactSource>,
     retention: Option<Retention>,
     focus: &str,
     summarize: &mut dyn FnMut(&crate::server::ai::types::Context) -> anyhow::Result<String>,
@@ -528,7 +534,7 @@ mod tests {
         std::fs::write(&profile, "PROFILE 指令").unwrap();
         std::fs::write(&config, "CONFIG 指令").unwrap();
 
-        let got = load_instruction(Some(&profile), Some(&config)).unwrap();
+        let got = load_instruction(Some(&CompactSource::File(profile)), Some(&config)).unwrap();
         assert_eq!(got, "PROFILE 指令");
         // 没有 profile 文件时退回 config。
         assert_eq!(load_instruction(None, Some(&config)).unwrap(), "CONFIG 指令");
@@ -542,7 +548,7 @@ mod tests {
     #[test]
     fn a_named_but_unreadable_profile_instruction_fails_loudly() {
         let missing = std::path::Path::new("/nonexistent/mypi/compact.md");
-        let e = load_instruction(Some(missing), None).unwrap_err();
+        let e = load_instruction(Some(&CompactSource::File(missing.into())), None).unwrap_err();
         assert!(format!("{e:#}").contains("compact.md"), "{e:#}");
     }
 
@@ -635,7 +641,16 @@ mod tests {
         };
         let mut summarize = |_: &crate::server::ai::types::Context| -> anyhow::Result<String> { Ok("短".into()) };
         let missing = std::path::Path::new("/nonexistent/mypi/compact.md");
-        let e = compact("sys", &es, &cfg, Some(missing), None, "", &mut summarize).unwrap_err();
+        let e = compact(
+            "sys",
+            &es,
+            &cfg,
+            Some(&CompactSource::File(missing.into())),
+            None,
+            "",
+            &mut summarize,
+        )
+        .unwrap_err();
         assert!(format!("{e:#}").contains("compact.md"), "{e:#}");
     }
 

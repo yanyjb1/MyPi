@@ -31,6 +31,7 @@ use crate::server::ai::client::Client;
 use crate::server::ai::config::{BrowserConfig, Cost, StreamMode, ToolsConfig};
 use crate::server::ai::types::{Context as ChatContext, Message};
 use crate::server::events::{Change, RunState, SessionEvent};
+use crate::server::profile::CompactSource;
 use crate::server::session::{Session, SessionState};
 use crate::server::store::Store;
 
@@ -43,6 +44,10 @@ use crate::server::store::Store;
 pub struct SessionSpec {
     /// Provider connection (endpoint + key + model) for **this** session.
     pub client: Client,
+    /// 空回复的占位文本（`config.yaml` → `tui.emptyReply`）。落盘的条目、
+    /// 下一轮请求里模型看到的上下文共用这一枚值；前端打断占位由 TUI 侧
+    /// 自己从同一份配置注入。三个写者必须字节一致，值随 spec 显式走。
+    pub empty_reply: String,
     /// System prompt verbatim. Stored with every round it is used for, so a
     /// resumed session replays the prompt it actually had, not today's.
     pub system_prompt: String,
@@ -75,7 +80,7 @@ pub struct SessionSpec {
     /// The active profile's `profiles/<name>/compact.md`, when it has one.
     /// Read fresh at each compaction; `None` falls through to
     /// `compact.instruction_file`, then the built-in instruction.
-    pub compact_instruction: Option<PathBuf>,
+    pub compact_instruction: Option<CompactSource>,
     /// What session-scoped commands may reach outside the session
     /// (`/switch`, `/profile`, `/model`). Empty = not wired; the commands say
     /// so rather than pretend. See [`crate::server::commands::CommandEnv`].
@@ -99,30 +104,25 @@ struct OpenSession {
 pub struct SessionHub {
     db: PathBuf,
     sessions: BTreeMap<i64, OpenSession>,
-}
-
-static PRUNE_ON_REWIND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-
-/// 回退到旧节点时是否**剪掉**后面的块（`config.yaml` → `tui.PruneOnRewind`）。
-///
-/// 默认剪：回退是后悔药，被抛下的内容就该扔掉，会话链不该越用越长。
-/// 置 false 则每次回退开一条新分支（一行 INSERT，不拷数据），之后任何节点
-/// 都还能回去。
-pub fn prune_on_rewind() -> bool {
-    *PRUNE_ON_REWIND.get().unwrap_or(&true)
-}
-
-/// 钉住开关（启动时，从配置）。首次调用生效——同
-/// [`crate::server::entry::set_empty_reply`]。
-pub fn set_prune_on_rewind(on: bool) {
-    let _ = PRUNE_ON_REWIND.set(on);
+    /// 回退到旧节点时是否**剪掉**后面的块（`config.yaml` → `tui.PruneOnRewind`）。
+    ///
+    /// 默认剪：回退是后悔药，被抛下的内容就该扔掉，会话链不该越用越长。
+    /// false 则每次回退开一条新分支（一行 INSERT，不拷数据），之后任何节点
+    /// 都还能回去。构造时从配置显式传入，不走进程级全局。
+    prune_on_rewind: bool,
 }
 
 impl SessionHub {
     pub fn new(db: PathBuf) -> Self {
+        Self::with_rewind_policy(db, true)
+    }
+
+    /// `prune_on_rewind`：启动路径从配置传入（见 [`Self::prune_on_rewind`]）。
+    pub fn with_rewind_policy(db: PathBuf, prune_on_rewind: bool) -> Self {
         Self {
             db,
             sessions: BTreeMap::new(),
+            prune_on_rewind,
         }
     }
 
@@ -243,6 +243,7 @@ impl SessionHub {
             spec.model_provider,
             spec.currency,
             spec.cwd,
+            spec.empty_reply.clone(),
             spec.tool_filter,
             spec.tools,
             spec.browser,
@@ -359,10 +360,21 @@ impl SessionHub {
         st.replay_round(id, round)
     }
 
-    /// Interrupt the running round of one session. No-op when idle.
+    /// **用户打断**（wire `ClientMsg::Interrupt`）一个会话的在跑回合。
+    /// No-op when idle. 所有权回收（唯一观察者离开、rewind 抛回合）不走
+    /// 这里——那是 [`Self::drop_turn_of`] / [`Self::rewind`] 的 drop 路径。
     pub fn interrupt(&self, id: i64) {
         if let Some(s) = self.sessions.get(&id) {
             s.session.interrupt_turn();
+        }
+    }
+
+    /// **所有权回收**：把一个会话在跑的回合安静停掉（不落 `stop_reason`、
+    /// 不产生任何 wire 回执）。唯一观察者离开时用；rewind 的抛回合在
+    /// [`Self::rewind`] 里内联做（它还要换事件通道）。
+    pub fn drop_turn_of(&mut self, id: i64) {
+        if let Some(s) = self.sessions.get_mut(&id) {
+            s.session.drop_turn();
         }
     }
 
@@ -392,15 +404,23 @@ impl SessionHub {
     ///
     /// 两条路都要接管在跑的那一轮：转录换成**选中的那块为止的前缀**（含），
     /// 否则新历史会带着分叉点之后那些本该被抛下的块继续跑；上一轮剩下的收尾
-    /// 事件也不该写进来（`abandon_turn` 把事件通道和上下文副本一起换掉）。
-    pub fn fork_in_place(&mut self, id: i64, block: i64) -> anyhow::Result<i64> {
-        self.rewind(id, block, prune_on_rewind())
+    /// 事件也不该写进来（`drop_turn` 把事件通道和上下文副本一起换掉）。
+    ///
+    /// 回退是**纯服务端**的动作：前端（节点树回车）只发
+    /// `ClientMsg::Rewind { session, block }`，cut 规则（选中用户块 = 连它
+    /// 一起退）只活在 [`Store::rewind_cut_point`] 一处，前端不复刻。
+    pub fn rewind_to(&mut self, id: i64, block: i64) -> anyhow::Result<i64> {
+        self.rewind(id, block, self.prune_on_rewind)
     }
 
-    /// [`Self::fork_in_place`] 的本体。`prune` 走参数而不是读全局：两条路
+    /// [`Self::rewind_to`] 的本体。`prune` 走参数而不是读全局：两条路
     /// 都要能测，而开关是进程级 `OnceLock`，测试里只设得上一次。
     fn rewind(&mut self, id: i64, block: i64, prune: bool) -> anyhow::Result<i64> {
         let mut store = Store::open(&self.db)?;
+        // 归一化一次，下游（截断 / 分叉 / 读前缀）全部跟着它。回退到用户消息
+        // 节点 = 把那句话收回输入框重发，所以那句话本身也要走；留着它，新请求
+        // 会带着同一句话出现两遍。
+        let block = store.rewind_cut_point(block)?;
         let new_id = if prune {
             // 被整条砍掉的会话可能还开在内存里（用户切走过、但没关）。它们的
             // 块已经没了，句柄留着只会往一个空壳里写。
@@ -408,6 +428,17 @@ impl SessionHub {
                 self.sessions.remove(&gone);
             }
             id
+        } else if block == 0 {
+            // "留"到开头 = 前缀为空的全新根：不挂在任何块上（分叉点的查询
+            // 只认真实存在的块），直接新开一行。
+            store.create_session(&crate::server::store::now_stamp(), &{
+                let cwd = self
+                    .sessions
+                    .get(&id)
+                    .map(|s| s.session.cwd().to_path_buf())
+                    .unwrap_or_default();
+                cwd.display().to_string()
+            })?
         } else {
             store.fork_session(id, block)?
         };
@@ -420,9 +451,9 @@ impl SessionHub {
             .ok_or_else(|| anyhow::anyhow!("session {id} is not in memory; cannot rewind"))?;
         // 先换 tip（转录变成新前缀），再抛下在跑的那一轮：上一轮属于被抛下的
         // 分支——它不该继续把新分支堵成"忙"，也不该把半截回复写进新分支。
-        // 上下文副本也跟着新前缀重建（`abandon_turn` 内部做）。
+        // 上下文副本也跟着新前缀重建（`drop_turn` 内部做）。
         open.session.retarget(new_id, entries);
-        open.rx = open.session.abandon_turn();
+        open.rx = open.session.drop_turn();
         self.sessions.insert(new_id, open);
         Ok(new_id)
     }
@@ -430,7 +461,8 @@ impl SessionHub {
     /// 会话树（节点树页面）：整条 fork 线，块按时序排，附每条 fork 的挂载点。
     ///
     /// 只读。读的是 `sessions.parent_id` / `fork_block_id` 和 `blocks.session_id`
-    /// ——都是写块时就落好的既有列，不做任何推导。
+    /// ——都是写块时就落好的既有列，不做任何推导。`current` 是**块 id**：
+    /// 行是前端概念，服务端不算行下标。
     pub fn tree(
         &self,
         id: i64,
@@ -438,37 +470,27 @@ impl SessionHub {
         (
             Vec<crate::server::wire::TreeNode>,
             Vec<crate::server::wire::ForkInfo>,
-            usize,
+            i64,
         ),
         String,
     > {
         let store = Store::open(&self.db).map_err(|e| e.to_string())?;
-        let (nodes, forks, current_block) =
-            store.lineage(id).map_err(|e| format!("{e:#}"))?;
-
-        // 逐**条目**展开：一块可能出两行（工具往返），也可能一行不出
-        // （一整块都是状态条目）。
-        let mut out = Vec::new();
-        // `current` 是**行**的位置，不是块的位置：一块能出两行。取"我停在哪块"
-        // 那一块**最后**出现的行——同块两行（call/result）时停在下面那行更自然。
-        let mut current = 0usize;
-        for n in nodes {
-            for e in &n.block.entries {
-                if let Some((kind, summary)) = crate::server::wire::summarize_entry_kind(e) {
-                    if n.block.id == current_block {
-                        current = out.len();
-                    }
-                    out.push(crate::server::wire::TreeNode {
-                        id: n.block.id,
-                        session: n.session,
-                        kind,
-                        summary,
-                    });
-                }
-            }
-        }
-        let nodes = out;
-        let forks = forks
+        let (nodes, forks, current) = store.lineage(id).map_err(|e| format!("{e:#}"))?;
+        let tree_nodes = nodes
+            .iter()
+            .flat_map(|n| {
+                n.block.entries.iter().filter_map(move |e| {
+                    crate::server::wire::summarize_entry_kind(e)
+                        .map(|(kind, summary)| crate::server::wire::TreeNode {
+                            id: n.block.id,
+                            session: n.session,
+                            kind,
+                            summary,
+                        })
+                })
+            })
+            .collect();
+        let wire_forks = forks
             .into_iter()
             .map(|f| crate::server::wire::ForkInfo {
                 id: f.id,
@@ -476,7 +498,7 @@ impl SessionHub {
                 fork_block: f.fork_block,
             })
             .collect();
-        Ok((nodes, forks, current))
+        Ok((tree_nodes, wire_forks, current))
     }
 }
 
@@ -497,6 +519,7 @@ mod tests {
     fn spec(base: &str, model: &str, system: &str, cwd: &Path) -> SessionSpec {
         SessionSpec {
             client: Client::new(base, "k", model),
+            empty_reply: "EMPTY".into(),
             system_prompt: system.into(),
             max_tokens: 4096,
             cost: Cost::default(),
@@ -1168,7 +1191,10 @@ mod tests {
             let store = crate::server::store::Store::open(&hub.db).unwrap();
             store.stored_blocks(a).unwrap()
         };
-        let fork_point = store_blocks[0].id;
+        // 回退到**助手**那一块：它是"从这里接着往下"的位置，所以它自己留着。
+        // （回退到用户块是另一回事——那句话本身要走，见
+        // `rewinding_onto_a_user_message_takes_that_message_with_it`。）
+        let fork_point = store_blocks[1].id;
 
         // 留：返回新行 id，**旧 id 不再在 hub 里**（同一份内存态换了名）。
         let b = hub.rewind(a, fork_point, false).expect("回退（留）");
@@ -1180,11 +1206,12 @@ mod tests {
         );
         // 关键断言：能提交。修之前这里是 false（"正在回复中"）。
         assert!(hub.submit(b, "分叉后的新问题"), "回退后必须能接着发");
-        // 分叉后的转录 = 到分叉点为止的前缀。
+        // 分叉后的转录 = 到分叉点为止的前缀（用户问 + 模型答），
+        // 再加上 submit 刚入队的那条新消息。
         assert_eq!(
             hub.get(b).unwrap().transcript().len(),
-            2,
-            "前缀应当是 用户问 + 模型答"
+            3,
+            "前缀 = 旧的两条 + 新问题"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1204,7 +1231,7 @@ mod tests {
             .stored_blocks(a)
             .unwrap();
         assert!(before.len() >= 4, "两轮至少四块，实际 {}", before.len());
-        let fork_point = before[0].id;
+        let fork_point = before[1].id;
 
         let b = hub.rewind(a, fork_point, true).expect("回退（剪）");
         assert_eq!(a, b, "剪枝不换行");
@@ -1212,14 +1239,53 @@ mod tests {
             .unwrap()
             .stored_blocks(a)
             .unwrap();
-        assert_eq!(after.len(), 1, "分叉点之后的块都该没了");
-        assert_eq!(after[0].id, fork_point, "留下的正是回退到的那一块");
+        assert_eq!(after.len(), 2, "分叉点之后的块都该没了");
+        assert_eq!(after[1].id, fork_point, "留下的最后一块正是回退到的那一块");
         assert_eq!(
             hub.get(b).unwrap().transcript().len(),
-            1,
-            "前缀 = 第一问，被截掉的那一轮不许留在上下文里"
+            2,
+            "前缀 = 第一问 + 第一答，被截掉的那一轮不许留在上下文里"
         );
         assert!(hub.submit(b, "剪枝后的新问题"), "回退后必须能接着发");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **回退到「用户消息」节点 = 把那句话收回去重发。**
+    ///
+    /// 这是真机上的 bug：回退到用户消息块时，那一块**自己**留在了历史里；
+    /// 用户把回填的文字重发之后，同一句话在上下文里出现两遍——模型看到问题
+    /// 被问了两遍，而用户想做的只是改一下重发。
+    #[test]
+    fn rewinding_onto_a_user_message_takes_that_message_with_it() {
+        let dir = tmp("rewind-user-msg");
+        let (base, _srv) = fake_gateway(vec![sse(&["第一答"]), sse(&["第二答"])]);
+        let mut hub = SessionHub::new(dir.join("sessions.db"));
+        let a = hub.open_new(spec(&base, "m", "S", &dir)).unwrap();
+        run_round(&mut hub, a, "第一问");
+        run_round(&mut hub, a, "第二问");
+
+        let blocks = crate::server::store::Store::open(&hub.db)
+            .unwrap()
+            .stored_blocks(a)
+            .unwrap();
+        // 一轮两块（问 + 答），所以第二问是第三块。
+        let second_ask = blocks[2].id;
+
+        let b = hub.rewind(a, second_ask, true).expect("回退到用户消息");
+        let after = crate::server::store::Store::open(&hub.db)
+            .unwrap()
+            .stored_blocks(b)
+            .unwrap();
+        assert!(
+            after.iter().all(|x| x.id < second_ask),
+            "回退到用户消息时，那句话本身也得走：{:?}",
+            after.iter().map(|x| x.id).collect::<Vec<_>>()
+        );
+        let transcript = format!("{:?}", hub.get(b).unwrap().transcript());
+        assert!(
+            !transcript.contains("第二问"),
+            "旧消息还留在上下文里，重发就会重复：{transcript}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1237,17 +1303,19 @@ mod tests {
             .unwrap()
             .stored_blocks(a)
             .unwrap();
-        let (first, third) = (blocks[0].id, blocks[2].id);
+        // 分叉点用**助手**那一块：用户块会被归一化退到它之前，那样分叉点
+        // 就落到剪枝点上了，这条测试要验的"岔出去的分支整条走掉"就不成立。
+        let (keep_to, branch_from) = (blocks[1].id, blocks[3].id);
 
         // 留模式岔一条分支（a 的句柄跟着变成 b），再把 a 自己从库里开回来：
         // 两个会话同时在内存里——这正是"用户切走过、没关"的样子。
-        let b = hub.rewind(a, third, false).unwrap();
+        let b = hub.rewind(a, branch_from, false).unwrap();
         assert!(hub.get(b).is_some());
         hub.resume(a, spec(&base, "m", "S", &dir)).unwrap();
         assert!(hub.get(a).is_some(), "两个会话都开着");
 
-        // 回到 a 上剪枝到第一块：b 挂在第三块之后，整条该走。
-        assert_eq!(hub.rewind(a, first, true).unwrap(), a, "剪枝不换行");
+        // 回到 a 上剪枝到第一答：b 挂在第四块之后，整条该走。
+        assert_eq!(hub.rewind(a, keep_to, true).unwrap(), a, "剪枝不换行");
         assert!(hub.get(a).is_some(), "用户站着的会话必须还在");
         assert!(hub.get(b).is_none(), "被砍掉的分支不该还开着");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1271,14 +1339,14 @@ mod tests {
 
         let fork_point = {
             let store = crate::server::store::Store::open(&hub.db).unwrap();
-            store.stored_blocks(a).unwrap()[0].id
+            store.stored_blocks(a).unwrap()[1].id
         };
 
         // 第二轮发出去但**不收事件**：回合还在跑，会话是忙的。
         assert!(hub.submit(a, "第二问"));
         assert!(hub.get(a).unwrap().busy(), "前提：这一轮真的在跑");
 
-        let b = hub.fork_in_place(a, fork_point).expect("就地分叉");
+        let b = hub.rewind_to(a, fork_point).expect("就地分叉");
         assert!(!hub.get(b).unwrap().busy(), "分叉后不许再显示忙");
         assert!(hub.submit(b, "分叉后的新问题"), "新分支必须能立刻发消息");
         let _ = std::fs::remove_dir_all(&dir);

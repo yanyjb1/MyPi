@@ -158,7 +158,10 @@ mod tests {
             })
             .collect();
         let forks = vec![ForkInfo { id: 1, parent: None, fork_block: None }];
+        // 高亮按**块 id** 找：块 id 从 1 起，无分支时树序 = 时序，
+        // 块 4 的行下标 = 3。
         app.tree.on_tree(&nodes, &forks, 4);
+        assert_eq!(app.tree.selected, 3, "高亮必须落在块 4 的行上");
 
         let lines = app.tree.render();
         let text: String = lines.iter().map(|l| l.to_string()).collect();
@@ -167,6 +170,48 @@ mod tests {
             "渲染必须出内容，实际：{text:?}"
         );
         assert!(lines.len() >= 5, "至少 5 块 + 标题，实际 {}", lines.len());
+    }
+
+    /// **两下 Esc 从主区一路走到节点树，Esc 再把它交回来。**
+    ///
+    /// 用户报的 bug 是"两下 Esc 进不去"。这条把整条交接链钉在 App 层：
+    /// 两次 `Key(Esc)` 投进来 → 出口队列里出现一条 `OpenTree`（会话层据此
+    /// 开树，它不再自己数时间）→ 所有权切到 Tree → Tree 里 Esc → 回 Main。
+    /// 任何一环断了都会在这里红。
+    #[test]
+    fn two_escapes_hand_the_screen_to_the_tree_and_esc_hands_it_back() {
+        use crate::tui::zone::main::input::ExitRequest;
+        fn esc() -> RawEvent {
+            RawEvent::Key {
+                key: ratatui::crossterm::event::KeyEvent {
+                    code: ratatui::crossterm::event::KeyCode::Esc,
+                    modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+                    kind: ratatui::crossterm::event::KeyEventKind::Press,
+                    state: ratatui::crossterm::event::KeyEventState::NONE,
+                },
+            }
+        }
+        let mut app = App::new(TermSize { cols: 80, rows: 24 }, ZoneId::Main, &Default::default());
+
+        app.deliver(esc());
+        assert!(
+            app.take_outcomes().is_empty(),
+            "第一下只是记时刻，不出请求"
+        );
+        app.deliver(esc());
+        assert_eq!(
+            app.take_outcomes(),
+            vec![ExitRequest::OpenTree],
+            "两下连着到 = 该开树"
+        );
+
+        // 会话层收到 OpenTree 就切屏（`loop::open_tree` 的另一半）。
+        app.open_tree();
+        assert_eq!(app.current_owner(), ZoneId::Tree);
+
+        // 树里 Esc：把所有权交回主区（`TreeZone::deliver` 的 Handover）。
+        app.deliver(esc());
+        assert_eq!(app.current_owner(), ZoneId::Main, "Esc 该退出节点树");
     }
 
     #[test]

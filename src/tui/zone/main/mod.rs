@@ -157,6 +157,13 @@ impl Zone for MainZone {
             self.history.deliver(&event);
         }
         if self.input.accepts().contains(&kind) {
+            // **先同步再投递**：`popup_open` / `panel_open` 是输入区判断 Esc
+            // 归属的依据，而它们只有 Zone 看得见。以前这一手在末尾，于是
+            // 输入区用的永远是**上一轮**的值——面板刚关掉的那一帧，Esc 还
+            // 以为面板开着。
+            self.input
+                .set_completion_open(self.reserved.completion_open());
+            self.input.set_panel_open(self.reserved.panel_open());
             self.input.deliver(&event);
             // 输入区的借用包裹：收件人写死保留区，Zone 只投递不拆包。
             match self.input.pending_lend.take() {
@@ -183,13 +190,9 @@ impl Zone for MainZone {
             {
                 let text = self.input.editor.text();
                 let cursor = self.input.editor.cursor();
+                // 下一轮的归属依据由 `refresh_completion` 之后的那次同步
+                // （在本函数开头）负责——这里不必再来一遍。
                 self.reserved.refresh_completion(&text, cursor);
-                // 弹窗开合是**输入区**决定键位归属的依据（开着 = ↑↓/Tab/
-                // Enter/Esc 归补全服务），而它只有 Zone 看得见。
-                self.input
-                    .set_completion_open(self.reserved.completion_open());
-                // 面板的开合同理：它决定 Esc 的归属，而只有 Zone 看得见保留区。
-                self.input.set_panel_open(self.reserved.panel_open());
             }
             // 出口请求逐级上报：一次事件的全部产出都搬上来，不吞。
             self.pending_exits.append(&mut self.input.pending_exits);
@@ -237,7 +240,7 @@ pub mod reserved;
 mod tests {
     use super::*;
     use crate::server::entry::Entry;
-    use crate::tui::zone::TermSize;
+    use crate::tui::zone::{RawEvent, TermSize};
 
     /// 走一遍真帧路径（和 loop.rs 的 `draw_frame` 同一套调用）：主区出行
     /// → ratatui 画进后端 → 读回缓冲。检查画出来的格子真的在缓冲里
@@ -289,6 +292,63 @@ mod tests {
             !after.ends_with(' ') || after == before,
             "空格被判成确认，不该原样落进编辑器：{before:?} -> {after:?}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **空输入框里两下 Esc 必须开树——补全服务装着也一样。**
+    ///
+    /// 真机报的："空的输入，连续两下没用；先敲一个空格，再两下就有用"。
+    /// 空格与空输入唯一可能的差别在补全服务：`MainZone` 每轮从它同步
+    /// `popup_open`，而那个标志会让 Esc 被借走。这条把服务装上、把两种
+    /// 输入都走一遍，两种必须给出同一条 `OpenTree`。
+    #[test]
+    fn two_escapes_open_the_tree_from_an_empty_input_too() {
+        use crate::tui::zone::main::input::ExitRequest;
+        let root = std::env::temp_dir().join(format!("mypi_esctree_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let esc = || RawEvent::Key {
+            key: ratatui::crossterm::event::KeyEvent {
+                code: ratatui::crossterm::event::KeyCode::Esc,
+                modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+                kind: ratatui::crossterm::event::KeyEventKind::Press,
+                state: ratatui::crossterm::event::KeyEventState::NONE,
+            },
+        };
+        let space = || RawEvent::Key {
+            key: ratatui::crossterm::event::KeyEvent {
+                code: ratatui::crossterm::event::KeyCode::Char(' '),
+                modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+                kind: ratatui::crossterm::event::KeyEventKind::Press,
+                state: ratatui::crossterm::event::KeyEventState::NONE,
+            },
+        };
+
+        // 空输入
+        let mut mz = MainZone::default();
+        mz.attach(crate::tui::zone::TermSize { cols: 80, rows: 24 });
+        mz.reserved.attach_completion(root.clone(), root.clone());
+        mz.deliver(esc());
+        mz.deliver(esc());
+        let empty = std::mem::take(&mut mz.pending_exits);
+
+        // 先敲一个空格
+        let mut mz2 = MainZone::default();
+        mz2.attach(crate::tui::zone::TermSize { cols: 80, rows: 24 });
+        mz2.reserved.attach_completion(root.clone(), root.clone());
+        mz2.deliver(space());
+        mz2.deliver(esc());
+        mz2.deliver(esc());
+        let spaced = std::mem::take(&mut mz2.pending_exits);
+
+        assert_eq!(
+            empty,
+            vec![ExitRequest::OpenTree],
+            "空输入两下 Esc 必须开树"
+        );
+        assert_eq!(spaced, empty, "空格不该改变结果");
+        assert!(!mz.reserved.completion_open(), "前提：空输入不该有弹窗");
+        assert!(!mz.reserved.panel_open(), "前提：没开面板");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -166,21 +166,52 @@ fn walk(rd: std::fs::ReadDir, root: PathBuf, out: &mut Vec<Profile>) {
     }
 }
 
-/// The active profile: config's `profile:` key, or `default`.
+/// The active profile: config's `profile:` key, or the built-in `oh-my-pi`.
 pub fn active_name(cfg: &Config) -> String {
-    cfg.app.profile.clone().unwrap_or_else(|| "default".into())
+    cfg.app.profile.clone().unwrap_or_else(|| OMP_PROFILE.into())
+}
+
+/// Where a profile's compaction instruction lives.
+///
+/// Two kinds, because a profile can be either a directory the user wrote or
+/// one shipped inside the binary: the built-in `oh-my-pi` carries omp's
+/// instruction, and making it a path would mean writing that file to disk on
+/// first run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompactSource {
+    /// `profiles/<name>/compact.md`, re-read at every compaction so an edit
+    /// lands on the next `/compact` with no restart.
+    File(PathBuf),
+    /// Shipped with the binary. No file, nothing to re-read.
+    Builtin(&'static str),
 }
 
 /// A profile resolved to concrete values. Everything the session needs from
-/// it, in one shot: the system prompt, the tool roster, and the path to a
-/// compaction instruction (`None` = this profile does not override one).
+/// it, in one shot: the system prompt, the tool roster, and where a
+/// compaction instruction comes from (`None` = this profile does not
+/// override one).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedProfile {
     pub system: String,
     /// Enabled tool names; `None` = no restriction (all tools).
     pub tools: Option<Vec<String>>,
-    /// `profiles/<name>/compact.md`, read at each compaction.
-    pub compact_instruction: Option<PathBuf>,
+    /// Read at each compaction.
+    pub compact_instruction: Option<CompactSource>,
+}
+
+/// The compaction instruction a built-in profile carries.
+///
+/// `oh-my-pi` brings omp's own instruction, because that profile's whole
+/// point is "be omp". `default` brings none: it is a minimal identity, so
+/// compaction falls through to the config's file, then the built-in default
+/// — which is the same text anyway, just not claimed by the profile.
+fn builtin_compact(name: &str) -> Option<CompactSource> {
+    match name {
+        OMP_PROFILE => Some(CompactSource::Builtin(
+            crate::server::prompts::COMPACT_INSTRUCTION,
+        )),
+        _ => None,
+    }
 }
 
 /// Resolve the active profile to concrete values.
@@ -200,7 +231,7 @@ pub fn resolve(cfg: &Config, name: &str) -> anyhow::Result<ResolvedProfile> {
         return Ok(ResolvedProfile {
             system: builtin.into(),
             tools: None,
-            compact_instruction: None,
+            compact_instruction: builtin_compact(name),
         });
     }
     let found = discover(&base);
@@ -209,14 +240,14 @@ pub fn resolve(cfg: &Config, name: &str) -> anyhow::Result<ResolvedProfile> {
             return Ok(ResolvedProfile {
                 system: p.load_system()?,
                 tools: p.load_tools()?,
-                compact_instruction: p.compact_path.clone(),
+                compact_instruction: p.compact_path.clone().map(CompactSource::File),
             });
         }
         if let Some(builtin) = builtin_system(name) {
             return Ok(ResolvedProfile {
                 system: builtin.into(),
                 tools: None,
-                compact_instruction: None,
+                compact_instruction: builtin_compact(name),
             });
         }
         let names = found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -334,6 +365,21 @@ mod tests {
         assert!(builtin_system("没有这个").is_none());
     }
 
+    /// 内置 `oh-my-pi` 自带 omp 的压缩指令——那份 profile 的全部意义就是
+    /// "当 omp"，压缩该跟着它走。`default` 不带：它是个最简身份，压缩落回
+    /// config → 内置默认（同一份文本，只是不挂在 profile 名下）。
+    #[test]
+    fn only_oh_my_pi_ships_a_compaction_instruction() {
+        assert_eq!(
+            builtin_compact(OMP_PROFILE),
+            Some(CompactSource::Builtin(
+                crate::server::prompts::COMPACT_INSTRUCTION
+            ))
+        );
+        assert_eq!(builtin_compact("default"), None);
+        assert_eq!(builtin_compact("没有这个"), None);
+    }
+
     #[test]
     fn dir_without_system_md_is_not_a_profile() {
         let base = scratch("empty");
@@ -353,13 +399,13 @@ mod tests {
     }
     #[test]
     fn tool_gate_hides_and_refuses() {
-        // Gate one: the roster the model sees drops disabled tools but
-        // always keeps `context` (the compressed-session escape hatch).
+        // Gate one: the roster the model sees drops everything the profile
+        // left out.
         let mut t = crate::server::agent::tools::BuiltinTools::new(std::env::temp_dir())
             .with_enabled(Some(vec!["read".into()]));
         let roster = t.definitions_for();
         let names: Vec<&str> = roster.iter().map(|d| d.function.name.as_str()).collect();
-        assert!(names.contains(&"read") && names.contains(&"context"));
+        assert_eq!(names, vec!["read"]);
         assert!(!names.contains(&"bash") && !names.contains(&"browser"));
 
         // Gate two: execute refuses a hallucinated call.
@@ -370,19 +416,17 @@ mod tests {
         );
         assert!(err.contains("disabled by the active profile"), "{err}");
 
-        // `context` itself passes the gate despite not being listed.
+        // `context` used to be exempt from the allow-list; it no longer is.
         let call = crate::server::ai::types::ToolCall::new(
             "c2",
             "context",
             r##"{"intent":"查历史","anchor":"#1"}"##,
         );
-        // The history is empty, so the lookup fails — but with a
-        // *lookup* error, not the gate error.
         let err = format!(
             "{:#}",
             crate::server::agent::loop_rs::ToolExecutor::execute(&mut t, &call, &mut |_| {}).unwrap_err()
         );
-        assert!(err.contains("no record of artifact"), "{err}");
+        assert!(err.contains("disabled by the active profile"), "{err}");
     }
 
     #[test]

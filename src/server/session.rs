@@ -14,6 +14,7 @@ use crate::server::ai::client::Client;
 use crate::server::ai::types::{Context as ChatContext, Usage};
 use crate::server::entry::Entry;
 use crate::server::events::{Change, LiveActivity, RunState, SessionEvent, StreamView};
+use crate::server::profile::CompactSource;
 
 /// How much of a **running** tool's output the live slot keeps.
 ///
@@ -78,6 +79,9 @@ pub struct SessionState {
     /// 没有块 id"必须由这里说了算。不变量：`live` 就是 `transcript` 的尾巴，
     /// 顺序一致（每个 push 都成对走 [`Self::push_live`]）。
     live: Vec<Entry>,
+    /// 空回复占位（`tui.emptyReply`，从 spec 显式传入）。空回合落盘用它，
+    /// 模型上下文里的那条 `recorded_message` 也用它——两处字节必须一致。
+    empty_reply: String,
 }
 
 impl SessionState {
@@ -99,7 +103,13 @@ impl SessionState {
             round_stop: None,
             model_provider: String::new(),
             live: Vec::new(),
+            empty_reply: crate::server::entry::DEFAULT_EMPTY_REPLY.to_string(),
         }
+    }
+
+    /// 空回复占位（装配时从 spec 传入，一次）。
+    pub fn set_empty_reply(&mut self, text: String) {
+        self.empty_reply = text;
     }
 
     /// 推一条**还没落盘**的转录尾巴：入 `transcript` 也入 `live`。
@@ -392,10 +402,16 @@ impl SessionState {
     ///
     /// **Idempotent per round**: the round-limit brake sends `Error` and then
     /// `TurnDone` for the same round, so this runs twice. The second pass would
-    /// find the buffers already drained and append a phantom `EMPTY_REPLY`
-    /// reply — stored in the DB, so the user would see a bogus bubble after
-    /// every brake. Any event that puts new data in the buffers re-opens the
-    /// round (see `round_finalized`).
+    /// find the buffers already drained and append a phantom reply — stored in
+    /// the DB, so the user would see a bogus bubble after every brake. Any
+    /// event that puts new data in the buffers re-opens the round (see
+    /// `round_finalized`).
+    ///
+    /// The stop reason splits the placeholder: a round the user actually
+    /// interrupted (`stop_reason: "interrupted"`) persists
+    /// [`INTERRUPTED_REPLY`]; any other empty reply means the host sent
+    /// nothing — [`DEFAULT_EMPTY_REPLY`]. One shared string cannot serve both
+    /// without lying to somebody (see the constants' docs).
     fn finalize_round(&mut self, usage: Option<Usage>) {
         if self.round_finalized {
             return;
@@ -403,7 +419,10 @@ impl SessionState {
         self.round_finalized = true;
         let content = std::mem::take(&mut self.stream.text);
         let content = if content.is_empty() {
-            crate::server::entry::empty_reply().into()
+            match self.round_stop {
+                Some("interrupted") => crate::server::entry::INTERRUPTED_REPLY.to_string(),
+                _ => self.empty_reply.clone(),
+            }
         } else {
             content
         };
@@ -460,13 +479,14 @@ impl SessionState {
     /// 抛下一轮：流式槽位、回合缓冲、收尾凭证全部归零，**不落盘**。
     ///
     /// 与 [`Self::finalize_round`] 相对：那个**收尾**（把这一轮存下来），这个
-    /// **丢弃**（这一轮不属于任何人了）。分叉用它——被抛下的那一轮属于旧
-    /// 分支，既不该继续占着 `busy()`（新分支要能立刻开工），也不该把它的
-    /// 半截回复写进新分支的转录。
-    pub fn abandon_turn(&mut self) {
+    /// **丢弃**（这一轮不属于任何人了）。所有权回收用它（rewind 抛回合）——
+    /// 被抛下的那一轮属于旧分支，既不该继续占着 `busy()`（新分支要能立刻
+    /// 开工），也不该把它的半截回复写进新分支的转录。用户打断不走这里
+    /// （那要落 `stop_reason`，见 `Session::interrupt_turn`）。
+    pub fn drop_turn(&mut self) {
         self.stream = StreamView::default();
         // 收尾闸门关死：旧回合线程随后飘来的 TurnDone / Error 到这里只会
-        // 提前返回。事件通道那边已经换掉了（见 `Session::abandon_turn`），
+        // 提前返回。事件通道那边已经换掉了（见 `Session::drop_turn`），
         // 这是第二道闸。
         self.round_finalized = true;
         self.round_meta = None;
@@ -851,7 +871,7 @@ pub struct Session {
     compact: crate::server::ai::config::CompactConfig,
     // The active profile's own compaction instruction (`profiles/<name>/compact.md`),
     // read at each compaction. `None` = the profile does not override one.
-    compact_instruction: Option<std::path::PathBuf>,
+    compact_instruction: Option<CompactSource>,
     // What session-scoped commands may reach outside the session (a model
     // resolver, a profile root, the config file). Empty = the commands say
     // "not wired" instead of pretending (see `run_command`).
@@ -913,16 +933,18 @@ impl Session {
         model_provider: String,
         currency: crate::server::ai::config::Currency,
         cwd: std::path::PathBuf,
+        empty_reply: String,
         tool_filter: Option<Vec<String>>,
         tools: crate::server::ai::config::ToolsConfig,
         browser: crate::server::ai::config::BrowserConfig,
         db_path: Option<std::path::PathBuf>,
     ) -> (Self, std::sync::mpsc::Receiver<SessionEvent>) {
         let (tx, rx) = std::sync::mpsc::channel::<SessionEvent>();
-        // 服务商是落盘事实（`turns.provider`），归状态持有；会话层只负责在
-        // 装配与 `/switch` 时告诉它。
+        // 服务商是落盘事实（`turns.provider`）、空回复占位（`tui.emptyReply`）
+        // 都是装配期注入：会话层不知道配置从哪来。
         let mut state = state;
         state.model_provider = model_provider;
+        state.set_empty_reply(empty_reply.clone());
         let s = Self {
             state,
             client: std::cell::RefCell::new(client),
@@ -1008,7 +1030,7 @@ impl Session {
                 &system,
                 &cwd_snapshot,
                 &ccfg,
-                profile_instruction.as_deref(),
+                profile_instruction.as_ref(),
                 retention,
                 &focus,
                 &mut summarize,
@@ -1671,9 +1693,13 @@ impl Session {
         self.state.replay_round(session_id, round_seq)
     }
 
-    /// 分叉：抛下在跑的回合，把这条会话接上新分支。
+    /// **所有权回收**（rewind / 切走会话）：打断在跑的回合、换事件通道、按
+    /// 当前转录重建上下文副本，返回新的接收端由调用方持有。
     ///
-    /// 三件事缺一不可，顺序也有讲究：
+    /// 这**不是**“用户打断”：没有 stop_reason 落盘、没有回执——被抛下的
+    /// 回合属于被抛下的分支，它不需要收尾，只需要安静消失。用户打断走
+    /// [`Self::interrupt_turn`]（wire `ClientMsg::Interrupt`，落
+    /// `stop_reason = "interrupted"`）。三件事缺一不可，顺序也有讲究：
     ///
     /// 1. **打断**（flag + 杀 worker）：旧回合的读循环立刻结束，不再烧 token。
     /// 2. **换事件通道**：旧回合线程还握着旧 `tx`，它剩下的收尾事件（TurnDone
@@ -1687,7 +1713,7 @@ impl Session {
     ///
     /// 调用方（hub）**先** `retarget` 再调这里——上下文要按新前缀重建。
     /// 返回新的接收端，由调用方持有。
-    pub fn abandon_turn(&mut self) -> std::sync::mpsc::Receiver<SessionEvent> {
+    pub fn drop_turn(&mut self) -> std::sync::mpsc::Receiver<SessionEvent> {
         self.interrupt
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.client.borrow().interrupt_worker();
@@ -1702,11 +1728,13 @@ impl Session {
         };
         let ctx = crate::server::turn::entries_to_context(&system, self.state.transcript());
         self.chat = std::sync::Arc::new(std::sync::Mutex::new(ctx));
-        self.state.abandon_turn();
+        self.state.drop_turn();
         rx
     }
 
-    /// Esc during a turn: the runner stops reading and disconnects.
+    /// **用户打断**（wire `ClientMsg::Interrupt`）：回合的 runner 停止读流并
+    /// 断开，已收到的内容照常收尾落盘（`stop_reason = "interrupted"`）。
+    /// 与 [`Self::drop_turn`]（所有权回收，不落盘不回执）相对。
     pub fn interrupt_turn(&self) {
         self.interrupt.store(true, std::sync::atomic::Ordering::Relaxed);
         self.client.borrow().interrupt_worker();
@@ -1753,8 +1781,8 @@ impl Session {
     /// Attach the active profile's own compaction instruction, if it has one.
     /// Called once, at assembly. The file is not read here: it is read at each
     /// compaction, so editing it takes effect on the next `/compact`.
-    pub fn with_compact_instruction(mut self, path: Option<std::path::PathBuf>) -> Self {
-        self.compact_instruction = path;
+    pub fn with_compact_instruction(mut self, src: Option<CompactSource>) -> Self {
+        self.compact_instruction = src;
         self
     }
 
@@ -2610,10 +2638,11 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_reply_persists_the_shared_placeholder() {
+    fn an_empty_reply_persists_the_injected_placeholder() {
         // The other half of the byte-fidelity contract: whatever the loop puts
         // in the live context for an empty reply, the entry says the same.
         let mut s = st();
+        s.set_empty_reply("占位".into());
         let _ = s.start_turn("问");
         let _ = s.handle(SessionEvent::TurnDone(
             Usage::default(),
@@ -2627,7 +2656,33 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(reply, crate::server::entry::empty_reply());
+        assert_eq!(reply, "占位");
+    }
+
+    #[test]
+    fn an_interrupted_empty_reply_persists_the_interrupt_text_not_the_placeholder() {
+        // The one-string-fits-all placeholder lied both ways: when it said
+        // "UserInterrupted" for upstreams that returned nothing, users hunted
+        // ghost Escs; once renamed to the anonymous "empty response", real
+        // interrupts hid behind it. The persisted entry must split on the
+        // stop reason the round actually ended with.
+        let mut s = st();
+        s.set_empty_reply("占位".into());
+        let _ = s.start_turn("问");
+        let _ = s.handle(SessionEvent::TurnDone(
+            Usage::default(),
+            crate::server::ai::types::StopReason::Interrupted,
+        ));
+        let reply = s
+            .transcript()
+            .iter()
+            .find_map(|e| match e {
+                Entry::Assistant { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(reply, crate::server::entry::INTERRUPTED_REPLY);
+        assert_ne!(reply, "占位", "真打断不该落通用占位文案");
     }
 
     #[test]

@@ -722,20 +722,84 @@ impl Daemon {
                     ),
                 }
             }
-            ClientMsg::Submit { text, from_block } => self.submit(conn, text, from_block),
+            ClientMsg::Submit { text } => self.submit(conn, text),
             ClientMsg::Command { name, args } => self.command(conn, &name, &args),
-            ClientMsg::Interrupt => {
-                if let Some(id) = self.conns.get(&conn).and_then(|c| c.attached) {
-                    self.hub.interrupt(id);
-                    crate::server::log::info("daemon", format!("interrupt session {id}"));
-                    // **立刻**回执：flag 已设，这就是服务端能给的全部保证。
-                    // turn 线程真正收尾是另一件事（它可能正卡在上游的 read
-                    // 上），前端不该为此干等——所以收到就回，不等 turn 结束。
-                    self.send(conn, ServerMsg::Interrupted { session_id: id });
+            ClientMsg::Rewind { session, block } => {
+                // 前端点名目标；连接必须正附着在它上面。不满足要**说**：
+                // 静默 return 的话前端在树页上回车，永远等不到快照，回到
+                // 主区看到的是旧转录——"回退"看起来成功了，其实什么都没发生。
+                if self.conns.get(&conn).and_then(|c| c.attached) != Some(session) {
+                    self.send(
+                        conn,
+                        ServerMsg::Error {
+                            code: ErrorCode::NoSuchSession,
+                            message: format!(
+                                "rewind ignored: connection is not attached to session {session}"
+                            ),
+                        },
+                    );
+                    return;
+                }
+                // 选中"用户消息"节点 = 把那句话收回输入框重发。内容要在
+                // **剪枝前**读（剪枝模式它自己也会被删）；非用户节点没有可
+                // 收回的东西，prefill 为 None。
+                let prefill = Store::open(self.hub.db())
+                    .ok()
+                    .and_then(|st| st.user_text_of(block).ok())
+                    .flatten();
+                match self.hub.rewind_to(session, block) {
+                    Ok(new_id) => {
+                        // 剪模式 new_id == session；fork 模式换了行，观察者
+                        // 跟着搬（同 `submit` 的 fork 分支）。
+                        if new_id != session {
+                            self.unwatch(conn, session);
+                        }
+                        if let Some(c) = self.conns.get_mut(&conn) {
+                            c.attached = Some(new_id);
+                        }
+                        self.watch(conn, new_id);
+                        // attach 规格的快照，立刻发：前端此刻站在旧树页上等
+                        // 回包，回主区第一帧就要画新前缀。
+                        self.send(conn, ServerMsg::Attached { session_id: new_id });
+                        if let Some(text) = prefill {
+                            self.send(conn, ServerMsg::Prefill { text });
+                        }
+                        for m in self.transcript_msgs_for(new_id, conn) {
+                            self.send(conn, m);
+                        }
+                        self.send(conn, self.stream_msg(new_id));
+                        if let Some(s) = self.hub.get(new_id) {
+                            self.last_stream.insert(new_id, s.stream_view().clone());
+                        }
+                        let state = self.state_msg(new_id);
+                        self.last_state.insert(new_id, state.clone());
+                        self.send(conn, state);
+                        self.flush_outbox(conn);
+                    }
+                    Err(e) => {
+                        self.send(
+                            conn,
+                            ServerMsg::Error {
+                                code: ErrorCode::Internal,
+                                message: format!("failed to rewind to block {block}: {e:#}"),
+                            },
+                        );
+                    }
+                }
+            }
+            ClientMsg::Interrupt { session } => {
+                // The front end names its target; the connection must be the
+                // one attached to it. A stale id (raced a round that already
+                // ended, or a session the connection never owned) is not an
+                // error — the front end may have raced a just-finished round.
+                if self.conns.get(&conn).and_then(|c| c.attached) == Some(session) {
+                    self.hub.interrupt(session);
+                    crate::server::log::info("daemon", format!("interrupt session {session}"));
+                    // fire-and-forget：flag 已设就是服务端能给的全部保证。前端的
+                    // 可输入态由它自己的乐观反馈（发打断的那一跳已切回）与随后
+                    // 的 `State{busy:false}`（权威收尾）共同收敛，无需专门回执。
                     self.flush_outbox(conn);
                 }
-                // Interrupting nothing is not an error: the front end may have
-                // raced a just-finished round.
             }
             ClientMsg::Tree { session } => {
                 let att = self.conns.get(&conn).and_then(|c| c.attached);
@@ -748,15 +812,14 @@ impl Daemon {
                         ServerMsg::Tree {
                             nodes: Vec::new(),
                             forks: Vec::new(),
-                            current: 0,
+                            current_block: 0,
                         },
                     );
                     return;
                 };
                 match self.hub.tree(id) {
-                    Ok((nodes, forks, current)) => {
-
-                        self.send(conn, ServerMsg::Tree { nodes, forks, current });
+                    Ok((nodes, forks, current_block)) => {
+                        self.send(conn, ServerMsg::Tree { nodes, forks, current_block });
                     }
                     Err(e) => self.send(
                         conn,
@@ -865,10 +928,14 @@ impl Daemon {
         if let Some(c) = self.conns.get_mut(&conn) {
             // One watched session per connection: a re-attach detaches first.
             if let Some(old) = c.attached.replace(id) {
-                self.unwatch(conn, old);
+                // re-attach 到同一个 id 时这一步不该摘：摘了就是"唯一观察者
+                // 走了"，`unwatch` 会打断这个会话自己。
+                if old != id {
+                    self.unwatch(conn, old);
+                }
             }
         }
-        self.watchers.entry(id).or_default().push(conn);
+        self.watch(conn, id);
         // Snapshot: everything a fresh renderer needs, in order.
         self.send(conn, ServerMsg::Attached { session_id: id });
         for m in self.transcript_msgs_for(id, conn) {
@@ -959,42 +1026,9 @@ impl Daemon {
         }
     }
 
-    fn submit(&mut self, conn: u64, text: String, from_block: Option<i64>) {
+    fn submit(&mut self, conn: u64, text: String) {
         if let Some(id) = self.ensure_session(conn) {
-            // 节点树里选过"回到这块"：**现在**（用户真的发了消息）才分叉。
-            // 单按回车不建会话，否则树上会有没内容的幽灵分支。
-            //
-            // 分叉是**就地**的：同一个会话换个 tip，内存里那份 `Session`
-            // 原样留着（转录、cwd、运行时权柄都不动），只把 `session_id`
-            // 指到新行。所以这里不需要 resume，也不会撞上"会话没打开"。
-            let old_id = id;
-            let id = match from_block {
-                Some(block) => match self.hub.fork_in_place(id, block) {
-                    Ok(new_id) => {
-                        // 旧分支的 tip 冻住了，它不再产消息，也就没必要再挂
-                        // 这个连接。`unwatch` 里的"最后一个观察者走了就打断"
-                        // 打的是**旧 id**，而它已经不在 hub 里了，无副作用。
-                        self.unwatch(conn, old_id);
-                        new_id
-                    }
-                    Err(e) => {
-                        self.send(
-                            conn,
-                            ServerMsg::Error {
-                                code: ErrorCode::Internal,
-                                message: format!("failed to fork from block {block}: {e}"),
-                            },
-                        );
-                        return;
-                    }
-                },
-                None => id,
-            };
-            if let Some(c) = self.conns.get_mut(&conn) {
-                c.attached = Some(id);
-            }
-            self.watchers.entry(id).or_default().push(conn);
-            self.send(conn, ServerMsg::Attached { session_id: id });
+            self.watch(conn, id);
             self.do_submit(conn, id, text);
         }
     }
@@ -1291,14 +1325,32 @@ impl Daemon {
         }
     }
 
+    /// 记下"这条连接在看这个会话"。**同一条连接同一个会话只记一份。**
+    ///
+    /// 去重不是优化，是正确性：`unwatch` 用 `retain` 一次摘掉**所有**等于
+    /// `conn` 的项，所以重复记账会让"一次 unwatch"把整张列表清空，把仍然
+    /// 盯着终端的用户误判成"没人看了"，当场打断正在跑的回合。
+    fn watch(&mut self, conn: u64, id: i64) {
+        let list = self.watchers.entry(id).or_default();
+        if !list.contains(&conn) {
+            list.push(conn);
+        }
+    }
+
+    /// 摘掉一条连接对某个会话的观察。**列表真的空了就回收**：没有人在看，
+    /// 就没有理由继续生成（SERVER.md §4）。
+    ///
+    /// 这是**所有权回收**，不是用户打断：不落 `stop_reason`、不回执——
+    /// 走 `drop_turn` 的路子把在跑的回合安静停掉。用户按 Esc 走
+    /// `ClientMsg::Interrupt` → [`SessionHub::interrupt`]。
+    ///
+    /// 前提是记账没出错：见 [`Self::watch`] 的去重。
     fn unwatch(&mut self, conn: u64, id: i64) {
         if let Some(list) = self.watchers.get_mut(&id) {
             list.retain(|c| *c != conn);
             if list.is_empty() {
                 self.watchers.remove(&id);
-                // The last watcher left. A running round stops now: nobody is
-                // watching, so no reason to keep generating (SERVER.md §4).
-                self.hub.interrupt(id);
+                self.hub.drop_turn_of(id);
             }
         }
     }

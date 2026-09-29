@@ -496,7 +496,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub browser: BrowserConfig,
     /// Active system-prompt profile name (`/profile` switches it;
-    /// restart returns to this default). None = `default`.
+    /// restart returns to this default). None = the built-in `oh-my-pi`.
     #[serde(default)]
     pub profile: Option<String>,
     /// Stream delivery mode (`immediate` | `buffered`). See [`StreamMode`].

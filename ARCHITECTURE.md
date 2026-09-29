@@ -1,7 +1,7 @@
 # MyPi 架构
 
 一个终端编程 agent：会话服务（`server`，含网关 `ai`、执行引擎 `agent`、持久化 `store`）+ TUI（`tui`）。
-规模：`src/` 约 6.3 万行 / 133 个文件；单 crate，edition 2024；`cargo test` 958 项（1 ignored）全绿。
+规模：`src/` 约 6.3 万行 / 133 个文件；单 crate，edition 2024；`cargo test` 963 项全绿（`--no-default-features` 下 934 项）。
 
 本文只写**现在成立的事实与规则**。规则由 `src/lib.rs` 里的 `mod architecture`
 测试强制：写错一条依赖，`cargo test` 直接红。

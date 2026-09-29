@@ -1346,9 +1346,9 @@ pub struct ToolSpec {
     pub run: ToolRun,
     /// Compiled in and usable right now (the web tools are feature-gated).
     pub available: fn() -> bool,
-    /// Whether the profile's allow-list may hide this tool. `context` is the
-    /// one that cannot be hidden: it is the compressed session's only way back
-    /// into its own history.
+    /// Whether the profile's allow-list may hide this tool. Every built-in
+    /// says yes; the flag exists so a tool the harness itself needs could opt
+    /// out later without touching the two readers below.
     pub filterable: bool,
     pub intent: IntentPolicy,
     pub tier: Tier,
@@ -1679,10 +1679,7 @@ pub const TOOLS: &[ToolSpec] = &[
         },
         run: run_context,
         available: || true,
-        // Never hidden by a profile: it is the compressed session's escape
-        // hatch back into its own history (the `context` tool is how a model
-        // asks "where did artifact #1 come from").
-        filterable: false,
+        filterable: true,
         intent: IntentPolicy::Require,
         tier: Tier::Read,
         events: &[],
@@ -2163,10 +2160,10 @@ mod tests {
         assert!(restricted.is_enabled("read"));
         assert!(!restricted.is_enabled("bash"));
         assert!(
-            restricted.is_enabled("context"),
-            "context 不可被 profile 关掉（压缩后的唯一退路）"
+            !restricted.is_enabled("context"),
+            "白名单之外的工具一律关掉，没有例外"
         );
-        assert_eq!(restricted.enabled_tools(), vec!["read", "context"]);
+        assert_eq!(restricted.enabled_tools(), vec!["read"]);
     }
 
     #[test]
@@ -2234,17 +2231,16 @@ mod tests {
 
     #[test]
     fn the_roster_and_the_executor_read_the_same_gate() {
-        // A tool hidden from the roster must be refused by the executor, and a
-        // tool that is *not* filterable must survive any allow-list. Both
-        // readers now derive from `TOOLS`, so this cannot drift — the test
-        // pins the property, not the implementation.
+        // A tool hidden from the roster must be refused by the executor. Both
+        // readers derive from `TOOLS`, so this cannot drift — the test pins
+        // the property, not the implementation.
         let mut t = BuiltinTools::new(std::env::temp_dir()).with_enabled(Some(vec!["read".into()]));
         let names: Vec<String> = t
             .definitions_for()
             .iter()
             .map(|d| d.function.name.clone())
             .collect();
-        assert_eq!(names, vec!["read", "context"], "只有 read 与不可过滤的 context");
+        assert_eq!(names, vec!["read"], "白名单只有 read");
 
         let call = |name: &str| crate::server::ai::types::ToolCall {
             id: "c".into(),

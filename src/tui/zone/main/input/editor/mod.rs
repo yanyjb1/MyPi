@@ -1156,7 +1156,10 @@ mod tests {
         e.insert_paste(&src);
         e.insert_str(" 帮我看看");
         let out = e.expanded_text();
-        assert!(out.starts_with("code line 0"), "提交内容应是原文");
+        assert!(
+            out.contains("```pasted content\ncode line 0"),
+            "提交内容应是原文，且带围栏"
+        );
         assert!(out.ends_with(" 帮我看看"));
         assert_eq!(out.matches("code line").count(), 35);
     }

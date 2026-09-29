@@ -54,14 +54,22 @@ impl TreeZone {
         self.scroll = 0;
     }
 
-    /// 服务端的树到了：算几何、拼行、填进来。
+    /// 服务端的树到了：算几何、拼行、按**块 id** 找高亮。
+    ///
+    /// 高亮落在选中的那块**最后一次**出现的行——同块两行（工具往返）时停
+    /// 在下面那行更自然。块不在树里（零行状态块）时退到最后一行。
     pub fn on_tree(
         &mut self,
         nodes: &[crate::server::wire::TreeNode],
         forks: &[crate::server::wire::ForkInfo],
-        current: usize,
+        current_block: i64,
     ) {
-        self.begin(build_rows(nodes, forks), current);
+        let rows = build_rows(nodes, forks);
+        let current = rows
+            .iter()
+            .rposition(|r| r.block_id == current_block)
+            .unwrap_or(rows.len().saturating_sub(1));
+        self.begin(rows, current);
     }
 
     /// 取走"用户选了哪一块"（回车）。取走一次就清。

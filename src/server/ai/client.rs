@@ -737,7 +737,17 @@ impl Client {
         loop {
             pending.clear();
             match std::io::BufRead::read_until(&mut reader, b'\n', &mut pending) {
-                Ok(0) => break, // 上游正常收流（EOF）
+                Ok(0) => {
+                    // EOF 不等于"正常收流"：worker 被杀（打断）也会表现为
+                    // 管道 EOF。不查 flag 的话，被打断的回合在这里被当成
+                    // "模型说完了"收尾——stop_reason 落成 stop，正文空了
+                    // 还被 empty_reply 顶上，屏幕上永远挂着一条
+                    // "SYSTEM: UserInterrupted."，而 turns 表说它正常结束。
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        interrupted = true;
+                    }
+                    break;
+                }
                 Ok(_) => {}
                 Err(e) if Self::is_body_read_timeout(&e) => {
                     // 空闲。给打断一次机会：flag 已设 = 用户按了 Esc，
@@ -787,6 +797,12 @@ impl Client {
             let line = String::from_utf8_lossy(&pending);
             let line = line.strip_suffix('\n').unwrap_or(&line);
             let line = line.strip_suffix('\r').unwrap_or(line);
+            // worker 的死亡报告（`__WORKER_ERROR__` 前缀，client.rs:681）不是
+            // 一条普通的坏行：吞掉它 = "请求静默蒸发，EOF 收场"。翻成错误，
+            // 走下面的 Err 臂——打断时按中断收工，其余按真错误处理。
+            if let Some(err) = line.strip_prefix("__WORKER_ERROR__") {
+                anyhow::bail!("HTTP worker died: {err}");
+            }
             let Some(payload) = line.strip_prefix("data: ") else {
                 continue;
             };
@@ -861,62 +877,68 @@ impl Client {
             if let Some(t) = delta.get("content").and_then(|v| v.as_str()) {
                 let mut emitted = String::new();
                 content_filter.feed(t, &mut emitted);
-                if emitted.is_empty() {
-                    continue;
-                }
-                // 上游同时给了结构化的 `tool_calls` 时，正文里的那份是**副本**
-                // ——把它当正文显示出去就行，不能再合成一个调用（否则同一次
-                // 调用会执行两遍）。
-                let structured = delta
-                    .get("tool_calls")
-                    .and_then(|v| v.as_array())
-                    .is_some_and(|a| !a.is_empty());
-                match scanner.as_mut() {
-                    Some(sc) => {
-                        for ev in sc.feed(&emitted) {
-                            match ev {
-                                crate::server::ai::inband::ScanEvent::Text(t) => {
-                                    content.push_str(&t);
-                                    if !on_delta(&t) {
-                                        interrupted = true;
+                // Qwen 经好几家网关流式调工具时，同一 chunk 同时带
+                // `content: ""` 和 `tool_calls` 分片（OpenAI 流的合法形状：
+                // 正文为空、调用在走）。这里的空产出只说明"这个 chunk 没有
+                // **正文**可处理"——绝不能 `continue`：那会跳过下面的
+                // `tool_calls.feed`，调用分片整流被丢，`finish_reason:
+                // "tool_calls"` 配上空调用列表，回合被当成"模型没说话"
+                // 收尾。跳的只是正文处理本身。
+                if !emitted.is_empty() {
+                    // 上游同时给了结构化的 `tool_calls` 时，正文里的那份是**副本**
+                    // ——把它当正文显示出去就行，不能再合成一个调用（否则同一次
+                    // 调用会执行两遍）。
+                    let structured = delta
+                        .get("tool_calls")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| !a.is_empty());
+                    match scanner.as_mut() {
+                        Some(sc) => {
+                            for ev in sc.feed(&emitted) {
+                                match ev {
+                                    crate::server::ai::inband::ScanEvent::Text(t) => {
+                                        content.push_str(&t);
+                                        if !on_delta(&t) {
+                                            interrupted = true;
+                                        }
+                                    }
+                                    crate::server::ai::inband::ScanEvent::Thinking(t) => {
+                                        reasoning.push_str(&t);
+                                        if !on_reasoning(&t) {
+                                            interrupted = true;
+                                        }
+                                    }
+                                    crate::server::ai::inband::ScanEvent::ToolCall {
+                                        name,
+                                        arguments,
+                                    } => {
+                                        if !structured {
+                                            healed_calls.push(crate::server::ai::types::ToolCall {
+                                                id: format!("call_healed_{}", healed_calls.len()),
+                                                kind: "function".into(),
+                                                function: crate::server::ai::types::FunctionCall {
+                                                    name,
+                                                    arguments,
+                                                },
+                                            });
+                                        }
                                     }
                                 }
-                                crate::server::ai::inband::ScanEvent::Thinking(t) => {
-                                    reasoning.push_str(&t);
-                                    if !on_reasoning(&t) {
-                                        interrupted = true;
-                                    }
-                                }
-                                crate::server::ai::inband::ScanEvent::ToolCall {
-                                    name,
-                                    arguments,
-                                } => {
-                                    if !structured {
-                                        healed_calls.push(crate::server::ai::types::ToolCall {
-                                            id: format!("call_healed_{}", healed_calls.len()),
-                                            kind: "function".into(),
-                                            function: crate::server::ai::types::FunctionCall {
-                                                name,
-                                                arguments,
-                                            },
-                                        });
-                                    }
+                                if interrupted {
+                                    break;
                                 }
                             }
-                            if interrupted {
-                                break;
+                        }
+                        None => {
+                            content.push_str(&emitted);
+                            if !on_delta(&emitted) {
+                                interrupted = true;
                             }
                         }
                     }
-                    None => {
-                        content.push_str(&emitted);
-                        if !on_delta(&emitted) {
-                            interrupted = true;
-                        }
+                    if interrupted {
+                        break;
                     }
-                }
-                if interrupted {
-                    break;
                 }
             }
             // Tool-call fragments (see the ToolCallAccum docs)

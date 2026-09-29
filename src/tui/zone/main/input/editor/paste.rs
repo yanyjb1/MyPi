@@ -8,7 +8,19 @@
 //! with the original stored in `PasteStore`. The marker is **atomic** in the editor:
 //! one backspace removes it all, one arrow key crosses it, and submission restores the full text.
 //!
-//! The format matches pi exactly, so habits from pi transfer directly:
+//! On submit the marker expands back to the original, **fenced**:
+//!
+//! ```text
+//! ```pasted content
+//! <the original text>
+//! ```
+//! ```
+//!
+//! The fence is on its own lines and carries the `pasted content` tag, so the
+//! model can tell pasted text from what the user typed, and pasted markdown
+//! cannot swallow the sentence around it.
+//!
+//! The marker format matches pi exactly, so habits from pi transfer directly:
 //! ```text
 //! [paste #1 +123 lines]    more than 10 lines
 //! [paste #1 1234 chars]    few lines but many characters
@@ -112,7 +124,19 @@ impl PasteStore {
             // Copy the original text before the marker verbatim
             out.extend(&chars[cursor..m.start]);
             match self.get(m.id) {
-                Some(content) => out.push_str(content),
+                Some(content) => {
+                    // Fence it, on its own lines. The marker can sit
+                    // mid-sentence ("看下这段 [paste #1] 有什么问题"), and raw
+                    // pasted text often starts with `#` or `-` — spliced
+                    // inline, it would eat the surrounding sentence. The
+                    // fence also tells the model this text arrived by paste.
+                    out.push_str("\n```pasted content\n");
+                    out.push_str(content);
+                    if !content.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    out.push_str("```\n");
+                }
                 None => out.extend(&chars[m.start..m.end]), // missing original: keep verbatim
             }
             cursor = m.end;
@@ -376,7 +400,11 @@ mod tests {
         let id = s.add("line1\nline2\nline3".into());
         let marker = PasteStore::marker_text(id, 3, 17);
         let text = format!("看下这段 {marker} 有什么问题");
-        assert_eq!(s.expand(&text), "看下这段 line1\nline2\nline3 有什么问题");
+        // 展开带围栏，且围栏独占行——标记可能夹在句子中间。
+        assert_eq!(
+            s.expand(&text),
+            "看下这段 \n```pasted content\nline1\nline2\nline3\n```\n 有什么问题"
+        );
     }
 
     #[test]
@@ -396,7 +424,10 @@ mod tests {
             PasteStore::marker_text(a, 30, 3),
             PasteStore::marker_text(b, 40, 3)
         );
-        assert_eq!(s.expand(&text), "中文AAA中间BBB尾巴");
+        assert_eq!(
+            s.expand(&text),
+            "中文\n```pasted content\nAAA\n```\n中间\n```pasted content\nBBB\n```\n尾巴"
+        );
     }
 
     #[test]

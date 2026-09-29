@@ -27,7 +27,7 @@ import termios
 import time
 
 BIN = "./target/release/mypi"
-GEN = "./target/release/examples/tui_scale_bench"
+GEN = "./target/release/mypi"   # `mypi bench gen` —— 压测装置现在装在二进制里
 ROOT = "/tmp/mypi-scale"
 COLS, ROWS = 120, 40
 
@@ -54,7 +54,7 @@ def boot(n):
     os.makedirs(rt, exist_ok=True)
     db = f"{data_home}/mypi/sessions.db3"
     if not os.path.exists(db):
-        subprocess.run([GEN, "gen", str(n), db], check=True, capture_output=True)
+        subprocess.run([GEN, "bench", "gen", str(n), db], check=True, capture_output=True)
     env = dict(os.environ)
     env["XDG_DATA_HOME"] = data_home
     env["XDG_RUNTIME_DIR"] = rt

@@ -47,11 +47,8 @@ fn every_client_msg_roundtrips() {
         ClientMsg::ListSessions { under: None },
         ClientMsg::ListRounds { id: 7 },
         ClientMsg::Replay { id: 7, round: 3 },
-        ClientMsg::Submit {
-            text: "x".into(),
-            from_block: None,
-        },
-        ClientMsg::Interrupt,
+        ClientMsg::Submit { text: "x".into() },
+        ClientMsg::Interrupt { session: 3 },
         ClientMsg::Logs { limit: 50 },
         ClientMsg::Quit,
     ];
@@ -249,7 +246,7 @@ fn entry_is_tagged_snake_case_on_the_wire() {
 
 #[test]
 fn partial_input_reports_partial_not_error() {
-    let bytes = encode(&ClientMsg::Interrupt);
+    let bytes = encode(&ClientMsg::Interrupt { session: 3 });
     for n in 0..bytes.len() {
         assert!(matches!(
             decode::<ClientMsg>(&bytes[..n]).expect("no error on prefix"),
@@ -318,7 +315,7 @@ fn two_messages_in_one_buffer_decode_in_order() {
 #[test]
 fn decode_consume_helper_roundtrips_a_stream() {
     // The exact loop a connection reader runs: pull bytes, decode, consume.
-    let wire: Vec<u8> = [ClientMsg::Attach { id: 9 }, ClientMsg::Interrupt]
+    let wire: Vec<u8> = [ClientMsg::Attach { id: 9 }, ClientMsg::Interrupt { session: 3 }]
         .iter()
         .flat_map(encode)
         .collect();
@@ -335,7 +332,13 @@ fn decode_consume_helper_roundtrips_a_stream() {
             }
         }
     }
-    assert_eq!(seen, vec![ClientMsg::Attach { id: 9 }, ClientMsg::Interrupt]);
+    assert_eq!(
+        seen,
+        vec![
+            ClientMsg::Attach { id: 9 },
+            ClientMsg::Interrupt { session: 3 }
+        ]
+    );
 }
 
 // ---- handshake waits ------------------------------------------------------

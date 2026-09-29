@@ -55,13 +55,6 @@ pub enum Action {
     HistoryPrev,
     // Next input history entry (↓ on the last row).
     HistoryNext,
-    // /resume picker: ↑↓ move.
-    SelectorUp,
-    SelectorDown,
-    // Enter confirms restoring the highlighted session.
-    SelectorConfirm,
-    // Esc closes the picker (no restore).
-    SelectorCancel,
     // Trigger / advance path completion (Tab).
     Complete,
     // Move up in the completion popup.
@@ -79,30 +72,30 @@ pub enum Action {
     ToggleTools,
     // Clear the input (Ctrl+C).
     ClearInput,
-    // Interrupt the in-flight streaming reply (Esc).
+    // Interrupt the in-flight reply.
+    //
+    // 两个来源：`Ctrl+C` 在回合进行中，以及 Esc——但 Esc 那条由
+    // `InputZone::route_esc` 自己判（streaming 时打断，空闲时数开树窗口）。
     Interrupt,
     // Submit the current input.
     Submit,
     // Quit the program.
     Quit,
-    // Esc pressed while idle (no popup, not streaming). The app applies
-    // the double-Esc window: second press inside 500ms opens the tree
-    // navigator, otherwise this quits.
-    EscIdle,
-    // Tree navigator modal: move highlight / confirm / cancel.
-    TreeUp,
-    TreeDown,
-    TreeConfirm,
-    TreeCancel,
     // Unrecognized; ignore.
     None,
 }
 
 // Context required to translate keys.
 //
-// Why these are passed in: the meaning of `Esc` / `Ctrl+C` / `↑` / `↓` **depends on current state**.
-// Esc closes the completion popup when it is open, interrupts during streaming,
-// and only otherwise quits. Passing state explicitly keeps `translate` a pure function that unit-tests easily.
+// Why these are passed in: the meaning of `Ctrl+C` / `↑` / `↓` **depends on current state**.
+// Passing state explicitly keeps `translate` a pure function that unit-tests easily.
+//
+// **`Esc` is not translated here.** Its ownership is decided by
+// `InputZone::route_esc`: the panel / the completion popup / the hang state
+// can all take it away, and only what is left over counts toward the
+// double-tap window that opens the node tree. Splitting that decision across a
+// table and a borrow site is what made "two Esc won't open the tree" hard to
+// see. One place, one answer.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KeyContext {
     // The input box is empty.
@@ -115,10 +108,6 @@ pub struct KeyContext {
     // The `/usage` panel is open. Modal for Esc: the panel is on top and is
     // what the next Esc means.
     pub panel_open: bool,
-    // The /resume picker is open (modal: ↑↓/Enter/Esc are all taken over).
-    pub selector_open: bool,
-    // The tree navigator modal is open (full-screen takeover).
-    pub tree_open: bool,
     // The cursor is on the first visual row.
     pub at_first_line: bool,
     // The cursor is on the last visual row.
@@ -158,35 +147,6 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
     let alt = m.contains(KeyModifiers::ALT);
     let shift = m.contains(KeyModifiers::SHIFT);
 
-    // ---- tree navigator modal: full-screen, highest priority ----
-    if cx.tree_open {
-        match key.code {
-            KeyCode::Up => return Action::TreeUp,
-            KeyCode::Down => return Action::TreeDown,
-            KeyCode::Enter if !alt && !shift => return Action::TreeConfirm,
-            KeyCode::Esc => return Action::TreeCancel,
-            _ => {}
-        }
-    }
-
-    // ---- /resume session picker: modal, highest priority ----
-    if cx.selector_open {
-        match key.code {
-            KeyCode::Up => return Action::SelectorUp,
-            KeyCode::Down => return Action::SelectorDown,
-            KeyCode::Enter if !alt && !shift => return Action::SelectorConfirm,
-            KeyCode::Esc => return Action::SelectorCancel,
-            _ => {}
-        }
-    }
-
-    // ---- `/usage` 面板：只有 Esc 归它 ----
-    // 面板是只读的一屏数，没有可上下选的东西，所以它**只借 Esc**。放在补全
-    // 之前：面板是用户刚敲出来的一屏，它在上层。
-    if cx.panel_open && matches!(key.code, KeyCode::Esc) {
-        return Action::DismissPanel;
-    }
-
     // ---- while the completion popup is open, these keys are taken over first ----
     if cx.popup_open {
         match key.code {
@@ -194,30 +154,18 @@ pub fn translate_with(key: KeyEvent, cx: KeyContext) -> Action {
             KeyCode::Down => return Action::CompleteDown,
             KeyCode::Tab => return Action::Complete,
             KeyCode::Enter if !alt && !shift => return Action::Complete,
-            KeyCode::Esc => return Action::DismissCompletion,
             _ => {}
         }
-    }
-
-    // ---- Esc: close popup > interrupt reply > quit/arm-tree ----
-    // Idle Esc no longer quits outright: the action reports "Esc fired"
-    // and the app decides within its 500ms window (double-Esc opens the
-    // tree navigator; a single Esc past the window quits). Streaming and
-    // popup paths are unchanged.
-    if matches!(key.code, KeyCode::Esc) {
-        if cx.popup_open {
-            return Action::DismissCompletion;
-        }
-        if cx.streaming {
-            return Action::Interrupt;
-        }
-        return Action::EscIdle;
     }
 
     // ---- Ctrl+C: clear input; quit only when the input is already empty ----
     // This follows pi's convention (`app.clear` / `app.exit`) and is far safer than
     // quitting outright: abandoning a half-written message never kills the program.
     if ctrl && matches!(key.code, KeyCode::Char('c')) {
+        // 回合在跑：Ctrl+C 是"停"，不是"清空"——不能被清空盖掉。
+        if cx.streaming {
+            return Action::Interrupt;
+        }
         return if cx.editor_empty {
             Action::Quit
         } else {
@@ -396,16 +344,6 @@ mod tests {
     }
 
     #[test]
-    fn esc_idle_arms_tree_window() {
-        // Idle Esc no longer quits directly: it reports EscIdle and the
-        // app applies the double-Esc window (arm -> tree, timeout -> quit).
-        assert_eq!(
-            translate(key(KeyCode::Esc, KeyModifiers::NONE)),
-            Action::EscIdle
-        );
-    }
-
-    #[test]
     fn ctrl_c_clears_input_then_quits_when_empty() {
         // Non-empty: clear (do not quit — abandoning a draft must not kill the program)
         let busy = KeyContext {
@@ -428,29 +366,30 @@ mod tests {
     }
 
     #[test]
-    fn esc_interrupts_while_streaming() {
-        let cx = KeyContext {
-            streaming: true,
-            editor_empty: false,
-            ..Default::default()
-        };
-        assert_eq!(
-            translate_with(key(KeyCode::Esc, KeyModifiers::NONE), cx),
-            Action::Interrupt
-        );
-    }
-
-    #[test]
-    fn esc_dismisses_popup_first() {
-        let cx = KeyContext {
-            popup_open: true,
-            streaming: true, // the popup wins even while streaming
-            ..Default::default()
-        };
-        assert_eq!(
-            translate_with(key(KeyCode::Esc, KeyModifiers::NONE), cx),
-            Action::DismissCompletion
-        );
+    fn esc_is_not_translated_here() {
+        // Esc 的归属不在这张表里（见 `InputZone::route_esc`）。表要是哪天
+        // 又给它派了动作，这条会红——那正是"双重来源"回潮的信号。
+        for cx in [
+            KeyContext::default(),
+            KeyContext {
+                streaming: true,
+                ..Default::default()
+            },
+            KeyContext {
+                popup_open: true,
+                ..Default::default()
+            },
+            KeyContext {
+                panel_open: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                translate_with(key(KeyCode::Esc, KeyModifiers::NONE), cx),
+                Action::None,
+                "Esc 不该由翻译表决定：{cx:?}"
+            );
+        }
     }
 
     #[test]

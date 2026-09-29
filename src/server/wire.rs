@@ -82,21 +82,19 @@ pub enum ClientMsg {
     Replay { id: i64, round: i64 },
     /// Start a round. In the draft state this creates the session row first
     /// and pushes `Attached` back before anything else.
+    Submit { text: String },
+    /// Interrupt the running round of **that** session. The front end names
+    /// the session explicitly — it knows which one it is showing (and a tree
+    /// jump may have swapped it mid-round). Valid any time; it is the only
+    /// message that is read even mid-stream.
+    Interrupt { session: i64 },
+    /// **回到节点树的某一块**（rewind）。前端在树上回车选中 `block`：
+    /// 服务端**此刻**就地回退（`hub::rewind_to`——剪默认 / 留按配置），
+    /// 换好 tip、抛掉在跑的回合，然后按 attach 的规格重发快照。
     ///
-    /// `from_block`: 前端在节点树里选过"回到这块"时带上它。服务端据此**在
-    /// 这一刻**把会话从这块分叉出去（`Store::fork_session`，一行 INSERT），
-    /// 新一轮接在这块之后。
-    ///
-    /// 为什么要等 submit 才带：单按回车**不建会话**。没有这条规矩，用户在
-    /// 树上点来点去就会攒出一堆没内容的幽灵分支。
-    Submit {
-        text: String,
-        #[serde(default)]
-        from_block: Option<i64>,
-    },
-    /// Interrupt the running round of the attached session. Valid any time;
-    /// it is the only message that is read even mid-stream.
-    Interrupt,
+    /// 回退是**纯服务端**动作：cut 规则（选中用户块 = 连它一起退）只活在
+    /// `Store::rewind_cut_point` 一处。前端不做任何本地预演。
+    Rewind { session: i64, block: i64 },
     /// Run a slash command. The front end only **recognizes** it (the table
     /// travels down in [`ServerMsg::Commands`]); the session owns the meaning,
     /// so the dispatch lives on this side of the wire.
@@ -177,6 +175,10 @@ pub enum ServerMsg {
     },
     /// The session became known: explicit attach, or the draft's first submit.
     Attached { session_id: i64 },
+    /// Rewind 把选中的那句话收回输入框。只在选中的是**用户消息**节点时发：
+    /// 回到 assistant / tool 节点是"接着它说"，没有可收回的东西。
+    /// 紧跟 `Attached` 之后、快照之前——前端拿到就写编辑器。
+    Prefill { text: String },
     /// Full transcript snapshot (on attach, and whenever the generation
     /// changes — branch switch, compaction, resume).
     ///
@@ -259,21 +261,12 @@ pub enum ServerMsg {
         nodes: Vec<TreeNode>,
         /// 每条 fork 的挂载关系（id/亲/亲块）。
         forks: Vec<ForkInfo>,
-        /// 用户当前所在的块（树里的下标，高亮用）。
-        current: usize,
+        /// 用户当前所在的**块 id**（高亮用）。行是前端概念（一次工具往返
+        /// 出两行、状态条目零行），服务端不算行下标；前端按自己的树序换算。
+        current_block: i64,
     },
     /// `logs` answer.
     Logs { records: Vec<LogRecord> },
-    /// **打断的明确回执**：`ClientMsg::Interrupt` 被收下、flag 已经设上。
-    ///
-    /// 为什么要有它：打断的生效依赖 turn 线程**下一次**去看那个原子 flag，
-    /// 而它可能正阻塞在上游的 `read` 上（两个 chunk 之间没有数据可读）。
-    /// 前端因此没东西可等——`Interrupt` 是个 fire-and-forget 的请求，服务端
-    /// 收没收到、认没认，之前一律靠"busy 有没有变 false"去猜。
-    ///
-    /// 这条消息把"收到了"和"停下了"分清：**收到就立刻回**，不用等 turn 真的
-    /// 收尾。前端据此可以马上把界面切回可输入态，而不是干等。
-    Interrupted { session_id: i64 },
     /// Protocol-level error (transport, unknown ids, bad state). A round's
     /// own errors travel as `Entry` instead.
     Error { code: ErrorCode, message: String },

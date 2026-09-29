@@ -72,15 +72,13 @@ pub trait SessionView {
         let _ = (lang, groups);
     }
 
-    /// 打断的明确回执（`ServerMsg::Interrupted`）：服务端**收下**了打断，
-    /// flag 已经设上。收到它前端就能立刻把界面切回可输入态——不必等 turn
-    /// 真正收尾（那取决于上游还有没有数据可读，可能再拖一会儿）。
-    fn on_interrupted(&mut self, session_id: i64) {
-        let _ = session_id;
-    }
-
     /// The session became known (draft submit / attach).
     fn on_attached(&mut self, session_id: i64);
+
+    /// Rewind 收回的那句话要回到输入框。默认忽略（无编辑器的前端）。
+    fn on_prefill(&mut self, text: String) {
+        let _ = text;
+    }
 
     /// Protocol error (not a round error — those travel as entries).
     fn on_error(&mut self, code: crate::server::wire::ErrorCode, message: String);
@@ -141,6 +139,7 @@ pub fn dispatch(msg: ServerMsg, view: &mut dyn SessionView) {
     match msg {
         ServerMsg::HelloOk { commands, .. } => view.on_hello(commands),
         ServerMsg::Attached { session_id } => view.on_attached(session_id),
+        ServerMsg::Prefill { text } => view.on_prefill(text),
         ServerMsg::Transcript { blocks, live } => view.on_transcript(blocks, live),
         ServerMsg::Blocks { blocks, live } => view.on_blocks(blocks, live),
         ServerMsg::OlderBlocks { blocks } => view.on_older(blocks),
@@ -164,7 +163,6 @@ pub fn dispatch(msg: ServerMsg, view: &mut dyn SessionView) {
             tool_output,
             run_state,
         }),
-        ServerMsg::Interrupted { session_id } => view.on_interrupted(session_id),
         ServerMsg::Usage { lang, groups } => view.on_usage_panel(lang, groups),
         ServerMsg::State {
             model,
@@ -244,6 +242,9 @@ pub struct ViewState {
     /// 上一次下发给状态栏的目录。用来区分"工作区真的移动了"与"只是
     /// `cd` 的临时迁移"——后者由工具结果下发（`CwdMigrated`）。
     last_cwd: String,
+    /// 当前附着的会话（draft 态 = `None`）。`Attached` 推送写入；
+    /// 打断消息按它点名目标（`ClientMsg::Interrupt { session }`）。
+    pub attached: Option<i64>,
 }
 
 /// The MainZone instance: wire messages land as zone calls.
@@ -279,6 +280,7 @@ impl MainSessionView {
             last_model: std::mem::take(&mut self.state.last_model),
             last_name: std::mem::take(&mut self.state.last_name),
             last_cwd: std::mem::take(&mut self.state.last_cwd),
+            attached: self.state.attached,
             state_slot: &mut self.state,
         }
     }
@@ -293,6 +295,8 @@ struct ZoneView<'a> {
     last_model: String,
     last_name: String,
     last_cwd: String,
+    /// 本条消息处理期间的附着会话；`on_attached` 在这里改，`Drop` 写回。
+    attached: Option<i64>,
     state_slot: &'a mut ViewState,
 }
 
@@ -303,6 +307,7 @@ impl Drop for ZoneView<'_> {
         self.state_slot.last_model = std::mem::take(&mut self.last_model);
         self.state_slot.last_name = std::mem::take(&mut self.last_name);
         self.state_slot.last_cwd = std::mem::take(&mut self.last_cwd);
+        self.state_slot.attached = self.attached;
     }
 }
 
@@ -445,21 +450,14 @@ impl SessionView for ZoneView<'_> {
         }
     }
 
-    fn on_interrupted(&mut self, _session_id: i64) {
-        // 服务端收下打断的那一刻，界面就该回到"能打字"：把流式标志清掉。
-        // turn 真正收尾还会来一条 `State{busy:false}`，那是第二道闸。
-        self.zone.input.streaming = false;
-        self.zone.input.notify(&StatusEvent::ActivityStopped);
+    fn on_attached(&mut self, session_id: i64) {
+        // 记下当前会话：打断消息按它点名目标。attach / 草稿提交 / 树跳转
+        // 换行都走这一条，所以这里永远是最新值。
+        self.attached = Some(session_id);
     }
 
-    fn on_attached(&mut self, session_id: i64) {
-        // 初始化语义（用户的设想）：attach/草稿提交后，daemon 立即推送
-        // 快照（transcript + stream + state），所以这里**不需要**再向
-        // server 讨要 —— 「init」事实上下文就是那条 Attached + 后续的
-        // 快照帧。将来 zone 侧要做什么自主初始化（比如清空输入历史、
-        // 重置补全会话），挂在 view 的这个回调上即可；组件级初始化走
-        // StatusEvent 广播，与 on_state 同路。
-        let _ = session_id;
+    fn on_prefill(&mut self, text: String) {
+        self.zone.input.prefill(&text);
     }
 
     fn on_hello(&mut self, commands: Vec<crate::server::wire::CommandInfo>) {

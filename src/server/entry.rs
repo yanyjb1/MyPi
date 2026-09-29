@@ -18,27 +18,28 @@
 ///
 /// **Configurable** (`config.yaml` → `tui.emptyReply`): the front end draws
 /// the same string the instant the user interrupts, hundreds of milliseconds
-/// before the persisted entry can arrive — three writers, one value. Pinned
-/// once at startup by [`set_empty_reply`]; every reader then sees the same
-/// bytes.
-pub const DEFAULT_EMPTY_REPLY: &str = "SYSTEM: UserInterrupted.";
+/// before the persisted entry can arrive — three writers, one value. The
+/// value travels **explicitly**: daemon sessions take it in the
+/// [`SessionSpec`](crate::server::hub::SessionSpec), the TUI injects it into
+/// its history zone at startup. No process-wide static: two binaries read
+/// the same config, and the value must not silently drift between them.
+///
+/// The default names the fact, not a cause: an empty reply can be an
+/// interrupt, but it can just as well be a host that returned reasoning
+/// with no content (gateway logs have shown exactly that — `outcome: ok`,
+/// usage complete, zero content). Blaming "the user interrupted" sent the
+/// user hunting for a ghost Esc that never happened.
+pub const DEFAULT_EMPTY_REPLY: &str = "SYSTEM: (no reply body — empty response)";
 
-static EMPTY_REPLY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
-/// The placeholder an empty reply is recorded and drawn with.
-pub fn empty_reply() -> &'static str {
-    EMPTY_REPLY
-        .get()
-        .map(String::as_str)
-        .unwrap_or(DEFAULT_EMPTY_REPLY)
-}
-
-/// Pin the placeholder for this process (startup, from config). The first
-/// call wins: every writer must see one value, so a later one is ignored
-/// rather than desynchronizing what is stored from what is drawn.
-pub fn set_empty_reply(text: &str) {
-    let _ = EMPTY_REPLY.set(text.to_string());
-}
+/// The text persisted for a round the user **actually** interrupted
+/// (`stop_reason: "interrupted"`). One constant, not config: this is the
+/// system's own voice describing what happened, not user styling — and it
+/// must stay distinct from [`DEFAULT_EMPTY_REPLY`], because both arrive as
+/// an empty reply body but mean different things. Before the split, a
+/// single shared string either accused the user of an Esc that never
+/// happened (upstream returned nothing) or, once that was fixed, hid real
+/// interrupts behind an anonymous "empty response".
+pub const INTERRUPTED_REPLY: &str = "SYSTEM: UserInterrupted.";
 
 /// One item on the model's todo list.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

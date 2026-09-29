@@ -25,13 +25,6 @@ fn main() -> anyhow::Result<()> {
         return mypi::bench::run(args);
     }
     let mut cfg = Config::load()?;
-    // 空回复的占位文本（`tui.emptyReply`）：落盘、上下文、打断占位三处
-    // 共用一枚值，进程启动时钉住。TUI 与 daemon 各跑一次 `main`，
-    // 读的是同一份配置，所以两边看到的永远是同一串。
-    mypi::server::entry::set_empty_reply(&cfg.app.tui.empty_reply);
-    // 回退到旧节点时剪不剪后面的块（`tui.PruneOnRewind`）：TUI 和 daemon
-    // 各跑一次 `main`，但真正做回退的只有 daemon，所以这里钉的值只有它会读。
-    mypi::server::hub::set_prune_on_rewind(cfg.app.tui.prune_on_rewind);
     // --model overrides the default for this session only (never written
     // back; /model is the persistent path).
     if let Some(spec) = &cli.model {
@@ -45,7 +38,7 @@ fn main() -> anyhow::Result<()> {
     let spec = session_spec(&cfg)?;
 
     if cli.server {
-        return run_server_foreground(spec);
+        return run_server_foreground(spec, cfg.app.tui.prune_on_rewind);
     }
     if cli.sessions {
         return mypi::oneshot::run_sessions(&spec);
@@ -136,6 +129,7 @@ fn session_spec(cfg: &Config) -> anyhow::Result<SessionSpec> {
 
     Ok(SessionSpec {
         client,
+        empty_reply: cfg.app.tui.empty_reply.clone(),
         system_prompt,
         max_tokens: model.max_output_tokens.unwrap_or(4096) as u32,
         cost: model.cost,
@@ -192,9 +186,10 @@ fn resolve_switch(cfg: &Config, id: &str) -> Result<mypi::server::commands::Mode
 }
 
 /// `mypi --server`: bind and serve until idle-exit or quit.
-fn run_server_foreground(spec: SessionSpec) -> anyhow::Result<()> {
+fn run_server_foreground(spec: SessionSpec, prune_on_rewind: bool) -> anyhow::Result<()> {
     let db = db_path();
-    let daemon = Daemon::bind(socket_path(), SessionHub::new(db), spec, idle_limit())?;
+    let hub = SessionHub::with_rewind_policy(db, prune_on_rewind);
+    let daemon = Daemon::bind(socket_path(), hub, spec, idle_limit())?;
     println!("mypi daemon listening on {}", socket_path().display());
     daemon.serve()
 }

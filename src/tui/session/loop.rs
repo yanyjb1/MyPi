@@ -83,25 +83,6 @@ fn send_resume_requests(app: &mut App, req: &mut crate::server::wire::ConnWriter
     }
 }
 
-/// 节点树回车之后落实"回到这块"。
-///
-/// 两件**纯本地**的事，一个字节不落盘：
-/// 1. 历史区的显示范围收到这块为止（库里的块一个没少）；
-/// 2. 选中的若是用户消息，全文塞回输入框让用户改。
-///
-/// fork/新开 session 要等用户真的按了发送 —— 那一天服务端自己知道当前
-/// 停在哪块，不需要前端先开个空会话（否则树上会有幽灵分支）。
-fn apply_return(app: &mut App, block: i64) {
-    let prefill = app.main_mut().history.user_text_of(block);
-    app.main_mut().history.limit_to_block(block);
-    if let Some(text) = prefill {
-        app.main_mut().input.editor = crate::tui::zone::main::input::editor::Editor::from_text(&text);
-    }
-}
-
-/// 两下 Esc 的窗口。超过这么久就没连上，作废。
-const ESC_WINDOW_MS: u64 = 500;
-
 /// 动画节拍：回合进行中主循环至少每这么多毫秒醒一次，把 spinner 推进一帧。
 /// 100ms = 10 fps，四帧转一圈 0.4s——够快看得出在动，又不至于空转烧 CPU。
 const ANIM_TICK: std::time::Duration = std::time::Duration::from_millis(100);
@@ -175,10 +156,17 @@ pub fn run_tui(
     let mut terminal = ratatui::init();
     let _ = execute!(
         std::io::stdout(),
+        // **只要一个 flag**：`DISAMBIGUATE_ESCAPE_CODES` 让终端把 Esc 明确
+        // 报成 `\x1b[27u`，这样裸 `\x1b` 就只可能是转义序列的开头——Esc
+        // 的归属判定靠的就是这个前提。
+        //
+        // 另外两个不要：`REPORT_ALL_KEYS_AS_ESCAPE_CODES` 让**所有**键都走
+        // CSI u 编码，把解析表面积摊给整张键盘，而没有任何一行代码读它的
+        // 结果——它唯一的可见后果是 `Modifier(LeftControl)` 这种噪音事件
+        // （单独按下 Ctrl 也变成一个按键事件）。`REPORT_ALTERNATE_KEYS`
+        // 同理，mypi 从不读 alternate key。
         ratatui::crossterm::event::PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS,
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
         )
     );
     let _ = execute!(std::io::stdout(), EnableBracketedPaste);
@@ -213,6 +201,8 @@ pub fn run_tui(
     app.main_mut()
         .history
         .set_window(cfg.app.tui.preload, cfg.app.tui.render_margin);
+    // （`tui.emptyReply` 只喂 daemon 侧：落盘条目与模型上下文。前端唯一的
+    // 本地占位是打断乐观行，它固定说"被打断"，不读这份配置。）
     // 任务清单的折叠策略（`tui.TodoFold`）：同一处下发，同样是启动期常量。
     app.main_mut().history.set_todo_fold(cfg.app.tui.todo_fold);
     // 命令表来自握手（`hello_ok`）：前端不再自己存一份。补全服务上岗之后再喂。
@@ -339,7 +329,19 @@ pub fn run_tui(
     // Producer 1: keyboard/mouse signals.
     let sig_tx_p1 = sig_tx.clone();
     std::thread::spawn(move || {
+        // **临时诊断**：设了 `MYPI_KEYLOG=<路径>` 时，把 crossterm 解析出的
+        // 每一个事件连同相对毫秒数追加进那个文件。写文件而不是 stderr——
+        // 备用屏会把屏幕上的一切盖掉。
+        //
+        // 存在的理由：真机上"没按 Esc 却收到 Esc"只能靠**字节层面的事实**
+        // 分辨，读代码永远只能猜。不设这个变量时开销是一次 open。
+        let t0 = std::time::Instant::now();
         while let Ok(ev) = event::read() {
+            crate::tui::session::keylog(&format!(
+                "{}ms raw {:?}",
+                t0.elapsed().as_millis(),
+                ev
+            ));
             let fwd = match ev {
                 Event::Key(k) if k.kind == KeyEventKind::Press => {
                     Some(crate::tui::session::signal::Signal::Key(k))
@@ -378,11 +380,6 @@ pub fn run_tui(
         // Initial paint.
         draw_frame(&mut terminal, &mut app)?;
         let mut quit = false;
-        // 两下 Esc 的计时：上一次空闲 Esc 的时刻。过期作废。
-        let mut esc_armed: Option<std::time::Instant> = None;
-        // 节点树里选过"回到这块"。**只是记着**：真分叉要等用户按下发送，
-        // 那一刻才随 `submit` 一起带上（单按回车不建会话）。
-        let mut tree_target: Option<i64> = None;
         while !quit {
             // Block until something happens; coalesce queued signals.
             //
@@ -444,10 +441,10 @@ pub fn run_tui(
                             && let crate::server::wire::ServerMsg::Tree {
                                 nodes,
                                 forks,
-                                current,
+                                current_block,
                             } = &msg
                         {
-                            app.tree.on_tree(nodes, forks, *current);
+                            app.tree.on_tree(nodes, forks, *current_block);
                             continue;
                         }
                         // 会话列表是**选择器**的输入，不是主区的：谁持有
@@ -531,7 +528,6 @@ pub fn run_tui(
                                     app.main_mut().history.clear_interrupt();
                                     req.request(&crate::server::wire::ClientMsg::Submit {
                                         text: text.clone(),
-                                        from_block: tree_target.take(),
                                     })
                                     .ok();
                                 }
@@ -551,31 +547,33 @@ pub fn run_tui(
                                 );
                                 main.history.note_interrupt();
                             }
-                            req.request(&crate::server::wire::ClientMsg::Interrupt).ok();
-                        }
-                        // 空闲时按了一下 Esc：数窗口。500ms 内来第二下 =
-                        // 两下 Esc = 开节点树；过期就作废（**不退出程序**——
-                        // 退出是 Ctrl+C/Ctrl+D 的事，Esc 的语义只有"打断"）。
-                        crate::tui::zone::main::input::ExitRequest::EscPressed => {
-                            let now = std::time::Instant::now();
-                            match esc_armed {
-                                Some(t)
-                                    if now.duration_since(t)
-                                        < std::time::Duration::from_millis(ESC_WINDOW_MS) =>
-                                {
-                                    esc_armed = None;
-                                    open_tree(&mut app, &mut req);
-                                }
-                                _ => esc_armed = Some(now),
+                            // 打断**点名**目标：树上跳过 fork 之后当前会话
+                            // 就是新的 id，打断必须打在它身上。draft 态
+                            // （还没 attach）没有可打断的东西，静默。
+                            if let Some(id) = view.state.attached {
+                                req.request(&crate::server::wire::ClientMsg::Interrupt { session: id })
+                                    .ok();
                             }
+                        }
+                        // 两下 Esc（300ms 之内）= 开节点树。**窗口在输入区里
+                        // 数**：Esc 归不归它，只有它知道（面板/补全/hang 会先
+                        // 借走），所以会话层收到这条就是"已经凑齐了"。
+                        crate::tui::zone::main::input::ExitRequest::OpenTree => {
+                            open_tree(&mut app, &mut req);
                         }
                     }
                 }
-                // 节点树回车选的块：本地收窄 + 回填文字，不落盘。真分叉
-                // 记在 `tree_target` 里，等用户按下发送才随 `submit` 带走。
-                if let Some(block) = app.tree.take_return_to() {
-                    apply_return(&mut app, block);
-                    tree_target = Some(block);
+                // 节点树回车选的块：rewind 是**纯服务端**动作，这里只把
+                // 请求发上路；快照（新前缀 + 新 attached id）随 `Attached`
+                // 推送回来，前端不做任何本地预演。
+                if let Some(block) = app.tree.take_return_to()
+                    && let Some(id) = view.state.attached
+                {
+                    req.request(&crate::server::wire::ClientMsg::Rewind {
+                        session: id,
+                        block,
+                    })
+                    .ok();
                 }
                 // 选择器要主循环替它做的事（见函数）。
                 send_resume_requests(&mut app, &mut req);

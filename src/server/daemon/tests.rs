@@ -33,6 +33,7 @@ fn tmp(name: &str) -> PathBuf {
 fn spec(base: &str) -> SessionSpec {
     SessionSpec {
         client: Client::new(base, "k", "m"),
+        empty_reply: "EMPTY".into(),
         system_prompt: "s".into(),
         max_tokens: 4096,
         cost: Cost::default(),
@@ -98,7 +99,13 @@ impl TestClient {
                 // 10s read timeout expired: the daemon never answered — a
                 // real deadlock, fail loudly with the buffer contents.
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    panic!("read timeout; buffered: {:#?}", &self.buf[..self.buf.len().min(2000)])
+                    // 已解析的消息比 raw bytes 有用得多：卡住时最想知道的是
+                    // "daemon 走到哪一步了"，不是那几十个字节的十六进制。
+                    panic!(
+                        "read timeout.\n  already read: {:#?}\n  buffered: {:#?}",
+                        self.read,
+                        &self.buf[..self.buf.len().min(2000)]
+                    )
                 }
                 Err(e) => panic!("read failed: {e}"),
             };
@@ -323,7 +330,6 @@ fn the_cleared_text_buffer_reaches_the_front_end_as_a_stream_frame() {
     let mut c = TestClient::connect(&path);
     c.send(&ClientMsg::Submit {
         text: "看看文件".into(),
-        from_block: None,
     });
     let _id = c.attached_id();
     // 那半句先到。
@@ -390,7 +396,7 @@ fn draft_submit_creates_session_and_delivers_transcript() {
     let (path, h) = start_daemon("draft-submit", &base);
 
     let mut c = TestClient::connect(&path);
-    c.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
+    c.send(&ClientMsg::Submit { text: "问".into() });
     let id = c.attached_id();
     // Read until the assistant's reply lands (full snapshot or tail — both
     // legal; stream frames may interleave). The reply entry IS the round's
@@ -451,11 +457,11 @@ fn two_sessions_two_front_ends_stay_separate() {
     let (path, h) = start_daemon("two-sessions", &base);
 
     let mut a = TestClient::connect(&path);
-    a.send(&ClientMsg::Submit { text: "甲".into(), from_block: None });
+    a.send(&ClientMsg::Submit { text: "甲".into() });
     let id_a = a.attached_id();
 
     let mut b = TestClient::connect(&path);
-    b.send(&ClientMsg::Submit { text: "乙".into(), from_block: None });
+    b.send(&ClientMsg::Submit { text: "乙".into() });
     let id_b = b.attached_id();
     assert_ne!(id_a, id_b, "two drafts must become two sessions");
 
@@ -494,7 +500,7 @@ fn a_front_end_that_stops_reading_never_stalls_the_round() {
     let (path, h) = start_daemon("backpressure", &base);
 
     let mut fast = TestClient::connect(&path);
-    fast.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
+    fast.send(&ClientMsg::Submit { text: "问".into() });
     let id = fast.attached_id();
 
     // The dead weight: attaches, then never reads a byte.
@@ -544,7 +550,7 @@ fn list_sessions_and_rounds_answer_from_the_db() {
     let (path, h) = start_daemon("list", &base);
 
     let mut c = TestClient::connect(&path);
-    c.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
+    c.send(&ClientMsg::Submit { text: "问".into() });
     let id = c.attached_id();
     c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
 
@@ -637,7 +643,7 @@ fn state_frame_carries_model_metadata() {
     }
 
     let mut c = TestClient::connect(&path);
-    c.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
+    c.send(&ClientMsg::Submit { text: "问".into() });
     let _id = c.attached_id();
     c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
     let st = c
@@ -692,7 +698,6 @@ fn busy_reaches_the_front_end_the_moment_a_turn_starts() {
     let mut c = TestClient::connect(&path);
     c.send(&ClientMsg::Submit {
         text: "问".into(),
-        from_block: None,
     });
     let _id = c.attached_id();
     c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
@@ -767,7 +772,7 @@ fn the_submitters_own_message_ships_before_the_round_does_anything() {
     let (path, h) = start_daemon("echo-on-submit", &base);
 
     let mut c = TestClient::connect(&path);
-    c.send(&ClientMsg::Submit { text: "问".into(), from_block: None });
+    c.send(&ClientMsg::Submit { text: "问".into() });
     let _ = c.attached_id();
 
     // 第一条带转录内容的消息：只许有用户那条，不许已有回复/工具。
@@ -876,7 +881,6 @@ fn usage_answers_the_asking_front_end_with_the_session_bill() {
     let mut c = TestClient::connect(&path);
     c.send(&ClientMsg::Submit {
         text: "问".into(),
-        from_block: None,
     });
     let _ = c.attached_id();
     c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
@@ -920,6 +924,238 @@ fn usage_answers_the_asking_front_end_with_the_session_bill() {
             assert!(!text.contains("FAKE-1M"), "账单不许混进转录：{text}");
         }
     }
+
+    c.quit();
+    h.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// **重新 attach 同一个会话，不许把它自己打断。**
+///
+/// `attach` 的规矩是"一条连接只盯一个会话"，所以再 attach 之前先撤旧的。
+/// 但撤的如果是**同一个 id**（`/resume` 选中当前会话，或任何"重新对齐"
+/// 的路径），`unwatch` 摘掉的就是这条连接在这个会话上的唯一观察者——
+/// 列表一空它就 `hub.interrupt(id)`，把正在跑的回合打断。用户什么都没干。
+///
+/// 观察点是**库里那一轮的停因**，不是消息流：`Store::rounds(id)` 里
+/// 被打断的回合会留下 `stop_reason = "interrupted"`，那是服务端自己写下的
+/// 事实，比"等某条消息到没到"稳（`attach` 还会重发一整份快照，把消息序
+/// 打乱）。
+#[test]
+fn re_attaching_the_same_session_does_not_interrupt_it() {
+    let dir = tmp("reattach-self");
+    let path = dir.join("d.sock");
+    let db = dir.join("sessions.sqlite3");
+    // 网关慢一点：留出一段"回合正在跑"的窗口，re-attach 才能落在里面。
+    let (base, _srv) = staged_gateway(std::time::Duration::from_millis(300));
+    let hub = SessionHub::new(db.clone());
+    let daemon = Daemon::bind(
+        path.clone(),
+        hub,
+        spec(&base),
+        std::time::Duration::from_secs(600),
+    )
+    .unwrap();
+    let h = std::thread::spawn(move || daemon.serve().unwrap());
+    for _ in 0..200 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut c = TestClient::connect(&path);
+    c.send(&ClientMsg::Submit {
+        text: "看看文件".into(),
+    });
+    let id = c.attached_id();
+    // 第一轮的正文到了：回合确实在跑（后面还有工具 + 第二轮）。
+    c.wait_for(|m| matches!(m, ServerMsg::Stream { text, .. } if text == "我先看看"));
+
+    // 回合进行中，重新 attach 同一个 id。
+    c.send(&ClientMsg::Attach { id });
+
+    // 让它跑完（staged_gateway 里有 sleep + 第二轮的收尾）。
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let rounds = Store::open(&db).unwrap().rounds(id).unwrap();
+    assert!(!rounds.is_empty(), "至少要有一轮落盘");
+    for r in &rounds {
+        assert_ne!(
+            r.stop_reason.as_deref(),
+            Some("interrupted"),
+            "re-attach 同一个会话把它自己打断了：{r:?}"
+        );
+    }
+
+    c.quit();
+    h.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// **树回车 rewind 一轮正在跑的回合，随后新回合不许被"幽灵打断"。**
+///
+/// 用户剧本：resume → 回合在跑（正文已到、工具慢着）→ 两下 Esc 开树 →
+/// 回车上一个旧节点 → 服务端就地回退（rewind 抛掉在跑的回合）→ 用户填好
+/// 新消息按发送。
+///
+/// 修之前的服务端症状（真机库里的铁证，turn 19）：被打断的回合落盘成
+/// `stop_reason = "stop"` + 正文 `SYSTEM: UserInterrupted.`——worker 被杀
+/// 后读流走到 EOF，EOF 路径不查 cancel flag，"被杀"被记成"说完了"。
+#[test]
+fn rewinding_mid_round_then_submitting_frees_the_new_round() {
+    let dir = tmp("rewind-mid-round");
+    let path = dir.join("d.sock");
+    let db = dir.join("sessions.sqlite3");
+    let (base, _srv) = staged_gateway(std::time::Duration::from_millis(300));
+    let hub = SessionHub::new(db.clone());
+    let daemon = Daemon::bind(
+        path.clone(),
+        hub,
+        spec(&base),
+        std::time::Duration::from_secs(600),
+    )
+    .unwrap();
+    let h = std::thread::spawn(move || daemon.serve().unwrap());
+    for _ in 0..200 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut c = TestClient::connect(&path);
+    c.send(&ClientMsg::Submit {
+        text: "看看文件".into(),
+    });
+    let id = c.attached_id();
+    // staged_gateway 的剧本：第一轮 = 正文 + 工具调用（隔 300ms）+ 第二轮
+    // 收尾"读完了"。等整个第一回合跑完，块才落库可查。
+    c.wait_for(|m| matches!(m, ServerMsg::State { busy: false, .. }));
+
+    // 第二回合开跑：rewind 打的就是**在跑的**这一轮。剧本只剩一段响应
+    // （第三连接没有脚本了），所以这轮会卡在等正文——正好，"在跑"。
+    c.send(&ClientMsg::Submit {
+        text: "第二轮的问题".into(),
+    });
+    // 给它一点时间把 RequestMeta/块发出来，然后树上回车第一块。
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let target = {
+        let store = Store::open(&db).unwrap();
+        let blocks = store.stored_blocks(id).unwrap();
+        assert!(!blocks.is_empty(), "第一轮落盘后必须能查到块");
+        blocks[0].id
+    };
+    c.send(&ClientMsg::Rewind {
+        session: id,
+        block: target,
+    });
+    // 快照三件套至少要有 Attached（回退落地）；第一块是用户消息，收回的
+    // 那句话要跟着回来（prefill）。
+    c.wait_for(|m| matches!(m, ServerMsg::Attached { .. }));
+    let prefill = c.wait_for(|m| matches!(m, ServerMsg::Prefill { .. }));
+    assert!(
+        matches!(&prefill, ServerMsg::Prefill { text } if text == "看看文件"),
+        "选中的用户消息必须收回输入框：{prefill:?}"
+    );
+    // 让旧回合线程有时间收尸（杀 worker → 线程退出）。
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // 新回合：必须完整跑完，stop_reason 是正常的 stop。剧本还有一段吗？
+    // 没有——第三连接的响应在 staged_gateway 里不存在，所以这一轮会撞
+    // 连接拒绝/EOF，那是**这一轮自己的**错误路径，不该被记成 interrupted。
+    // 关键断言：turns 表里没有 "interrupted"，被打断的那轮（rewind 抛掉的）
+    // 根本不该落盘。
+    c.send(&ClientMsg::Submit {
+        text: "rewind 之后的新问题".into(),
+    });
+    std::thread::sleep(std::time::Duration::from_millis(800));
+
+    let rounds = Store::open(&db).unwrap().rounds(id).unwrap();
+    for r in &rounds {
+        assert_ne!(
+            r.stop_reason.as_deref(),
+            Some("interrupted"),
+            "出现幽灵打断：{:?}",
+            rounds.iter().map(|r| (r.seq, r.stop_reason.clone())).collect::<Vec<_>>()
+        );
+    }
+    // rewind 抛掉的那轮（第二轮，正文"我先看看"开始的那轮）不许落盘：
+    // 它属于被抛下的分支。
+    let block_count = {
+        let store = Store::open(&db).unwrap();
+        store.stored_blocks(id).unwrap().len()
+    };
+    // 第一轮 = 问+答+工具三件套（>= 4 块），rewind 到第一块后这些都该留着；
+    // 第二轮的块（在 rewind 前只可能有 0-1 块）不许再多。
+    assert!(
+        block_count <= 5,
+        "rewind 之后还有新块进来：{block_count}（被抛下的回合落盘了）"
+    );
+
+    c.quit();
+    h.join().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// **真切走的时候，旧会话必须停。**
+///
+/// `unwatch` 的语义是"没人看了就不该继续烧 token"——`attach` 那条路靠它
+/// 实现"切到别的会话，这边就停"。上一条测试钉的是它的反面（同一个 id 不
+/// 能停），这条钉正面。两条一起才说明 `old != id` 那个判断改对了，
+/// 而不是把整条打断能力关掉了。
+#[test]
+fn switching_to_another_session_stops_the_one_you_left() {
+    let dir = tmp("switch-away");
+    let path = dir.join("d.sock");
+    let db = dir.join("sessions.sqlite3");
+    let (base, _srv) = staged_gateway(std::time::Duration::from_millis(300));
+    let hub = SessionHub::new(db.clone());
+    let daemon = Daemon::bind(
+        path.clone(),
+        hub,
+        spec(&base),
+        std::time::Duration::from_secs(600),
+    )
+    .unwrap();
+    let h = std::thread::spawn(move || daemon.serve().unwrap());
+    for _ in 0..200 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut c = TestClient::connect(&path);
+    c.send(&ClientMsg::Submit {
+        text: "看看文件".into(),
+    });
+    let left = c.attached_id();
+    c.wait_for(|m| matches!(m, ServerMsg::Stream { text, .. } if text == "我先看看"));
+
+    // 另开一个会话再切过去：这次是真的把 `left` 落下。
+    let other = {
+        let mut store = Store::open(&db).unwrap();
+        store.create_session("2026-09-29 00:00:00", "/tmp").unwrap()
+    };
+    c.send(&ClientMsg::Attach { id: other });
+    c.wait_for(|m| matches!(m, ServerMsg::Attached { session_id } if *session_id == other));
+
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    // **所有权回收，不是用户打断**：`unwatch` 走 `drop_turn_of`——被抛下的
+    // 回合安静停掉，**不落 `stop_reason`**（`turns` 表里那轮根本不写，被抛下
+    // 的回合属于被抛下的分支，不需要收尾）。可观测的事实因此是：
+    // 网关的第二轮（收尾回复）**没有被消费**——回合在读到它之前就死了。
+    // staged_gateway 的 accept() 永远等不到第二个连接，线程卡在 accept 上；
+    // 这里以"turns 表没有新行"作为"回合确实停了"的库级事实。
+    let rounds = Store::open(&db).unwrap().rounds(left).unwrap();
+    assert!(
+        rounds.is_empty(),
+        "被抛下的回合不许再收尾落盘（那是用户打断的待遇），实际：{:?}",
+        rounds.iter().map(|r| r.stop_reason.clone()).collect::<Vec<_>>()
+    );
 
     c.quit();
     h.join().unwrap();
