@@ -39,6 +39,7 @@
     "mdCode": "readoutGreen",
     "mdCodeBlock": "dimAluminum",
     "mdCodeBlockBorder": "subtleGray",
+    "mdTableBorder": "white",
     "mdQuote": "dimAluminum",
     "mdQuoteBorder": "subtleGray",
     "mdHr": "subtleGray",
@@ -64,7 +65,7 @@
     "statusLineBg": "darkTitanium",
     "statusLineSep": "subtleGray",
     "statusLineModel": "electricBlue",
-    "statusLinePath": "brightAluminum",
+    "statusLinePath": "#ffffff",
     "statusLineGitClean": "readoutGreen",
     "statusLineGitDirty": "warningAmber",
     "statusLineContext": "dimAluminum",
@@ -73,7 +74,7 @@
     "statusLineDirty": "warningAmber",
     "statusLineUntracked": "dimAluminum",
     "statusLineOutput": "deepBlue",
-    "statusLineCost": "titaniumGold",
+    "statusLineCost": "#d4c090",
     "statusLineSubagents": "electricBlue"
   },
   "symbols": { "preset": "ascii", "overrides": {} }

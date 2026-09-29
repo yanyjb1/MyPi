@@ -8,11 +8,11 @@
 //! mid-session theme switch therefore restyles the row with zero plumbing —
 //! the snapshot is rebuilt on the next frame (same contract as `Palette::current`).
 //!
-//! **Wiring status.** Every slot below resolves to *today's* color. The theme's
-//! `statusLine*` tokens are declared and load fine but are not yet
-//! authoritative (that audit is deliberately deferred); each slot names the
+//! **Wiring status.** Most slots below still resolve to a literal instead of
+//! the theme: the `statusLine*` tokens are declared and load fine but are not
+//! yet authoritative (that audit is deliberately deferred). Each slot names the
 //! token it will be plugged into, so activating one is a one-line change here
-//! and touches no component.
+//! and touches no component. `Text` is wired; the rest are not.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
@@ -30,7 +30,7 @@ pub enum Token {
     /// Frames, the gauge's arrow and used part, the model pill, the session
     /// pill, the ` | ` / `< ` connectors. (theme: `accent`)
     Accent,
-    /// Money and the `?N` / `+N` counts. (theme: `warning`)
+    /// Money and the `?N` / `+N` counts. (theme: `statusLineCost`)
     Gold,
     /// The idle `π`. (theme: `muted`)
     Muted,
@@ -38,7 +38,7 @@ pub enum Token {
     /// (theme: `userMessageBg` — see the note in [`StatusTheme::resolve`])
     Capsule,
     /// Plain foreground text: the working-directory path.
-    /// (theme: `statusLinePath`; today hardcoded white)
+    /// (theme: `statusLinePath`)
     Text,
     /// Clean git branch. (theme: `statusLineGitClean`)
     GitClean,
@@ -106,7 +106,7 @@ impl StatusTheme {
         let mut colors = [Color::Reset; ALL_TOKENS.len()];
         let mut put = |tok: Token, c: Color| colors[tok.idx()] = c;
         put(Token::Accent, t.color(ColorToken::Accent));
-        put(Token::Gold, t.color(ColorToken::Warning));
+        put(Token::Gold, t.color(ColorToken::StatusLineCost));
         put(Token::Muted, t.color(ColorToken::Muted));
         // `statusLineBg` is deliberately not read: the capsule band has always
         // been `userMessageBg` here, while models.yml's `theme.black` override
@@ -114,7 +114,7 @@ impl StatusTheme {
         // as is — which side moves is the token audit's call, not this
         // refactor's.
         put(Token::Capsule, t.color(ColorToken::UserMessageBg));
-        put(Token::Text, Color::White);
+        put(Token::Text, t.color(ColorToken::StatusLinePath));
         put(Token::GitClean, t.color(ColorToken::StatusLineGitClean));
         put(Token::GitDirty, t.color(ColorToken::StatusLineGitDirty));
         put(Token::Sep, Color::Reset);

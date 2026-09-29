@@ -42,6 +42,7 @@
     "mdCode": "#e5c1ff",
     "mdCodeBlock": "#9CDCFE",
     "mdCodeBlockBorder": "gray",
+    "mdTableBorder": "white",
     "mdQuote": "gray",
     "mdQuoteBorder": "darkGray",
     "mdHr": "darkGray",
@@ -67,7 +68,7 @@
     "statusLineBg": "#121212",
     "statusLineSep": 244,
     "statusLineModel": "#d787af",
-    "statusLinePath": "#00afaf",
+    "statusLinePath": "#ffffff",
     "statusLineGitClean": "#5faf5f",
     "statusLineGitDirty": "#d7af5f",
     "statusLineContext": "#8787af",
@@ -76,7 +77,7 @@
     "statusLineDirty": 178,
     "statusLineUntracked": 39,
     "statusLineOutput": 205,
-    "statusLineCost": 205,
+    "statusLineCost": "#d4c090",
     "statusLineSubagents": "accent"
   },
   "symbols": { "preset": "ascii", "overrides": {} }

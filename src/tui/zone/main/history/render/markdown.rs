@@ -620,7 +620,7 @@ fn render_table(
         out
     };
 
-    let border = |s: String| Line::from(Span::styled(s, t.fg_style(Token::MdCodeBlockBorder)));
+    let border = |s: String| Line::from(Span::styled(s, t.fg_style(Token::MdTableBorder)));
     let mut out: Vec<Line<'static>> = Vec::new();
 
     // 框线必须与内容行**逐格对齐**：内容行是 `│ ` + 单元格 + ` │ `，所以
@@ -643,7 +643,7 @@ fn render_table(
             .map(|li| {
                 let mut spans: Vec<Span<'static>> = vec![Span::styled(
                     "│ ".to_string(),
-                    t.fg_style(Token::MdCodeBlockBorder),
+                    t.fg_style(Token::MdTableBorder),
                 )];
                 for (i, cell) in wrapped.iter().enumerate() {
                     let text = cell.get(li).map(String::as_str).unwrap_or("");
@@ -663,7 +663,7 @@ fn render_table(
                     spans.push(Span::styled(padded, st));
                     spans.push(Span::styled(
                         if i + 1 == n { " │" } else { " │ " }.to_string(),
-                        t.fg_style(Token::MdCodeBlockBorder),
+                        t.fg_style(Token::MdTableBorder),
                     ));
                 }
                 Line::from(spans)
@@ -748,6 +748,32 @@ mod tests {
         assert!(all.contains("│ a    │ 第一 │"), "{all}");
         // 行与行之间有分隔线，不是一坨。
         assert!(all.contains("├"), "{all}");
+    }
+
+    /// 表格框线用自己的色号（白），不与代码块围栏共用——围栏是灰的，
+    /// 框线要的是能一眼看清表格的边界。
+    #[test]
+    fn table_borders_carry_their_own_color() {
+        let md = "| a | b |\n|---|---|\n| 1 | 2 |";
+        let lines = render_markdown_at_width(md, &t(), 40);
+        let theme = HistoryTheme::resolve();
+        let table = theme.get(Token::MdTableBorder);
+        assert_ne!(
+            table,
+            theme.get(Token::MdCodeBlockBorder),
+            "不该与代码块共用色号"
+        );
+        // 框线字符上色；单元格内容不上色（只有加粗，前景取默认）。
+        let mut borders = 0usize;
+        for l in &lines {
+            for s in &l.spans {
+                if let Some(fg) = s.style.fg {
+                    assert_eq!(fg, table, "这一格不是框线色：{:?}", s.content);
+                    borders += 1;
+                }
+            }
+        }
+        assert!(borders >= 4, "顶边、竖线、底边都该上色，只数到 {borders}");
     }
 
     /// 中文按**格**算宽度。按字符数算的话每行都会错开两格，

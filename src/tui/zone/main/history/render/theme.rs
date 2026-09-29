@@ -106,6 +106,8 @@ tokens! {
     MdCode,
     // 代码块 ``` 边框。
     MdCodeBlockBorder,
+    // GFM 表格的框线。
+    MdTableBorder,
     MdQuote,
     // 引用左侧竖条。
     MdQuoteBorder,
@@ -187,6 +189,7 @@ impl HistoryTheme {
         put(Token::MdLinkUrl, t.color(ColorToken::MdLinkUrl));
         put(Token::MdCode, t.color(ColorToken::MdCode));
         put(Token::MdCodeBlockBorder, t.color(ColorToken::MdCodeBlockBorder));
+        put(Token::MdTableBorder, t.color(ColorToken::MdTableBorder));
         put(Token::MdQuote, t.color(ColorToken::MdQuote));
         put(Token::MdQuoteBorder, t.color(ColorToken::MdQuoteBorder));
         put(Token::MdHr, t.color(ColorToken::MdHr));
