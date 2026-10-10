@@ -1,6 +1,4 @@
-//! Agent layer — mirrors pi's packages/agent.
-pub mod artifacts;
-pub mod bash_guard;
-pub mod loop_rs;
-pub mod todo;
+//! Loop, tools, request. One message from the user opens one loop.
+pub mod r#loop;
+pub mod request;
 pub mod tools;
