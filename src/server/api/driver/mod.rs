@@ -136,7 +136,8 @@ impl Driver {
         }
     }
 
-    /// Land the user's message and put the round on a thread of its own.
+    /// Land the user's message and put the round on a thread of its own. The round id goes back
+    /// the moment it exists, before the thread does anything.
     fn open_round(
         &self,
         session: i64,
@@ -144,7 +145,7 @@ impl Driver {
         prefix: Option<&str>,
         text: &str,
         suffix: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         let conn = Reader::open(&self.db)?;
         let live = self.sessions.take(&self.cfg, &conn, session);
         Reader::close(conn);
@@ -175,7 +176,7 @@ impl Driver {
                 )
             })
             .context("cannot start the round thread")?;
-        Ok(())
+        Ok(turn)
     }
 
     /// Gather everything one compaction needs (`None` = there is nothing to
@@ -257,7 +258,7 @@ impl SubmitOp for Driver {
         // The round's pieces are not handed out here: they go to whoever
         // watches the session (see `watch`), which a front end does first.
         match self.open_round(session, stop, prefix, text, suffix) {
-            Ok(()) => Ok(Opened::Started),
+            Ok(turn) => Ok(Opened::Started { turn: Some(turn) }),
             Err(e) => {
                 self.running.release(session);
                 Err(e)
@@ -298,7 +299,8 @@ impl CompactOp for Driver {
             self.running.release(session);
             return Err(e).context("cannot start the compaction thread");
         }
-        Ok(Opened::Started)
+        // The compaction's round id is opened inside its own thread: it arrives with `Ended`.
+        Ok(Opened::Started { turn: None })
     }
 }
 

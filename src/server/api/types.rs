@@ -2,7 +2,6 @@
 //! command string crosses this file.
 
 use crate::commands::Candidate;
-use crate::server::storage::Block;
 
 /// Number wording for the usage panel: English steps by 10^3, Chinese by 10^4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -46,20 +45,27 @@ pub enum Call {
     },
     /// A session's first frame: the last `limit` blocks of its viewport.
     Tail { session: i64, limit: usize },
-    /// Older blocks for a sliding window.
+    /// Older blocks for a sliding window. `turn` names the round the caller is on: blocks of it
+    /// come back without a round of their own.
     Older {
         session: i64,
         before: i64,
         limit: usize,
+        turn: Option<i64>,
     },
-    /// Newer blocks after the window dropped some.
+    /// Newer blocks after the window dropped some. `turn` as in [`Call::Older`].
     Newer {
         session: i64,
         after: i64,
         limit: usize,
+        turn: Option<i64>,
     },
     /// The session's whole todo list, replayed from its own tool calls.
     Todo { session: i64 },
+    /// One round's structure: which blocks it manages, newest first, each with the hash that
+    /// claims its content. The session is named so the same door can later answer for a whole
+    /// session.
+    Turn { session: i64, turn: i64 },
     /// The session's metadata as it stands now, plus the working directory
     /// that lives in memory (the model's `cd` moves it, nothing writes it).
     Meta { session: i64 },
@@ -158,14 +164,28 @@ pub enum Reply {
     /// Answer to [`Call::Sessions`].
     SessionRows(Vec<crate::server::api::call::sessions::SessionRow>),
     /// Answer to the viewport calls: stored blocks in order, ids included, plus
-    /// whether more exist in the direction asked.
-    Blocks { blocks: Vec<Block>, more: bool },
+    /// whether more exist in the direction asked. Each block carries the round it
+    /// belongs to — a rewind names both.
+    Blocks {
+        blocks: Vec<crate::server::api::call::viewport::PlacedBlock>,
+        more: bool,
+    },
     /// Answer to [`Call::Todo`]: the session's list as it stands.
     Todo(Vec<crate::server::agent::tools::TodoPhase>),
+    /// Answer to [`Call::Turn`]: the round's structure, newest first.
+    Turn { turn: i64, blocks: Vec<TurnBlock> },
     /// Answer to [`Call::Meta`].
     Meta(crate::server::api::call::meta::SessionState),
     /// Answer to [`Call::Pools`].
     Pools(CandidatePools),
+}
+
+/// One block of a round's structure: its id, and the hash of the columns a front end can see.
+/// The front end recomputes that hash from its own copy and claims the id with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TurnBlock {
+    pub id: i64,
+    pub hash: u64,
 }
 
 /// The two completion pools, in the shape every provider hands out.

@@ -18,7 +18,9 @@ pub struct ConfigFile {
 pub struct AppConfig {
     /// What the server side reads.
     pub server: ServerConfig,
-    /// What the front end reads.
+    /// What every front end reads.
+    pub ui: UiConfig,
+    /// What the terminal front end reads on its own.
     pub tui: TuiConfig,
 }
 
@@ -33,6 +35,14 @@ pub struct ServerConfig {
     pub agent: AgentConfig,
     pub storage: StorageConfig,
     pub platform: PlatformConfig,
+    /// On a rewind, drop what follows or keep it as a branch you can return to. Only the dropping
+    /// mode is built: `false` is refused when the config loads.
+    #[serde(default = "d_prune_on_rewind")]
+    pub prune_on_rewind: bool,
+}
+
+fn d_prune_on_rewind() -> bool {
+    true
 }
 
 /// `config.server.api:` — how the server addresses a model.
@@ -158,9 +168,39 @@ impl IpcCost {
     }
 }
 
+// ---- ui: ----
+
+/// `config.ui:` — what every front end reads, the terminal one included.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UiConfig {
+    /// The session layer's own switches.
+    pub session: SessionConfig,
+    /// The words a front end draws where the server stored a placeholder
+    /// name. See [`PlaceholderConfig`].
+    pub placeholder: PlaceholderConfig,
+}
+
+/// `config.ui.session:` — the session layer's own switches.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SessionConfig {
+    /// How many blocks the content cache keeps around the view.
+    #[serde(default = "d_preload_cache")]
+    pub preload_cache: usize,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            preload_cache: d_preload_cache(),
+        }
+    }
+}
+
 // ---- tui: ----
 
-/// `tui:` — the front end's own switches.
+/// `config.tui:` — the terminal front end's own switches.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TuiConfig {
@@ -168,15 +208,8 @@ pub struct TuiConfig {
     pub theme: Theme,
     /// How many blocks of rendered lines to keep around the viewport.
     pub render_margin: usize,
-    /// How many blocks above the anchor to keep warm.
-    pub preload: usize,
     /// How the task list folds.
     pub todo_fold: TodoFold,
-    /// On a rewind, drop what follows or keep it as a branch you can return to.
-    pub prune_on_rewind: bool,
-    /// The words the front end draws where the server stored a placeholder
-    /// name. See [`PlaceholderConfig`].
-    pub placeholder: PlaceholderConfig,
     /// `/usage` panel display options.
     pub usage: UsageConfig,
     /// Exchange rate.
@@ -188,17 +221,14 @@ impl Default for TuiConfig {
         Self {
             theme: Theme::default(),
             render_margin: d_render_margin(),
-            preload: d_preload(),
-            prune_on_rewind: true,
             todo_fold: TodoFold::default(),
-            placeholder: PlaceholderConfig::default(),
             usage: UsageConfig::default(),
             fx: FxConfig::default(),
         }
     }
 }
 
-/// `config.tui.placeholder:` — the text for each placeholder **name** the server
+/// `config.ui.placeholder:` — the text for each placeholder **name** the server
 /// stores. The database keeps the name, the front end owns the words.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -491,7 +521,7 @@ fn d_render_margin() -> usize {
     64
 }
 
-fn d_preload() -> usize {
+fn d_preload_cache() -> usize {
     128
 }
 

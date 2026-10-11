@@ -19,8 +19,9 @@ use submit::SubmitOp;
 /// What opening a stretch answers with. The content is not here: it arrives on the stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Opened {
-    /// The stretch is on its way.
-    Started,
+    /// The stretch is on its way. `turn` = the round it opened (`None` = the round number is not
+    /// known yet and arrives with `StreamItem::Ended`; a compaction is the case).
+    Started { turn: Option<i64> },
     /// Nothing started: that session is already mid-round, or there was
     /// nothing to compact. Try again when the round ends.
     Busy,

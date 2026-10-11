@@ -2,7 +2,9 @@
 //! request archive, an artifact, and what is submitted to the write inlet.
 
 /// What a block is (the `type` column, typed).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum BlockKind {
     /// The user's own message.
     #[default]
@@ -177,6 +179,57 @@ pub struct Block {
     pub ts: Option<String>,
 }
 
+/// What both sides can see of one block before its id lands: the recipe for the id-claim hash.
+/// A front end recomputes it from the same columns, so the two must not drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContentKey<'a> {
+    pub kind: BlockKind,
+    pub content: Option<&'a str>,
+    pub call_id: Option<&'a str>,
+    pub name: Option<&'a str>,
+    pub args: Option<&'a str>,
+    pub result: Option<&'a str>,
+    pub text: Option<&'a str>,
+}
+
+impl ContentKey<'_> {
+    /// The hash that claims an id: `DefaultHasher` (SipHash-1-3), same build on both sides.
+    pub fn digest(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+impl Block {
+    pub fn content_key(&self) -> ContentKey<'_> {
+        ContentKey {
+            kind: self.kind,
+            content: self.content.as_deref(),
+            call_id: self.call_id.as_deref(),
+            name: self.name.as_deref(),
+            args: self.args.as_deref(),
+            result: self.result.as_deref(),
+            text: self.text.as_deref(),
+        }
+    }
+}
+
+impl NewBlock {
+    pub fn content_key(&self) -> ContentKey<'_> {
+        ContentKey {
+            kind: self.kind,
+            content: self.content.as_deref(),
+            call_id: self.call_id.as_deref(),
+            name: self.name.as_deref(),
+            args: self.args.as_deref(),
+            result: self.result.as_deref(),
+            text: self.text.as_deref(),
+        }
+    }
+}
+
 /// A session row.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMeta {
@@ -340,10 +393,7 @@ pub enum Submit {
         meta: Box<RequestMeta>,
     },
     /// A change to the session row.
-    Session {
-        session: i64,
-        change: SessionChange,
-    },
+    Session { session: i64, change: SessionChange },
     /// A compaction: the summary round plus the rounds borrowing an index.
     Compaction {
         session: i64,
@@ -370,8 +420,13 @@ pub struct Landed {
 /// hands it to whoever asked for that session.
 #[derive(Debug, Clone)]
 pub enum Relay {
-    /// The tail that has not landed yet (what a streaming reply produced).
-    Tail { session: i64, blocks: Vec<NewBlock> },
+    /// The tail that has not landed yet (what a streaming reply produced). `done` = these blocks
+    /// are finished: the piece is the authoritative version, not another increment.
+    Tail {
+        session: i64,
+        blocks: Vec<NewBlock>,
+        done: bool,
+    },
     /// A batch just landed: its blocks, ids included, in order.
     Blocks { session: i64, blocks: Vec<Block> },
     /// The round ended; the reason as stored (`None` = died before the gateway answered), and the

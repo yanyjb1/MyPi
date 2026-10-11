@@ -38,7 +38,8 @@ source of truth for every column.
   summary lands. The reason it carries is the one the round's own row carries.
 - A block can be handed in **before it is finished** (`done: false`): the writer keeps it, relays
   every piece the moment it arrives, and does not write it. A finished block of the same kind (and
-  the same tool call) closes it — the request side's cut is the authoritative version. A round that
+  the same tool call) closes it — the request side's cut is the authoritative version. The piece
+  carries that same flag, so a front end can tell an increment from the finished block. A round that
   ends with a block still open lands it as it stands, so nothing is ever held forever.
 - Three things land a batch: a user's message, every N tool rounds, the end of a round — the last
   one always.
@@ -105,8 +106,7 @@ keep no third copy of. The three things in memory are the residue neither can ca
 
 1. How fast the block columns read and write, and the shape of the block-fetch query (one query
    per interval, or intervals into a temp table and one join) — both deferred.
-2. One of the config keys below still has no reader (`pruneOnRewind`).
-3. Fetching an artifact stays the caller's own query: the session's state reads the row by
+2. Fetching an artifact stays the caller's own query: the session's state reads the row by
    `block_id` and materializes it (`../agent/README.md`).
 
 ## 4. config
@@ -118,7 +118,7 @@ and hands the values over.
 |---|---|---|
 | `config.server.storage.batchTools` | how many completed tool rounds land one batch (default 10; `0` is rejected when the config loads) | the second argument of `Writer::open` |
 | `config.server.request.streaming` | how much of a running round a front end sees: `immediate` = every decoded chunk, `buffered` = one piece per finished block | read at the backend-to-front-end edge (`src/ipc/stream.rs`), not here |
-| `config.tui.pruneOnRewind` | what a rewind does: `true` cuts the list, `false` opens a branch instead | nobody reads it yet — the fork path is not built |
+| `config.server.pruneOnRewind` | what a rewind does: `true` cuts the list; `false` (keeping what follows as a branch) is not built, and the config load refuses it | nowhere: the config load checks it, and the rewind reads the list, not the key |
 
 Nothing else comes from there: no path, no clock, no limits.
 

@@ -213,6 +213,11 @@ impl Config {
                 "config.yaml → server.storage.batchTools 必须是正整数（0 没有意义）"
             ));
         }
+        // Only the cutting rewind is built: a branch would need the block-sharing path, which
+        // does not exist.
+        if !self.app.server.prune_on_rewind {
+            panic!("config.yaml → server.pruneOnRewind 只能是 true（开分支那条路还没做）");
+        }
         // Structural only: a persisted default that no longer resolves is
         // handled by `finish_load` (warn + fall back), never here.
         Ok(())

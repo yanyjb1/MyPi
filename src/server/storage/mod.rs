@@ -21,8 +21,8 @@ pub use delete::rewind::{Cut, Target};
 pub use reader::Reader;
 pub use schema::SCHEMA_VERSION;
 pub use shape::{
-    Artifact, Block, BlockKind, Landed, NewBlock, Relay, RequestMeta, RoundUsage, SessionChange,
-    SessionMeta, SessionRef, Spill, Submit, TurnRow, base36, parse_base36,
+    Artifact, Block, BlockKind, ContentKey, Landed, NewBlock, Relay, RequestMeta, RoundUsage,
+    SessionChange, SessionMeta, SessionRef, Spill, Submit, TurnRow, base36, parse_base36,
 };
 pub use write::compaction::BORROWED;
 pub use writer::Writer;

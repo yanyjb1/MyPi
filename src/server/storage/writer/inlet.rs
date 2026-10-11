@@ -161,6 +161,7 @@ impl Store {
                     b
                 })
                 .collect(),
+            done,
         });
         // A different round's tail must never be dropped on the floor: land it first.
         if self.inlet.pending.as_ref().is_some_and(|(held, _)| *held != turn) {

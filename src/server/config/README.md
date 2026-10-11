@@ -42,8 +42,9 @@ A key's name is its whole address: **area . path . name**.
 5. A section follows its reader: a key read only by the request layer lives under
    `config.server.request`.
 6. One value, one entry, named after the layer that hands it out.
-7. A UI section is named after the UI: `config.tui.*`. Placeholders hang under
-   `config.tui.placeholder.*`, each leaf named after what it shows.
+7. What every front end reads lives under `config.ui.*`; a front end's own switches live under a
+   section named after it (`config.tui.*`). Placeholders hang under `config.ui.placeholder.*`, each
+   leaf named after what it shows.
 8. Where a key breaks one of these rules, the reason is stated at that key's own definition, in one
    line, and nowhere else.
 

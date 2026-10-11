@@ -66,7 +66,8 @@ name the modules that define its payloads.
 round that just closed. `Relayed` is one piece as it leaves storage's port, with the session it
 belongs to.
 
-`Opened` (in `subscribe`) is the verdict a stretch door answers with: started, or busy.
+`Opened` (in `subscribe`) is the verdict a stretch door answers with: started, or busy. The round's
+id arrives later, with `StreamItem::Ended`.
 
 ### A round
 

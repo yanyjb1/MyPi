@@ -1,5 +1,6 @@
-//! Storage schema: one authority on the SQLite layout — four tables, three properties. The full
-//! spec is in this folder's `README.md`.
+//! Storage schema: one authority on the SQLite layout — seven tables, and the connection's three
+//! settings (WAL, `synchronous = NORMAL`, a five-second busy timeout). The full spec is in this
+//! folder's `README.md`.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;

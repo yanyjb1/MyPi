@@ -7,8 +7,9 @@ use crate::server::storage::{Block, NewBlock, Relay};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum StreamItem {
     /// The tail that has not landed yet: the blocks a streaming reply produced, or the api's own
-    /// mid-flight preview. A front end **replaces** its preview with the latest of these.
-    Live(Vec<NewBlock>),
+    /// mid-flight preview. `done` = these blocks are finished, the authoritative version rather
+    /// than another increment; a front end appends increments and replaces on a finished piece.
+    Live { blocks: Vec<NewBlock>, done: bool },
     /// A batch landed: its blocks, ids included, in order.
     Blocks(Vec<Block>),
     /// What a tool printed while it ran. Display only: the result block carries
@@ -33,9 +34,13 @@ impl From<Relay> for Relayed {
     /// relays, forwarded as is.
     fn from(relay: Relay) -> Self {
         match relay {
-            Relay::Tail { session, blocks } => Relayed {
+            Relay::Tail {
                 session,
-                item: StreamItem::Live(blocks),
+                blocks,
+                done,
+            } => Relayed {
+                session,
+                item: StreamItem::Live { blocks, done },
             },
             Relay::Blocks { session, blocks } => Relayed {
                 session,

@@ -17,6 +17,7 @@ pub mod complete;
 pub mod meta;
 pub mod sessions;
 pub mod todo;
+pub mod turn;
 pub mod usage;
 pub mod viewport;
 
@@ -40,20 +41,26 @@ pub(crate) fn dispatch(cfg: &Config, conn: &Connection, cwd: &Path, call: Call) 
             session,
             before,
             limit,
-        } => window(viewport::older(conn, session, before, limit)?),
+            turn,
+        } => window(viewport::older(conn, session, before, limit, turn)?),
         Call::Newer {
             session,
             after,
             limit,
-        } => window(viewport::newer(conn, session, after, limit)?),
+            turn,
+        } => window(viewport::newer(conn, session, after, limit, turn)?),
         Call::Todo { session } => Ok(Reply::Todo(todo::list(conn, session)?)),
+        Call::Turn { session, turn } => Ok(Reply::Turn {
+            turn,
+            blocks: turn::blocks(conn, session, turn)?,
+        }),
         Call::Meta { session } => Ok(Reply::Meta(meta::state(conn, session, cwd)?)),
         Call::Pools => Ok(Reply::Pools(complete::pools(cfg))),
     }
 }
 
 /// A viewport answer: the blocks, and whether more exist past the window.
-fn window((blocks, more): (Vec<Block>, bool)) -> Result<Reply> {
+fn window((blocks, more): (Vec<viewport::PlacedBlock>, bool)) -> Result<Reply> {
     Ok(Reply::Blocks { blocks, more })
 }
 

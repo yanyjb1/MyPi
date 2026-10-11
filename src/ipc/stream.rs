@@ -25,7 +25,10 @@ pub(crate) fn pump(
         // `buffered` hands out no half-written text: the durable version
         // arrives as blocks in either setting.
         if mode == StreamMode::Buffered
-            && matches!(item, StreamItem::Live(_) | StreamItem::ToolOutput { .. })
+            && matches!(
+                item,
+                StreamItem::Live { .. } | StreamItem::ToolOutput { .. }
+            )
         {
             continue;
         }
