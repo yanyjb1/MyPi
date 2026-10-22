@@ -1,152 +1,127 @@
-# session — the layer every mypi front end sits on
+# session
 
-mypi is a terminal coding agent: one server process owns the database and the agent loop; front ends
-talk to it over a socket. This directory is the layer a front end sits on: the connection, the
-session's state, and the blocks waiting to be rendered. A front end reads a borrowed view of it and
-draws.
+The layer between a front end and the api: one connection, one session's state, the block caches,
+and a borrowed view.
 
-## 1. Design / Schema
+## 1. Design
 
-### A session is one viewer's view of one stored session
+### One viewer, one session
 
-One session at a time: watching another means leaving the first. Several viewers may watch the same
-session, each with a copy of this layer of its own; this layer knows nothing about that.
+A `Viewer` names one front end. A `Session` holds one viewer and watches one stored session at a
+time; entering another leaves the first. Several viewers may watch the same session.
 
 ### Files
 
 | file | holds |
 |---|---|
-| `mod.rs` | `Session` — the one entry point for every api call; `View` — the borrowed read model |
-| `client.rs` | the connection, the request queue, the session's stream |
-| `ingest.rs` | what the backend sends → state, window and structure |
-| `state.rs` | the session's state |
-| `window.rs` | the content cache: the landed window and the unlanded tail |
-| `shape.rs` | the structure cache: which blocks each kept round manages |
-| `command.rs` | a slash command's arguments → the call that carries them out |
+| `mod.rs` | `Session`, `View`, `Switches` |
+| `client.rs` | the connection, request queue, watch stream |
+| `ingest.rs` | arrivals → state, window, structure, range |
+| `state.rs` | session state, notices, usage |
+| `window.rs` | content cache: landed window + unlanded tail |
+| `shape.rs` | structure cache: blocks per round |
+| `range.rs` | raw block interval for the tree |
+| `command.rs` | command text → call |
 
-### The entry point
+### Entry points
 
 ```text
-connect(cost, path, cwd, switches)   bye()
-set_draft(...)   open_new()   attach(id)   detach()
-submit(text)   interrupt()   compact(retention, focus?)   rewind(turn, block)
-rename(name?)  set_cwd(path)  switch_model(id)  set_default_model(id)
-set_profile(profile)  delete(id)
-list_sessions(under?)   usage(lang)   todo()   pools()
-note_view(top?, bottom?, pinned)   view()   text_of(block)
-set_preload(n)   set_interrupted_text(text)   notice(text, level, life)
+connect(cost, path, cwd, switches, viewer)  viewer()  bye()
+init(session)  jump(turn)  fetch(num, older)  settled()  tree_range(start, end)
+submit(text)  interrupt()  compact(...)  rewind(turn, block)
+attach(id)  detach()  set_draft(...)  open_new()
+rename(...)  set_cwd(...)  switch_model(...)  set_default_model(...)
+set_profile(...)  delete(id)  list_sessions(...)  usage(...)  todo()  pools()
+view()  text_of(block)  set_preload(n)  set_interrupted_text(text)  notice(...)
 ```
 
-Two rules per method. A change lands locally first and joins one queue, which the frame loop sends
-with `pump` once per frame. A read is a question, and its answer comes back through `ingest` like
-everything else.
+Changes land locally first and join one queue; `pump` sends the queue once per frame. Reads are
+questions; their answers arrive through `ingest`.
 
-### The read model
+### Opening
 
-`View` is borrowed: the session's id and flags, name and model, the working directory and whether
-the model moved it, the notices, the task list, the picker's rows, the completion pools, the bill,
-the landed blocks (`chain()` walks landed, tail and the optimistic row in display order as
-`BlockRef`), the tail, the optimistic interrupt row, the kept structure, and a generation counter
-that moves on a whole replacement.
+```text
+enter(id)
+  attach; clear structure and range
+  Watch(id)
+  Call::Init { session, limit: asked }
+  Call::Meta { session }
+  Call::Todo { session }
+```
 
-### Two ways to read one block
+`Reply::Init` replaces the structure and the content window. `init` is the History landing: it
+ignores the row this front end just created (`new_born`) and never sends a second `Init` while one
+is in flight.
 
-`BlockRef` is one shape over a landed block (`Block`, which has an id) and one that has not landed
-(`NewBlock`): kind, content, tool name, arguments, intent, the half sentence the model wrote,
-whether it is the reply's first call, success, result, the extra material for a front end, duration,
-the pairing key, usage, timestamp.
+### Reads
 
-### Two caches
+| Call | Reply the session reads | Use |
+|---|---|---|
+| `Init { session, limit }` | `Init { turns, blocks, more }` | open |
+| `Round { session, turn }` | `Round { turn, blocks, older, newer }` | jump |
+| `Range { session, start, end }` | `Range(Vec<Block>)` | tree |
+| `Older` / `Newer` | `Blocks { blocks, more }` | one side of the window |
+| `Turn { session, turn }` | `Turn { turn, blocks }` | structure after a round |
+
+`TurnShape` is `{ turn, blocks }`; each `TurnBlock` is `{ id, hash }`. `Reply::Init` carries the
+structure newest first. `Reply::Round` replaces the content window and sets both latches from
+`older` / `newer`. `Reply::Range` fills `RangeCache`, not the content window.
+
+`jump` records a shrinking budget (32 → 8 → 4, floor 4); `settled` restores it. `fetch` asks for
+`asked` blocks and names the edge block's round.
+
+### Caches
 
 | cache | holds | budget |
 |---|---|---|
-| content (`window.rs`) | the landed window, ascending by id, plus the tail that has not landed | `config.ui.session.preloadCache` blocks around the view, evicted from the end farthest from the view |
-| structure (`shape.rs`) | per kept round: its block ids and each block's content hash, newest first | 8 rounds |
+| content (`window.rs`) | landed blocks + tail | `Switches.preload`, at least 8 |
+| structure (`shape.rs`) | per round: `id` + `hash`, newest first | unbounded |
+| range (`range.rs`) | raw blocks for one interval | one interval |
 
-The tail accumulates: an increment is appended to its block, a finished piece replaces it and
-carries the hash that claims its id. A landed batch is appended by id, and a block already there
-takes the landed version. `claim` matches a round's (id, hash) pairs against the window and the
-tail: a finished tail block that matches lands with that id.
+`Window` trims on a landed append or a claimed tail block, only while no round is active; the oldest
+`written` goes first. `Shapes` is replaced by `Reply::Init` and grows by `Reply::Turn`. `RangeCache`
+has no contiguity rule and is independent of the content window.
 
-### One round
+### View
 
-```text
-submit → the answer carries the round id
-increments → appended to the tail
-finish → the block is replaced, its hash taken
-a landed batch → appended by id, stamped with the current round
-the round ends → the structure read (session + round) → the structure cache, then claim by hash
-```
+`View` borrows the attached session, flags, name, model, cwd, notices, todo, picker rows, pools,
+usage, landed blocks, tail, optimistic interrupt row, structure, range, and generation.
+
+The status line's `π` / `Tel` signal belongs to its own `Activity`; it does not pass through here.
 
 ### Invariants
 
-1. A component never holds a connection: every api call is a `Session` method.
+1. A component never holds a connection; every api call is a `Session` method.
 2. A change lands locally before it is sent.
 3. Blocks are addressed by id, never by position.
-4. The window's size follows `config.ui.session.preloadCache`, not the conversation.
-5. The tail is not a cache of finished rows.
-6. Only what the backend pushed and what a surface asked for by name comes in.
-7. The content hash has one recipe (`ContentKey` in storage).
+4. `Window` trims by admission order, never during a round.
+5. `claim` matches `(id, hash)`; no hash-only fallback.
+6. The content hash has one recipe (`ContentKey`).
+7. `init` does not re-read a row this front end just created.
 
-## 2. Design intent
+## 2. Intent
 
-**Entry and queue**
-
-- **One entry point** — so no front end invents a second way of asking.
-- **A change and a question are different** — a change carries no answer, so it lands at once and
-  the reader never waits a round trip; a question waits.
-- **One queue** — intents from any component go out in one batch per frame, in order; the order is
-  the semantics.
-
-**The read model**
-
-- **The view is borrowed** — drawing every frame cannot copy the transcript.
-- **The window is bounded** — memory follows the window, not the conversation.
-
-**Two caches**
-
-- **They are separate** — a block can be managed by two rounds, so the structure cannot be mixed into
-  the content.
-- **The structure holds ids and hashes only** — a round carries tens to hundreds of blocks, so 8
-  rounds fit only because nothing but numbers is kept.
-- **Ids are claimed by content hash** — block ids are sequential, so matching by position is not
-  reliable; matching by content is.
-- **The finish signal carries a flag** — without it a front end cannot tell an increment from the
-  finished block.
-- **The round id comes back with the submission** — a front end knows which round it is writing into
-  without waiting for the round to end.
-
-**Tail and placeholder**
-
-- **The tail is not a finished-row cache** — it changes at streaming rate; a render side memoizes it
-  against `LiveTail::version`.
-- **One optimistic row** — an interrupt stands a row where the server's own will land, so the screen
-  does not wait out a dying round.
-
-**State**
-
-- **The task list has one starting point** — the api answers with the list as it stands; everything
-  after that arrives as the blocks the front end already receives.
-- **The working directory is compared, not remembered** — the row's `cwd` is where the last `/cdp`
-  landed and the live one is where the model's `cd` has taken the session; equal means it was not
-  moved, different means the model moved it for now.
-- **Older and newer reads may name a round** — blocks of that round come back without a round of
-  their own.
+- **One entry point.** Front ends do not invent a second way to ask.
+- **One queue.** Intents go out in order; order is semantics.
+- **Borrowed view.** Drawing does not copy the transcript.
+- **Two caches.** A block can belong to two rounds, so structure and content stay separate.
+- **Named reads.** Open returns structure + content; jump returns one round; tree returns a range.
 
 ## 3. Unresolved
 
-1. The tree, the round list, replay and logs have no api. The structure cache keeps 8 rounds; a tree
-   over a whole session needs a read beyond that.
-2. A context estimate has no api: before a round has run there is no measured prompt size.
-3. The layering rules do not know this tree: the architecture test forbids a front end from naming
-   the storage and agent layers, while the api hands out `Block`, `NewBlock`, `TurnBlock` and
-   `TodoPhase` directly.
-4. `ui` is not in the build: `lib.rs` has no `pub mod ui;`, and `Cargo.toml` has no `ratatui` /
-   `crossterm`.
+1. The api lacks `Call::Init` / `Round` / `Range`, `Reply::Init` / `Round` / `Range`, and
+   `TurnShape`; the session side calls them.
+2. `Call::Round` has no limit field; the jump budget is local.
+3. `Viewer` is still `i64`; the App's `Uuid` is not wired here.
+4. `State::set_ctx_limit` has no caller, so `View.ctx_limit` is always `None`.
+5. `Switches.asked` has no config field yet.
+6. Tree fork rendering and `rewind_non_prune` are not implemented.
 
-## 4. Config fields
+## 4. Config
 
 | key | use |
 |---|---|
-| `config.ui.session.preloadCache` | how many blocks the content cache keeps around the view (default 128) |
-| `config.ui.placeholder.interrupted` | the words the optimistic interrupt row carries |
+| `config.ui.session.preloadCache` | content budget |
+| `config.ui.session.askedEachTime` | blocks per read |
+| `config.ui.placeholder.interrupted` | optimistic interrupt text |
+| `model.contextWindow` | context gauge denominator |

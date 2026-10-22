@@ -8,9 +8,8 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use anyhow::{Context, Result};
 
 use crate::ipc::client::Client as Door;
-use crate::ipc::viewer as make_viewer;
 use crate::server::api::subscribe::Retention;
-use crate::server::api::{Call, Opened, Post, PostDone, Reply, StreamItem};
+use crate::server::api::{Call, Opened, Post, PostDone, Reply, StreamItem, Viewer};
 use crate::server::platform::ipc::Cost;
 
 /// What the front end asks the backend for. One queue holds them all, in order.
@@ -73,6 +72,7 @@ pub enum Arrival {
     /// The door failed. The connection stays usable.
     Failed {
         kind: Kind,
+        call: Option<Call>,
         message: String,
     },
 }
@@ -85,8 +85,7 @@ pub struct Client {
 
 impl Client {
     /// Connect and register. Who starts the server is not this layer's business.
-    pub fn connect(cost: Cost, path: &Path) -> Result<Client> {
-        let viewer = make_viewer();
+    pub fn connect(cost: Cost, path: &Path, viewer: Viewer) -> Result<Client> {
         let door = Door::connect(cost, path, viewer)
             .with_context(|| format!("cannot reach the server at {}", path.display()))?;
         Ok(Client {
@@ -122,11 +121,16 @@ impl Client {
         self.drain_stream(&mut out);
         while let Some(request) = self.queue.pop_front() {
             let kind = kind_of(&request);
+            let call = match &request {
+                Request::Call(call) => Some(call.clone()),
+                _ => None,
+            };
             match self.send(request) {
                 Ok(Some(arrival)) => out.push(arrival),
                 Ok(None) => {}
                 Err(e) => out.push(Arrival::Failed {
                     kind,
+                    call,
                     message: format!("{e:#}"),
                 }),
             }

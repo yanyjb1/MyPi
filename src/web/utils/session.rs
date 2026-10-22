@@ -25,38 +25,31 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::cdp::{Browser, Cdp, Target};
-use crate::server::ai::config::BrowserConfig;
-use crate::xdg::browser_profile_dir;
+use crate::server::config::BrowserConfig;
 
 pub(crate) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) const RENDER_WAIT: Duration = Duration::from_secs(15);
 pub(crate) const POLL_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// The profile directory to use: `$MYPI_BROWSER_PROFILE_DIR` wins (tests and
-/// parallel sessions), then `config.yaml → browser.profileDir`, then the XDG
-/// data default.
 /// Where this process's browser keeps its profile.
 ///
 /// Three answers, in order:
 ///
-/// 1. an explicit directory — `$MYPI_BROWSER_PROFILE_DIR` or
-///    `config.yaml → browser.profileDir` (naming a directory *is* the request
-///    for the logins in it, so this wins over the toggle);
+/// 1. an explicit directory — `config.yaml → browser.profileDir` (naming a
+///    directory *is* the request for the logins in it, so this wins over the
+///    toggle);
 /// 2. `browser.persistProfile: false` — a throwaway directory, one per process,
 ///    removed when the browser we launched is reaped;
 /// 3. otherwise the shared `$XDG_DATA_HOME/mypi/browser/profile`, so logins,
 ///    cookies and extensions survive restarts.
 fn profile_dir(cfg: &BrowserConfig) -> PathBuf {
-    if let Some(d) = std::env::var_os("MYPI_BROWSER_PROFILE_DIR").filter(|d| !d.is_empty()) {
-        return PathBuf::from(d);
-    }
     if let Some(d) = &cfg.profile_dir {
         return d.clone();
     }
     if !cfg.persist_profile {
         return ephemeral_profile_dir().to_path_buf();
     }
-    browser_profile_dir()
+    crate::server::platform::env::data_dir().join("browser").join("profile")
 }
 
 /// The throwaway profile for this process: created once, reused by every call

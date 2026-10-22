@@ -9,7 +9,7 @@ describes the code as it stands, not how it got here.
 
 | file | holds |
 |---|---|
-| `mod.rs` | the protocol's own vocabulary (`Ask`, `Answer`), the endpoint's path, a front end's id |
+| `mod.rs` | the protocol's own vocabulary (`Ask`, `Answer`), the endpoint's path |
 | `frame.rs` | the framing: `encode`, `decode`, `MAX_LINE_BYTES`, and `Lines` (one connection's read face, with the scanner behind it) |
 | `server.rs` | the server half: the database lock (`Claim`, `claim`), the bound endpoint (`Bound`, `bind`), `serve`, `run`, the accept loop, one connection's handler, the register (`Peers`), replacing a leftover endpoint, the endpoint's permissions |
 | `stream.rs` | the server's half of one watch: a session's stream becomes lines (`pump`); `pub(crate)` |
@@ -21,7 +21,6 @@ describes the code as it stands, not how it got here.
 |---|---|
 | `Ask`, `Answer` | what crosses the wire, in each direction |
 | `socket_path(db)` | where this database's server listens |
-| `viewer()` | a fresh id for a front end |
 | `server::claim(db)` | try to serve this database; `None` means somebody already does |
 | `server::bind(cfg, db, claim)` | create the endpoint, after the lock |
 | `server::serve(bound)` | answer until no front end is left |
@@ -87,7 +86,9 @@ describes the code as it stands, not how it got here.
 
 ## Not wired yet
 
-1. The front end: `main.rs` connects and then stops with a message.
+1. The front end: `main.rs` connects and then stops with a message. Its connect calls still expect a
+   front-end-id factory that does not exist; the caller must make one `Viewer` above this layer and
+   pass it to `Client::connect`.
 2. The Windows named pipe: the platform layer's Windows bodies are `unimplemented!()`.
 3. Nothing reconnects: a front end whose server dies makes no second attempt.
 4. One-shot commands do not use this layer (`mypi --sessions` reads the database directly).

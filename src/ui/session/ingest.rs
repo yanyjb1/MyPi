@@ -5,6 +5,7 @@ use crate::server::api::{Call, Opened, PostDone, Reply, StreamItem};
 use crate::server::storage::BlockKind;
 
 use super::client::{Arrival, Kind, Round};
+use super::range::RangeCache;
 use super::shape::Shapes;
 use super::state::{Level, Life, State};
 use super::window::Window;
@@ -30,10 +31,11 @@ pub fn apply(
     state: &mut State,
     window: &mut Window,
     shapes: &mut Shapes,
+    range: &mut RangeCache,
 ) -> Follow {
     match arrival {
         Arrival::Stream(item) => on_stream(item, state, window, shapes),
-        Arrival::Answer { call, reply } => on_answer(call, reply, state, window, shapes),
+        Arrival::Answer { call, reply } => on_answer(call, reply, state, window, shapes, range),
         Arrival::Done(done) => on_done(done, state),
         Arrival::Opened {
             session,
@@ -45,7 +47,11 @@ pub fn apply(
             state.notice("这条会话的推送断了".to_string(), Level::Error, Life::Long);
             Follow::Nothing
         }
-        Arrival::Failed { kind, message } => {
+        Arrival::Failed {
+            kind,
+            call: _,
+            message,
+        } => {
             if matches!(kind, Kind::Round | Kind::Watch) {
                 state.set_busy(false);
             }
@@ -62,9 +68,9 @@ fn on_stream(item: StreamItem, state: &mut State, window: &mut Window, shapes: &
             let asked_todo = blocks
                 .iter()
                 .any(|b| b.kind == BlockKind::ToolResult && b.name.as_deref() == Some("todo"));
-            window.push_blocks(blocks);
+            window.push_blocks(blocks, state.busy());
             // A batch can land late: the kept structure says which round it belongs to.
-            restamp(window, shapes);
+            restamp(window, shapes, state.busy());
             state.settle();
             if asked_todo && let Some(id) = state.attached() {
                 return Follow::Todo(id);
@@ -85,10 +91,10 @@ fn on_stream(item: StreamItem, state: &mut State, window: &mut Window, shapes: &
     Follow::Nothing
 }
 
-/// Write the kept rounds onto the window again, matching by content hash.
-fn restamp(window: &mut Window, shapes: &Shapes) {
+/// Write the kept rounds onto the window again, matching by id and content hash.
+fn restamp(window: &mut Window, shapes: &Shapes, busy: bool) {
     for shape in shapes.iter() {
-        window.claim(shape.turn, &shape.blocks);
+        window.claim(shape.turn, &shape.blocks, busy);
     }
 }
 
@@ -98,8 +104,37 @@ fn on_answer(
     state: &mut State,
     window: &mut Window,
     shapes: &mut Shapes,
+    range: &mut RangeCache,
 ) -> Follow {
     match reply {
+        Reply::Init {
+            turns,
+            blocks,
+            more,
+        } => {
+            if call_session(&call) == state.attached() {
+                shapes.replace(turns);
+                window.replace(blocks, more);
+                restamp(window, shapes, state.busy());
+            }
+        }
+        Reply::Round {
+            turn: _,
+            blocks,
+            older,
+            newer,
+        } => {
+            if call_session(&call) == state.attached() {
+                window.replace_round(blocks, older, newer);
+            }
+        }
+        Reply::Range(blocks) => {
+            if call_session(&call) == state.attached()
+                && let Call::Range { start, end, .. } = call
+            {
+                range.replace(start, end, blocks);
+            }
+        }
         Reply::Blocks { blocks, more } => {
             if call_session(&call) == state.attached() {
                 match call {
@@ -112,7 +147,7 @@ fn on_answer(
         Reply::Turn { turn, blocks } => {
             if call_session(&call) == state.attached() {
                 shapes.set(turn, blocks);
-                restamp(window, shapes);
+                restamp(window, shapes, state.busy());
             }
         }
         Reply::Meta(meta) => {
@@ -120,7 +155,11 @@ fn on_answer(
                 state.set_meta(meta);
             }
         }
-        Reply::Usage { lang, groups } => state.set_usage(lang, groups),
+        Reply::Usage { lang, groups } => {
+            if call_session(&call) == state.attached() {
+                state.set_usage(lang, groups);
+            }
+        }
         Reply::SessionRows(rows) => state.set_rows(rows),
         Reply::Todo(list) => {
             if call_session(&call) == state.attached() {
@@ -132,10 +171,21 @@ fn on_answer(
     Follow::Nothing
 }
 
-fn on_done(done: PostDone, _state: &mut State) -> Follow {
+fn on_done(done: PostDone, state: &mut State) -> Follow {
     match done {
-        PostDone::Created(id) => Follow::Created(id),
-        PostDone::Done => Follow::Nothing,
+        PostDone::Created(id) => {
+            state.set_refused(false);
+            state.set_new_born(true);
+            Follow::Created(id)
+        }
+        PostDone::Done => {
+            state.set_refused(false);
+            Follow::Nothing
+        }
+        PostDone::Busy => {
+            state.set_refused(true);
+            Follow::Nothing
+        }
     }
 }
 
@@ -172,7 +222,9 @@ fn on_opened(
 fn call_session(call: &Call) -> Option<i64> {
     match call {
         Call::Usage { session, .. }
-        | Call::Tail { session, .. }
+        | Call::Init { session, .. }
+        | Call::Round { session, .. }
+        | Call::Range { session, .. }
         | Call::Older { session, .. }
         | Call::Newer { session, .. }
         | Call::Todo { session }

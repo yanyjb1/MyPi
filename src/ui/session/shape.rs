@@ -3,10 +3,7 @@
 
 use std::collections::VecDeque;
 
-use crate::server::api::types::TurnBlock;
-
-/// How many rounds of structure are kept. A round is a management unit, not a block count.
-const SHAPE_TURNS: usize = 8;
+use crate::server::api::types::{TurnBlock, TurnShape};
 
 /// One round's blocks: the id, and the hash that claims the content.
 pub struct Shape {
@@ -22,11 +19,21 @@ pub struct Shapes {
 }
 
 impl Shapes {
-    /// Record one round: the same round replaces its old row, and the oldest falls off.
+    /// Record one round: the same round replaces its old row.
     pub fn set(&mut self, turn: i64, blocks: Vec<TurnBlock>) {
         self.turns.retain(|s| s.turn != turn);
         self.turns.push_front(Shape { turn, blocks });
-        self.turns.truncate(SHAPE_TURNS);
+    }
+
+    /// Replace the whole structure; `turns` is newest first.
+    pub fn replace(&mut self, turns: Vec<TurnShape>) {
+        self.turns = turns
+            .into_iter()
+            .map(|t| Shape {
+                turn: t.turn,
+                blocks: t.blocks,
+            })
+            .collect();
     }
 
     /// Newest first.

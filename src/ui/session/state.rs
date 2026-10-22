@@ -31,6 +31,7 @@ pub struct Notice {
     pub life: Life,
 }
 
+/// The usage bill for one session, in the language the panel speaks.
 pub struct UsagePanel {
     pub lang: UsageLang,
     pub groups: Vec<ModelUsage>,
@@ -51,6 +52,12 @@ pub struct State {
     /// The task list, replayed by the server from the session's own tool calls.
     todo: Vec<TodoPhase>,
     notices: Vec<Notice>,
+    /// The last write was refused because the session is mid-round.
+    refused: bool,
+    /// The model's context window, once a front end has asked the server for it.
+    ctx_limit: Option<u64>,
+    /// A row was created by this front end and has not been opened yet.
+    new_born: bool,
 }
 
 impl State {
@@ -65,6 +72,9 @@ impl State {
             pools: None,
             todo: Vec::new(),
             notices: Vec::new(),
+            refused: false,
+            ctx_limit: None,
+            new_born: false,
         }
     }
 
@@ -78,6 +88,9 @@ impl State {
         self.meta = None;
         self.todo.clear();
         self.notices.clear();
+        self.refused = false;
+        self.ctx_limit = None;
+        self.usage = None;
         self.busy = false;
     }
 
@@ -89,6 +102,9 @@ impl State {
         self.notices.clear();
         self.busy = false;
         self.usage = None;
+        self.refused = false;
+        self.ctx_limit = None;
+        self.new_born = false;
     }
 
     pub fn set_meta(&mut self, state: SessionState) {
@@ -191,6 +207,33 @@ impl State {
 
     pub fn notices(&self) -> &[Notice] {
         &self.notices
+    }
+
+    /// The model's context window, or `None` when nobody has asked yet.
+    pub fn ctx_limit(&self) -> Option<u64> {
+        self.ctx_limit
+    }
+
+    pub fn set_ctx_limit(&mut self, limit: u64) {
+        self.ctx_limit = Some(limit);
+    }
+
+    /// Take the new-row flag; `true` means this front end just created the row.
+    pub fn take_new_born(&mut self) -> bool {
+        std::mem::take(&mut self.new_born)
+    }
+
+    pub fn set_new_born(&mut self, value: bool) {
+        self.new_born = value;
+    }
+
+    /// Whether the last write was refused (the session is mid-round).
+    pub fn refused(&self) -> bool {
+        self.refused
+    }
+
+    pub fn set_refused(&mut self, refused: bool) {
+        self.refused = refused;
     }
 
     /// Say something. A long notice clears the short ones, the way a block does.

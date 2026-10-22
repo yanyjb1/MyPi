@@ -237,6 +237,8 @@ pub struct PlaceholderConfig {
     pub empty_reply: String,
     /// A round the user actually interrupted.
     pub interrupted: String,
+    /// A rewind picked a user message: those words are on the clipboard.
+    pub copied_to_clipboard: String,
 }
 
 impl Default for PlaceholderConfig {
@@ -244,6 +246,7 @@ impl Default for PlaceholderConfig {
         Self {
             empty_reply: "SYSTEM: (no reply body — empty response)".into(),
             interrupted: "SYSTEM: UserInterrupted.".into(),
+            copied_to_clipboard: "SYSTEM: that message is on your clipboard.".into(),
         }
     }
 }

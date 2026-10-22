@@ -1,19 +1,10 @@
-//! git integration — only two things needed: the current branch name and
-//! how many files changed.
-//!
-//! Counting rules (by design: count files, not lines):
-//! - Needs `git add` (untracked + unstaged changes) -> `?N`
-//! - Already staged -> `+N`
-//!
-//! A file that is both staged and modified again (porcelain `MM`) counts
-//! on both sides — it genuinely exists in both todo lists.
+//! git integration — the current branch name and how many files changed.
+//! Counting rules: needs `git add` -> `?N`; already staged -> `+N`.
 
 use std::path::Path;
 use std::process::Command;
 
-/// Whether untracked directories expand into individual files.
-/// `false` matches `git status` defaults (`?? src/` counts as 1);
-/// `true` counts every file (adds `--untracked-files=all`).
+/// Expand untracked directories into individual files? `false` matches `git status` defaults.
 const UNTRACKED_ALL: bool = false;
 
 /// Result of one git query.

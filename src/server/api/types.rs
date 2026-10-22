@@ -121,6 +121,8 @@ pub enum PostDone {
     Created(i64),
     /// The change landed; nothing to hand back.
     Done,
+    /// Nothing landed: the session is mid-round, so its list is not the caller's to cut.
+    Busy,
 }
 
 /// A subscription: either a claim on a session's **stream**, or the opening of

@@ -53,7 +53,14 @@ fn dispatch(state: &mut Driver, post: Post) -> Result<PostDone> {
             state.interrupt(session);
             PostDone::Done
         }
-        Post::Rewind { session, turn, block } => {
+        Post::Rewind {
+            session,
+            turn,
+            block,
+        } => {
+            if state.running.flag(session).is_some() {
+                return Ok(PostDone::Busy);
+            }
             state.rewind(Target {
                 session,
                 turn,
@@ -96,11 +103,19 @@ fn dispatch(state: &mut Driver, post: Post) -> Result<PostDone> {
             if let Some(profile) = &profile {
                 crate::commands::Profile::resolve(&state.cfg, profile)?;
             }
-            let session =
-                init::create(&state.cfg, &state.writer, &cwd, model.as_ref(), name.as_deref())?;
+            let session = init::create(
+                &state.cfg,
+                &state.writer,
+                &cwd,
+                model.as_ref(),
+                name.as_deref(),
+            )?;
             PostDone::Created(session)
         }
         Post::Delete { session } => {
+            if state.running.flag(session).is_some() {
+                return Ok(PostDone::Busy);
+            }
             crate::commands::Delete::remove(&state.writer, session)?;
             PostDone::Done
         }
@@ -109,6 +124,7 @@ fn dispatch(state: &mut Driver, post: Post) -> Result<PostDone> {
     let session = match done {
         PostDone::Created(session) => Some(session),
         PostDone::Done => profile_session,
+        PostDone::Busy => None,
     };
     if let (Some(session), Some(name)) = (session, profile_name) {
         state.sessions.choose_profile(&state.cfg, session, &name)?;

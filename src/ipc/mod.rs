@@ -33,12 +33,22 @@ pub enum Ask {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Answer {
-    Reply { reply: Reply },
-    Done { done: PostDone },
-    Opened { opened: Opened },
-    Stream { item: StreamItem },
+    Reply {
+        reply: Reply,
+    },
+    Done {
+        done: PostDone,
+    },
+    Opened {
+        opened: Opened,
+    },
+    Stream {
+        item: StreamItem,
+    },
     /// The door failed. The connection stays open; the next line is welcome.
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 impl Answer {
@@ -60,11 +70,4 @@ fn fingerprint(db: &Path) -> String {
     let mut hasher = DefaultHasher::new();
     db.hash(&mut hasher);
     format!("{:012x}", hasher.finish())
-}
-
-/// A front end's own id: this process, plus a counter inside it.
-pub fn viewer() -> Viewer {
-    static NEXT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    Viewer(((std::process::id() as i64) << 20) | (seq & 0xf_ffff))
 }

@@ -18,8 +18,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 错误处理：省掉手写几百行 Result 样板
 anyhow = "1"
-ratatui = "0.30.2"
-crossterm = "0.29.0"
 serde_yaml = "0.9.34"
 unicode-width = "0.2.2"
 # SQLite：bundled = 自带 C 源码编译，不依赖系统 libsqlite3
@@ -37,23 +35,3 @@ html-to-markdown-rs = { version = "3.14", default-features = false, optional = t
 # URL 解析（fetch 的 scheme 校验）
 url = { version = "2", optional = true }
 
-# 联网示例脚本：`cargo run --example tool_fetch` 之类只在带 web 时能编译
-[[example]]
-name = "tool_fetch"
-required-features = ["web"]
-
-[[example]]
-name = "fetch_e2e"
-required-features = ["web"]
-
-[[example]]
-name = "tool_search"
-required-features = ["web"]
-
-[[example]]
-name = "search_e2e"
-required-features = ["web"]
-
-[[example]]
-name = "tool_browser"
-required-features = ["web"]

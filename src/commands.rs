@@ -234,6 +234,13 @@ commands! {
         scope: Local,
         detail: "恢复本项目的某个会话",
     },
+    New {
+        name: "/new",
+        aliases: [],
+        args: [],
+        scope: Local,
+        detail: "开一个新会话",
+    },
     Quit {
         name: "/q",
         aliases: ["/quit", "/exit"],

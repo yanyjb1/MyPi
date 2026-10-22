@@ -1,24 +1,32 @@
-//! Bing engine — direct HTTPS GET + static HTML parsing. No browser.
+//! Bing — direct HTTPS GET + static HTML parsing. No browser tier.
 //!
-//! Plain queries hit this path first (verified live: ~1 s, 10 organic
-//! results). The CN egress serves `li.b_algo` markup that still honors
-//! nothing beyond plain terms — advanced-syntax queries route to the DDG
-//! engine instead (see `super::ddg`).
+//! Plain queries hit this path first: one request, ~1 s, ten organic results.
+//! It is the chain's cheapest engine, and the only one MyPi added on its own
+//! (omp has no Bing).
+//!
+//! The engine is handed **plain keywords**, never operators. `www.bing.com`
+//! parses Google-style syntax natively, but from a CN egress IP it 302s into
+//! `cn.bing.com` no matter which escape-hatch parameters or cookies ride along
+//! (verified: ensearch/mkt/setmkt/cc/SRCHHPGUSR all ignored), and `cn.bing`
+//! silently drops every operator — leaving the literal `site:github.com` in
+//! the query as search words. `engine.rs` therefore keeps directive-bearing
+//! queries off this engine entirely; constraints are enforced by the
+//! post-filter.
 
-use anyhow::{Context as _, anyhow};
-use std::time::Duration;
-
-use super::super::engine::SearchHit;
+use super::super::hit::{SearchHit, take_unique};
+use super::super::http::encode;
+use super::super::query::{PLAIN_QUERY_SYNTAX, format_query};
+use super::{Ctx, get};
 use crate::web::utils::html::{extract_attr, extract_between, strip_tags, unescape_entities};
-use crate::web::utils::url::{percent_decode, urlencoded};
+use crate::web::utils::url::percent_decode;
 
-pub(super) const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+pub const LABEL: &str = "Bing";
 const SEARCH_URL: &str = "https://www.bing.com/search";
-pub(super) const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
-fn search_url(query: &str, limit: usize) -> String {
+pub(super) fn build_url(ctx: &Ctx<'_>) -> String {
+    let query = format_query(ctx.parsed, PLAIN_QUERY_SYNTAX);
     // `count` is Bing's result-size parameter; honored without login.
-    format!("{SEARCH_URL}?q={}&count={}", urlencoded(query), limit)
+    format!("{SEARCH_URL}?q={}&count={}", encode(&query), ctx.limit)
 }
 
 fn unwrap_tracking_href(href: &str) -> String {
@@ -36,7 +44,7 @@ fn unwrap_tracking_href(href: &str) -> String {
         {
             return s;
         }
-        return href.to_string();
+        return href;
     }
     if let Some(pos) = href.find("&u=http") {
         // Old wrapper shape: &u=<percent-encoded target>. Bing lowercases
@@ -140,47 +148,39 @@ pub fn parse_bing_html(html: &str) -> Vec<SearchHit> {
         })
         .unwrap_or_default();
 
-        hits.push(SearchHit {
-            title,
-            url,
-            snippet,
-        });
+        hits.push(SearchHit::new(LABEL, title, url, snippet));
     }
     hits
 }
 
-// --- Tier 1: direct HTTPS ----------------------------------------------------
-
-pub(crate) fn direct(query: &str, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
-    let url = search_url(query, limit);
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        .build()
-        .into();
-    let mut response = agent
-        .get(&url)
-        .header("User-Agent", USER_AGENT)
-        .header("Accept-Language", "en-US,en;q=0.9")
-        .call()
-        .map_err(|e| anyhow!("bing request failed: {e}"))?;
-
-    let status = response.status().as_u16();
-    let body = response
-        .body_mut()
-        .read_to_string()
-        .context("reading bing body")?;
-
-    // 200 + no b_algo = soft block (consent/JS gate). Surface it so the
-    // caller falls back instead of returning "no results".
-    if status != 200 || (!body.contains("b_algo") && !body.contains("b_no")) {
-        anyhow::bail!("bing soft-blocked the direct request (HTTP {status})");
+/// Single-request direct tier. Bing has no browser tier: unlike the scraper
+/// engines, a render would not change what the markup says — a soft block on
+/// this egress is about the operator set, not about JavaScript.
+pub fn search(ctx: &Ctx<'_>) -> anyhow::Result<Vec<SearchHit>> {
+    let url = build_url(ctx);
+    let page = get(&url, None)?;
+    if !page.is_ok() {
+        anyhow::bail!("{LABEL}: HTTP {}", page.status);
     }
-    Ok(parse_bing_html(&body))
+    // 200 + no b_algo = soft block (consent/JS gate). Surface it so the chain
+    // advances instead of reporting "no results".
+    if !page.body.contains("b_algo") && !page.body.contains("b_no") {
+        anyhow::bail!(
+            "{LABEL}: soft-blocked the direct request (HTTP {})",
+            page.status
+        );
+    }
+    let hits = take_unique(parse_bing_html(&page.body), ctx.limit);
+    if hits.is_empty() {
+        anyhow::bail!("{LABEL}: no results");
+    }
+    Ok(hits)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::ai::config::BrowserConfig;
 
     // Fixture pinned to the markup Bing served during live testing (2026-09).
     const FIXTURE: &str = r#"
@@ -206,6 +206,20 @@ mod tests {
 </li>
 </ol>"#;
 
+    fn ctx_for<'a>(
+        query: &'a str,
+        parsed: &'a crate::web::search::query::StructuredQuery,
+        browser: &'a BrowserConfig,
+    ) -> Ctx<'a> {
+        Ctx {
+            query,
+            parsed,
+            limit: 8,
+            recency: None,
+            browser,
+        }
+    }
+
     #[test]
     fn parses_organic_results_from_bing_markup() {
         let hits = parse_bing_html(FIXTURE);
@@ -216,6 +230,7 @@ mod tests {
             hits[0].snippet,
             "A language empowering everyone to write reliable & efficient software."
         );
+        assert_eq!(hits[0].provider, "Bing");
     }
 
     #[test]
@@ -242,16 +257,22 @@ mod tests {
     }
 
     #[test]
-    fn query_passes_through_url_encoded() {
-        let url = search_url("site:github.com \"async runtime\" -tokio", 8);
-        assert!(url.starts_with("https://www.bing.com/search?q=site"));
-        assert!(url.contains("count=8"));
-        // The dead mkt/ensearch escape hatches stay out: verified no-ops on
-        // CN egress, and their presence suggests a guarantee we don't have.
-        assert!(!url.contains("mkt="));
-        assert!(!url.contains("ensearch"));
-        // quote/space encoding sanity
-        assert!(url.contains("%22async%20runtime%22"));
+    fn operators_never_reach_the_engine() {
+        // Bing on this egress drops operators; sending them would leave the
+        // literal `site:…` in the query as search words.
+        let parsed = crate::web::search::query::parse("site:github.com \"async runtime\" -tokio");
+        let browser = BrowserConfig::default();
+        let ctx = ctx_for(
+            "site:github.com \"async runtime\" -tokio",
+            &parsed,
+            &browser,
+        );
+        let url = build_url(&ctx);
+        assert!(!url.contains("site%3A"), "{url}");
+        assert!(!url.contains("-%22") && !url.contains("-tokio"), "{url}");
+        assert!(url.contains("count=8"), "{url}");
+        // The terms themselves survive.
+        assert!(url.contains("async"), "{url}");
     }
 
     #[test]

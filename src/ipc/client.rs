@@ -159,8 +159,8 @@ impl Client {
 
 /// One connection to the server, ready to write one line and read one back.
 fn open(cost: Cost, path: &Path) -> Result<Conn> {
-    let stream =
-        ipc::connect(cost, path).with_context(|| format!("no mypi server at {}", path.display()))?;
+    let stream = ipc::connect(cost, path)
+        .with_context(|| format!("no mypi server at {}", path.display()))?;
     Ok(Conn {
         lines: Lines::new(BufReader::new(stream.clone())),
         out: BufWriter::new(stream),

@@ -1,36 +1,14 @@
-//! CLI argument parsing — hand-rolled, no clap (dep policy).
-//!
-//! Two forms:
-//!   mypi [options]            the TUI (connects to the daemon, spawning one
-//!                             if none is running)
-//!   mypi --server             run the daemon in the foreground and exit
-//!                             on idle / quit
-//!   mypi attach <id>          attach the TUI to a stored session
-//!   mypi sessions             list sessions (script-friendly; goes through
-//!                             the daemon's socket, never touches the db)
-//!   mypi replay <id> <round>  rebuild one stored round's request (audit)
-//!   mypi bench <scenario> …   render benchmarks (see src/bench.rs)
-//!
-//! Flags: --help/-h, --version/-V, --resume, --model <spec>.
+//! CLI argument parsing — hand-rolled, no clap (dep policy). The four shapes a
+//! command line can take, and the flags, are spelled out in `USAGE` below.
 
 /// Parsed command line.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Cli {
-    /// Run the daemon only (--server).
+    /// Run the server alone (--server).
     pub server: bool,
-    /// Run the isolated HTTP worker.
-    pub http_worker: bool,
     pub attach: Option<i64>,
-    /// One-shot `sessions` listing (no TUI).
+    /// One-shot `sessions` listing (no front end).
     pub sessions: bool,
-    /// One-shot `replay <id> <round>` (no TUI).
-    pub replay: Option<(i64, i64)>,
-    /// One-shot `bench <scenario> [args…]` (no TUI). Everything after the
-    /// word `bench` rides along untouched — the bench module owns its own
-    /// vocabulary, and a second parser here would only drift from it.
-    /// `Some(vec![])` = bare `mypi bench`, which is a legal request (the
-    /// module picks the full sweep).
-    pub bench: Option<Vec<String>>,
     /// Open the resume picker immediately (--resume).
     pub resume: bool,
     /// Model override for this session (`provider:id`).
@@ -38,15 +16,15 @@ pub struct Cli {
 }
 
 const USAGE: &str = "\
-mypi — coding agent (daemon + TUI front end)
+mypi — coding agent (server + front end)
 
 Usage:
-  mypi [options]             new session in the TUI
-  mypi attach <id>           attach the TUI to a stored session
-  mypi sessions              list sessions (through the daemon socket)
-  mypi replay <id> <round>   rebuild a stored round's request (read-only)
-  mypi bench <scenario> …    render benchmarks (try `mypi bench all`)
-  mypi --server              run the daemon in the foreground
+  mypi [options]             the whole product: a server if none is running,
+                             then a front end on this terminal
+  mypi attach <id>           attach the front end to a stored session
+  mypi sessions              list sessions (reads the database itself)
+  mypi --server              run the server alone (it exits when the last
+                             front end is gone)
 
 Options:
   -h, --help        Print this help and exit
@@ -55,8 +33,8 @@ Options:
   --model <p:id>    Session model override (provider:id, not persisted)
 
 Configuration: ~/.config/mypi/config.yaml (see models_example.yml in the repo).
-Sessions:      ~/.local/share/mypi/sessions.db3
-Daemon socket: $XDG_RUNTIME_DIR/mypi.sock (auto-started by the TUI)";
+Sessions:      ~/.local/share/mypi/history.db
+Server socket: $XDG_RUNTIME_DIR/mypi-<hash>.sock (one per database)";
 
 impl Cli {
     /// Parse argv (excluding argv[0]). Unknown flags and stray positionals
@@ -75,7 +53,6 @@ impl Cli {
                     std::process::exit(0);
                 }
                 "--server" => cli.server = true,
-                "--http-worker" => cli.http_worker = true,
                 "--resume" => cli.resume = true,
                 "--model" => {
                     let v = it.next().ok_or_else(|| {
@@ -95,103 +72,9 @@ impl Cli {
                     })?);
                 }
                 "sessions" => cli.sessions = true,
-                "bench" => {
-                    // 剩下的一律归它：bench 有自己的词表，在这里再解一遍
-                    // 只会跟着它一起漂。
-                    cli.bench = Some(it.by_ref().collect());
-                }
-                "replay" => {
-                    let v = it.next().ok_or_else(|| {
-                        anyhow::anyhow!("replay needs: mypi replay <session id> <round>")
-                    })?;
-                    let id: i64 = v
-                        .parse()
-                        .map_err(|_| anyhow::anyhow!("replay expects a numeric session id, got `{v}`"))?;
-                    let v = it.next().ok_or_else(|| {
-                        anyhow::anyhow!("replay needs a round number: mypi replay <id> <round>")
-                    })?;
-                    let round: i64 = v
-                        .parse()
-                        .map_err(|_| anyhow::anyhow!("replay expects a numeric round, got `{v}`"))?;
-                    cli.replay = Some((id, round));
-                }
                 other => anyhow::bail!("unknown argument `{other}` — see `mypi --help`"),
             }
         }
         Ok(cli)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(args: &[&str]) -> anyhow::Result<Cli> {
-        Cli::parse(args.iter().map(|s| s.to_string()))
-    }
-
-    #[test]
-    fn empty_args_are_defaults() {
-        assert_eq!(parse(&[]).unwrap(), Cli::default());
-    }
-
-    #[test]
-    fn resume_flag() {
-        assert!(parse(&["--resume"]).unwrap().resume);
-    }
-
-    #[test]
-    fn model_requires_provider_prefix() {
-        let c = parse(&["--model", "local:gpt-x"]).unwrap();
-        assert_eq!(c.model.as_deref(), Some("local:gpt-x"));
-        // Bare id is rejected with guidance.
-        assert!(parse(&["--model", "gpt-x"]).is_err());
-        // Missing value is rejected.
-        assert!(parse(&["--model"]).is_err());
-    }
-
-    #[test]
-    fn unknown_arg_is_error() {
-        assert!(parse(&["--resune"]).is_err());
-        assert!(parse(&["extra-positional"]).is_err());
-    }
-
-    #[test]
-    fn server_flag() {
-        assert!(parse(&["--server"]).unwrap().server);
-    }
-
-    #[test]
-    fn attach_takes_a_numeric_id() {
-        let c = parse(&["attach", "42"]).unwrap();
-        assert_eq!(c.attach, Some(42));
-        assert!(parse(&["attach"]).is_err(), "missing id rejected");
-        assert!(parse(&["attach", "abc"]).is_err(), "non-numeric rejected");
-    }
-
-    #[test]
-    fn bench_takes_everything_after_it() {
-        let c = parse(&["bench", "gen", "32000", "/tmp/x.db", "dirty"]).unwrap();
-        assert_eq!(
-            c.bench.as_deref(),
-            Some(["gen", "32000", "/tmp/x.db", "dirty"].map(String::from).as_slice())
-        );
-        // 光一个 bench 也是合法的：模块自己决定默认跑什么。
-        assert_eq!(parse(&["bench"]).unwrap().bench, Some(Vec::new()));
-        // 没敲 = 没有这次请求（和"敲了但没给参数"不是一回事）。
-        assert_eq!(parse(&[]).unwrap().bench, None);
-    }
-
-    #[test]
-    fn sessions_is_a_oneshot() {
-        assert!(parse(&["sessions"]).unwrap().sessions);
-    }
-
-    #[test]
-    fn replay_takes_two_numbers() {
-        let c = parse(&["replay", "7", "3"]).unwrap();
-        assert_eq!(c.replay, Some((7, 3)));
-        assert!(parse(&["replay", "7"]).is_err(), "missing round rejected");
-        assert!(parse(&["replay", "a", "3"]).is_err());
     }
 }

@@ -7,25 +7,6 @@ use crate::server::api::call::viewport::PlacedBlock;
 use crate::server::api::types::TurnBlock;
 use crate::server::storage::{Block, NewBlock};
 
-/// Blocks kept beyond the budget, so one scroll does not ask again.
-const SCREEN_BLOCKS: usize = 24;
-
-/// What the view is missing: the session turns it into a read. `turn` = the round the view sits
-/// on, so the answer can leave that round implied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Want {
-    Older {
-        before: i64,
-        limit: usize,
-        turn: Option<i64>,
-    },
-    Newer {
-        after: i64,
-        limit: usize,
-        turn: Option<i64>,
-    },
-}
-
 /// One block as a render side reads it: the one shape over `Block` and `NewBlock`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BlockRef<'a> {
@@ -113,6 +94,8 @@ pub struct WindowBlock {
     pub turn: Option<i64>,
     /// Computed when the block is admitted: what the structure's id claim is matched against.
     pub hash: u64,
+    /// Admission order; trimming evicts the smallest.
+    pub written: u64,
     pub block: Block,
 }
 
@@ -122,10 +105,11 @@ impl WindowBlock {
     }
 
     /// One block off a viewport answer: the round it names, or the one the request named.
-    fn from_placed(placed: PlacedBlock, asked: Option<i64>) -> Self {
+    fn from_placed(placed: PlacedBlock, asked: Option<i64>, written: u64) -> Self {
         Self {
             turn: placed.turn.or(asked),
             hash: placed.block.content_key().digest(),
+            written,
             block: placed.block,
         }
     }
@@ -267,16 +251,12 @@ pub struct Window {
     /// A page came back empty (or said there was nothing): the latch closes.
     no_more_above: bool,
     no_more_below: bool,
-    want_older: Option<i64>,
-    want_newer: Option<i64>,
-    /// Blocks kept around the view (`config.ui.session.preloadCache`).
+    /// Blocks kept in the content cache (`config.ui.session.preloadCache`).
     preload: usize,
     /// Bumped by every whole replacement.
     generation: u64,
-    /// The blocks the view shows at top and bottom (`None` = on the tail), and the pin.
-    top: Option<i64>,
-    bottom: Option<i64>,
-    pinned: bool,
+    /// Admission order for the next block.
+    written: u64,
 }
 
 impl Window {
@@ -289,13 +269,9 @@ impl Window {
             placeholder_text: String::new(),
             no_more_above: false,
             no_more_below: false,
-            want_older: None,
-            want_newer: None,
             preload: preload.max(8),
             generation: 0,
-            top: None,
-            bottom: None,
-            pinned: true,
+            written: 0,
         }
     }
 
@@ -329,76 +305,114 @@ impl Window {
         self.placeholder.as_ref()
     }
 
-    fn index_of(&self, key: i64) -> Option<usize> {
-        self.window.iter().position(|b| b.key() == key)
+    pub fn has_more_above(&self) -> bool {
+        !self.no_more_above
+    }
+
+    pub fn has_more_below(&self) -> bool {
+        !self.no_more_below
+    }
+
+    fn next_written(&mut self) -> u64 {
+        let written = self.written;
+        self.written = self.written.wrapping_add(1);
+        written
+    }
+
+    fn admit_placed(&mut self, placed: PlacedBlock, asked: Option<i64>) -> WindowBlock {
+        let written = self.next_written();
+        WindowBlock::from_placed(placed, asked, written)
+    }
+
+    fn admit_block(&mut self, turn: Option<i64>, hash: u64, block: Block) -> WindowBlock {
+        let written = self.next_written();
+        WindowBlock {
+            turn,
+            hash,
+            written,
+            block,
+        }
     }
 
     /// Replace the transcript whole; `more` = older blocks exist past this frame.
     pub fn replace(&mut self, blocks: Vec<PlacedBlock>, more: bool) {
-        self.window = blocks
-            .into_iter()
-            .map(|p| WindowBlock::from_placed(p, None))
-            .collect();
+        self.window.clear();
+        self.written = 0;
+        for block in blocks {
+            let block = self.admit_placed(block, None);
+            self.window.push_back(block);
+        }
         self.turn = None;
         self.placeholder = None;
         self.no_more_above = !more;
-        self.no_more_below = false;
-        self.want_older = None;
-        self.want_newer = None;
-        self.top = None;
-        self.bottom = None;
-        self.pinned = true;
+        self.no_more_below = true;
+        self.tail.clear();
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Replace the window with one round; `older` / `newer` say whether either side remains.
+    pub fn replace_round(&mut self, blocks: Vec<PlacedBlock>, older: bool, newer: bool) {
+        self.window.clear();
+        self.written = 0;
+        for block in blocks {
+            let block = self.admit_placed(block, None);
+            self.window.push_back(block);
+        }
+        self.turn = None;
+        self.placeholder = None;
+        self.no_more_above = !older;
+        self.no_more_below = !newer;
         self.tail.clear();
         self.generation = self.generation.wrapping_add(1);
     }
 
     /// Append a landed batch; the tail is cleared (the server resends it without them). A block
     /// already here (claimed from the structure) takes the landed version instead.
-    pub fn push_blocks(&mut self, blocks: Vec<Block>) {
+    pub fn push_blocks(&mut self, blocks: Vec<Block>, busy: bool) {
+        let turn = self.turn;
         for block in blocks {
             let hash = block.content_key().digest();
+            let written = self.next_written();
             match self.window.iter_mut().find(|b| b.key() == block.id) {
                 Some(held) => {
                     held.hash = hash;
-                    held.turn = held.turn.or(self.turn);
+                    held.turn = held.turn.or(turn);
+                    held.written = written;
                     held.block = block;
                 }
                 None => self.window.push_back(WindowBlock {
-                    turn: self.turn,
+                    turn,
                     hash,
+                    written,
                     block,
                 }),
             }
         }
         self.placeholder = None;
         self.tail.clear();
-        self.trim();
+        self.trim(busy);
     }
 
     /// Prepend older blocks; an empty page or `more` false closes the upper latch.
     pub fn prepend(&mut self, blocks: Vec<PlacedBlock>, more: bool, asked: Option<i64>) {
-        self.want_older = None;
         if blocks.is_empty() || !more {
             self.no_more_above = true;
         }
         for block in blocks.into_iter().rev() {
-            self.window
-                .push_front(WindowBlock::from_placed(block, asked));
+            let block = self.admit_placed(block, asked);
+            self.window.push_front(block);
         }
-        self.trim();
     }
 
     /// Append newer blocks; an empty page or `more` false closes the lower latch.
     pub fn append(&mut self, blocks: Vec<PlacedBlock>, more: bool, asked: Option<i64>) {
-        self.want_newer = None;
         if blocks.is_empty() || !more {
             self.no_more_below = true;
         }
         for block in blocks {
-            self.window
-                .push_back(WindowBlock::from_placed(block, asked));
+            let block = self.admit_placed(block, asked);
+            self.window.push_back(block);
         }
-        self.trim();
     }
 
     pub fn push_live(&mut self, blocks: Vec<NewBlock>, done: bool) {
@@ -424,9 +438,8 @@ impl Window {
         self.tail.set_tool_output(None);
     }
 
-    /// Write a round number onto the blocks that round names, matching by content hash: the
-    /// position is not trusted. A finished tail block the round names is admitted with its id.
-    pub fn claim(&mut self, turn: i64, blocks: &[TurnBlock]) {
+    /// Write a round number onto the blocks that round names, matching by id and content hash.
+    pub fn claim(&mut self, turn: i64, blocks: &[TurnBlock], busy: bool) {
         if blocks.is_empty() {
             return;
         }
@@ -435,8 +448,7 @@ impl Window {
             let hit = self
                 .window
                 .iter()
-                .position(|b| b.key() == id && b.hash == hash)
-                .or_else(|| self.window.iter().position(|b| b.hash == hash));
+                .position(|b| b.key() == id && b.hash == hash);
             if let Some(i) = hit {
                 if let Some(block) = self.window.get_mut(i) {
                     block.turn = Some(turn);
@@ -453,12 +465,9 @@ impl Window {
             if let Some(at) = at
                 && let Some(live) = self.tail.take(at)
             {
-                self.window.push_back(WindowBlock {
-                    turn: Some(turn),
-                    hash,
-                    block: live.block.landed(id),
-                });
-                self.trim();
+                let block = self.admit_block(Some(turn), hash, live.block.landed(id));
+                self.window.push_back(block);
+                self.trim(busy);
             }
         }
     }
@@ -479,76 +488,21 @@ impl Window {
         self.placeholder = None;
     }
 
-    /// Remember where the view sits, then say whether to ask for more: `top` / `bottom` are
-    /// the ids it shows (`None` = on the tail), and at most one want comes back per call.
-    pub fn note_view(
-        &mut self,
-        top: Option<i64>,
-        bottom: Option<i64>,
-        pinned: bool,
-    ) -> Option<Want> {
-        self.top = top;
-        self.bottom = bottom;
-        self.pinned = pinned;
-        let above = top.and_then(|k| self.index_of(k)).unwrap_or(0);
-        let below = bottom
-            .and_then(|k| self.index_of(k))
-            .map(|i| self.window.len().saturating_sub(i + 1))
-            .unwrap_or(0);
-        if !self.no_more_above && above < self.preload {
-            if let Some(edge) = self.window.front() {
-                let (before, turn) = (edge.key(), edge.turn);
-                self.want_older = Some(before);
-                return Some(Want::Older {
-                    before,
-                    limit: self.preload,
-                    turn,
-                });
-            }
-        }
-        if !self.no_more_below && below < self.preload {
-            if let Some(edge) = self.window.back() {
-                let (after, turn) = (edge.key(), edge.turn);
-                self.want_newer = Some(after);
-                return Some(Want::Newer {
-                    after,
-                    limit: self.preload,
-                    turn,
-                });
-            }
-        }
-        None
-    }
-
-    /// Evict down to the budget, from the end farthest from the view.
-    fn trim(&mut self) {
-        let keep = self.preload + SCREEN_BLOCKS;
-        if self.pinned {
-            // Pinned: the window's end is the stored tail, so only the front may lose blocks.
-            while self.window.len() > keep {
-                self.window.pop_front();
-            }
+    /// Evict down to the budget, oldest admission first. A live round is never trimmed.
+    fn trim(&mut self, busy: bool) {
+        if busy {
             return;
         }
-        let Some(top) = self.top.and_then(|k| self.index_of(k)) else {
-            while self.window.len() > keep {
-                self.window.pop_front();
-            }
-            return;
-        };
-        let front = top.saturating_sub(self.preload);
-        for _ in 0..front {
-            self.window.pop_front();
-        }
-        let top = top - front;
-        let back = self
-            .bottom
-            .and_then(|k| self.index_of(k))
-            .unwrap_or(top)
-            .max(top);
-        let floor = back + self.preload + SCREEN_BLOCKS;
-        while self.window.len() > floor {
-            self.window.pop_back();
+        while self.window.len() > self.preload {
+            let Some((at, _)) = self
+                .window
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, block)| block.written)
+            else {
+                return;
+            };
+            self.window.remove(at);
         }
     }
 }

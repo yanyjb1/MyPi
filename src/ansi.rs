@@ -1,22 +1,8 @@
-//! ANSI escape-sequence handling — a leaf utility, no dependencies.
-//!
-//! Lives outside `tui` on purpose: the tool layer strips escape codes from
-//! captured process output *before* the text goes anywhere (to the model and
-//! into a card), so `agent` needs it too. Putting it in `tui` made the agent
-//! layer depend on the renderer, which is backwards.
+//! ANSI escape-sequence handling — a leaf utility, no dependencies. The tool
+//! layer needs it too (captured output is stripped before it goes anywhere).
 
-/// Strip ANSI escape sequences from terminal-captured text.
-///
-/// Tool output is written to the terminal **verbatim**, so a program that
-/// colourises its output (`ls --color=always`, `grep --color=always`, `rg`
-/// on a TTY, a progress bar) hands us real escape bytes. Drawn inside a
-/// card those bytes are re-interpreted by the terminal: an embedded
-/// `ESC[0m` resets the background mid-row, which is what punched holes of
-/// default terminal background through the card's black.
-///
-/// Our own styling owns the appearance; captured escape codes are dropped.
-/// Handles CSI (with intermediates), OSC (BEL- or ST-terminated), and the
-/// two-byte escape forms; a lone ESC at the end is discarded.
+/// Strip ANSI escape sequences from terminal-captured text: our own styling owns the appearance.
+/// Handles CSI (with intermediates), OSC, and the two-byte forms.
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();

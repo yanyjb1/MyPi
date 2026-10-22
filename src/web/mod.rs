@@ -17,4 +17,4 @@ mod utils;
 // Tool-layer facade: everything `crate::server::agent::tools` may touch.
 pub use browser::{browser, parse_browser_args};
 pub use fetch::{fetch, parse_fetch_args};
-pub use search::{SearchArgs, SearchHit, parse_search_args, render, search};
+pub use search::{Engine, SearchArgs, SearchHit, SearchOutcome, parse_search_args, render, search};

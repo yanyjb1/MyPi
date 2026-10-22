@@ -4,13 +4,15 @@
 mod client;
 mod command;
 mod ingest;
+mod range;
 mod shape;
 mod state;
 mod window;
 
+pub use range::RangeCache;
 pub use shape::Shapes;
 pub use state::{Level, Life, Notice, UsagePanel};
-pub use window::{BlockRef, LiveBlock, LiveTail, ToolOutput, Want, WindowBlock};
+pub use window::{BlockRef, LiveBlock, LiveTail, ToolOutput, WindowBlock};
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -20,7 +22,7 @@ use anyhow::Result;
 use crate::server::agent::tools::TodoPhase;
 use crate::server::api::call::sessions::SessionRow;
 use crate::server::api::subscribe::Retention;
-use crate::server::api::types::{Call, CandidatePools, ModelId, Post, UsageLang};
+use crate::server::api::types::{Call, CandidatePools, ModelId, Post, UsageLang, Viewer};
 use crate::server::platform::ipc::Cost;
 use crate::server::storage::{BlockKind, NewBlock};
 
@@ -31,8 +33,10 @@ use window::Window;
 
 /// The knobs a front end reads out of its configuration, handed in once at startup.
 pub struct Switches {
-    /// `config.ui.session.preloadCache` — how many blocks the content cache keeps around the view.
+    /// `config.ui.session.preloadCache` — how many blocks the content cache keeps.
     pub preload: usize,
+    /// `config.ui.session.askedEachTime` — how many blocks one read asks for.
+    pub asked: usize,
     /// `config.ui.placeholder.interrupted` — the words the optimistic interrupt row carries.
     pub interrupted: String,
 }
@@ -47,25 +51,41 @@ struct Draft {
 
 pub struct Session {
     client: Client,
+    viewer: Viewer,
     state: State,
     window: Window,
     shapes: Shapes,
+    range: RangeCache,
     draft: Draft,
     /// A message sent with no row yet: it goes out as soon as the id arrives.
     waiting: Option<String>,
+    /// The session whose first frame is in flight; one at a time.
+    init_in_flight: Option<i64>,
+    /// The limit the next jump asks for; `Settled` restores it.
+    jump_budget: usize,
+    /// One read's block count (`config.ui.session.askedEachTime`).
+    asked: usize,
 }
 
 impl Session {
     /// Connect to the server and register. Who starts the server is not this layer's business.
-    pub fn connect(cost: Cost, path: &Path, cwd: PathBuf, switches: Switches) -> Result<Session> {
-        let client = Client::connect(cost, path)?;
+    pub fn connect(
+        cost: Cost,
+        path: &Path,
+        cwd: PathBuf,
+        switches: Switches,
+        viewer: Viewer,
+    ) -> Result<Session> {
+        let client = Client::connect(cost, path, viewer)?;
         let mut window = Window::new(switches.preload);
         window.set_placeholder_text(switches.interrupted);
         Ok(Session {
             client,
+            viewer,
             state: State::new(cwd.to_string_lossy().into_owned()),
             window,
             shapes: Shapes::default(),
+            range: RangeCache::default(),
             draft: Draft {
                 cwd,
                 model: None,
@@ -73,14 +93,43 @@ impl Session {
                 profile: None,
             },
             waiting: None,
+            init_in_flight: None,
+            jump_budget: switches.asked,
+            asked: switches.asked,
         })
+    }
+
+    /// The id this front end registered with.
+    pub fn viewer(&self) -> Viewer {
+        self.viewer
     }
 
     /// Send what was queued and take what came back.
     pub fn pump(&mut self) {
         for arrival in self.client.pump() {
-            let follow =
-                ingest::apply(arrival, &mut self.state, &mut self.window, &mut self.shapes);
+            let init = match &arrival {
+                Arrival::Answer {
+                    call: Call::Init { session, .. },
+                    ..
+                } => Some(*session),
+                Arrival::Failed {
+                    call: Some(Call::Init { session, .. }),
+                    ..
+                } => Some(*session),
+                _ => None,
+            };
+            let follow = ingest::apply(
+                arrival,
+                &mut self.state,
+                &mut self.window,
+                &mut self.shapes,
+                &mut self.range,
+            );
+            if let Some(session) = init
+                && self.init_in_flight == Some(session)
+            {
+                self.init_in_flight = None;
+            }
             self.follow(follow);
         }
     }
@@ -100,17 +149,86 @@ impl Session {
         }
     }
 
-    /// Enter a session: watch it, take its first frame and the facts beside it.
+    /// Enter a session: watch it, take its structure and newest blocks, plus the facts beside it.
     fn enter(&mut self, id: i64) {
         self.state.attach(id);
         self.shapes.clear();
+        self.range.clear();
         self.client.queue(Request::Watch(id));
-        self.read(Call::Tail {
+        self.init_in_flight = Some(id);
+        self.read(Call::Init {
             session: id,
-            limit: self.window.budget(),
+            limit: self.asked,
         });
         self.read(Call::Meta { session: id });
         self.read(Call::Todo { session: id });
+    }
+
+    /// Re-read the structure and newest blocks, unless the row was just created here.
+    pub fn init(&mut self, session: i64) {
+        if self.state.attached() != Some(session) {
+            return;
+        }
+        if self.state.take_new_born() {
+            return;
+        }
+        if self.init_in_flight == Some(session) {
+            return;
+        }
+        self.init_in_flight = Some(session);
+        self.read(Call::Init {
+            session,
+            limit: self.asked,
+        });
+    }
+
+    /// Jump to one round: the window is replaced by that round's blocks.
+    pub fn jump(&mut self, turn: i64) {
+        let Some(session) = self.state.attached() else {
+            return;
+        };
+        self.jump_budget = next_budget(self.jump_budget);
+        self.read(Call::Round { session, turn });
+    }
+
+    /// Fetch one side of the window; `num` is the edge block.
+    pub fn fetch(&mut self, num: i64, older: bool) {
+        let Some(session) = self.state.attached() else {
+            return;
+        };
+        let turn = self.shapes.turn_of(num);
+        if older {
+            self.read(Call::Older {
+                session,
+                before: num,
+                limit: self.asked,
+                turn,
+            });
+        } else {
+            self.read(Call::Newer {
+                session,
+                after: num,
+                limit: self.asked,
+                turn,
+            });
+        }
+    }
+
+    /// The jump stopped: the next one starts from the full budget again.
+    pub fn settled(&mut self) {
+        self.jump_budget = self.asked;
+    }
+
+    /// Read raw blocks for the tree.
+    pub fn tree_range(&mut self, start: i64, end: i64) {
+        let Some(session) = self.state.attached() else {
+            return;
+        };
+        self.read(Call::Range {
+            session,
+            start,
+            end,
+        });
     }
 
     fn read(&mut self, call: Call) {
@@ -162,6 +280,10 @@ impl Session {
         self.client.queue(Request::Unwatch);
         self.window.replace(Vec::new(), false);
         self.shapes.clear();
+        self.range.clear();
+        self.init_in_flight = None;
+        self.waiting = None;
+        self.jump_budget = self.asked;
         self.state.detach();
     }
 
@@ -221,9 +343,11 @@ impl Session {
         }));
         // Everything past the cut is gone: the kept structure names rounds that no longer exist.
         self.shapes.clear();
-        self.read(Call::Tail {
+        self.range.clear();
+        self.init_in_flight = Some(session);
+        self.read(Call::Init {
             session,
-            limit: self.window.budget(),
+            limit: self.asked,
         });
     }
 
@@ -298,33 +422,6 @@ impl Session {
         self.read(Call::Pools);
     }
 
-    /// The view moved: the blocks it shows at top and bottom (`None` = on the tail), and
-    /// whether it is pinned. The window decides whether that means asking for more.
-    pub fn note_view(&mut self, top: Option<i64>, bottom: Option<i64>, pinned: bool) {
-        let Some(session) = self.state.attached() else {
-            return;
-        };
-        match self.window.note_view(top, bottom, pinned) {
-            Some(Want::Older {
-                before,
-                limit,
-                turn,
-            }) => self.read(Call::Older {
-                session,
-                before,
-                limit,
-                turn,
-            }),
-            Some(Want::Newer { after, limit, turn }) => self.read(Call::Newer {
-                session,
-                after,
-                limit,
-                turn,
-            }),
-            None => {}
-        }
-    }
-
     pub fn set_preload(&mut self, preload: usize) {
         self.window.set_budget(preload);
     }
@@ -353,15 +450,19 @@ impl Session {
             cwd: self.state.cwd(),
             cwd_temporary: self.state.cwd_temporary(),
             notices: self.state.notices(),
+            refused: self.state.refused(),
             todo: self.state.todo(),
             rows: self.state.rows(),
             pools: self.state.pools(),
             usage: self.state.usage(),
+            ctx_tokens: self.last_prompt_tokens(),
+            ctx_limit: self.state.ctx_limit(),
             blocks: self.window.stored(),
             live: self.window.tail().blocks(),
             placeholder: self.window.placeholder(),
             tail: self.window.tail(),
             shapes: &self.shapes,
+            range: &self.range,
             generation: self.window.generation(),
         }
     }
@@ -381,8 +482,14 @@ pub struct View<'a> {
     /// The model moved the working directory: the session row says something else.
     pub cwd_temporary: bool,
     pub notices: &'a [Notice],
+    /// The last write was refused because the session is mid-round.
+    pub refused: bool,
     /// The task list, replayed by the server from the session's own tool calls.
     pub todo: &'a [TodoPhase],
+    /// Prompt tokens of the newest reply: the context gauge's numerator.
+    pub ctx_tokens: Option<u64>,
+    /// The model's context window: the gauge's denominator, once a front end has asked.
+    pub ctx_limit: Option<u64>,
     /// The picker's rows, as last asked for; `None` = not answered yet.
     pub rows: Option<&'a [SessionRow]>,
     pub pools: Option<&'a CandidatePools>,
@@ -397,8 +504,14 @@ pub struct View<'a> {
     pub tail: &'a LiveTail,
     /// Which blocks each kept round manages, newest first (the tree and a rewind read it).
     pub shapes: &'a Shapes,
+    /// Raw blocks a tree asked for, independent of the content window.
+    pub range: &'a RangeCache,
     /// A whole replacement moves it: a render side's finished cache is invalid on it.
     pub generation: u64,
+}
+
+fn next_budget(current: usize) -> usize {
+    if current > 8 { 8 } else { (current / 2).max(4) }
 }
 
 impl<'a> View<'a> {

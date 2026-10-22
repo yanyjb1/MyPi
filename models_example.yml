@@ -4,10 +4,13 @@
 # startup bootstrap only ever touch config.yaml. Keep your keys here,
 # back this file up, and don't expect mypi to repair it.
 #
-# Location (XDG):
-#   1. $MYPI_MODELS            — explicit override (tests/CI)
-#   2. $XDG_CONFIG_HOME/mypi/models.yml  <- put your keys here
-#                                             (~/.config/mypi/models.yml)
+# Location — two roots, decided per file:
+#   1. 项目根（进程启动目录）:  ./models.yml          <- 有就用它
+#   2. 全局根:                 $XDG_CONFIG_HOME/mypi/models.yml
+#                              (~/.config/mypi/models.yml)  <- 兜底
+# `MYPI_CONFIG_DIR=/some/dir` 把根换成那一个目录：只在它里面找，缺文件直接报错。
+# 项目根里放着 models.yml 就意味着**凭据在你的工作目录里**——那个目录如果是
+# 版本库，把 models.yml 加进 .gitignore。
 #
 # How to get this file onto your machine (the program will not create it):
 #   curl -o ~/.config/mypi/models.yml \

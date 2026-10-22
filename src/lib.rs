@@ -1,157 +1,69 @@
 //! mypi — a terminal coding agent: session service, agent loop, TUI.
-//!
 //! The module graph is a contract, and `mod architecture` below enforces it.
 
 pub mod ansi;
-pub mod bench;
 pub mod cli;
+pub mod commands;
 pub mod git;
-pub mod grouping;
+pub mod ipc;
 pub mod oneshot;
 pub mod server;
-pub mod tui;
 #[cfg(feature = "web")]
 pub mod web;
-pub mod xdg;
 
-/// Executable layering rules — the module graph as a test, not a diagram.
-///
-/// Cargo cannot express any of this inside a single crate, so a forbidden
-/// `crate::` reference has to fail something. It fails here.
-///
-/// Rules are **path-prefix pairs**, so they keep working after a file moves
-/// into a submodule: `("server::agent", &["server::session"])` reads "nothing
-/// under `server/agent/` may name the session service". Targets match by
-/// prefix too (`server::session::Session` is caught by `server::session`).
+/// The layering rules as a test: a forbidden `crate::` reference has to fail something, and it
+/// fails here. Rules are path-prefix pairs, so they survive a file moving into a submodule.
 #[cfg(test)]
 mod architecture {
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
-    /// `(module prefix, module prefixes it must never reference)`.
-    ///
-    /// Direction is "downward only": the leaves know nothing above them, the
-    /// execution engine knows nothing about the service that drives it, and
-    /// the service knows nothing about any terminal. Everything not listed is
-    /// allowed — `tui` is a surface and may use anything it can reach.
+    /// `(module prefix, module prefixes it must never reference)`. The direction is downward only;
+    /// anything not listed is allowed.
     const FORBIDDEN: &[(&str, &[&str])] = &[
-        // 协议数据模型：只认识自己 + 模型层的类型。
+        // Execution engine: runs tools, knows no UI and no layer above it.
+        ("server::agent", &["server::api", "cli", "tui"]),
+        // Contract: command declarations and metadata only. It reads nothing (both the server and the
+        // front ends read it).
+        ("commands", &["server", "cli", "tui", "web", "git", "ansi"]),
+        // api sits above: any of the lower layers reaching for it would close a cycle.
+        ("server::storage", &["server::api"]),
+        ("server::config", &["server::api"]),
+        // The api surface asks downward (storage / config / platform / agent);
+        // terminals, the CLI and the tool providers are none of its business.
+        ("server::api", &["cli", "tui", "web", "git", "ansi"]),
+        // Platform: the standard library and each other, nothing more. Anyone may ask it.
         (
-            "server::entry",
+            "server::platform",
             &[
                 "server::agent",
-                "server::session",
-                "server::turn",
-                "server::store",
-                "server::compaction",
-                "server::profile",
-                "server::events",
+                "server::api",
+                "server::config",
+                "server::storage",
                 "cli",
                 "tui",
                 "web",
             ],
         ),
-        // 持久化：只认识数据模型与平台胶水。
-        (
-            "server::store",
-            &[
-                "server::agent",
-                "server::session",
-                "server::turn",
-                "server::compaction",
-                "server::profile",
-                "server::events",
-                "cli",
-                "tui",
-                "web",
-            ],
-        ),
-        // 模型网关：只管 HTTP 与线格式，不知道谁在用它。
-        (
-            "server::ai",
-            &[
-                "server::agent",
-                "server::session",
-                "server::turn",
-                "server::compaction",
-                "server::profile",
-                "server::events",
-                "cli",
-                "tui",
-                "web",
-            ],
-        ),
-        // 执行引擎：跑工具，不认识界面，也不认识驱动它的会话服务。
-        (
-            "server::agent",
-            &[
-                "server::session",
-                "server::turn",
-                "server::compaction",
-                "server::profile",
-                "server::events",
-                "cli",
-                "tui",
-            ],
-        ),
-        // 会话服务与回合线程：认识下面每一层，但绝不知道终端。
-        ("server::session", &["cli", "tui"]),
-        ("server::turn", &["cli", "tui"]),
-        ("server::compaction", &["cli", "tui"]),
-        ("server::profile", &["cli", "tui"]),
-        ("server::events", &["cli", "tui"]),
-        // 内存日志：只认识标准库，谁都能往里写，它不认识任何人。
-        (
-            "server::log",
-            &[
-                "server::ai",
-                "server::agent",
-                "server::session",
-                "server::turn",
-                "server::store",
-                "server::entry",
-                "server::events",
-                "server::hub",
-                "server::compaction",
-                "server::profile",
-                "cli",
-                "tui",
-                "web",
-            ],
-        ),
-        // 多会话宿主：认识会话与下面的每一层，不知道终端，也不认识别的宿主。
-        ("server::hub", &["cli", "tui", "web"]),
-        // web 工具域：自成一体的工具提供方。
-        (
-            "web",
-            &["server::agent", "server::session", "server::turn", "cli", "tui"],
-        ),
-        // 块分组：渲染与压缩共用的纯函数，只认识数据模型。
-        (
-            "grouping",
-            &["server::agent", "server::session", "server::turn", "cli", "tui", "web"],
-        ),
-        // 平台胶水与叶子。
-        ("xdg", &["cli", "server", "tui", "web"]),
+        // web: a self-contained tool provider.
+        ("web", &["server::agent", "cli", "tui"]),
+        // Leaves: the standard library only.
         ("git", &["cli", "server", "tui", "web"]),
         ("ansi", &["cli", "server", "tui", "web"]),
-        // 兜底：`server` 下任何文件都不许点名终端（含刚搬进来的子模块）。
-        ("server", &["tui"]),
-        // TUI 是 socket 前端：只许碰协议（wire）与会话工厂类型（hub 的
-        // spec），不许摸库、网关、回合引擎或 daemon 本体。
+        // Backstop: no file under `server` may name a terminal (including the submodules just moved
+        // in), and none may name the protocol layer — ipc stands between the two halves.
+        ("server", &["tui", "ipc"]),
+        // The protocol layer stands between the halves: it carries api's shapes, knows no UI.
+        ("ipc", &["cli", "tui", "web", "git", "ansi"]),
+        // The TUI is a front end: api only; never the engine's, storage's or config's innards.
         (
             "tui",
-            &[
-                "server::store",
-                "server::daemon",
-                "server::turn",
-                "server::session",
-                "server::agent",
-            ],
+            &["server::agent", "server::storage", "server::config"],
         ),
     ];
 
-    /// Every `.rs` file under `src/`.
+    /// Every `.rs` file under `src/`, except sibling `tests.rs` files: a moved-out test half is not
+    /// production code, and test code is allowed to reach across layers.
     fn rust_files(root: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
         let mut stack = vec![root.to_path_buf()];
@@ -161,6 +73,10 @@ mod architecture {
                 if p.is_dir() {
                     stack.push(p);
                 } else if p.extension().is_some_and(|e| e == "rs") {
+                    // Sibling tests.rs: test code may reach across layers, so do not scan it.
+                    if p.file_name().is_some_and(|n| n == "tests.rs") {
+                        continue;
+                    }
                     out.push(p);
                 }
             }
@@ -186,12 +102,8 @@ mod architecture {
         segs.join("::")
     }
 
-    /// `crate::` reference paths in a source string.
-    ///
-    /// Comments are skipped: module docs *name* other layers all the time
-    /// ("the TUI subscribes to this") and naming is not depending. Only code
-    /// counts. `use crate::{a, b::c};` is expanded so a braced import cannot
-    /// hide an edge.
+    /// `crate::` reference paths in a source string. Comments are skipped — naming a layer is not
+    /// depending on it — and a braced `use` is expanded so it cannot hide an edge.
     fn refs(src: &str) -> BTreeSet<String> {
         let mut out = BTreeSet::new();
         for line in src.lines().filter(|l| !l.trim_start().starts_with("//")) {
@@ -321,8 +233,8 @@ mod architecture {
 
     #[test]
     fn the_layer_matrix_holds() {
-        // 只允许向下依赖：叶子不认识它上面的人，执行引擎不认识驱动它的服务，
-        // 服务不认识任何终端。规则见 FORBIDDEN（路径前缀对，所以文件搬家后仍然成立）。
+        // Downward dependencies only: leaves do not know what is above them, the engine does not know
+        // the service driving it, and the service knows no terminal. Rules in FORBIDDEN.
         let root = src_root();
         let found = violations(&root);
         assert!(
@@ -334,10 +246,7 @@ mod architecture {
 
     #[test]
     fn the_server_never_learns_about_the_terminal() {
-        // The rule the whole split rests on: `server` is a service that any
-        // surface can drive — a Telegram bridge, a headless driver, the TUI. It
-        // stays true only while nothing under `src/server/` names a terminal
-        // type, so this is asserted on its own with a name that says why.
+        // The split rests on this: nothing under `src/server/` names a terminal type.
         let root = src_root();
         let found: Vec<String> = violations(&root)
             .into_iter()
@@ -354,9 +263,9 @@ mod architecture {
     fn the_stripper_ignores_test_modules_only() {
         // Guard the guard: if `production_source` swallowed production code the
         // rules above would pass vacuously.
-        let text = "use crate::server::store::Store;\n#[cfg(test)]\nmod tests {\n    use crate::tui::app::App;\n}\npub fn f() { let _ = crate::server::x(); }\n";
+        let text = "use crate::server::storage::Store;\n#[cfg(test)]\nmod tests {\n    use crate::tui::app::App;\n}\npub fn f() { let _ = crate::server::x(); }\n";
         let prod = production_source(text);
-        assert!(prod.contains("crate::server::store"), "{prod}");
+        assert!(prod.contains("crate::server::storage"), "{prod}");
         assert!(prod.contains("crate::server"), "生产代码不能被吞掉: {prod}");
         assert!(!prod.contains("crate::tui"), "测试模块必须被剔除: {prod}");
         // A test-only accessor (not a module) keeps the code after it.
