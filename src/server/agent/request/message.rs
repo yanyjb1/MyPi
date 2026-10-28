@@ -167,6 +167,11 @@ impl Message {
                 prefix: b.prefix.clone(),
                 suffix: b.suffix.clone(),
             },
+            BlockKind::Wake => Message::User {
+                content: need(&b.content, "content")?,
+                prefix: b.prefix.clone(),
+                suffix: b.suffix.clone(),
+            },
             BlockKind::Assistant => Message::Assistant {
                 content: need(&b.content, "content")?,
                 usage: b.usage_total.map(|total| UsageSummary {
@@ -509,6 +514,8 @@ pub enum StopReason {
     ToolCalls,
     // User interrupt (Esc). The partial content received so far is usable.
     Interrupted,
+    // The provider reported an error after the stream started.
+    Error,
 }
 
 impl StopReason {
@@ -519,6 +526,7 @@ impl StopReason {
             StopReason::Length => "length",
             StopReason::ToolCalls => "tool_calls",
             StopReason::Interrupted => "interrupted",
+            StopReason::Error => "error",
         }
     }
 }

@@ -6,7 +6,8 @@ use std::sync::mpsc::Sender;
 use anyhow::{Context, Result};
 
 use super::super::shape::{
-    BlockKind, Landed, NewBlock, Relay, SessionChange, SessionRef, Submit,
+    BlockKind, Effect, EffectKind, Landed, NewBlock, Relay, RoundUsage, SessionChange, SessionRef,
+    Submit,
 };
 use super::super::write::shared::open_turn;
 use super::Store;
@@ -15,8 +16,8 @@ use super::Store;
 pub(crate) struct Inlet {
     /// How many tool rounds land one batch (the config's number, handed in).
     batch: usize,
-    /// The round the unlanded blocks belong to, and those blocks.
-    pending: Option<(i64, Vec<NewBlock>)>,
+    /// The round the unlanded blocks belong to, those blocks, and their effects.
+    pending: Option<(i64, Vec<NewBlock>, Vec<Effect>)>,
     /// The blocks this round is still writing (`done: false` pieces accumulate here).
     open: Vec<NewBlock>,
     /// Tool rounds handed in since the last landing.
@@ -36,6 +37,26 @@ impl Inlet {
             relay: None,
         }
     }
+
+    /// Mark a pending or open tool result, if this call is still in memory.
+    pub(crate) fn mark_todo(&mut self, call_id: &str, value: &str) -> bool {
+        let mut hit = false;
+        if let Some((_, pieces, _)) = &mut self.pending {
+            for block in pieces.iter_mut() {
+                if is_todo_block(block, call_id) {
+                    block.memo = Some(value.to_string());
+                    hit = true;
+                }
+            }
+        }
+        for block in &mut self.open {
+            if is_todo_block(block, call_id) {
+                block.memo = Some(value.to_string());
+                hit = true;
+            }
+        }
+        hit
+    }
 }
 
 impl Store {
@@ -48,9 +69,16 @@ impl Store {
                 cwd,
                 model,
                 name,
+                profile,
             } => {
                 let pair = model.as_ref().map(|(p, m)| (p.as_str(), m.as_str()));
-                let id = self.open_session(&started_at, &cwd, pair, name.as_deref())?;
+                let id = self.open_session(
+                    &started_at,
+                    &cwd,
+                    pair,
+                    name.as_deref(),
+                    profile.as_deref(),
+                )?;
                 Ok(Landed {
                     session: Some(id),
                     ..Landed::default()
@@ -63,19 +91,22 @@ impl Store {
                 suffix,
                 ts,
             } => self.push_user_message(session, prefix, text, suffix, ts),
+            Submit::Wake { session, text, ts } => self.push_wake(session, text, ts),
             Submit::Blocks {
                 session,
                 blocks,
                 done,
-            } => self.push_blocks(session, blocks, done),
+                effects,
+            } => self.push_blocks(session, blocks, done, effects),
             Submit::RoundEnd {
                 session,
                 stop_reason,
                 usage,
             } => self.push_round_end(session, stop_reason, usage),
             Submit::Request { session, meta } => {
-                let turn = open_turn(&self.conn, session)?
-                    .context("this session has no open round — the user's message must land first")?;
+                let turn = open_turn(&self.conn, session)?.context(
+                    "this session has no open round — the user's message must land first",
+                )?;
                 self.attach_request(turn, &meta)?;
                 Ok(Landed::default())
             }
@@ -88,13 +119,15 @@ impl Store {
                 summary,
                 request,
                 kept,
+                profile,
             } => {
                 let turn =
-                    self.append_compaction(session, &summary, request.as_deref(), &kept)?;
+                    self.append_compaction(session, &summary, request.as_deref(), &kept, &profile)?;
                 // A compaction is a round like any other: it ends when it lands.
                 self.relay_out(Relay::Ended {
                     session,
-                    turn: Some(turn),
+                    turn,
+                    usage: None,
                     stop_reason: Some("compaction".to_string()),
                 });
                 Ok(Landed {
@@ -136,6 +169,7 @@ impl Store {
         self.inlet.rounds = 0;
         self.relay_out(Relay::Blocks {
             session,
+            turn,
             blocks: landed.clone(),
         });
         Ok(Landed {
@@ -145,14 +179,50 @@ impl Store {
         })
     }
 
+    fn push_wake(&mut self, session: i64, text: String, ts: Option<String>) -> Result<Landed> {
+        let block = NewBlock {
+            kind: BlockKind::Wake,
+            content: Some(text),
+            prefix: Some("[system wake: ".to_string()),
+            suffix: Some("]".to_string()),
+            ts,
+            ..NewBlock::default()
+        };
+        let (turn, landed) = self.open_turn(session, std::slice::from_ref(&block), None)?;
+        self.inlet.pending = None;
+        self.inlet.open.clear();
+        self.inlet.rounds = 0;
+        self.relay_out(Relay::Blocks {
+            session,
+            turn,
+            blocks: landed.clone(),
+        });
+        Ok(Landed {
+            turn: Some(turn),
+            blocks: landed,
+            ..Landed::default()
+        })
+    }
+
     /// A reply's blocks (or a tool round's): relayed now, held for the landing. `done` = finished;
     /// an open piece extends the open block of the same kind and never lands.
-    fn push_blocks(&mut self, session: i64, blocks: Vec<NewBlock>, done: bool) -> Result<Landed> {
+    fn push_blocks(
+        &mut self,
+        session: i64,
+        blocks: Vec<NewBlock>,
+        done: bool,
+        effects: Vec<Effect>,
+    ) -> Result<Landed> {
+        anyhow::ensure!(
+            done || effects.is_empty(),
+            "an open block cannot carry effects"
+        );
         let turn = open_turn(&self.conn, session)?
             .context("this session has no open round — the user's message must land first")?;
         // What goes out is the visible stretch; the citation is added when the block lands.
         self.relay_out(Relay::Tail {
             session,
+            turn,
             blocks: blocks
                 .iter()
                 .cloned()
@@ -164,7 +234,12 @@ impl Store {
             done,
         });
         // A different round's tail must never be dropped on the floor: land it first.
-        if self.inlet.pending.as_ref().is_some_and(|(held, _)| *held != turn) {
+        if self
+            .inlet
+            .pending
+            .as_ref()
+            .is_some_and(|(held, _, _)| *held != turn)
+        {
             self.land_pending(session)?;
         }
 
@@ -184,18 +259,31 @@ impl Store {
         }
 
         let mut finished = blocks;
+        for block in &mut finished {
+            if block.memo.is_none()
+                && let Some(open) = self.inlet.open.iter().find(|open| same_block(open, block))
+            {
+                block.memo = open.memo.clone();
+            }
+        }
         for block in &finished {
             self.inlet.open.retain(|open| !same_block(open, block));
         }
         let tool_round = finished.iter().any(|b| b.kind == BlockKind::ToolResult);
+        let anchor = effects
+            .iter()
+            .any(|e| matches!(&e.kind, EffectKind::Subsession { .. }));
         match &mut self.inlet.pending {
-            Some((held, pieces)) if *held == turn => pieces.append(&mut finished),
-            slot => *slot = Some((turn, finished)),
+            Some((held, pieces, pending_effects)) if *held == turn => {
+                pieces.append(&mut finished);
+                pending_effects.extend(effects);
+            }
+            slot => *slot = Some((turn, finished, effects)),
         }
         if tool_round {
             self.inlet.rounds += 1;
         }
-        if self.inlet.rounds >= self.inlet.batch {
+        if anchor || self.inlet.rounds >= self.inlet.batch {
             return self.land_pending(session);
         }
         Ok(Landed::default())
@@ -206,23 +294,24 @@ impl Store {
         &mut self,
         session: i64,
         stop_reason: Option<String>,
-        usage: Option<super::super::shape::RoundUsage>,
+        usage: Option<RoundUsage>,
     ) -> Result<Landed> {
         let turn = open_turn(&self.conn, session)?;
         let mut out = match turn {
             Some(_) => self.land_pending(session)?,
             None => Landed::default(),
         };
+        self.inlet.rounds = 0;
         if let Some(turn) = turn {
             self.finish_turn(turn, stop_reason.as_deref(), usage)?;
             out.turn = Some(turn);
+            self.relay_out(Relay::Ended {
+                session,
+                turn,
+                usage,
+                stop_reason,
+            });
         }
-        self.inlet.rounds = 0;
-        self.relay_out(Relay::Ended {
-            session,
-            turn,
-            stop_reason,
-        });
         Ok(out)
     }
 
@@ -232,18 +321,27 @@ impl Store {
         if !open.is_empty()
             && let Some(turn) = open_turn(&self.conn, session)?
         {
+            if self
+                .inlet
+                .pending
+                .as_ref()
+                .is_some_and(|(held, _, _)| *held != turn)
+            {
+                self.land_pending(session)?;
+            }
             match &mut self.inlet.pending {
-                Some((held, pieces)) if *held == turn => pieces.extend(open),
-                slot => *slot = Some((turn, open)),
+                Some((held, pieces, _)) if *held == turn => pieces.extend(open),
+                slot => *slot = Some((turn, open, Vec::new())),
             }
         }
-        let Some((turn, blocks)) = self.inlet.pending.take() else {
+        let Some((turn, blocks, effects)) = self.inlet.pending.take() else {
             return Ok(Landed::default());
         };
         self.inlet.rounds = 0;
-        let landed = self.append_blocks(turn, &blocks)?;
+        let landed = self.append_blocks(session, turn, &blocks, &effects)?;
         self.relay_out(Relay::Blocks {
             session,
+            turn,
             blocks: landed.clone(),
         });
         Ok(Landed {
@@ -262,6 +360,8 @@ impl Store {
                 self.set_session_model(session, pair)
             }
             SessionChange::Cwd { turn, path } => self.set_session_cwd(session, turn, &path),
+            SessionChange::Profile(name) => self.set_session_profile(session, &name),
+            SessionChange::Todo { on, call_id } => self.set_todo_on(session, on, &call_id),
         }
     }
 
@@ -282,6 +382,11 @@ impl Store {
 /// same kind and, for a tool call, carry the same `call_id`.
 fn same_block(a: &NewBlock, b: &NewBlock) -> bool {
     a.kind == b.kind && a.call_id == b.call_id
+}
+
+/// Is this the todo tool result for `call_id`?
+fn is_todo_block(b: &NewBlock, call_id: &str) -> bool {
+    b.kind == BlockKind::ToolResult && b.call_id.as_deref() == Some(call_id)
 }
 
 /// Take one more piece of a block that is still being written: the text grows,

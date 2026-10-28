@@ -3,11 +3,12 @@
 
 use anyhow::Result;
 
-use super::shared::{append_list_row, put_request_meta, read_turn};
 use super::super::decode::encode_blocks;
-use super::super::shape::{Block, NewBlock, RequestMeta, RoundUsage, base36};
+use super::super::shape::{Block, BlockKind, NewBlock, RequestMeta, RoundUsage, base36};
 use super::super::writer::Store;
 use super::artifacts::put_artifact;
+use super::effects;
+use super::shared::{append_list_row, put_request_meta, read_turn};
 
 impl Store {
     /// Open a round **and land its first batch**, in one transaction.
@@ -28,7 +29,7 @@ impl Store {
         )?;
         let turn_id = tx.last_insert_rowid();
         append_list_row(&tx, session_id, turn_id, false)?;
-        let (range, bytes, landed) = land(&tx, blocks)?;
+        let (range, bytes, landed) = land(&tx, session_id, blocks, &[])?;
         if let Some(range) = range {
             tx.execute(
                 "UPDATE turns SET blocks = ?1, bytes = ?2 WHERE turn_id = ?3",
@@ -43,14 +44,17 @@ impl Store {
     /// index, add the bytes. One transaction, so the ids are consecutive.
     pub(crate) fn append_blocks(
         &mut self,
+        session: i64,
         turn_id: i64,
         blocks: &[NewBlock],
+        effects: &[super::super::shape::Effect],
     ) -> Result<Vec<Block>> {
         if blocks.is_empty() {
+            anyhow::ensure!(effects.is_empty(), "effects need blocks");
             return Ok(Vec::new());
         }
         let tx = self.conn.transaction()?;
-        let (range, bytes, landed) = land(&tx, blocks)?;
+        let (range, bytes, landed) = land(&tx, session, blocks, effects)?;
         let range = range.expect("blocks is not empty");
         let turn = read_turn(&tx, turn_id)?
             .ok_or_else(|| anyhow::anyhow!("round {turn_id} does not exist"))?;
@@ -110,11 +114,14 @@ impl Store {
 /// blocks themselves. A spilled block lands its artifact in the same transaction.
 pub(super) fn land(
     tx: &rusqlite::Transaction<'_>,
+    session: i64,
     blocks: &[NewBlock],
+    effects: &[super::super::shape::Effect],
 ) -> Result<(Option<[i64; 2]>, i64, Vec<Block>)> {
     let mut landed = Vec::with_capacity(blocks.len());
     let mut bytes = 0i64;
     let mut range: Option<[i64; 2]> = None;
+    let mut matched = vec![false; effects.len()];
     for b in blocks {
         bytes += bytes_of(b);
         tx.execute(
@@ -161,11 +168,28 @@ pub(super) fn land(
             )?;
             landed_block.result = Some(cited);
         }
+        if b.kind == BlockKind::ToolResult
+            && let Some(call_id) = b.call_id.as_deref()
+        {
+            for (i, effect) in effects.iter().enumerate() {
+                if effect.call_id.as_str() == call_id {
+                    effects::apply(tx, session, id, effect)?;
+                    matched[i] = true;
+                }
+            }
+        }
         landed.push(landed_block);
         match &mut range {
             None => range = Some([id, id]),
             Some(r) => r[1] = id,
         }
+    }
+    for (i, effect) in effects.iter().enumerate() {
+        anyhow::ensure!(
+            matched[i],
+            "effect call_id {} has no tool result block",
+            effect.call_id
+        );
     }
     Ok((range, bytes, landed))
 }

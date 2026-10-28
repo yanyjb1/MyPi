@@ -59,8 +59,8 @@ Three entry points, and the machinery behind them:
 | `hand_results` | cut the tool results of one lap into blocks; one result per call, paired by `call_id` |
 | `rebuild` | the history as messages: from the newest compaction on, every block of every round in it, in order. The `context` tool's window is this same list |
 
-Behind them sit three things: **assembly** (stored messages → protocol messages, the request body, the
-per-host compatibility, the prepared request a summary uses), **inbound** (a streamed response → a
+Behind them sit three things: **assembly** (stored messages → protocol messages, the prepared request
+a summary uses), **protocols** (the request body, per-host compatibility, a streamed response → a
 reply, the scanner for hosts that carry tool calls inside text, the markup filter), and **transport**
 (hand a body out and read lines back, one connection per provider, and the subprocess a long
 connection is killed through).
@@ -82,6 +82,7 @@ whoever reads the archive has to be able to tell them apart.
 | tool calls | one `tool_request` block per call, paired by `call_id`; the reply's own text and the model's one-line intent ride the **first** call (a flag marks it), so replaying groups them back into one protocol message |
 | plain text | one `assistant` block; an empty reply lands the built-in placeholder text, and an interrupted one its own |
 | a tool's result | one `tool_result` block per call; `ok` colours the card, `memo` is the front end's structured payload, `result` is what the model reads |
+| a `kairos` wake | one `wake` block; it reads back as a user message wrapped in `[system wake: …]` |
 
 The cut lives in the request half only, and the columns live in storage; nothing else decides what a
 block is.
@@ -94,12 +95,38 @@ block is.
 | `TOOLS` / `roster` | the table, and the table filtered by the profile's gate, as the model sees it |
 | `execute` | the front door: look the name up, check the gate, fill the arguments, run it, then measure the result |
 | `ToolOutput` | `text` (for the model), `memo` (for a front end), `spill` (the whole text, when the result is too big) |
-| `Env` | everything a tool may touch: the workspace, the output budget, the todo list, the history window, the artifact handle, the bash timeout and stop flag, the browser package, the profile gate |
+| `kairos` | the main-session background task tool: accept work now/later/on a cron, wake on completion, fetch output with `result` |
+| `task` | the main-session tool that spawns one subagent from a template |
+| `final` | the child-only tool that edits the draft and writes the final file |
+| `mcp` | the static MCP tool: list configured servers/tools or call one tool through the bridge |
+| `jobs` | the per-session async framework: schedules, pool, wake, output retention |
+| `subagent` | the child service: template, contract, spawn, agent runner, draft |
+| `Env` | everything a tool may touch: the workspace, the output budget, the todo list, the history window, the artifact handle, the bash timeout and stop flag, the browser package, the profile gate, the jobs handle, the subagent handle, and the MCP bridge |
 | `Workspace` | the working zone, and how a path is resolved inside it |
 
 A tool reads nothing itself: no database, no config file, no global. Whatever it may use is in `Env`,
-put there by the loop. The three web tools (`fetch`, `browser`, `search`) are compiled in only with
-the `web` feature; without it their rows are not in the table at all.
+put there by the loop. The `web` tool is compiled in only with the `web` feature; without it its row
+is not in the table at all. The `mcp` tool is always in the table; it is hidden from the roster when
+no `mcp.servers` are configured, and the profile or child template can still exclude it.
+
+### MCP
+
+`mcp` is one static tool, not a dynamic registry. `list` asks the bridge for servers and their tools;
+`call` forwards one JSON object and returns text. `mcp list` data can change, but `TOOLS` keeps one
+row.
+
+`McpBridge` is the only backend seam. It returns `ServerInfo`, `ToolInfo`, `McpResult` and
+`McpContent`; it never sees `ToolOutput`, rmcp or tokio. The default `SyncMcpBridge` owns one lazy
+stdio process per configured server, shared by every session. A server that dies is restarted on the
+next call; `shutdown` kills it.
+
+The tool maps MCP `isError` to a failed tool result, keeps the text, and marks image/audio/structured
+content as unsupported. Text is joined in order; the front door still owns spill.
+
+Servers live at top-level `mcp:` in `config.yaml`. `command` is direct exec; `args`, `env`, `cwd`
+and `timeoutSecs` have the defaults documented in the config README. There is no `mcp` feature; the
+default stdio backend is always compiled. A future `mcp-rmcp` feature would only replace the bridge
+implementation. The first version does not cover resources, prompts, HTTP, OAuth, or MCP Tasks.
 
 A tool's **parameter list is its only declaration**: the manual the model reads and the arguments a
 call is filled from both grow out of it, and the model's own one-line "what I am about to do" is
@@ -108,9 +135,50 @@ edit in one file.
 
 `memo` has a convention: always a JSON object carrying a `kind`, and only the fields a front end
 **cannot compute** for itself. What the arguments and the result text already say — the old text, the
-new text, a line count, an exit code — never goes in. Two tools use it today: `edit` (which line a
-change landed on) and `mass_edit` (the original text of the lines that were replaced, which survives
-nowhere else).
+new text, a line count, an exit code — never goes in. `edit` uses it today: the exact mode records
+which line a change landed on; the mass mode records the original text of the lines it replaced.
+
+### Background jobs
+
+`jobs` is the session's async framework, not a tool. `JobSpec` carries a `JobRunner`, a schedule
+(`Now`, `After`, `Every`), a timeout, whether it needs a pool slot, and whether it produces output.
+`JobRunner` is the only extension point: `kairos` supplies command and text runners; subagents supply
+the agent runner. The framework never matches a task kind.
+
+One scheduler thread per session owns the clock, the pool, skips, cancellation and wake merging.
+The pool is shared by every job of that session. `now` fails when the pool is full; `after` waits for
+a slot; `every` skips an overlapping run. A reserved job stays scheduled until the API activates it,
+which is how a child is started only after its anchor lands.
+
+Jobs live in memory only. Watch zero, delete, or `Live` drop cancels every job, kills command process
+groups, removes the TMP output, and emits no wake. One job has one TMP output file; `result` reads and
+removes it. Retained unread results are bounded; the oldest is marked expired and removed.
+
+### Subagents
+
+A subagent is an ordinary session, not a second loop. It has its own row, `Live`, rounds, tools and
+history. It inherits the parent's model and profile at spawn; later parent changes do not reach it.
+It cannot accept `Submit` or `Compact`, cannot spawn another subagent, and does not receive `kairos`.
+
+`task` is parent-only. It resolves a template, checks that the template's tools are a subset of the
+parent's roster, creates the child row, returns one `Subsession` effect, and reserves an agent job.
+The loop starts that job only after the tool result and `subsessions` anchor land, so a fast child
+cannot wake before its anchor exists. The receipt names the child, job and final path; the anchor is
+the landed tool-result block.
+
+A template is markdown with a leading YAML block carrying `tools`. `{{...}}` names are rendered from
+string `vars`; missing, extra, empty, or unclosed names fail. `task` in a template fails. `APPENDED`
+is only a normal reserved name: it must appear in the template if supplied.
+
+`final` is child-only and system-added; it is not part of the template's subset check. It edits one
+in-memory draft (`write`, `edit`, `mass_edit`, `read`) and `submit` writes the draft to
+`<parent root>/.mypi/answers/<child>.md` with a system timestamp, then stops the child. `submit`
+must be the only call in its message. If the child ends without `submit`, the runner writes the
+draft, else the last assistant text; if neither exists the child is marked failed.
+
+A child's budget counts non-`final` calls across laps and rounds. At exhaustion the next request's
+roster contains only `final`; rejected calls still get failed tool results. `final` never counts.
+The wake reports status only; the parent reads the final file by path.
 
 ### Oversized output, end to end
 
@@ -137,13 +205,18 @@ nowhere else).
 5. A citation is a block id spelled in base36, and a block's id never changes.
 6. A tool touches only what is in `Env`.
 7. Nothing is invented on the way out: an unset value is never sent.
+8. The job framework never names a task kind; only a `JobRunner` does.
+9. A child is a normal session; its only special rules are the roster and the final file.
+10. `task` is parent-only, `final` is child-only, and both are hard-rejected outside their session.
+11. A child's final path is derived from the parent root and the child id; it is not stored.
 
 ### What lives in memory
 
 One `Live` per session — the provider connection, the working directory, the roster, the todo list,
-the stop flag, the artifact handle, the settings — built on demand and lent out by the api. This
-domain holds nothing between rounds of its own: every round builds its working state and gives it
-back.
+the stop flag, the artifact handle, the jobs handle, the subagent handle, the settings — built on
+demand and lent out by the api. The job service keeps schedules and completed output for that
+session; the subagent service keeps child specs, the pending job map, and draft text. None of it is
+written to a job table or resumed across processes.
 
 ## 2. Design intent
 
@@ -190,7 +263,16 @@ compiled in and resolved into one struct; the switches a thinking request needs 
 that struct, not a second copy.
 
 **The fence is not a budget.** A round that keeps asking for tools re-sends its whole history every
-lap, so a live conversation runs out of context long before any sane number.
+lap, so a live conversation runs out of context long before any sane number. A child's budget is
+separate: it counts non-`final` calls across its whole life and only trims the roster.
+
+**Jobs are a framework, not a tool.** Command, text and agent work differ only in their `JobRunner`;
+scheduling, the pool, cancellation, wake merging and output retention are shared. That keeps
+`kairos` a thin tool face and lets a child reuse the same lifecycle without a second scheduler.
+
+**A child is a session.** Reusing the ordinary row, `Live`, loop and relay means the child gets
+history, artifacts, watch, interrupt and delete for free. The link table stores only the anchor, so
+there is no parent field to keep consistent and no template snapshot to invalidate.
 
 **A round is the unit; a session's life is the api's.** The loop itself only ever runs one round;
 keeping a session's `Live` alive while somebody watches, and letting it go when nobody does, belongs
@@ -198,23 +280,19 @@ to the layer that knows who is watching.
 
 ## 3. Open questions
 
-1. **A citation and `context`'s own numbering look alike.** The `context` tool prints its lines as
-   `#<index>`, which a model can mistake for an artifact citation — and the anchor search accepts
-   any `#<base36>`. The tool's output numbering is a candidate for a different spelling.
-2. **`Message` carries serde derives nothing uses.** The block columns are the storage format; the
+1. **`Message` carries serde derives nothing uses.** The block columns are the storage format; the
    derived JSON form is not read anywhere.
-3. **Placeholders are not the memo's design yet.** The request side writes the built-in text into an
+2. **Placeholders are not the memo's design yet.** The request side writes the built-in text into an
    empty or interrupted block, and two writers hard-code the same bytes. The memo's rule — the block
-   carries the placeholder's *name*, and `config.tui.placeholder.emptyReply` / `interrupted` own the
+   carries the placeholder's *name*, and `config.ui.placeholder.emptyReply` / `interrupted` own the
    words — is not implemented: no server-side code reads those two keys.
-4. **The write lock is the api's running set.** "One writer per session" is enforced there, not by a
+3. **The write lock is the api's running set.** "One writer per session" is enforced there, not by a
    writer's identity; the real mechanism is undecided (`memo.md`).
-5. **Fork mode and the context cache.** A rewind in fork mode is a `todo!()` on the api side, and
+4. **Fork mode and the context cache.** A rewind in fork mode is a `todo!()` on the api side, and
    caching the flattened message list per session is deferred.
-6. **The web tools' four char limits are constants.** `config.server.agent.tools.web.*` is declared,
-   but the engines still use their own numbers (第 14 条).
-7. **The fence has no second user.** It exists so a future sub-agent feature can be handed a small
-   tool budget (VISION 第 8 条); today only a whole round uses it.
+5. **The fence and the child budget are separate mechanisms.** The loop fence limits tool rounds;
+   the child budget limits non-`final` calls. They share `ToolBudget` only for the final-only
+   roster, and the loop fence still has no per-round cap on ordinary sessions.
 
 ## 4. Config
 
@@ -223,15 +301,19 @@ through `Env`, or as the argument of a call.
 
 | key | what it decides | how it arrives |
 |---|---|---|
-| `config.server.agent.loop.maxToolCalls` | the tool-round fence (`false` turns it off) | `Live.settings.fence` |
+| `config.server.agent.loop.maxToolCalls` | the tool-round fence (`false` turns it off) | `ToolBudget` in `Live.driver` |
 | `config.server.agent.tools.outputMaxLines` | how much of one tool result stays inline, in lines | the output limits in `Env`, used by `read` and by the spill gate |
 | `config.server.agent.tools.outputMaxBytes` | the same in bytes (for few-lines-huge results) | as above |
 | `config.server.agent.tools.bashTimeout` | the wall-clock cap on one `bash` command, in seconds | the bash settings in `Env` |
-| `config.server.agent.tools.browser.*` | which browser the web tools drive, and how | the browser settings in `Env` |
+| `config.server.agent.tools.browser.*` | which browser the web tool drives, and how | the browser settings in `Env` |
+| `config.server.agent.tools.kairos.maxConcurrent` | jobs allowed at once in one session | `KairosConfig` in the job factory |
+| `config.server.agent.tools.kairos.timeoutSecs` | the default command timeout | `KairosConfig` in the job factory |
+| `config.server.agent.tools.kairos.maxOutputBytes` | bytes captured for one job | `KairosConfig` in the job factory |
+| `config.server.agent.tools.kairos.maxRetained` | completed unread results kept per session | `KairosConfig` in the job factory |
+| `config.server.agent.subagent.maxToolCalls` | a child's non-`final` call budget | `SubagentConfig` in the subagent factory; `task` may override per child |
 | `config.server.agent.profile` | which system prompt and tool roster a session runs | resolved by the config layer into `Live.settings.system` and `Live.roster`; the profile's own gate becomes the enabled set |
 | `config.server.request.compact.retainTail` | the tail a compaction keeps when the command names no budget | the compaction config handed to the plan |
 | `config.server.request.streaming` | how much of a running round a front end sees | not this domain: read at the backend-to-front-end edge (`src/ipc/stream.rs`) — `immediate` / `buffered` |
-| `config.server.agent.tools.web.*` | four output limits for the web tools | **no reader yet** (第 14 条) |
 
 ## See also
 

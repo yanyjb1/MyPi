@@ -73,7 +73,9 @@ pub struct Provider {
 
 /// The default for the protocol key: the only one implemented.
 pub fn default_api() -> String {
-    crate::server::agent::request::transport::client::PROTOCOL.to_string()
+    crate::server::agent::request::protocols::ProtocolId::OpenAiCompletion
+        .as_str()
+        .to_string()
 }
 
 /// A protocol name as written in the config → the one protocol id inside the program. Only
@@ -81,7 +83,7 @@ pub fn default_api() -> String {
 pub fn normalize_api(name: &str) -> Option<&'static str> {
     match name.trim().to_ascii_lowercase().as_str() {
         "openai-completions" | "openai-chat-completions" | "openai" | "" => {
-            Some(crate::server::agent::request::transport::client::PROTOCOL)
+            Some(crate::server::agent::request::protocols::ProtocolId::OpenAiCompletion.as_str())
         }
         _ => None,
     }
@@ -116,7 +118,8 @@ pub struct ModelEntry {
     /// This model's compatibility switches. **Absent = detect them from
     /// `baseUrl` + the model id**; written = the user's word wins.
     #[serde(default)]
-    pub compat: Option<crate::server::agent::request::assembly::compat::Compat>,
+    pub compat:
+        Option<crate::server::agent::request::protocols::openai::completion::compat::Compat>,
 }
 
 impl ModelEntry {
@@ -130,4 +133,3 @@ impl ModelEntry {
         }
     }
 }
-

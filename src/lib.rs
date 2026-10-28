@@ -8,6 +8,7 @@ pub mod git;
 pub mod ipc;
 pub mod oneshot;
 pub mod server;
+pub mod ui;
 #[cfg(feature = "web")]
 pub mod web;
 
@@ -50,15 +51,36 @@ mod architecture {
         // Leaves: the standard library only.
         ("git", &["cli", "server", "tui", "web"]),
         ("ansi", &["cli", "server", "tui", "web"]),
-        // Backstop: no file under `server` may name a terminal (including the submodules just moved
-        // in), and none may name the protocol layer — ipc stands between the two halves.
-        ("server", &["tui", "ipc"]),
+        // Backstop: no file under `server` may name a front end or the IPC edges. The contract and
+        // transport are the only ipc pieces a backend may name.
+        ("server", &["ui", "ipc::client", "ipc::server"]),
         // The protocol layer stands between the halves: it carries api's shapes, knows no UI.
-        ("ipc", &["cli", "tui", "web", "git", "ansi"]),
-        // The TUI is a front end: api only; never the engine's, storage's or config's innards.
+        ("ipc", &["cli", "ui", "web", "git", "ansi"]),
+        // The front end's half never reaches into the backend.
+        ("ui::session", &["server", "ipc::server"]),
+        // The client half is the front end's; it never names the backend or the server half.
+        ("ipc::client", &["server", "ipc::server"]),
+        // The contract is shared vocabulary; it names neither end.
         (
-            "tui",
-            &["server::agent", "server::storage", "server::config"],
+            "ipc::contract",
+            &["server", "ui", "ipc::client", "ipc::server"],
+        ),
+        // The server half is the only adapter; it never names a front end.
+        ("ipc::server", &["ui"]),
+        // Transport and endpoint are platform mechanics; they know no backend or front end.
+        ("ipc::transport", &["server", "ui"]),
+        ("ipc::endpoint", &["server", "ui"]),
+        // The TUI is a front end: it reads `ui::session` and never the backend or the
+        // client/server halves of IPC.
+        (
+            "ui::tui",
+            &[
+                "server",
+                "ipc::client",
+                "ipc::server",
+                "ipc::endpoint",
+                "ipc::transport",
+            ],
         ),
     ];
 
@@ -269,8 +291,7 @@ mod architecture {
         assert!(prod.contains("crate::server"), "生产代码不能被吞掉: {prod}");
         assert!(!prod.contains("crate::tui"), "测试模块必须被剔除: {prod}");
         // A test-only accessor (not a module) keeps the code after it.
-        let text =
-            "#[cfg(test)]\npub fn for_tests() {}\npub fn real() { let _ = crate::server::entry::x(); }\n";
+        let text = "#[cfg(test)]\npub fn for_tests() {}\npub fn real() { let _ = crate::server::entry::x(); }\n";
         let prod = production_source(text);
         assert!(prod.contains("crate::server::entry"), "{prod}");
     }

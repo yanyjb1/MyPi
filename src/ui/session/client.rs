@@ -1,42 +1,26 @@
-//! The backend half: the connection, watching a session, and the request queue.
-//! Design: `README.md`.
+//! The one IPC client: connect, the request queue, the watch, the upstream loop.
 
 use std::collections::VecDeque;
-use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use anyhow::{Context, Result};
 
 use crate::ipc::client::Client as Door;
-use crate::server::api::subscribe::Retention;
-use crate::server::api::{Call, Opened, Post, PostDone, Reply, StreamItem, Viewer};
-use crate::server::platform::ipc::Cost;
+use crate::ipc::contract::{Call, Event, Opened, Post, PostDone, Reply, Subscribe, Viewer};
+use crate::ipc::endpoint::Endpoint;
 
-/// What the front end asks the backend for. One queue holds them all, in order.
+/// One queued request: the session's translation of a front end call.
 #[derive(Debug, Clone)]
 pub enum Request {
     Call(Call),
-    /// A change of session state, already applied locally.
     Post(Post),
-    Submit {
-        session: i64,
-        prefix: Option<String>,
-        text: String,
-        suffix: Option<String>,
-    },
-    Compact {
-        session: i64,
-        retention: Retention,
-        focus: Option<String>,
-    },
-    /// Watch a session: a stream connection of its own.
-    Watch(i64),
-    /// Stop watching. Dropping the channel closes the stream, which is the whole of it.
+    Subscribe(Subscribe),
+    /// Stop the watch; dropping the stream closes it.
     Unwatch,
     Bye,
 }
 
-/// Which stretch a round-opening request belonged to.
+/// Which stretch a round-opening subscription belonged to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Round {
     Submit,
@@ -52,11 +36,11 @@ pub enum Kind {
     Watch,
 }
 
-/// What came back, in the shape the ingest side eats.
+/// What came back: the upstream object, and the local facts about the connection itself.
 #[derive(Debug)]
 pub enum Arrival {
-    Stream(StreamItem),
-    /// An answer, with the question it answers: a viewport page means what was asked.
+    Stream(Event),
+    /// An answer with the question it answers.
     Answer {
         call: Call,
         reply: Reply,
@@ -77,17 +61,18 @@ pub enum Arrival {
     },
 }
 
+/// The connection, the queue, and the watch. Nothing is sent until the next `pump`.
 pub struct Client {
     door: Door,
     queue: VecDeque<Request>,
-    watch: Option<Receiver<StreamItem>>,
+    watch: Option<Receiver<Event>>,
 }
 
 impl Client {
     /// Connect and register. Who starts the server is not this layer's business.
-    pub fn connect(cost: Cost, path: &Path, viewer: Viewer) -> Result<Client> {
-        let door = Door::connect(cost, path, viewer)
-            .with_context(|| format!("cannot reach the server at {}", path.display()))?;
+    pub fn connect(endpoint: Endpoint, viewer: Viewer) -> Result<Client> {
+        let door = Door::connect(endpoint.clone(), viewer)
+            .with_context(|| format!("cannot reach the server at {endpoint:?}"))?;
         Ok(Client {
             door,
             queue: VecDeque::new(),
@@ -95,24 +80,13 @@ impl Client {
         })
     }
 
-    /// Ask for something. Nothing is sent until the next `pump`.
     pub fn queue(&mut self, request: Request) {
         self.queue.push_back(request);
     }
 
-    /// Watch a session: the stream replaces this viewer's old one.
-    pub fn watch(&mut self, session: i64) -> Result<()> {
-        let stream = self.door.watch(session)?;
-        self.watch = Some(stream);
-        Ok(())
-    }
-
-    pub fn unwatch(&mut self) {
-        self.watch = None;
-    }
-
-    pub fn bye(&self) {
-        self.door.bye();
+    /// Drop everything not yet sent.
+    pub fn clear(&mut self) {
+        self.queue.clear();
     }
 
     /// Take what the stream pushed, send what is queued, take what that earned.
@@ -158,6 +132,7 @@ impl Client {
         }
     }
 
+    /// The only place an upstream wire call is made.
     fn send(&mut self, request: Request) -> Result<Option<Arrival>> {
         Ok(match request {
             Request::Call(call) => {
@@ -165,37 +140,43 @@ impl Client {
                 Some(Arrival::Answer { call, reply })
             }
             Request::Post(post) => Some(Arrival::Done(self.door.post(post)?)),
-            Request::Submit {
-                session,
-                prefix,
-                text,
-                suffix,
-            } => Some(Arrival::Opened {
-                session,
-                round: Round::Submit,
-                opened: self
-                    .door
-                    .submit(session, prefix.as_deref(), &text, suffix.as_deref())?,
-            }),
-            Request::Compact {
-                session,
-                retention,
-                focus,
-            } => Some(Arrival::Opened {
-                session,
-                round: Round::Compact,
-                opened: self.door.compact(session, retention, focus)?,
-            }),
-            Request::Watch(session) => {
-                self.watch(session)?;
-                None
-            }
+            Request::Subscribe(subscribe) => match subscribe {
+                Subscribe::Watch { session } => {
+                    let stream = self.door.watch(session)?;
+                    self.watch = Some(stream);
+                    None
+                }
+                Subscribe::Submit {
+                    session,
+                    prefix,
+                    text,
+                    suffix,
+                } => Some(Arrival::Opened {
+                    session,
+                    round: Round::Submit,
+                    opened: self.door.submit(
+                        session,
+                        prefix.as_deref(),
+                        &text,
+                        suffix.as_deref(),
+                    )?,
+                }),
+                Subscribe::Compact {
+                    session,
+                    retention,
+                    focus,
+                } => Some(Arrival::Opened {
+                    session,
+                    round: Round::Compact,
+                    opened: self.door.compact(session, retention, focus)?,
+                }),
+            },
             Request::Unwatch => {
-                self.unwatch();
+                self.watch = None;
                 None
             }
             Request::Bye => {
-                self.bye();
+                self.door.bye();
                 None
             }
         })
@@ -206,8 +187,9 @@ fn kind_of(request: &Request) -> Kind {
     match request {
         Request::Call(_) => Kind::Read,
         Request::Post(_) => Kind::Change,
-        Request::Submit { .. } | Request::Compact { .. } => Kind::Round,
-        Request::Watch(_) | Request::Unwatch => Kind::Watch,
+        Request::Subscribe(Subscribe::Watch { .. }) => Kind::Watch,
+        Request::Subscribe(_) => Kind::Round,
+        Request::Unwatch => Kind::Watch,
         Request::Bye => Kind::Change,
     }
 }

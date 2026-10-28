@@ -22,10 +22,16 @@ pub fn parse(stamp: &str) -> Option<Parts> {
     }
     let num = |a: usize, z: usize| -> Option<i64> {
         let s = std::str::from_utf8(b.get(a..z)?).ok()?;
-        s.bytes().all(|c| c.is_ascii_digit()).then(|| s.parse().ok())?
+        s.bytes()
+            .all(|c| c.is_ascii_digit())
+            .then(|| s.parse().ok())?
     };
     let (y, mo, d) = (num(0, 4)?, num(5, 7)? as u32, num(8, 10)? as u32);
-    let (h, mi, s) = (num(11, 13)? as u32, num(14, 16)? as u32, num(17, 19)? as u32);
+    let (h, mi, s) = (
+        num(11, 13)? as u32,
+        num(14, 16)? as u32,
+        num(17, 19)? as u32,
+    );
     if b[4] != b'-' || b[7] != b'-' || b[10] != b' ' || b[13] != b':' || b[16] != b':' {
         return None;
     }

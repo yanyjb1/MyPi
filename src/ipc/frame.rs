@@ -9,8 +9,8 @@ pub const MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
 
 /// A value as one line: its JSON, then the newline that ends it.
 pub fn encode<T: serde::Serialize>(value: &T) -> io::Result<Vec<u8>> {
-    let mut out = serde_json::to_vec(value)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut out =
+        serde_json::to_vec(value).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     out.push(b'\n');
     Ok(out)
 }

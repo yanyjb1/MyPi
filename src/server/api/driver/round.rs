@@ -1,14 +1,13 @@
-//! One round: the loop on its own thread, and the outlet that streams it. The loop lands its own
-//! pieces, so nothing here writes; a tool's running output goes straight to the stream.
+//! One round: the loop on its own thread, and the outlet that streams it.
 
 use anyhow::Result;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::server::agent::r#loop::{self as agent_loop, Live, Outlet, ToolEvent, Turn};
-use crate::server::api::reply::stream::StreamItem;
-use crate::server::storage::{BlockKind, NewBlock, Reader, Submit, Writer};
+use crate::server::agent::r#loop::outlet::{Outlet, ToolEvent};
+use crate::server::agent::r#loop::{self as agent_loop, Live, Turn};
+use crate::server::agent::request::retry::RetryNotice;
+use crate::server::agent::tools::jobs::Wake;
+use crate::server::storage::{Reader, Writer};
 
 use super::relay::Relay;
 use super::running::Running;
@@ -25,7 +24,6 @@ pub(crate) fn run(
     mut live: Live,
     mut preview: Preview,
 ) {
-    // Kept for the check at the end: is anybody still watching this session?
     let relay = preview.relay.clone();
     let result = (|| -> Result<()> {
         let conn = Reader::open(&db)?;
@@ -48,86 +46,59 @@ pub(crate) fn run(
             format!("session {session}: the round died: {e:#}"),
         );
     }
-    // Nothing runs in this session any more: the state goes back when somebody watches it.
-    running.release(session);
+    let queue = live.wakes.clone();
+    let sink = live.wake_sink.clone();
     if relay.watched(session) {
         sessions.put(session, live);
+        running.release(session);
+        let pending = {
+            let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+            if q.is_empty() {
+                None
+            } else {
+                Some(q.drain(..).collect::<Vec<_>>().join("\n"))
+            }
+        };
+        if let (Some(text), Some(sink)) = (pending, sink) {
+            sink.wake(Wake { session, text });
+        }
     } else {
+        running.release(session);
         sessions.drop_live(session);
     }
 }
 
-/// The loop's live channel: the reply as it streams, and what a tool prints
-/// while it runs.
+/// The loop's live channel: the reply as it streams, and what a tool prints.
 pub(crate) struct Preview {
     session: i64,
-    stop: Arc<AtomicBool>,
-    writer: Writer,
+    turn: i64,
     relay: Relay,
 }
 
 impl Preview {
-    pub(crate) fn new(session: i64, stop: Arc<AtomicBool>, writer: Writer, relay: Relay) -> Self {
+    pub(crate) fn new(session: i64, turn: i64, relay: Relay) -> Self {
         Self {
             session,
-            stop,
-            writer,
+            turn,
             relay,
         }
-    }
-
-    /// Hand one increment to the writer: a piece of a block still being written.
-    fn piece(&self, kind: BlockKind, text: &str) {
-        let block = NewBlock {
-            kind,
-            content: Some(text.to_string()),
-            ts: Some(crate::server::platform::time::now_stamp()),
-            ..NewBlock::default()
-        };
-        let out = self.writer.push(Submit::Blocks {
-            session: self.session,
-            blocks: vec![block],
-            done: false,
-        });
-        if let Err(e) = out {
-            crate::server::platform::log::warn(
-                "api",
-                format!(
-                    "session {}: a streamed piece did not reach the writer: {e:#}",
-                    self.session
-                ),
-            );
-        }
-    }
-
-    fn stopping(&self) -> bool {
-        self.stop.load(Ordering::Relaxed)
     }
 }
 
 impl Outlet for Preview {
-    fn content(&mut self, text: &str) -> bool {
-        self.piece(BlockKind::Assistant, text);
-        !self.stopping()
-    }
-
-    fn reasoning(&mut self, text: &str) -> bool {
-        self.piece(BlockKind::Reasoning, text);
-        !self.stopping()
-    }
+    fn tool_event(&mut self, _event: &ToolEvent) {}
 
     fn tool_output(&mut self, call_id: &str, text: &str) {
-        self.relay.emit(
-            self.session,
-            StreamItem::ToolOutput {
-                call_id: call_id.to_string(),
-                text: text.to_string(),
-            },
+        self.relay
+            .tool_output(self.session, self.turn, call_id, text);
+    }
+
+    fn retry(&mut self, notice: &RetryNotice) {
+        crate::server::platform::log::warn(
+            "api",
+            format!("session {}: {}", self.session, notice.reason),
         );
     }
 
-    fn tool_event(&mut self, _event: &ToolEvent) {
-        // The three moments land as blocks of their own — the request side cuts
-        // them, and storage relays those at once. Nothing to preview.
-    }
+    fn budget_exhausted(&mut self) {}
 }

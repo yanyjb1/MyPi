@@ -4,10 +4,10 @@
 use anyhow::{Context, Result};
 use rusqlite::params;
 
-use super::prune;
 use super::super::decode::BLOCK_BYTES_SQL;
 use super::super::write::shared::read_turn;
 use super::super::writer::Store;
+use super::prune;
 
 /// What the surface saw: which block the user picked, and which round was
 /// on screen when they picked it.

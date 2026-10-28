@@ -8,7 +8,8 @@ use super::shape::{Artifact, Block, BlockKind, RequestMeta, RoundUsage, SessionM
 /// Decode a run of interval ids into `Vec<[i64; 2]>`. An unreadable value is
 /// a broken row: error, never silently empty.
 pub(crate) fn parse_blocks(raw: &str) -> Result<Vec<[i64; 2]>> {
-    serde_json::from_str(raw).with_context(|| format!("a round's block index is unreadable: {raw:.80}"))
+    serde_json::from_str(raw)
+        .with_context(|| format!("a round's block index is unreadable: {raw:.80}"))
 }
 
 /// Encode interval ids as JSON.
@@ -24,7 +25,8 @@ pub(crate) fn session_meta(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMet
         cwd: r.get(3)?,
         model_provider: r.get(4)?,
         model: r.get(5)?,
-        todo_on: r.get::<_, i64>(6)? != 0,
+        profile: r.get(6)?,
+        todo_on: r.get::<_, i64>(7)? != 0,
     })
 }
 
@@ -89,10 +91,26 @@ pub(crate) fn turn_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> 
     let prompt: Option<i64> = r.get(5)?;
     let usage = prompt.map(|p| RoundUsage {
         prompt_tokens: p.max(0) as u64,
-        completion_tokens: r.get::<_, Option<i64>>(6).unwrap_or(None).unwrap_or(0).max(0) as u64,
-        cached_tokens: r.get::<_, Option<i64>>(7).unwrap_or(None).unwrap_or(0).max(0) as u64,
-        reasoning_tokens: r.get::<_, Option<i64>>(8).unwrap_or(None).unwrap_or(0).max(0) as u64,
-        cache_write_tokens: r.get::<_, Option<i64>>(9).unwrap_or(None).unwrap_or(0).max(0) as u64,
+        completion_tokens: r
+            .get::<_, Option<i64>>(6)
+            .unwrap_or(None)
+            .unwrap_or(0)
+            .max(0) as u64,
+        cached_tokens: r
+            .get::<_, Option<i64>>(7)
+            .unwrap_or(None)
+            .unwrap_or(0)
+            .max(0) as u64,
+        reasoning_tokens: r
+            .get::<_, Option<i64>>(8)
+            .unwrap_or(None)
+            .unwrap_or(0)
+            .max(0) as u64,
+        cache_write_tokens: r
+            .get::<_, Option<i64>>(9)
+            .unwrap_or(None)
+            .unwrap_or(0)
+            .max(0) as u64,
     });
     let request_id: Option<i64> = r.get(1)?;
     let request = match (request_id, r.get::<_, Option<String>>(11)?) {
@@ -103,6 +121,7 @@ pub(crate) fn turn_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> 
                 provider: r.get::<_, Option<String>>(12)?.unwrap_or_default(),
                 protocol: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
                 base_url: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+                profile: r.get::<_, Option<String>>(19)?.unwrap_or_default(),
                 system: r.get::<_, Option<String>>(15)?.unwrap_or_default(),
                 tools_json: r.get::<_, Option<String>>(16)?.unwrap_or_default(),
                 max_tokens: r.get::<_, Option<i64>>(17)?.unwrap_or(0).max(0) as u32,
@@ -135,7 +154,8 @@ pub(crate) const ARTIFACT_COLS: &str = "block_id, name, total_lines, content";
 
 /// A block's byte volume, for the queries that sum it (the write side mirrors
 /// this in `write/batches.rs::bytes_of` — keep the two in step).
-pub(crate) const BLOCK_BYTES_SQL: &str = "LENGTH(COALESCE(content, '')) + LENGTH(COALESCE(prefix, ''))
+pub(crate) const BLOCK_BYTES_SQL: &str =
+    "LENGTH(COALESCE(content, '')) + LENGTH(COALESCE(prefix, ''))
      + LENGTH(COALESCE(suffix, '')) + LENGTH(COALESCE(call_id, '')) + LENGTH(COALESCE(name, ''))
      + LENGTH(COALESCE(args, '')) + LENGTH(COALESCE(intent, '')) + LENGTH(COALESCE(text, ''))
      + LENGTH(COALESCE(result, '')) + LENGTH(COALESCE(memo, '')) + LENGTH(COALESCE(ts, ''))";
@@ -146,7 +166,7 @@ pub(crate) const TURN_COLS: &str = "t.turn_id, t.request_id, t.blocks, t.stop_re
      t.prompt_tokens, t.completion_tokens, t.cached_tokens, t.reasoning_tokens,
      t.cache_write_tokens,
      r.hash, r.model, r.provider, r.protocol, r.base_url, r.system,
-     r.tools_json, r.max_tokens, r.compat_json";
+     r.tools_json, r.max_tokens, r.compat_json, r.profile";
 
 /// Round rows left-joined to their request archive.
 pub(crate) const TURN_FROM: &str =

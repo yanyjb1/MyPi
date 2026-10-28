@@ -1,235 +1,154 @@
-//! The backend's arrivals → the session state and the raw cache, the one writer from outside.
-//! Design: `README.md`.
+//! The one inbound writer: upstream objects become structure, content, flags, and outbox entries.
 
-use crate::server::api::{Call, Opened, PostDone, Reply, StreamItem};
-use crate::server::storage::BlockKind;
+use std::ops::RangeInclusive;
 
-use super::client::{Arrival, Kind, Round};
-use super::range::RangeCache;
-use super::shape::Shapes;
-use super::state::{Level, Life, State};
-use super::window::Window;
+use crate::ipc::contract::{
+    Call, ContentEvent, Event, Opened, PostDone, Reply, SessionEvent, SessionReply, ToolAsk,
+    TurnShape,
+};
 
-/// What an arrival asks the session to do next. The session turns it into a request.
-pub enum Follow {
-    Nothing,
-    /// A row was created just now: enter it, and send the message that was waiting for it.
-    Created(i64),
-    /// An existing session was entered.
-    Watch(i64),
-    /// The task list may have changed.
-    Todo(i64),
-    /// A round just ended: its structure is worth asking for.
-    Shape {
-        session: i64,
-        turn: i64,
-    },
-}
+use super::client::{Arrival, Kind};
+use super::content::ContentCache;
+use super::state::State;
+use super::structure::{Structure, Turn};
 
+/// Write one arrival into the caches, the flags, and the outbox.
 pub fn apply(
     arrival: Arrival,
     state: &mut State,
-    window: &mut Window,
-    shapes: &mut Shapes,
-    range: &mut RangeCache,
-) -> Follow {
+    structure: &mut Structure,
+    content: &mut ContentCache,
+) {
+    let mine = belongs(&arrival, state.attached());
+    if mine {
+        match &arrival {
+            Arrival::Stream(event) => on_stream(event, state, structure, content),
+            Arrival::Answer { call, reply } => on_answer(call, reply, structure, content),
+            Arrival::Done(done) => on_done(done, state),
+            Arrival::Opened {
+                session, opened, ..
+            } => on_opened(*session, opened, state),
+            Arrival::WatchEnded => state.set_busy(false),
+            Arrival::Failed { kind, .. } => {
+                if matches!(kind, Kind::Round | Kind::Watch) {
+                    state.set_busy(false);
+                }
+            }
+        }
+    }
+    if mine {
+        state.push(arrival);
+    }
+}
+
+/// Does this arrival belong to the attached session? A failure or a watch end is always ours.
+fn belongs(arrival: &Arrival, attached: Option<i64>) -> bool {
     match arrival {
-        Arrival::Stream(item) => on_stream(item, state, window, shapes),
-        Arrival::Answer { call, reply } => on_answer(call, reply, state, window, shapes, range),
-        Arrival::Done(done) => on_done(done, state),
-        Arrival::Opened {
-            session,
-            round,
-            opened,
-        } => on_opened(session, round, opened, state, window),
-        Arrival::WatchEnded => {
-            state.set_busy(false);
-            state.notice("这条会话的推送断了".to_string(), Level::Error, Life::Long);
-            Follow::Nothing
-        }
-        Arrival::Failed {
-            kind,
-            call: _,
-            message,
-        } => {
-            if matches!(kind, Kind::Round | Kind::Watch) {
-                state.set_busy(false);
-            }
-            state.notice(message, Level::Error, Life::Long);
-            Follow::Nothing
-        }
+        Arrival::Stream(event) => attached == Some(event.session()),
+        Arrival::Answer { call, .. } => match call_session(call) {
+            Some(session) => attached == Some(session),
+            None => true,
+        },
+        Arrival::Opened { session, .. } => Some(*session) == attached,
+        Arrival::WatchEnded | Arrival::Done(_) | Arrival::Failed { .. } => true,
     }
 }
 
-fn on_stream(item: StreamItem, state: &mut State, window: &mut Window, shapes: &Shapes) -> Follow {
-    match item {
-        StreamItem::Live { blocks, done } => window.push_live(blocks, done),
-        StreamItem::Blocks(blocks) => {
-            let asked_todo = blocks
-                .iter()
-                .any(|b| b.kind == BlockKind::ToolResult && b.name.as_deref() == Some("todo"));
-            window.push_blocks(blocks, state.busy());
-            // A batch can land late: the kept structure says which round it belongs to.
-            restamp(window, shapes, state.busy());
-            state.settle();
-            if asked_todo && let Some(id) = state.attached() {
-                return Follow::Todo(id);
-            }
-        }
-        // Display only: the result block carries the durable text.
-        StreamItem::ToolOutput { call_id, text } => window.set_tool_output(call_id, text),
-        StreamItem::Ended { turn, .. } => {
-            state.set_busy(false);
-            if let Some(turn) = turn {
-                window.end_round(turn);
-                if let Some(session) = state.attached() {
-                    return Follow::Shape { session, turn };
-                }
-            }
-        }
-    }
-    Follow::Nothing
-}
-
-/// Write the kept rounds onto the window again, matching by id and content hash.
-fn restamp(window: &mut Window, shapes: &Shapes, busy: bool) {
-    for shape in shapes.iter() {
-        window.claim(shape.turn, &shape.blocks, busy);
-    }
-}
-
-fn on_answer(
-    call: Call,
-    reply: Reply,
+fn on_stream(
+    event: &Event,
     state: &mut State,
-    window: &mut Window,
-    shapes: &mut Shapes,
-    range: &mut RangeCache,
-) -> Follow {
-    match reply {
-        Reply::Init {
-            turns,
-            blocks,
-            more,
-        } => {
-            if call_session(&call) == state.attached() {
-                shapes.replace(turns);
-                window.replace(blocks, more);
-                restamp(window, shapes, state.busy());
-            }
-        }
-        Reply::Round {
-            turn: _,
-            blocks,
-            older,
-            newer,
-        } => {
-            if call_session(&call) == state.attached() {
-                window.replace_round(blocks, older, newer);
-            }
-        }
-        Reply::Range(blocks) => {
-            if call_session(&call) == state.attached()
-                && let Call::Range { start, end, .. } = call
-            {
-                range.replace(start, end, blocks);
-            }
-        }
-        Reply::Blocks { blocks, more } => {
-            if call_session(&call) == state.attached() {
-                match call {
-                    Call::Older { turn, .. } => window.prepend(blocks, more, turn),
-                    Call::Newer { turn, .. } => window.append(blocks, more, turn),
-                    _ => window.replace(blocks, more),
+    structure: &mut Structure,
+    content: &mut ContentCache,
+) {
+    match event {
+        Event::Content(event) => match event {
+            ContentEvent::Started { .. } => state.set_busy(true),
+            ContentEvent::Live { blocks, done, .. } => {
+                for block in blocks {
+                    content.push_live(block.clone(), *done);
                 }
             }
-        }
-        Reply::Turn { turn, blocks } => {
-            if call_session(&call) == state.attached() {
-                shapes.set(turn, blocks);
-                restamp(window, shapes, state.busy());
+            ContentEvent::Blocks { turn, blocks, .. } => {
+                structure.add_blocks(*turn, blocks);
+                content.merge_landed(blocks.clone());
             }
-        }
-        Reply::Meta(meta) => {
-            if call_session(&call) == state.attached() {
-                state.set_meta(meta);
+            ContentEvent::ToolOutput { call_id, text, .. } => {
+                content.set_tool_output(call_id.clone(), text.clone());
             }
-        }
-        Reply::Usage { lang, groups } => {
-            if call_session(&call) == state.attached() {
-                state.set_usage(lang, groups);
+            ContentEvent::Ended { .. } => {
+                state.set_busy(false);
+                content.clear_tool_output();
             }
-        }
-        Reply::SessionRows(rows) => state.set_rows(rows),
-        Reply::Todo(list) => {
-            if call_session(&call) == state.attached() {
-                state.set_todo(list);
+        },
+        Event::Session(event) => match event {
+            SessionEvent::Meta { .. } => {}
+            SessionEvent::Rewound { .. } => state.set_busy(false),
+            SessionEvent::Deleted { .. } => {
+                state.detach();
+                structure.clear();
+                content.clear();
             }
-        }
-        Reply::Pools(pools) => state.set_pools(pools),
+        },
+        Event::Notice(_) => {}
     }
-    Follow::Nothing
 }
 
-fn on_done(done: PostDone, state: &mut State) -> Follow {
+fn on_answer(call: &Call, reply: &Reply, structure: &mut Structure, content: &mut ContentCache) {
+    match reply {
+        Reply::Session(SessionReply::Init(init)) => {
+            let turns = init.structure.iter().cloned().map(turn_of).collect();
+            structure.replace(Structure::new(turns));
+            content.replace_landed(init.blocks.clone());
+        }
+        Reply::Session(SessionReply::Blocks(blocks)) => content.merge_landed(blocks.clone()),
+        _ => {}
+    }
+}
+
+fn on_done(done: &PostDone, state: &mut State) {
     match done {
-        PostDone::Created(id) => {
+        PostDone::Created(_) => {
             state.set_refused(false);
             state.set_new_born(true);
-            Follow::Created(id)
         }
-        PostDone::Done => {
-            state.set_refused(false);
-            Follow::Nothing
-        }
-        PostDone::Busy => {
-            state.set_refused(true);
-            Follow::Nothing
-        }
+        PostDone::Done => state.set_refused(false),
+        PostDone::Busy => state.set_refused(true),
     }
 }
 
-fn on_opened(
-    session: i64,
-    round: Round,
-    opened: Opened,
-    state: &mut State,
-    window: &mut Window,
-) -> Follow {
+fn on_opened(session: i64, opened: &Opened, state: &mut State) {
     if state.attached() != Some(session) {
-        return Follow::Nothing;
+        return;
     }
     match opened {
-        Opened::Started { turn } => {
-            state.set_busy(true);
-            if let Some(turn) = turn {
-                window.set_turn(turn);
-            }
-        }
-        // Nothing started: already mid-round, or nothing to compact.
-        Opened::Busy => {
-            state.set_busy(true);
-            let what = match round {
-                Round::Submit => "上一轮还没跑完，这条要等它结束",
-                Round::Compact => "没有可压缩的东西（或者这一轮还没跑完）",
-            };
-            state.notice(what.to_string(), Level::Info, Life::Short);
-        }
+        Opened::Started { .. } | Opened::Busy => state.set_busy(true),
     }
-    Follow::Nothing
 }
 
 fn call_session(call: &Call) -> Option<i64> {
     match call {
-        Call::Usage { session, .. }
-        | Call::Init { session, .. }
-        | Call::Round { session, .. }
-        | Call::Range { session, .. }
-        | Call::Older { session, .. }
-        | Call::Newer { session, .. }
-        | Call::Todo { session }
-        | Call::Turn { session, .. }
-        | Call::Meta { session } => Some(*session),
-        Call::Sessions { .. } | Call::Pools => None,
+        Call::Session { session, .. } => Some(*session),
+        Call::Tool(ToolAsk::Todo { session }) | Call::Tool(ToolAsk::Children { session }) => {
+            Some(*session)
+        }
+        Call::Tool(ToolAsk::Memo { session, .. }) => *session,
+        Call::Server(_) => None,
+    }
+}
+
+/// One round's wire shape: its block ids, folded into intervals in id order.
+fn turn_of(shape: TurnShape) -> Turn {
+    let mut ids: Vec<i64> = shape.blocks.iter().map(|block| block.id).collect();
+    ids.sort_unstable();
+    let mut blocks: Vec<RangeInclusive<i64>> = Vec::new();
+    for id in ids {
+        match blocks.last_mut() {
+            Some(last) if *last.end() + 1 == id => *last = *last.start()..=id,
+            _ => blocks.push(id..=id),
+        }
+    }
+    Turn {
+        id: shape.turn,
+        blocks,
     }
 }

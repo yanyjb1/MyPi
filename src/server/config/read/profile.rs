@@ -56,8 +56,8 @@ impl Profile {
         };
         let text = std::fs::read_to_string(p)
             .with_context(|| format!("failed to read tools.yaml: {}", p.display()))?;
-        let v: serde_yaml::Value =
-            serde_yaml::from_str(&text).with_context(|| format!("invalid YAML: {}", p.display()))?;
+        let v: serde_yaml::Value = serde_yaml::from_str(&text)
+            .with_context(|| format!("invalid YAML: {}", p.display()))?;
         let Some(list) = v.get("enabled").and_then(|e| e.as_sequence()) else {
             bail!("tools.yaml needs an `enabled:` list ({})", p.display());
         };
@@ -66,7 +66,9 @@ impl Profile {
             .filter_map(|i| i.as_str().map(str::to_string))
             .collect::<Vec<_>>();
         if names.is_empty() {
-            bail!("tools.yaml has an empty enabled list — keep at least one tool, or drop the file");
+            bail!(
+                "tools.yaml has an empty enabled list — keep at least one tool, or drop the file"
+            );
         }
         Ok(Some(names))
     }
@@ -123,7 +125,12 @@ fn walk(rd: std::fs::ReadDir, root: PathBuf, out: &mut Vec<Profile>) {
 
 /// The active profile: config's `profile:` key, or the built-in `oh-my-pi`.
 pub fn active_name(cfg: &Config) -> String {
-    cfg.app.server.agent.profile.clone().unwrap_or_else(|| OMP_PROFILE.into())
+    cfg.app
+        .server
+        .agent
+        .profile
+        .clone()
+        .unwrap_or_else(|| OMP_PROFILE.into())
 }
 
 /// A profile resolved to concrete values: the system prompt, the tool roster,

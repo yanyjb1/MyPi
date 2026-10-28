@@ -1,13 +1,18 @@
-//! `mypi sessions` — list sessions without touching a socket: a one-shot query
-//! opens the database for reading itself (`memo.md`: read-only work needs no lock).
+//! `mypi sessions` — list sessions through the running server, never the database.
 
-use crate::server::api::call::sessions::display_name;
-use crate::server::api::{self, Call, Reply};
-use crate::server::config::Config;
+use std::path::Path;
+
+use crate::ipc::client::Client;
+use crate::ipc::contract::{Call, Reply, ServerAsk, ServerReply, Viewer, display_name};
+use crate::ipc::endpoint;
 
 /// `mypi sessions`: TSV rows — id, name, started, cwd.
-pub fn run_sessions(cfg: &Config) -> anyhow::Result<()> {
-    let Reply::SessionRows(rows) = api::call::answer(cfg, Call::Sessions { under: None })? else {
+pub fn run_sessions(file: &Path) -> anyhow::Result<()> {
+    let endpoint = endpoint::read(file)?;
+    let client = Client::connect(endpoint, Viewer("oneshot".to_string()))?;
+    let Reply::Server(ServerReply::Sessions(rows)) =
+        client.call(Call::Server(ServerAsk::Sessions { under: None }))?
+    else {
         anyhow::bail!("the sessions door answered something other than rows");
     };
     println!("id\tname\tstarted\tcwd");

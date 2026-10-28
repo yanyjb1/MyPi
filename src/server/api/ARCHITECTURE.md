@@ -1,129 +1,93 @@
-# api architecture
+# Architecture
 
-What the pieces are and how they relate. The design and its reasoning are in `README.md`.
-
----
+`src/server/api` is the server's public surface. It is reached by the IPC server, and it reaches
+storage, config, the agent loop, and the platform. It does not know any front end.
 
 ## Files
 
-| file | holds |
+| Path | What it holds |
 |---|---|
-| `mod.rs` | the declarations, and what this layer exports: the doors' shapes, `StreamItem`, `Opened`, `Viewer` |
-| `types.rs` | `Call`, `Post`, `PostDone`, `Subscribe`, `Reply`, `Viewer`, `ModelId`, `UsageLang`, `CandidatePools` |
-| `driver/mod.rs` | the api's state: the writer, the session table, the running set, the relay, the config; `state(cfg)` builds it once; `call`, `rewind`, `interrupt`, watching, and the two doors that open a stretch |
-| `driver/sessions.rs` | the session table: one `Live` per session, built on demand; `drop_live` lets one go |
-| `driver/running.rs` | which sessions are mid-round, and the flag that stops them |
-| `driver/relay.rs` | storage's one port, and the fan-out to subscribers — per session, keyed by viewer |
-| `driver/round.rs` | one round on its own thread, the outlet that streams it, and letting the state go at its end |
-| `driver/compact.rs` | the compaction's machinery: gather, plan, summarize, land, and settle one that never lands |
-| `call/mod.rs` | the call door: reach the state, open a read connection, dispatch, close |
-| `call/sessions.rs` | the picker's rows |
-| `call/viewport.rs` | the window: first frame, older, newer |
-| `call/usage.rs` | the bill, priced here |
-| `call/complete.rs` | the two completion pools |
-| `call/todo.rs` | the todo list, replayed from the session's own tool calls |
-| `call/meta.rs` | the session row, plus the working directory in memory |
-| `post/mod.rs` | the post door: reach the state, dispatch, and finish the changes the state itself owns |
-| `post/init.rs` | creating a session before any message |
-| `post/name.rs` | `/name` |
-| `post/cwd.rs` | `/cdp` |
-| `post/model.rs` | `/switch` and `/model` |
-| `post/profile.rs` | `/profile`, resolved against the roster |
-| `post/delete.rs` | `/delete` and `/rm` |
-| `post/rewind.rs` | the cut (prune mode; the fork mode is a `todo!`) |
-| `subscribe/mod.rs` | the subscribe door: `watch`, the `Opened` verdict, and its two stretch entries |
-| `subscribe/submit.rs` | `SubmitOp` — open a round |
-| `subscribe/compaction.rs` | `CompactOp` — summarize a context region |
-| `reply/mod.rs` | what the doors send back |
-| `reply/stream.rs` | `StreamItem`, and `Relayed` (a piece off storage's port) |
+| `mod.rs` | `Api`, module declarations, the public re-exports from `ipc::contract`. |
+| `notice.rs` | `Notice`, `NoticeLevel`, `notify`. |
+| `call/mod.rs` | `Call`, `answer`, dispatch. |
+| `call/ctx.rs` | The read context: config, connection, attached session, live sessions, running rounds. |
+| `call/reply.rs` | `Reply`, `SessionReply`, `ToolReply`, `ServerReply`. |
+| `call/session/` | `SessionAsk` and the four session queries; `Init` carries the optional initial todo list; shared read helpers. |
+| `call/tool/` | `ToolAsk`, memo reads, todo gate/replay, child rows. |
+| `call/server/` | `ServerAsk`, config values, completion pools, resume rows. |
+| `post/mod.rs` | `Post`, `PostDone`, `ModelId`, `apply`, dispatch. |
+| `post/init.rs` | The one write that creates a session and answers with its id. |
+| `post/session/` | `SessionWrite` and its files: name, cwd, switch, profile, todo on/off, delete, interrupt, rewind, unwatch. |
+| `post/server/` | `ServerWrite`: default model, reload. |
+| `post/tool/` | `ToolWrite`, memo add/mod/del. |
+| `subscribe/mod.rs` | `Subscribe`, `Opened`, `Retention`, `connect`, `watch`, `submit`, `compact`. |
+| `subscribe/event.rs` | Re-exports `Event`, `ContentEvent`, `SessionEvent`, `StartKind`, `TurnUsage` from `ipc::contract`. |
+| `subscribe/watch.rs` | Registers the session's full stream. |
+| `subscribe/submit.rs` | Opens a round and registers the viewer on its turn. |
+| `subscribe/compact.rs` | Opens a compaction round. |
+| `driver/mod.rs` | The global state, `Driver`, the entry points, round opening, compaction planning, rewind, interrupt; builds the shared MCP bridge. |
+| `driver/sessions.rs` | One `Live` per session, built on demand; job/subagent factories, child specs, and the shared MCP bridge. |
+| `driver/child.rs` | The `Spawn` port: run one child session to its end. |
+| `driver/running.rs` | The running-round claim and stop flags. |
+| `driver/subscriptions.rs` | Viewer streams, the current-turn buffer, queued notices. |
+| `driver/relay.rs` | Storage's relay port and the event conversion. |
+| `driver/round.rs` | One round thread and its outlet. |
+| `driver/wake.rs` | The job wake channel and worker; opens wake rounds with no user message. |
+| `driver/compact.rs` | The compaction thread. |
 
-## The public surface
+## Public surface
 
-| item | what it does |
-|---|---|
-| `call::answer(cfg, call)` | answers a `Call`, on a read connection the state opens |
-| `post::apply(cfg, post)` | carries a `Post` out |
-| `subscribe::watch(cfg, viewer, session)` | one viewer's stream for one session |
-| `subscribe::submit(cfg, session, prefix, text, suffix)` | opens a round; answers started / busy |
-| `subscribe::compact(cfg, session, retention, focus)` | opens a compaction; answers started / busy |
-| `Opened` | what the two stretch doors answer with: `Started` or `Busy` |
-| `Retention` | how much of the tail a compaction keeps, as the surface parsed it |
-| `Call`, `Post`, `Subscribe`, `Reply`, `PostDone` | the door shapes |
-| `StreamItem` | the stream vocabulary; `Ended` names the round it closed |
-| `Viewer` | a front end's own id, carried on every claim |
-| `ModelId`, `CandidatePools` | the shared shapes a surface also names |
+- `api::{Call, Reply, Post, PostDone, Subscribe, Opened, Event, Notice, NoticeLevel, Viewer}`
+  and the rest of the wire vocabulary, re-exported from `ipc::contract`.
+- `api::notify`.
+- `call::answer(cfg, viewer, call)`.
+- `post::apply(cfg, viewer, post)`.
+- `subscribe::{connect, watch, submit, compact}`.
+- `notice::notify`.
 
-`Post::Unwatch` is the other half of a claim: it drops one viewer's stream and asks whether the
-session's state should go with it.
+`driver` is private. The types inside the group modules are public because the door shapes name
+them.
 
-The two doors' contracts (`SubmitOp`, `CompactOp`) are this layer's own: they state what the api's
-state must supply, and nothing outside implements them.
+## Who calls it
 
-## Relationships
+- The IPC server calls the doors and `subscribe::connect`; it forwards `Event` values to the
+  front end.
+- Other server domains call `notice::notify` when they have something to say about a session.
+- A front end reaches the API only through IPC.
 
-```text
-  front end ──subscribe::watch────────────┐  (a stream, per viewer)
-             ──call::answer───────────────┤
-             ──post::apply (…Unwatch)─────┤
-             ──subscribe::submit/compact──┤
-                                          ▼
-                                   ┌─ state ─┐
-                storage Writer ◄────┤ sessions│  (one Live per session)
-                storage Reader ◄────┤ running │  (who is mid-round)
-                                    │ relay   │  (who is watching)
-                                    └────┬────┘
-                                         │ round thread
-                                         ▼
-                  agent::loop::run(writer, connection, live, turn, outlet)
-                                         │
-                      storage Writer ◄───┘ (blocks, archives, round end)
-                                         │
-                         storage Relay ──┴─► the fan-out ──► each viewer's stream
-```
+## What it calls
 
-- **Who calls the api**: a front end, and nothing else. It names the three doors and holds no state
-  of the api's.
-- **Who the api calls**: `storage` (the writer, a read connection, the decoders), `config` (values
-  only), `platform` (the clock, the log, the data directory), and `agent` (the loop, the tools, the
-  request side, the compaction plan).
-- **Who reads the database**: `call/*`, `post/*`, and the state's session table — each opens its own
-  connection, writes its own SQL, and decodes with `storage::decode`.
-- **Who the api does not know**: a front end, the command line, the wire protocol, and the shape of
-  a request body.
-- **The contract** (`crate::commands`) is read by the api for the marker types the session commands
-  implement; the api never parses a command line.
+- `convert`: maps `storage::Block`/`NewBlock`/`SessionMeta`/`RoundUsage` and
+  `agent::TodoPhase` to their `ipc::contract` counterparts.
+- Storage: `Reader`, `Writer`, `Relay`, `Block`, `NewBlock`, `SessionMeta`, `RoundUsage`,
+  `Submit`, `Target`, `Cut`.
+- Config: `Config`, model resolution, profile resolution, the app config.
+- Agent: `Live`, `Settings`, the loop, the tool environment, compaction planning.
+- Platform: time, logging, data and runtime directories.
+- The command marker types: `Name`, `Cdp`, `Switch`, `Model`, `Profile`.
 
-## Threads
+## What it does not know
 
-| thread | created by | lives |
-|---|---|---|
-| the writer | `state()` (through `storage::Writer::open`) | until the process ends |
-| the relay | `state()` | until the process ends; hands storage's pieces to the viewers' streams |
-| a round | `state.submit` (through `subscribe::submit`) | one round: borrows the session's `Live`, runs the loop, gives it back or lets it go, releases the claim |
-| a compaction | `state.compact` | one summarization round, same borrowing rules |
+- The IPC transport, framing, or connection lifetime.
+- Any front end's screen, layout, or rendering.
+- Storage's schema internals; it writes its own SQL against the documented tables.
+- The config registry; it exposes a wire `ConfigValue`.
+- The agent's tool bodies or request encoding.
 
-Two locks guard the state's shared parts: the session table and the running set — plus the relay's
-viewer list. They are taken one at a time, never nested. Dropping a `Live` (and with it the temp
-files of a session's artifacts) happens on the round's own thread, after the claim is released.
+## Synchronization
 
-## Parts that must stay in step
+- One global `Mutex<Driver>` serializes the doors.
+- `Running` is the per-session claim: one round at a time.
+- `Sessions` holds one `Live` per session, a writer handle, and the shared MCP bridge; a `Live` is
+  taken for a round and put back after. A profile chosen mid-session lands here and is written to the
+  session row then.
+- `Subscriptions` holds one stream per viewer, the current-turn buffer, and queued notices.
+- The writer's relay port is the only source of content events; the round's outlet adds tool
+  output and the driver adds started/ended/session events.
+- The API's reader connections are independent of the writer.
 
-1. `call/sessions.rs`'s `SESSION_COLS` and `storage::decode::session_meta` — the columns are read by
-   position, and `call/meta.rs` shares the same constant.
-2. `call/todo.rs`'s replay and the `todo` tool's own operations: the replay runs the tool, so a rule
-   about what an operation does lives in one place only.
-3. `driver/sessions.rs`'s `Settings` assembly and `agent::loop::Settings` — every field the loop
-   reads is filled here.
-4. `driver/round.rs`'s `Preview` and `reply/stream.rs`'s `StreamItem` — what the loop gives out is
-   what a viewer receives. The streamed text reaches storage as `Submit::Blocks { done: false }`,
-   and the request side's cut is what closes it.
-5. `types.rs`'s `Subscribe` variants and the door entries — one variant per entry (watch, submit,
-   compact).
-6. The two questions that reap a session — `relay.watched` and `running.flag` — and every place that
-   asks them (`driver/mod.rs::reap`, `driver/round.rs`, `driver/compact.rs`).
+## Not yet wired
 
-## Not wired yet
-
-1. The entry points reach the ipc layer directly; nothing calls these three doors (第 8 条).
-2. Nothing refreshes the completion pools or the tool roster after a config reload (第 20 条).
-3. The fork mode of a rewind is a `todo!()`.
+- The config registry does not exist yet; the wire `ConfigValue` lives in `ipc::contract`.
+- The compaction summary's turn is not aligned between storage and the API.
+- Memo writes do not go through the writer.

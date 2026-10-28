@@ -3,7 +3,7 @@
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 
-use super::super::decode::{TURN_COLS, TURN_FROM};
+use super::super::decode::{TURN_COLS, TURN_FROM, parse_blocks};
 use super::super::shape::{RequestMeta, TurnRow};
 
 /// Read one round row (inside a transaction, for the write path's own use).
@@ -51,6 +51,25 @@ pub(crate) fn append_list_row(
     Ok(idx)
 }
 
+/// Every block interval the session's list holds.
+pub(crate) fn session_blocks(conn: &Connection, session: i64) -> Result<Vec<[i64; 2]>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.blocks FROM session_turns s JOIN turns t ON t.turn_id = s.turn_id
+          WHERE s.session_id = ?1 ORDER BY s.idx",
+    )?;
+    let rows = stmt.query_map([session], |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for raw in rows {
+        out.extend(parse_blocks(&raw?)?);
+    }
+    Ok(out)
+}
+
+/// Is this id inside one of the intervals?
+pub(crate) fn in_ranges(ranges: &[[i64; 2]], id: i64) -> bool {
+    ranges.iter().any(|[lo, hi]| *lo <= id && id <= *hi)
+}
+
 /// Write a request archive row (deduplicated by content hash), returning its
 /// `request_id`.
 pub(crate) fn put_request_meta(tx: &rusqlite::Transaction<'_>, r: &RequestMeta) -> Result<i64> {
@@ -67,14 +86,16 @@ pub(crate) fn put_request_meta(tx: &rusqlite::Transaction<'_>, r: &RequestMeta) 
     }
     tx.execute(
         "INSERT INTO request_meta
-            (hash, model, provider, protocol, base_url, system, tools_json, max_tokens, compat_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            (hash, model, provider, protocol, base_url, profile, system, tools_json, max_tokens,
+             compat_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             hash,
             r.model,
             r.provider,
             r.protocol,
             r.base_url,
+            r.profile,
             r.system,
             r.tools_json,
             r.max_tokens as i64,
@@ -98,6 +119,7 @@ fn request_hash(r: &RequestMeta) -> String {
     eat(r.provider.as_bytes());
     eat(r.protocol.as_bytes());
     eat(r.base_url.as_bytes());
+    eat(r.profile.as_bytes());
     eat(r.system.as_bytes());
     eat(r.tools_json.as_bytes());
     eat(&(r.max_tokens as u64).to_be_bytes());

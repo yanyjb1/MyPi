@@ -1,85 +1,106 @@
-//! Where every binary mode fans out: the two processes, and the one-shot
-//! queries. The modes are the ones `mypi --help` lists.
+//! Where every binary mode fans out: the two processes, and the one-shot queries.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 
 use mypi::cli::Cli;
-use mypi::ipc;
-use mypi::ipc::client::Client;
+use mypi::ipc::contract::Viewer;
+use mypi::ipc::endpoint::{self, Endpoint};
 use mypi::ipc::server;
+use mypi::server::api::Api;
 use mypi::server::config::Config;
-use mypi::server::platform::ipc::Cost;
 use mypi::server::platform::time;
 use mypi::server::storage;
+use mypi::ui::session::Switches;
+use mypi::ui::tui;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse(std::env::args().skip(1))?;
-    let cfg = Config::load()?;
     let db = storage::default_path();
 
     if cli.server {
-        return run_server(cfg, &db);
+        return run_server(&db);
     }
     if cli.sessions {
-        return mypi::oneshot::run_sessions(&cfg);
+        return mypi::oneshot::run_sessions(&Endpoint::file_path(&db));
     }
-    run(cfg, &db)
+    if let Some(file) = std::env::var_os("MYPI_ENDPOINT") {
+        return front_end(PathBuf::from(file), &cli);
+    }
+    if let Ok(endpoint) = endpoint::read(&Endpoint::file_path(&db)) {
+        return front_end_with(endpoint, &cli);
+    }
+
+    let cfg = Config::load()?;
+    let kind = cfg.app.server.platform.ipc.cost();
+    let endpoint = Endpoint::for_db(&db, kind);
+    let file = Endpoint::file_path(&db);
+    let Some(claim) = server::claim(&db)? else {
+        anyhow::bail!("another mypi owns {}", db.display());
+    };
+    time::init(cfg.app.server.platform.timezone.as_deref());
+    let api = Arc::new(Api::new(cfg));
+    let bound = server::bind(api, &db, endpoint, claim)?;
+    let mut front = std::process::Command::new(std::env::current_exe()?)
+        .env("MYPI_ENDPOINT", &file)
+        .spawn()
+        .context("cannot start the front end")?;
+    server::serve(bound)?;
+    let _ = front.wait();
+    Ok(())
 }
 
-/// `mypi --server`: the server alone. Losing the lock means somebody else already serves this database.
-fn run_server(cfg: Config, db: &std::path::Path) -> anyhow::Result<()> {
+/// `mypi --server`: the server alone.
+fn run_server(db: &Path) -> anyhow::Result<()> {
+    let cfg = Config::load()?;
     let Some(claim) = server::claim(db)? else {
         anyhow::bail!("another mypi owns {}", db.display());
     };
     time::init(cfg.app.server.platform.timezone.as_deref());
-    server::run(cfg, db, claim)
+    let kind = cfg.app.server.platform.ipc.cost();
+    let endpoint = Endpoint::for_db(db, kind);
+    server::run(Api::new(cfg), db, endpoint, claim)
 }
 
-/// `mypi`: a server if there is none, then a front end on this terminal.
-fn run(cfg: Config, db: &std::path::Path) -> anyhow::Result<()> {
-    let cost = cfg.app.server.platform.ipc.cost();
-    let path = ipc::socket_path(db);
-
-    // Somebody is serving this database already: this process is a front end.
-    if Client::connect(cost, &path, ipc::viewer()).is_ok() {
-        return front_end(cfg, &path, cost);
-    }
-
-    if let Some(claim) = server::claim(db)? {
-        // Nobody was serving and the lock is ours: become the server, then start the front end.
-        time::init(cfg.app.server.platform.timezone.as_deref());
-        let bound = server::bind(cfg.clone(), db, claim)?;
-        let mut front = std::process::Command::new(std::env::current_exe()?)
-            .spawn()
-            .context("cannot start the front end")?;
-        server::serve(bound)?;
-        let _ = front.wait();
-        return Ok(());
-    }
-
-    // Somebody else won the race and is starting up: wait for their socket.
-    wait_for_front_end(cfg, &path, cost)
+/// The front end's own process, once the server is reachable.
+fn front_end(file: PathBuf, cli: &Cli) -> anyhow::Result<()> {
+    let endpoint =
+        endpoint::read(&file).with_context(|| format!("cannot read {}", file.display()))?;
+    front_end_with(endpoint, cli)
 }
 
-/// Wait for the socket of a server that is starting up, then be a front end.
-fn wait_for_front_end(cfg: Config, path: &std::path::Path, cost: Cost) -> anyhow::Result<()> {
-    for _ in 0..200 {
-        if Client::connect(cost, path, ipc::viewer()).is_ok() {
-            return front_end(cfg, path, cost);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-    anyhow::bail!(
-        "a mypi server is starting up but never answered on {}",
-        path.display()
-    )
+fn front_end_with(endpoint: Endpoint, cli: &Cli) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir().context("cannot read the current directory")?;
+    let session =
+        mypi::ui::session::Session::connect(endpoint, cwd.clone(), Switches::default(), viewer())?;
+    let model = cli.model.as_deref().and_then(model_id);
+    let startup = if let Some(id) = cli.attach {
+        tui::app::Startup::attach(cwd, id, model)
+    } else if cli.resume {
+        let mut startup = tui::app::Startup::resume(cwd);
+        startup.model = model;
+        startup
+    } else {
+        tui::app::Startup::main(cwd, model)
+    };
+    tui::run(session, startup)
 }
 
-/// The front end's own process, once the server is reachable. The terminal side is the next wave.
-fn front_end(cfg: Config, path: &std::path::Path, _cost: Cost) -> anyhow::Result<()> {
-    time::init(cfg.app.server.platform.timezone.as_deref());
-    anyhow::bail!(
-        "connected to the server at {} — the front end itself is the next wave",
-        path.display()
-    )
+fn model_id(spec: &str) -> Option<mypi::ipc::contract::ModelId> {
+    let (provider, model) = spec.split_once(':')?;
+    Some(mypi::ipc::contract::ModelId {
+        provider: provider.to_string(),
+        model: model.to_string(),
+    })
+}
+
+fn viewer() -> Viewer {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Viewer(format!("{}-{now}", std::process::id()))
 }

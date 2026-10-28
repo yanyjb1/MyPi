@@ -1,208 +1,189 @@
-# api
+# API
 
-The surface a front end talks to, and the server's own reuse face. Nothing else under `server/` is a
-front end's business.
+`src/server/api` implements the wire contract in `ipc::contract`; it owns the semantics, not the
+shapes. Storage, config, agent and the front ends live behind it.
 
-## 1. The design
+## 1. Design / Schema
 
-### Three doors
+### Doors
 
-| door | what it is | what comes back |
-|---|---|---|
-| `call` | one question, one answer | a `Reply`, at once |
-| `post` | one change of session state | a `PostDone` |
-| `subscribe` | open a stretch | a channel, or a refusal |
+- `call` — a read-only question, answered once.
+- `post` — a state change, answered with a receipt.
+- `subscribe` — a viewer's stream, and the two writes that open a round on it.
+- `notice` — the server's outbound path; not a door.
 
-**`call`** — `call::answer(cfg, call)`. Eight questions: the usage bill, the resume picker's rows,
-three viewport reads (the first frame, older, newer), the todo list, a session's metadata, the two
-completion pools. The front end reads no database and does no arithmetic; it gets a finished answer.
+### Call
 
-**`post`** — `post::apply(cfg, post)`. Nine changes: `/name`, `/cdp`, `/switch`, `/model`,
-`/profile`, creating a session, deleting one, an interrupt, a rewind. A change answers nothing — the
-value it changed is the caller's own, and no error back means it landed. Creating a session is the
-one exception: without the id the front end cannot open a round, so that one answers with it.
+```text
+Call::Session { session, ask: SessionAsk }
+    SessionAsk::Init { limit }
+    SessionAsk::Blocks { ranges }
+    SessionAsk::Meta
+    SessionAsk::Usage { lang }
 
-An interrupt is fire-and-forget: the flag being set is all it promises, and the truth arrives as the
-`StreamItem::Ended` that closes the running round's stream. A rewind is one-shot too: it cuts the
-list and sweeps what nothing references, and the front end works out what survived from the window it
-already holds.
+Call::Tool(ToolAsk)
+    ToolAsk::Todo { session }
+    ToolAsk::Memo { session, op, scope, name }
+    ToolAsk::Children { session }
 
-**`subscribe`** — three entries. One watches a session, two open a stretch on it:
+Call::Server(ServerAsk)
+    ServerAsk::Config { key }
+    ServerAsk::Pools
+    ServerAsk::Sessions { under }
+```
 
-| entry | does | answers |
-|---|---|---|
-| `subscribe::watch(cfg, viewer, session)` | claims the session's stream for one viewer | that stream, which carries every piece about the session until the viewer stops watching |
-| `subscribe::submit(cfg, session, prefix, text, suffix)` | opens one round | `Opened::Started`, or `Opened::Busy` when the session is already mid-round |
-| `subscribe::compact(cfg, session, retention, focus)` | opens one compaction | the same two, `Busy` also when there is nothing to compact |
+### Post
 
-A round's content does **not** come back from `submit`: one session has one stream per viewer, and a
-surface watches *before* it asks. That is what lets two surfaces watch one session without one of
-them stealing the other's pieces. A stretch ends at `StreamItem::Ended`, which names the round it
-closed; whoever stopped it, that is the end.
+```text
+Post::Session { session, write: SessionWrite }
+    SessionWrite::Name, Cwd, Switch, Profile, TodoOn, TodoOff, Delete, Interrupt, Rewind, Unwatch
 
-Watching stops with `Post::Unwatch` (`viewer` + `session`, no answer). A front end makes its own id
-up at startup — `Viewer` — and carries it on every claim; the server never invents one.
+Post::Tool(ToolWrite)
+    ToolWrite::Memo(MemoWrite)
 
-What the doors send back is public: `Reply`, `PostDone`, `StreamItem`, `Opened`. Everything else is
-this layer's own business.
+Post::Server(ServerWrite)
+    ServerWrite::DefaultModel, Reload
 
-### The api's state
+Post::Init { cwd, model, name, profile }
+```
 
-Nothing outside this layer holds a handle to it. The three doors reach it through one private
-`state(cfg)`, which opens the database the first time it is asked and keeps it for the life of the
-process. The file is `history.db` under the platform's data directory — the XDG one
-(`$XDG_DATA_HOME/mypi`, else `~/.local/share/mypi`).
+`PostDone` is `Done`, `Created(id)`, or `Busy`.
 
-Inside it: the writer, one `Live` per session, the set of running rounds, the relay, and the config.
+### Subscribe
 
-### The shapes
+```text
+Subscribe::Watch { session }
+Subscribe::Submit { session, prefix, text, suffix }
+Subscribe::Compact { session, retention, focus }
+```
 
-`types.rs` carries the doors' vocabulary: `Call`, `Post`, `Subscribe`, `Reply`, `PostDone`,
-`Viewer`, `ModelId`, `UsageLang`, `CandidatePools`. Every argument is a **parsed value** — a surface
-parses its own input and hands typed pieces over; no raw command line crosses this file. `Reply` may
-name the modules that define its payloads.
+`Opened` is `Started { turn }` or `Busy`. `Retention` is `Default`, `Tokens(n)`, or `Blocks(n)`.
 
-`reply/stream.rs` carries what a viewer sees on its stream: `StreamItem`, whose `Ended` names the
-round that just closed. `Relayed` is one piece as it leaves storage's port, with the session it
-belongs to.
+### Replies and events
 
-`Opened` (in `subscribe`) is the verdict a stretch door answers with: started, or busy. The round's
-id arrives later, with `StreamItem::Ended`.
+```text
+Reply::Session(SessionReply) | Tool(ToolReply) | Server(ServerReply)
 
-### A round
+SessionReply::Init(InitReply) | Blocks(Vec<Block>) | Meta(SessionState) | Usage(UsageReply)
+ToolReply::Todo(Vec<TodoPhase>) | Memo(MemoData) | Children(Vec<ChildRow>)
+ServerReply::Config(ConfigValue) | Pools(CandidatePools) | Sessions(Vec<SessionRow>)
 
-1. A surface calls `watch` for the session it wants to see (once, when it opens it).
-2. It calls `submit` with the session id and the message already split into prefix, body and suffix.
-3. The session is claimed. Already running → `Busy`, and nothing else happens.
-4. The session's `Live` is borrowed from the session table (built from the session row, the config and the session's own transcript, if this is the first round).
-5. The user's message is pushed to the writer and **lands at once** — the round row and the user's block go in together, and the answer carries the round id.
-6. A thread runs `agent::loop::run` for that round. The loop cuts the reply into blocks, hands them to storage, runs the tools, and settles the round when it stops. Every piece reaches the watchers on the session's stream.
-7. The claim is released and the `Live` goes back — or is let go, when nobody is watching any more. Everything that landed is in storage, so a session touched again builds its state from its transcript.
+Event::Content(ContentEvent) | Session(SessionEvent) | Notice(Notice)
 
-A compaction takes the same shape: claim the session, plan the cut from the transcript, and run the
-summarization on a thread. The summary lands as a round of its own, and the kept stretch gets one
-borrowed index per whole round. It is a round like any other — it just runs no tools — so storage
-relays its end when it lands. A summarization that never lands settles its round here instead, with
-no reason recorded, so the stretch still ends.
+ContentEvent::Started | Live | Blocks | ToolOutput | Ended
+SessionEvent::Meta | Rewound | Deleted
+```
 
-### The session table
+`StartKind` is `Submit`, `Compact`, or `Wake`.
 
-One `Live` per session: the provider connection, the working directory **in memory**, the tool
-roster, the todo list, the stop flag, the artifact handle (what a `#<ref>` materializes into a temp
-file), and the settings in effect. It is built on demand and lives between rounds.
+### The stream
 
-**When the last viewer leaves and the last round ends, the `Live` is let go.** Two questions decide
-it — is anybody watching (the relay's list), is a round running (the running set) — and both the
-last unwatch and the round's own end ask them. Letting it go drops the provider connection and the
-subprocess behind it, and the temp files that session's artifacts were written into; nothing else,
-because everything that matters is in storage and the next round builds the state again. What the
-slot remembers besides the `Live` — the profile chosen mid-session, the compaction instruction of
-the profile in effect — stays.
+- `subscribe::connect` creates one stream per viewer.
+- `Watch` points that stream at a session and receives every turn.
+- `Submit` and `Compact` point it at one turn (session + turn).
+- `ContentEvent` carries the turn; `SessionEvent` and `Notice` are session-wide.
+- The API keeps only the current turn's increments. A viewer that joins mid-turn receives the
+  current turn's backlog first, then increments.
+- `Ended` closes the turn: its buffer and its turn subscriptions are dropped.
+- There is no history in the API. History is read with `Call::Session::Init` and
+  `Call::Session::Blocks`.
 
-Two things a session row cannot carry sit beside it: the profile chosen mid-session (it lands at the
-next of two moments), and the compaction instruction of the profile in effect.
+### Viewer
 
-The working directory is the one piece of state that is not in the database at all: the model's `cd`
-moves it, `/cdp` resolves `~` and relative paths against it, and nothing writes it to a row. A front
-end reads it through `Call::Meta`.
+`Viewer` is a UUID string made by the front end. The server keeps viewer → session for the
+attached session; a `Call::Server::Config` for `model.*` or `profile.*` resolves against it.
+The viewer is carried by the connection, never by a `Call`, `Post`, or `Subscribe` value.
 
-### The relay, and the text that streams
+### Query rules
 
-Storage relays to exactly one port — the api's. Every piece names its session. The state keeps the
-subscribers **per session, keyed by viewer** and hands each piece to every viewer of that session; a
-stream that nobody holds any more is dropped on the spot, which is also how the state knows when a
-session has no viewers left. The api's own pieces go through the same fan-out: the reply's live
-increments, and a tool's running output. (A compaction's end is not one of them: it lands in storage,
-so storage relays it.)
+- `Init`: the whole structure from the read start, newest round first, plus the newest `limit`
+  blocks in ascending id order. When the session's `todo_on` flag is true and the replay is
+  non-empty, it also carries `todo`; otherwise the field is absent. It does not return
+  `todo_on` itself.
+- `Blocks`: closed ranges, in request order, ascending inside a range, overlaps kept. A range
+  outside the session is an error.
+- `Meta`: the session row plus the live working directory.
+- `Usage`: one row per model, priced from the stored tokens and the config's rates.
+- `Todo`: the session's list, replayed from its own `todo` calls.
+- `Memo`: names, current content, or the full history; `current` needs a session, `global` does
+  not. The single-note operation is `show`; `history` returns every version.
+- `Children`: the child sessions a `task` call spawned, with anchor, row, intent, and state.
+- `Config`: a registry-shaped value; `model.*` and `profile.*` use the attached session, global
+  keys ignore it; an unknown key is an error.
+- `Pools`: model ids and profile names for completion.
+- `Sessions`: resume rows, newest first, with child sessions filtered out.
 
-The loop's outlet hands the reply's increments to the writer as a block that is **still being
-written**. The writer relays every piece the moment it arrives and holds it back from the disk; the
-request side's cut closes the block, and that cut is the version that lands. A front end sees the
-text as it streams, and the transcript gets one whole block per message.
+### Write rules
 
-A tool's running output is the one piece that never becomes a block: it goes straight to the same
-fan-out, because there is no block for it to belong to.
-
-### Reading
-
-A reader opens its own connection (`Reader::open`), writes its own SQL, decodes rows with
-`storage::decode`'s column lists and decoders, and closes the connection. `call/*` and `post/*` do
-this per request; the state does it when it needs the session row.
-
-### Invariants
-
-1. One session runs one round at a time. The claim is the lock; storage does not know about it.
-2. The user's message lands before the loop starts. The loop reads it back out of the list.
-3. A round's content is landed by the request side, never by the api's preview.
-4. Every query is written where it is asked, and no layer above storage spells out a column list.
-5. `Post::Init` is the only change that answers with a body.
-6. One session has one stream per viewer, and a stream outlives any single round: a round's end
-   names the round it closed instead of closing the stream.
-7. A session's `Live` is let go only when nobody watches it and nothing runs in it.
+- `Post` is the only write door.
+- `Delete` and `Rewind` are refused while the session is mid-round; `Name`, `Cwd`, `Switch` and
+  `Profile` are not.
+- `Interrupt` only sets the running round's stop flag.
+- `Unwatch` drops the viewer's stream.
+- `Delete` refuses a child session; deleting a parent deletes its children and stops their jobs.
+- `Rewind` only prunes; the fork mode is not built.
+- `Reload` is refused while any session runs, replaces the config, drops idle `Live`s, and rebuilds the MCP bridge.
+- `Init` is the only write that answers with a new id.
+- `TodoOn` and `TodoOff` are transition writes: one `true` at the start, one `false` at the
+  end, not one per `todo` toolresult. Both carry the `call_id` of the relevant `todo` toolresult.
+  `TodoOn` writes `sessions.todo_on = true` and the literal `true` into that block's `memo`;
+  `TodoOff` writes `false` into the flag and the memo. The front end is the only maintainer of
+  the list; the backend does not infer or repair the flag.
+- A memo `add` refuses an existing name; `mod` appends a version; `del` removes every version.
+  Identity is `scope + name`; `anchor` is provenance. A `current` write carries the latest landed
+  block as its anchor and that block must belong to the owning session; `global` carries no anchor.
 
 ## 2. Design intent
 
-**Three doors, because the three ways of talking are genuinely different.** A question has an answer;
-a change does not (the value it changed is the caller's own, and no error means it landed); a stretch
-streams, so it answers with a channel and the content arrives on it.
+- **Three doors, not one.** A read, a write, and a stream have different failure and lifetime
+  rules; one enum would force every caller to carry the other two.
+- **Groups and queries.** A door names a business group; the group names one operation. Adding a
+  query touches its group, not the door or the other groups.
+- **Grouped replies and events.** The top level carries only group tags, so the wire vocabulary
+  stays stable while a group grows.
+- **One stream per viewer.** A session's content is one stream; subscriptions are filters over it.
+  Two front ends can watch the same session without duplicating the producer.
+- **Current-turn buffer, no history.** The stream is for live increments; history is a read. This
+  keeps the API from becoming a second transcript store.
+- **Backlog on join.** A viewer that starts watching mid-turn still sees the turn from its first
+  event; `Ended` is the only cleanup point.
+- **Notice is not a door.** Doors are front-end requests; a notice is the server speaking. It
+  shares the session stream but has no group or query.
+- **Viewer on the connection.** The front end's identity belongs to its connection, not to every
+  request; the server keeps the mapping.
+- **Config follows the attached session.** `model.*` and `profile.*` are session-relative;
+  global keys are not. The caller does not pass a session to a config read.
+- **Child sessions are sessions.** They reuse the loop, storage, and relay; the API only refuses
+  a direct submit and a direct delete, and lists them under their anchor.
+- **Memo is a tool.** Reads are `Call::Tool`; writes are `Post::Tool`; identity is `scope + name`
+  and the anchor is only provenance. A `current` write uses the latest landed block; `global` has
+  no anchor.
+- **Todo is front-end state.** The front end owns the list and the on/off transition; the
+  backend only stores the flag and the transcript marker. `Init` gives the initial list once,
+  and only when it is non-empty.
 
-**No handle, because a front end should hold no server state.** Opening a database, keeping one
-`Live` per session, remembering which rounds are running and routing storage's relay are not a front
-end's business — and neither is remembering to build them. The state builds itself on first use, and
-a surface names only the three doors.
+## 3. Unresolved
 
-**Interrupt and rewind are changes, not subscriptions.** Neither streams anything of its own: an
-interrupt sets a flag and a rewind cuts a list. Their receipts are either slow (the round's own end)
-or uninteresting (a cut the front end can work out from its own window), so they answer nothing at
-all rather than inventing a second way to say "done".
+- The config registry is not built. The wire `ConfigValue` lives in `ipc::contract`; global keys
+  are resolved by walking the serialized app config, and the registry should replace that lookup.
+- The compaction summary is landed by storage as its own round; the API ends the fixed
+  `/compact` turn itself. Storage and the API must agree on which turn a compaction's blocks
+  belong to.
+- Memo writes use a transaction on a read/write connection; the writer does not own them yet.
 
-**A session id is mandatory.** A front end creates the session first (`Post::Init`) and opens rounds
-with the id it got back; there is no path that creates one on the way in.
+The three implementation deviations from the target form are recorded in `EXTRA.md`; none of them
+is a design goal.
 
-**`/profile` has two moments, because the profile is a prefix.** Swapping the system prompt and the
-tool roster mid-round would change the bytes a request is built from while it runs. It lands before a
-new session's first message, and before the first message after a compaction — the two points where
-the prefix is rebuilt anyway. A profile chosen in between waits in the session table.
+## 4. Config fields
 
-**The writer separates forwarding from writing.** A reply's text is handed in while it is still
-being written: relayed at once, never landed. Only a finished block is written, and the request
-side's cut is what finishes it. That keeps one rule in one place — a surface sees text the moment it
-exists, the disk sees whole blocks — and the same channel carries both, so no second path to the
-surface is needed.
-
-**Reading opens its own connection, because reads must not wait for the writer.** A reader is never
-locked out by a batch landing. It also keeps the api free of a shared connection: the writer's queue
-is the only shared thing.
-
-**One `Live` per session, built on demand, because a round needs state that outlives it.** The
-connection, the roster and the in-memory directory are expensive to rebuild and wrong to share. A
-round borrows its session's `Live` and gives it back; two sessions never touch the same one.
-
-**`/switch` retargets the running session.** The row is the durable answer, and the state updates the
-`Live`'s connection so the next round uses the new model without a restart.
-
-## 3. Open questions
-
-1. **Nothing calls these three doors yet.** The entry points reach the ipc layer directly, so
-   `watch` / `submit` / `compact` have no caller outside this layer (第 8 条).
-2. **Nothing renews the lists after a config reload.** The completion pools and the tool roster are
-   snapshots taken when a session's state is built (第 20 条).
-3. **The fork mode.** `rewind_non_prune` is a `todo!()`.
-4. **The `Subscribe` shape has no caller.** The three entries take loose arguments, so nothing
-   constructs `Subscribe`; the front end's own wave decides whether it stays.
-
-## 4. Config
-
-Read through `Config`; this layer opens no file.
-
-| key | what it decides |
+| Key | Use |
 |---|---|
-| `config.server.storage.batchTools` | handed to `Writer::open` — how many tool rounds land one batch |
-| `config.server.agent.profile` | the profile a session starts under (the built-in `oh-my-pi` when absent) |
-| `config.server.agent.loop.maxToolCalls` | the loop's fence, as `Live.settings.fence` |
-| `config.server.agent.tools.*` | `bashTimeoutSecs`, the output limits, the browser package, `emptyReply` — the rest of `Live.settings` |
-| `config.server.request.compact.retainTail` | the tail a compaction keeps when the user names no budget |
-| `config.server.request.compact.instructionFile` | the compaction template, unless the profile carries its own |
-| `config.server.api.defaultModel` | the model a session without one runs |
-| `models.yml` | the provider, its endpoint, its key (`${ENV}` resolved), and the model's cost and `maxOutputTokens` |
-| `config.tui.fx` | the currency folding the `/usage` bill applies to unit prices |
+| `config.server.api.defaultModel` | Default model written by `Post::Server::DefaultModel`; read by `Config`. |
+| `config.server.storage.batchTools` | Writer batch size at driver open. |
+| `config.server.agent.profile` | Active profile when a session has none. |
+| `config.server.agent.loop.maxToolCalls` | Fence put into each `Live`'s `ToolBudget`. |
+| `config.server.agent.tools.*` | Output limits, browser, bash timeout, and job limits for each `Live`. |
+| `config.server.agent.subagent.maxToolCalls` | Default child budget; `task` may override it. |
+| `config.server.request.compact.*` | Compaction plan and instruction. |
+| `config.server.pruneOnRewind` | Must be true; the config loader refuses the fork mode. |
+| `config.ui.*`, `config.tui.*` | Reachable through `Call::Server::Config`; owned by the front ends. |

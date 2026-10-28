@@ -31,7 +31,8 @@ A key's name is its whole address: **area . path . name**.
 
 | area | written as | controls | example |
 |---|---|---|---|
-| configuration | `config.` | everything `config.yaml` carries | `config.server.api.defaultModel` |
+| configuration | `config.` | the app half of `config.yaml` | `config.server.api.defaultModel` |
+| mcp | `mcp.` | the top-level MCP half of `config.yaml` | `mcp.servers.local.command` |
 | model | `models.` | everything `models.yml` carries | `models.providers.<name>.baseUrl` |
 | profile | `profile.` | what the enabled profile supplies | `profile.system` |
 
@@ -70,7 +71,7 @@ A profile is a directory under `profiles/`, and its dotted relative path is its 
 
 ### What lives in memory
 
-One loaded `Config` per process, built once at startup. A caller holds the copy it was handed.
+One loaded `Config` per process. `Post::Server::Reload` replaces it; callers re-read what they need.
 
 ## 2. Design intent
 
@@ -84,14 +85,12 @@ documented behaviour.
 
 ## 3. Open questions
 
-1. **Nothing re-reads the files at runtime.** A changed value needs a restart, and nothing downstream
-   refreshes the lists it built from the old one (第 20 条).
-2. **`config.server.agent.tools.web.*` has no reader.** The four output limits are declared; the web
-   engines still use their own constants (第 14 条).
-3. **`config.server.agent.reloadOnCompaction` has no semantics.** The key is declared; "re-read the
+1. **Reload does not push.** `Post::Server::Reload` replaces the config, but other front ends are not
+   told; each must re-ask for the lists it built from the old one (第 20 条).
+2. **`config.server.agent.reloadOnCompaction` has no semantics.** The key is declared; "re-read the
    profile's tool list after a compaction" is not implemented.
-4. **The process's working directory is read from the environment, not from `platform`** (第 22 条).
-5. **`config.server.request.streaming` is honored at the backend-to-front-end edge**
+3. **The process's working directory is read from the environment, not from `platform`** (第 22 条).
+4. **`config.server.request.streaming` is honored at the backend-to-front-end edge**
    (`src/ipc/stream.rs`). Whether the gateway itself answers with increments is a different question,
    and no key in this file answers it.
 
@@ -102,8 +101,34 @@ This layer owns the three sources. Other domains ask it for values; none of them
 | source | root keys | file |
 |---|---|---|
 | configuration | `config.server.*` (api, request, agent, storage, platform) and `config.tui.*` | `config.yaml`, under each root |
+| mcp | `mcp.servers.<name>.*` — command, args, env, cwd, timeout | `config.yaml`, top-level |
 | model | `models.providers.<name>.*` — where the provider is, its wire protocol, its key, its models' prices and switches | `models.yml`, under each root |
 | profile | `profile.system`, `profile.tools`, `profile.compactInstruction` | `profiles/<name>/`, under each root |
+
+The job limits live under `config.server.agent.tools.kairos`:
+
+| key | default | purpose |
+|---|---:|---|
+| `maxConcurrent` | 4 | jobs allowed at once in one session |
+| `timeoutSecs` | 3600 | default command timeout |
+| `maxOutputBytes` | 8388608 | bytes captured per job |
+| `maxRetained` | 8 | completed unread results kept per session |
+
+The subagent key lives under `config.server.agent.subagent`:
+
+| key | default | purpose |
+|---|---:|---|
+| `maxToolCalls` | 1000 | non-`final` calls one child may make; `task` can override per child |
+
+MCP servers live at top-level `mcp:`:
+
+| key | default | purpose |
+|---|---|---|
+| `servers.<name>.command` | required | executable to start; no shell |
+| `servers.<name>.args` | `[]` | argv passed as is |
+| `servers.<name>.env` | `{}` | extra environment over the inherited one |
+| `servers.<name>.cwd` | process cwd | child working directory |
+| `servers.<name>.timeoutSecs` | 120 | start, handshake, list and call timeout |
 
 ## See also
 

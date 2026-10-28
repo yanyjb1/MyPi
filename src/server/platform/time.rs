@@ -158,20 +158,37 @@ fn parse_tzif(data: &[u8]) -> Option<Zone> {
         transitions.push((t, *offsets.get(idx)?));
     }
     // Before the first transition use the first non-DST type (the TZif convention).
-    let initial = standard
-        .or_else(|| offsets.first().copied())
-        .unwrap_or(0);
+    let initial = standard.or_else(|| offsets.first().copied()).unwrap_or(0);
     Some(Zone {
         transitions,
         initial,
     })
 }
 
-fn unix_now() -> i64 {
+pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+pub(crate) fn offset_at(unix: i64) -> i32 {
+    local_zone().offset_at(unix)
+}
+
+pub(crate) fn local_parts(unix: i64) -> (i64, u32, u32, u32, u32, u32) {
+    let local = unix + local_zone().offset_at(unix) as i64;
+    let days = local.div_euclid(86_400);
+    let secs = local.rem_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    (
+        y,
+        m,
+        d,
+        (secs / 3600) as u32,
+        ((secs % 3600) / 60) as u32,
+        (secs % 60) as u32,
+    )
 }
 
 /// Now (local zone) as `YYYY-MM-DD HH:MM:SS`.
@@ -196,7 +213,7 @@ fn stamp_from_unix(local: i64) -> String {
 
 /// Howard Hinnant's `civil_from_days`: days since 1970-01-01 → (y, m, d).
 /// Floored arithmetic, so it is correct for negative (pre-1970) inputs too.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097); // [0, 146096]
@@ -218,7 +235,9 @@ fn parse_stamp(stamp: &str) -> Option<i64> {
     }
     let num = |a: usize, z: usize| -> Option<i64> {
         let s = std::str::from_utf8(b.get(a..z)?).ok()?;
-        s.bytes().all(|c| c.is_ascii_digit()).then(|| s.parse().ok())?
+        s.bytes()
+            .all(|c| c.is_ascii_digit())
+            .then(|| s.parse().ok())?
     };
     let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
     let (h, mi, s) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
@@ -233,7 +252,7 @@ fn parse_stamp(stamp: &str) -> Option<i64> {
 }
 
 /// Inverse of [`civil_from_days`]: (y, m, d) → days since 1970-01-01.
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+pub(crate) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400; // [0, 399]

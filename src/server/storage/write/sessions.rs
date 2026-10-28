@@ -1,4 +1,4 @@
-//! Session rows: create one, rename it, point it at a model, migrate it.
+//! Session rows: create one, rename it, point it at a model, migrate it, mark it.
 
 use anyhow::Result;
 
@@ -21,11 +21,12 @@ impl Store {
         cwd: &str,
         model: Option<(&str, &str)>,
         name: Option<&str>,
+        profile: Option<&str>,
     ) -> Result<i64> {
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT INTO sessions (started_at, cwd) VALUES (?1, ?2)",
-            rusqlite::params![started_at, cwd],
+            "INSERT INTO sessions (started_at, cwd, profile) VALUES (?1, ?2, ?3)",
+            rusqlite::params![started_at, cwd, profile],
         )?;
         let id = tx.last_insert_rowid();
         if let Some(name) = name {
@@ -71,6 +72,15 @@ impl Store {
         Ok(())
     }
 
+    /// The profile this session is on.
+    pub(crate) fn set_session_profile(&mut self, session_id: i64, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET profile = ?1 WHERE id = ?2",
+            rusqlite::params![name, session_id],
+        )?;
+        Ok(())
+    }
+
     /// `/cdp`: migrate the session's working directory. Two things land: the session row's `cwd`
     /// and the round-anchored `cwd_history` entry.
     pub(crate) fn set_session_cwd(
@@ -91,6 +101,30 @@ impl Store {
                 rusqlite::params![session_id, turn, path],
             )?;
         }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The todo marker: the session flag and the tool result's `memo` move together.
+    pub(crate) fn set_todo_on(&mut self, session_id: i64, on: bool, call_id: &str) -> Result<()> {
+        let value = if on { "true" } else { "false" };
+        if self.inlet.mark_todo(call_id, value) {
+            self.conn.execute(
+                "UPDATE sessions SET todo_on = ?1 WHERE id = ?2",
+                rusqlite::params![on as i64, session_id],
+            )?;
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE blocks SET memo = ?1 WHERE call_id = ?2 AND type = 'tool_result'",
+            rusqlite::params![value, call_id],
+        )?;
+        anyhow::ensure!(changed > 0, "no todo tool result with call_id {call_id}");
+        tx.execute(
+            "UPDATE sessions SET todo_on = ?1 WHERE id = ?2",
+            rusqlite::params![on as i64, session_id],
+        )?;
         tx.commit()?;
         Ok(())
     }

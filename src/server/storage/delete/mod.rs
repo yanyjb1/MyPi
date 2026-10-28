@@ -1,6 +1,7 @@
 //! The cleanup half: a rewind's cut (prune mode) and a session's deletion, both followed by the
 //! same sweep. Request archives are never swept.
 
+pub(crate) mod export;
 pub(crate) mod rewind;
 pub(crate) mod session;
 
@@ -9,14 +10,12 @@ use anyhow::Result;
 use super::decode::parse_blocks;
 
 /// Sweep what nothing references any more: rounds outside every list, blocks
-/// outside every round's index, and the artifacts bound to those blocks.
+/// outside every round's index, and the rows anchored to those blocks.
 pub(crate) fn prune(tx: &rusqlite::Transaction<'_>) -> Result<()> {
     tx.execute(
         "DELETE FROM turns WHERE turn_id NOT IN (SELECT turn_id FROM session_turns)",
         [],
     )?;
-    // The block survival set: every live round's intervals expanded into a temp table with a
-    // recursive CTE (one interval can span thousands of blocks).
     tx.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS alive_blocks (id INTEGER PRIMARY KEY);
          DELETE FROM alive_blocks;",
@@ -42,9 +41,24 @@ pub(crate) fn prune(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         [],
     )?;
     tx.execute("DROP TABLE alive_blocks", [])?;
-    // An artifact follows its block: the block is gone, so the spill goes.
     tx.execute(
         "DELETE FROM artifacts WHERE block_id NOT IN (SELECT block_id FROM blocks)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM memos WHERE anchor IS NOT NULL AND anchor NOT IN (SELECT block_id FROM blocks)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM aliases WHERE anchor NOT IN (SELECT block_id FROM blocks)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM subsessions WHERE anchor NOT IN (SELECT block_id FROM blocks)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM subsessions WHERE subsession_id NOT IN (SELECT id FROM sessions)",
         [],
     )?;
     Ok(())

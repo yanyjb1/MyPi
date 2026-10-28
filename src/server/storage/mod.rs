@@ -2,10 +2,10 @@
 //! There are no reads here: a caller writes its own query and decodes the rows.
 
 pub mod decode;
+pub(crate) mod delete;
 pub mod reader;
 pub mod schema;
 pub mod shape;
-pub(crate) mod delete;
 pub(crate) mod write;
 pub(crate) mod writer;
 
@@ -21,8 +21,9 @@ pub use delete::rewind::{Cut, Target};
 pub use reader::Reader;
 pub use schema::SCHEMA_VERSION;
 pub use shape::{
-    Artifact, Block, BlockKind, ContentKey, Landed, NewBlock, Relay, RequestMeta, RoundUsage,
-    SessionChange, SessionMeta, SessionRef, Spill, Submit, TurnRow, base36, parse_base36,
+    AliasOp, Artifact, Block, BlockKind, ContentKey, Effect, EffectKind, Landed, MemoOp, MemoScope,
+    NewBlock, Relay, RequestMeta, RoundUsage, SessionChange, SessionMeta, SessionRef, Spill,
+    Submit, TurnRow, base36, parse_base36,
 };
 pub use write::compaction::BORROWED;
 pub use writer::Writer;

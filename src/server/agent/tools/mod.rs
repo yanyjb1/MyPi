@@ -1,31 +1,29 @@
-//! Tools. The root holds the four shared pieces: `spec`, `registry`, `executor`, `workspace`; every
-//! tool gets its own folder (rationale in `src/server/agent/README.md`).
+//! Tools. The root holds the four shared pieces: `spec`, `registry`, `executor`, `workspace`; tools
+//! are grouped by use domain.
 
 mod bash;
-mod cd;
-mod context;
-mod edit;
 mod executor;
-mod mass_edit;
-mod read;
+pub(crate) mod jobs;
+mod kairos;
+mod mcp;
+mod memo;
 mod registry;
 mod spec;
-mod todo;
+pub(crate) mod subagent;
 mod workspace;
-mod write;
 
 #[cfg(feature = "web")]
-mod browser;
+mod web;
 #[cfg(feature = "web")]
-mod fetch;
-#[cfg(feature = "web")]
-mod search;
+pub(crate) use web::close_session as close_web_session;
 
-pub use context::Window;
+pub use bash::context::Window;
 pub use executor::execute;
+pub use mcp::{McpBridge, McpContent, McpResult, ServerInfo, SyncMcpBridge, ToolInfo};
+pub use memo::todo::state::{TodoPhase, TodoStatus, TodoTask};
 pub use registry::{TOOLS, roster};
 pub use spec::{
-    Args, Artifacts, BashEnv, Env, Inbox, Kind, Param, Run, Spill, Tool, ToolOutput, ToolProgress,
+    Args, Artifacts, BashEnv, Env, Inbox, Kind, MemoRead, MemoReadOp, MemoVersion, MemoView, Param,
+    Run, Spill, Tool, ToolOutput, ToolProgress,
 };
-pub use todo::state::TodoPhase;
 pub use workspace::Workspace;

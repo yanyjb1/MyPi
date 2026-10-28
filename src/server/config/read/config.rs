@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use super::model::Currency;
 
-/// The shape of `config.yaml`: everything lives under the literal `config` key, and there is no
-/// `#[serde(default)]` on that field — a file with no `config:` section is an error.
+/// The shape of `config.yaml`: the app lives under `config`, MCP servers beside it.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ConfigFile {
     pub config: AppConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 /// Everything `config.yaml` carries.
@@ -22,6 +23,34 @@ pub struct AppConfig {
     pub ui: UiConfig,
     /// What the terminal front end reads on its own.
     pub tui: TuiConfig,
+}
+
+// ---- mcp: ----
+
+/// Top-level `mcp:` — external tool servers.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct McpConfig {
+    pub servers: std::collections::BTreeMap<String, McpServerConfig>,
+}
+
+/// One stdio MCP server.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub cwd: Option<std::path::PathBuf>,
+    #[serde(default = "d_mcp_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn d_mcp_timeout() -> u64 {
+    120
 }
 
 // ---- server: ----
@@ -77,6 +106,8 @@ pub struct AgentConfig {
     pub r#loop: LoopConfig,
     /// Tool-layer knobs.
     pub tools: ToolsConfig,
+    /// Subagent knobs.
+    pub subagent: SubagentConfig,
 }
 
 /// `config.server.agent.loop:` — how far the loop may run on its own.
@@ -159,11 +190,11 @@ pub enum IpcCost {
 
 impl IpcCost {
     /// The endpoint this setting asks for on the system we are running on.
-    pub fn cost(self) -> crate::server::platform::ipc::Cost {
+    pub fn cost(self) -> crate::ipc::transport::Kind {
         match self {
-            IpcCost::Os => crate::server::platform::ipc::Cost::of_this_system(),
-            IpcCost::Unix => crate::server::platform::ipc::Cost::Unix,
-            IpcCost::Pipe => crate::server::platform::ipc::Cost::Pipe,
+            IpcCost::Os => crate::ipc::transport::Kind::of_this_system(),
+            IpcCost::Unix => crate::ipc::transport::Kind::Unix,
+            IpcCost::Pipe => crate::ipc::transport::Kind::Pipe,
         }
     }
 }
@@ -264,10 +295,10 @@ pub struct ToolsConfig {
     /// The same cap in bytes — for results that are few lines but huge
     /// (minified JSON, base64 blobs, one 40 MB line).
     pub output_max_bytes: usize,
-    /// Which browser the web tools drive.
+    /// Which browser the web tool drives.
     pub browser: BrowserConfig,
-    /// Limits of the web tools.
-    pub web: WebConfig,
+    /// `kairos` background tasks.
+    pub kairos: KairosConfig,
 }
 
 impl Default for ToolsConfig {
@@ -277,7 +308,7 @@ impl Default for ToolsConfig {
             output_max_lines: 512,
             output_max_bytes: 256 * 1024,
             browser: BrowserConfig::default(),
-            web: WebConfig::default(),
+            kairos: KairosConfig::default(),
         }
     }
 }
@@ -315,6 +346,42 @@ impl From<&ToolsConfig> for OutputLimits {
     }
 }
 
+/// `config.server.agent.tools.kairos:` — per-session background tasks.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct KairosConfig {
+    pub max_concurrent: usize,
+    pub timeout_secs: u64,
+    pub max_output_bytes: usize,
+    pub max_retained: usize,
+}
+
+impl Default for KairosConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: 4,
+            timeout_secs: 3600,
+            max_output_bytes: 8 * 1024 * 1024,
+            max_retained: 8,
+        }
+    }
+}
+
+/// `config.server.agent.subagent:` — one child's tool-call budget.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SubagentConfig {
+    pub max_tool_calls: u32,
+}
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self {
+            max_tool_calls: 1000,
+        }
+    }
+}
+
 /// `config.server.agent.tools.browser:` — which browser the web tools drive.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -328,8 +395,6 @@ pub struct BrowserConfig {
     /// Persistent profile directory: cookies, logins and extensions survive
     /// restarts.
     pub profile_dir: Option<std::path::PathBuf>,
-    /// Keep one browser profile across runs, logins and all.
-    pub persist_profile: bool,
     /// Launch headless. Default true: nobody is watching a window.
     pub headless: bool,
     /// Override the User-Agent of the launched browser.
@@ -344,35 +409,9 @@ impl Default for BrowserConfig {
             bin: None,
             port: None,
             profile_dir: None,
-            persist_profile: true,
             headless: true,
             user_agent: None,
             extra_args: Vec::new(),
-        }
-    }
-}
-
-/// `config.server.agent.tools.web:` — how much of a page the web tools may hand back.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct WebConfig {
-    /// Characters kept from a fetched page.
-    pub fetch_chars: usize,
-    /// Characters kept from a browser read.
-    pub browser_chars: usize,
-    /// How many search hits come back.
-    pub search_hits: usize,
-    /// Bytes fetched at most for one search result page.
-    pub page_bytes: usize,
-}
-
-impl Default for WebConfig {
-    fn default() -> Self {
-        Self {
-            fetch_chars: 24_000,
-            browser_chars: 24_000,
-            search_hits: 20,
-            page_bytes: 2 * 1024 * 1024,
         }
     }
 }

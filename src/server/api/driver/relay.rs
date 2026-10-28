@@ -1,19 +1,22 @@
-//! The relay: storage's one port, and the fan-out to whoever asked for a session. A subscriber is a
-//! **viewer**: one session, one stream per viewer.
+//! The relay: storage's one port, and the fan-out to the subscription table.
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::mpsc::{self, Receiver};
 
-use crate::server::api::reply::stream::{Relayed, StreamItem};
-use crate::server::api::types::Viewer;
+use crate::ipc::contract::Viewer;
+use crate::server::api::convert;
+use crate::server::api::notice::Notice;
+use crate::server::api::subscribe::event::{
+    ContentEvent, Event, SessionEvent, StartKind, TurnUsage,
+};
 use crate::server::storage::{Relay as Piece, Writer};
+
+use super::subscriptions::Subscriptions;
 
 /// The api's port and the subscribers behind it.
 #[derive(Clone, Default)]
 pub(crate) struct Relay {
-    sinks: Arc<Mutex<HashMap<i64, Vec<(Viewer, Sender<StreamItem>)>>>>,
+    subs: Subscriptions,
 }
 
 impl Relay {
@@ -21,68 +24,129 @@ impl Relay {
     pub(crate) fn start(w: &Writer) -> Result<Relay> {
         let relay = Relay::default();
         let (port, pieces) = mpsc::channel::<Piece>();
-        w.relay(port).context("cannot register the api's relay port")?;
-        let handing = relay.clone();
+        w.relay(port)
+            .context("cannot register the api's relay port")?;
+        let subs = relay.subs.clone();
         std::thread::Builder::new()
             .name("api-relay".to_string())
             .spawn(move || {
                 for piece in pieces {
-                    handing.hand(Relayed::from(piece));
+                    subs.publish(convert(piece));
                 }
             })
             .context("cannot start the relay thread")?;
         Ok(relay)
     }
 
-    /// Ask for one session's stream, as this viewer. Asking twice replaces the old stream.
-    pub(crate) fn attach(&self, viewer: Viewer, session: i64) -> Receiver<StreamItem> {
-        let (sink, stream) = mpsc::channel();
-        let mut sinks = self.sinks();
-        let list = sinks.entry(session).or_default();
-        list.retain(|(v, _)| *v != viewer);
-        list.push((viewer, sink));
-        stream
+    pub(crate) fn connect(&self, viewer: &Viewer) -> Receiver<Event> {
+        self.subs.connect(viewer)
     }
 
-    /// Stop watching: this viewer's stream of that session is dropped.
-    pub(crate) fn detach(&self, viewer: Viewer, session: i64) {
-        let mut sinks = self.sinks();
-        let Some(list) = sinks.get_mut(&session) else {
-            return;
-        };
-        list.retain(|(v, _)| *v != viewer);
-        if list.is_empty() {
-            sinks.remove(&session);
-        }
+    pub(crate) fn watch(&self, viewer: &Viewer, session: i64, turn: Option<i64>) -> Result<()> {
+        self.subs.watch(viewer, session, turn)
     }
 
-    /// Is anybody still watching this session?
+    pub(crate) fn detach(&self, viewer: &Viewer) {
+        self.subs.detach(viewer);
+    }
+
     pub(crate) fn watched(&self, session: i64) -> bool {
-        self.sinks()
-            .get(&session)
-            .is_some_and(|list| !list.is_empty())
+        self.subs.watched(session)
     }
 
-    /// Hand one piece to the subscribers of its session.
-    pub(crate) fn emit(&self, session: i64, item: StreamItem) {
-        self.hand(Relayed { session, item });
+    pub(crate) fn session_of(&self, viewer: &Viewer) -> Option<i64> {
+        self.subs.session_of(viewer)
     }
 
-    /// One piece, to whoever asked for that session. A subscriber that dropped
-    /// its receiver is forgotten here.
-    fn hand(&self, piece: Relayed) {
-        let Relayed { session, item } = piece;
-        let mut sinks = self.sinks();
-        let Some(list) = sinks.get_mut(&session) else {
-            return;
-        };
-        list.retain(|(_, sink)| sink.send(item.clone()).is_ok());
-        if list.is_empty() {
-            sinks.remove(&session);
-        }
+    pub(crate) fn started(&self, session: i64, turn: i64, kind: StartKind) {
+        self.subs.publish(Event::Content(ContentEvent::Started {
+            session,
+            turn,
+            kind,
+        }));
     }
 
-    fn sinks(&self) -> MutexGuard<'_, HashMap<i64, Vec<(Viewer, Sender<StreamItem>)>>> {
-        self.sinks.lock().unwrap_or_else(|e| e.into_inner())
+    pub(crate) fn tool_output(&self, session: i64, turn: i64, call_id: &str, text: &str) {
+        self.subs.publish(Event::Content(ContentEvent::ToolOutput {
+            session,
+            turn,
+            call_id: call_id.to_string(),
+            text: text.to_string(),
+        }));
+    }
+
+    pub(crate) fn ended(
+        &self,
+        session: i64,
+        turn: i64,
+        stop_reason: Option<String>,
+        usage: Option<TurnUsage>,
+    ) {
+        self.subs.publish(Event::Content(ContentEvent::Ended {
+            session,
+            turn,
+            stop_reason,
+            usage,
+        }));
+    }
+
+    pub(crate) fn session_meta(&self, session: i64, meta: crate::server::storage::SessionMeta) {
+        self.subs.publish(Event::Session(SessionEvent::Meta {
+            session,
+            meta: convert::session_meta(meta),
+        }));
+    }
+
+    pub(crate) fn rewound(&self, session: i64, turn: i64, block: i64) {
+        self.subs.publish(Event::Session(SessionEvent::Rewound {
+            session,
+            turn,
+            block,
+        }));
+    }
+
+    pub(crate) fn deleted(&self, session: i64) {
+        self.subs
+            .publish(Event::Session(SessionEvent::Deleted { session }));
+    }
+
+    pub(crate) fn notice(&self, notice: Notice) {
+        self.subs.publish(Event::Notice(notice));
+    }
+}
+
+fn convert(piece: Piece) -> Event {
+    match piece {
+        Piece::Tail {
+            session,
+            turn,
+            blocks,
+            done,
+        } => Event::Content(ContentEvent::Live {
+            session,
+            turn,
+            blocks: blocks.into_iter().map(convert::new_block).collect(),
+            done,
+        }),
+        Piece::Blocks {
+            session,
+            turn,
+            blocks,
+        } => Event::Content(ContentEvent::Blocks {
+            session,
+            turn,
+            blocks: blocks.into_iter().map(convert::block).collect(),
+        }),
+        Piece::Ended {
+            session,
+            turn,
+            stop_reason,
+            usage,
+        } => Event::Content(ContentEvent::Ended {
+            session,
+            turn,
+            stop_reason,
+            usage: usage.map(convert::turn_usage),
+        }),
     }
 }

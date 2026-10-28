@@ -1,89 +1,81 @@
 # ipc
 
-The wire between the server and a front end: one line, one value, the api's shapes in both
-directions.
+The wire between the server and a front end. Three parts: the contract both sides name, the
+front end's client, and the server's adapter. Nothing else crosses.
 
 ## 1. Design
 
-### Two halves
+### Contract
 
-| half | holds | does |
-|---|---|---|
-| server | database lock, endpoint, register | accepts, answers, streams, stops when no front end is left |
-| front end | one command connection, one per watched session | asks, changes, watches, leaves |
+`contract/` is the only shared vocabulary. It owns `Ask`, `Answer`, `Call`, `Reply`, `Post`,
+`Subscribe`, `Event`, the block and session shapes, and the todo shapes. It depends on `serde` and
+the command candidate type, and on neither `server` nor `ui`.
 
-`mypi --server` is the server alone. Plain `mypi` looks for one; if none, it takes the lock, binds
-the endpoint, starts the server, and spawns the front end.
+`ErrorCode` is structured; `Answer::Error` carries a code and a message. `Hello` carries
+`PROTOCOL_VERSION`; a mismatch is refused before registration.
 
-### Wire
+### Client
 
-Only three lines are the protocol's own:
+`client::Client` is the front end's only connection. It takes an `Endpoint`, registers with
+`Hello`, and offers `call`, `post`, `submit`, `compact`, `watch`, and `bye`. A watch is a second
+connection: `Hello`, then `Subscribe::Watch`, then the server only writes.
 
-| line | direction | means |
-|---|---|---|
-| `Hello { viewer }` | front end → server | register this id |
-| `Bye` | front end → server | leave |
-| `Error { message }` | server → front end | door failed; connection stays |
+The client never names `server`.
 
-Everything else crosses unchanged: `Call`, `Post`, `Subscribe` out; `Reply`, `PostDone`, `Opened`,
-`StreamItem` back. One line is one JSON value; the newline is the framing. The cap is 32 MiB.
+### Server
 
-### Endpoint
+`server` owns the database lock, the listener, the peer count, and one thread per connection. It
+calls `server::api::Api` and nothing below it. `stream::pump` writes one watch's events and posts
+`SessionWrite::Unwatch` when the stream ends.
 
-One endpoint per database: `$XDG_RUNTIME_DIR/mypi-<fingerprint>.sock`, or a `mypi/` directory under
-the system temporary directory. Directory 0700, socket 0600. The fingerprint hashes the database
-path, so two databases mean two endpoints.
+### Transport and endpoint
 
-Unix socket on unix, named pipe on Windows. `config.server.platform.ipc` chooses `os` (default),
-`unix`, or `pipe`. Only the unix socket is written.
+`transport/` owns the platform mechanics:
 
-### Who serves
+- `unix.rs`: Linux and macOS, Unix sockets.
+- `windows.rs`: Windows named pipes; interface present, implementation returns `Unsupported`.
 
-The database lock decides, not the endpoint. A process takes the file lock before binding; if it is
-already held, another process serves and this one is a front end. The kernel drops the lock on
-death, so there is no stale lock. The endpoint is removed when the server stops; a leftover endpoint
-is tried once, then replaced.
+`endpoint::Endpoint` is either `Unix { path }` or `Pipe { name }`. `Endpoint::file_path(db)` names
+the JSON file a front end reads; `Endpoint::for_db(db, kind)` names the address the server binds.
 
-### One watch, one connection
+Linux uses `$XDG_RUNTIME_DIR`, else `$TMPDIR/mypi/`. macOS uses `$TMPDIR/mypi/`. Windows uses
+`%LOCALAPPDATA%\mypi\`, else `%TEMP%\mypi\`. Unix sockets get `0600`; Windows endpoint files live
+under the user's directory.
 
-One command connection carries questions, changes, and stretches, one at a time, paired by order.
-Each watched session gets its own connection, and the server only writes on it. Dropping the
-receiving end closes the connection; the server unwatches.
+### One database, one endpoint
+
+The database lock decides who serves, not the endpoint. The server writes the endpoint file after
+binding and removes it when it stops. A front end with no endpoint file has no server; it does not
+guess, and it does not read `config`.
 
 ### Memory
 
-No durable state. The server keeps the lock, endpoint, and registered front ends. A front end keeps
-its command connection and, per watch, a channel and reader thread.
+No durable state in IPC. The server keeps the lock, listener, endpoint, and peer count. A client
+keeps its command connection and, per watch, a channel and reader thread.
 
-### Invariants
+## 2. Invariants
 
-1. One line is one value.
-2. The database lock decides who serves.
-3. A connection that has not said `Hello` is not registered and does not keep the server alive.
-4. After a watch, the server never reads that connection again.
-5. With `buffered` streaming, a front end sees only whole blocks.
-
-## 2. Intent
-
-- **No HTTP, no port.** One byte stream on one machine; file permissions are the boundary.
-- **No invented shapes.** The wire carries the api's own values.
-- **Lock on the database.** The kernel drops it; the database says who serves.
-- **Front end names itself.** The id is made above this layer and passed to `Client::connect`; there
-  is no factory here.
-- **One watch, one connection.** Ending a watch is ending a connection.
-- **Stopping rule.** The server stops when nobody is registered, after a short grace period.
+1. One line is one JSON value; newline is the frame.
+2. `Hello` before registration; a peer that never says it does not keep the server alive.
+3. Protocol version mismatch is refused.
+4. A watch connection is write-only after `Watch`.
+5. The server posts `Unwatch` when a watch ends.
+6. `buffered` filtering belongs to the backend API, not IPC.
+7. `contract` names neither end.
+8. `client` never names `server`.
+9. `server` names only `server::api::Api`, not config, storage, or agent.
 
 ## 3. Open questions
 
 1. Nothing reconnects after the server dies.
-2. The server's log ring has no door.
-3. Windows named pipes are not written.
-4. No authentication or encryption; local only.
-5. One-shot commands (`mypi --sessions`) bypass this layer.
+2. Windows named pipes are not written.
+3. No authentication or encryption; local only.
+4. The endpoint file is only removed on a clean stop.
 
 ## 4. Config
 
-| key | decides |
-|---|---|
-| `config.server.platform.ipc` | endpoint kind: `os`, `unix`, `pipe` |
-| `config.server.request.streaming` | watch granularity: `immediate` or `buffered` |
+IPC reads no config.
+
+- `config.server.platform.ipc` is read by the backend at startup to choose `Kind`; the choice is
+  written into the endpoint file.
+- `config.server.request.streaming` is read by the backend API; IPC does not filter.

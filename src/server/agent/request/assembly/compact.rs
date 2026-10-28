@@ -3,8 +3,9 @@
 
 use anyhow::{Context as _, bail};
 
-use crate::server::config::CompactConfig;
 use crate::server::agent::request::message::{Message, WireMessage};
+use crate::server::agent::request::protocols::ProtocolRequest;
+use crate::server::config::CompactConfig;
 
 /// The one construction point for the summary user message: live and rebuilt must be the same bytes.
 pub(crate) fn summary_turn(summary: &str) -> WireMessage {
@@ -39,11 +40,7 @@ pub struct Plan {
 pub type TurnBlocks = (i64, Vec<(i64, Vec<Message>)>);
 
 /// Compute the cut. `turns` are the rounds from the read start, each `(round, blocks)`.
-pub fn plan(
-    turns: &[TurnBlocks],
-    retention: Option<Retention>,
-    cfg: &CompactConfig,
-) -> Plan {
+pub fn plan(turns: &[TurnBlocks], retention: Option<Retention>, cfg: &CompactConfig) -> Plan {
     enum Mode {
         /// A character budget (tokens ≈ chars/4).
         Chars(usize),
@@ -155,7 +152,13 @@ pub fn render_instruction(template: &str, focus: &str) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     } else {
-        template.replace("{{focus}}", &format!("\nThe user specifically asks you to focus on: {}", focus.trim()))
+        template.replace(
+            "{{focus}}",
+            &format!(
+                "\nThe user specifically asks you to focus on: {}",
+                focus.trim()
+            ),
+        )
     }
 }
 
@@ -195,13 +198,17 @@ pub fn replay_context(
 /// Run one compaction: summarize `compacted` into `summary`. A summary no smaller than the region it
 /// replaces is rejected.
 pub fn compact(
+    model: &str,
+    max_output_tokens: u32,
+    stream: bool,
+    session_id: Option<&str>,
     ctx: &crate::server::agent::request::message::Context,
     compacted: &[Message],
     kept: &[Message],
     instruction: &str,
     focus: &str,
     system: &str,
-    summarize: &mut dyn FnMut(&crate::server::agent::request::message::Context) -> anyhow::Result<String>,
+    summarize: &mut dyn FnMut(&ProtocolRequest) -> anyhow::Result<String>,
 ) -> anyhow::Result<Compacted> {
     if compacted.is_empty() {
         bail!("an empty session needs no compaction");
@@ -211,16 +218,25 @@ pub fn compact(
     let region_chars: usize = compacted.iter().map(message_chars).sum();
 
     // The replay request: the live context + the instruction as its last turn.
-    let mut req = replay_context(ctx, system);
+    let mut replay = replay_context(ctx, system);
     let instruction = render_instruction(instruction, focus);
     // Fill the placeholder user turn.
-    let last = req.messages.last_mut().expect("placeholder exists");
+    let last = replay.messages.last_mut().expect("placeholder exists");
     *last = WireMessage::User {
         content: instruction.into(),
     };
+    let req = ProtocolRequest {
+        model: model.to_string(),
+        max_output_tokens,
+        stream,
+        messages: replay.messages,
+        tools: replay.tools,
+        session_id: session_id.map(str::to_string),
+    };
 
     // Summarize (the caller owns the client round-trip).
-    let summary = summarize(&req).context("the summarization request failed (the context is untouched; safe to retry)")?;
+    let summary = summarize(&req)
+        .context("the summarization request failed (the context is untouched; safe to retry)")?;
     if summary.trim().is_empty() {
         bail!("the summarizing model returned nothing (the context is untouched; safe to retry)");
     }

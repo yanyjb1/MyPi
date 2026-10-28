@@ -11,7 +11,7 @@ invariants this layer keeps — is in `README.md`.
 |---|---|
 | `mod.rs` | the declarations, `Config` itself, and the one load path: read both files, validate, write a bootstrap file when none exists |
 | `paths.rs` | `ConfigPaths`: where the two files live (the `config.yaml` root, the `models.yml` beside it, the profile folder), the project root, and `absolute` |
-| `read/config.rs` | the `config.` area: `ConfigFile` (the literal `config:` layer), `AppConfig` (`server` / `tui`), `ServerConfig` (`api` / `request` / `agent` / `storage` / `platform`), the per-area structs and their defaults, validation, the bootstrap writer, and `write_key` |
+| `read/config.rs` | `ConfigFile` (`config:` plus top-level `mcp:`), `AppConfig` (`server` / `ui` / `tui`), `McpConfig` / `McpServerConfig`, `ServerConfig` (`api` / `request` / `agent` / `storage` / `platform`), the per-area structs and their defaults, validation, the bootstrap writer, and `write_key` |
 | `read/model.rs` | the `models.` area: `ModelsConfig`, `Provider`, `ModelEntry`, prices, the compatibility switches |
 | `read/profile.rs` | the `profile.` area: finding the profile folder, listing names, resolving one (its system prompt, its compaction instruction, which tools it enables), and the active name |
 | `prompts/` | the built-in texts, one file each, compiled into the binary with `include_str!` |
@@ -28,6 +28,8 @@ invariants this layer keeps — is in `README.md`.
 | `Config::set_default_model(id)` | write the default back into `config.yaml` (the `/model` path), and return the file it wrote |
 | `ConfigPaths` | the roots, resolved to absolute paths when they are built |
 | `AppConfig` and the per-area structs | the whole `config.` area, handed out as values |
+| `McpConfig` / `McpServerConfig` | top-level `mcp.servers`: command, args, env, cwd, timeout |
+| `KairosConfig` | `config.server.agent.tools.kairos`: pool, timeout, output cap, retention |
 | `read::model::{Provider, ModelEntry, …}`, `ResolvedModel` | the `models.` area, resolved |
 | `read::profile::{resolve, list, active_name}` | the `profile.` area |
 | `prompts::{builtin_system, compact_instruction, compact_context}` | the built-in texts |
@@ -51,8 +53,9 @@ Everything else in this folder is private or crate-internal.
 
 1. A struct's field names and the file's keys: `serde` with `camelCase` and `default`, so a missing
    key falls back to the type's default and an unknown one is ignored.
-2. `config.yaml`'s literal `config:` layer: the loader (`ConfigFile`) and the writer (`write_key`)
-   must agree on it — a file missing the layer is an error, not a silent fallback.
+2. `config.yaml`'s literal `config:` layer and the top-level `mcp:` layer: the loader
+   (`ConfigFile`) and the writer (`write_key`) must agree on them — a file missing `config:` is an
+   error; a missing `mcp:` falls back to no servers.
 3. `read/config.rs`'s doc headings (`` /// `config.server.api:` `` and the like) spell the key prefix
    out; they are the in-code statement of the naming rule the README sets.
 4. `prompts/mod.rs`'s `include_str!` paths and the file names in `prompts/`.
@@ -63,11 +66,9 @@ Everything else in this folder is private or crate-internal.
 
 ## Not wired yet
 
-1. `config.server.agent.tools.web.*` — the four output limits are declared, but the web engines still
-   use their own constants (第 14 条).
-2. `config.server.agent.reloadOnCompaction` — declared, and the semantics (re-read the profile's tool
+1. `config.server.agent.reloadOnCompaction` — declared, and the semantics (re-read the profile's tool
    list after a compaction) are not implemented (`memo.md`, 会话从哪儿算起).
-3. The process's working directory: `paths.rs` calls `std::env::current_dir()` itself instead of
+2. The process's working directory: `paths.rs` calls `std::env::current_dir()` itself instead of
    asking `platform` (第 22 条 — the rule that a built path never moves again has to survive that
    move).
 4. `config.server.request.streaming` is honored at the backend-to-front-end edge

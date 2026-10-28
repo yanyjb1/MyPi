@@ -3,10 +3,10 @@
 
 use anyhow::Result;
 
-use super::batches::land;
-use super::super::decode::{encode_blocks, BLOCK_BYTES_SQL};
+use super::super::decode::{BLOCK_BYTES_SQL, encode_blocks};
 use super::super::shape::{NewBlock, RequestMeta};
 use super::super::writer::Store;
+use super::batches::land;
 use super::shared::{append_list_row, put_request_meta, read_turn};
 
 /// The stop reason a borrowed round carries: it is **not** a new round, only an index borrowed
@@ -22,12 +22,15 @@ impl Store {
         summary: &NewBlock,
         request: Option<&RequestMeta>,
         kept: &[(i64, Option<i64>)],
+        profile: &str,
     ) -> Result<i64> {
         let tx = self.conn.transaction()?;
         let request_id = match request {
             Some(r) => Some(put_request_meta(&tx, r)?),
             None => None,
         };
+        let mut summary = summary.clone();
+        summary.memo = Some(profile.to_string());
         // The summary round: one block, and its list row carries the flag
         // that makes it the read start.
         tx.execute(
@@ -35,7 +38,7 @@ impl Store {
             rusqlite::params![request_id],
         )?;
         let summary_turn = tx.last_insert_rowid();
-        let (range, bytes, _) = land(&tx, std::slice::from_ref(summary))?;
+        let (range, bytes, _) = land(&tx, session_id, std::slice::from_ref(&summary), &[])?;
         let range = range.expect("one block lands one interval");
         tx.execute(
             "UPDATE turns SET blocks = ?1, bytes = ?2 WHERE turn_id = ?3",
@@ -57,12 +60,7 @@ impl Store {
             tx.execute(
                 "INSERT INTO turns (request_id, blocks, stop_reason, bytes)
                  VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    source.request_id,
-                    encode_blocks(&blocks),
-                    BORROWED,
-                    bytes
-                ],
+                rusqlite::params![source.request_id, encode_blocks(&blocks), BORROWED, bytes],
             )?;
             let id = tx.last_insert_rowid();
             append_list_row(&tx, session_id, id, false)?;

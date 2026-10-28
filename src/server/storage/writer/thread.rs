@@ -3,8 +3,8 @@
 
 use std::sync::mpsc::Receiver;
 
-use super::job::{Answer, Job, What};
 use super::Store;
+use super::job::{Answer, Job, What};
 
 /// Serve jobs until every handle is gone.
 pub(crate) fn run(work: Receiver<Job>, mut store: Store) {

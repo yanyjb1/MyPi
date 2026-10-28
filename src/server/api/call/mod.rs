@@ -1,111 +1,44 @@
-//! Call — one question, one answer. `answer` is the door: a read connection, the capability that
-//! owns the question, the connection closed again.
+//! Call — one question, one answer, read-only.
 
 use anyhow::Result;
-use std::path::Path;
 
-use rusqlite::Connection;
-
+use crate::ipc::contract::Viewer;
 use crate::server::api::driver;
 use crate::server::config::Config;
-use crate::server::storage::decode::BLOCK_COLS;
-use crate::server::storage::{Block, BlockKind, TurnRow};
+use crate::server::storage::Reader;
 
-use super::types::{Call, Reply};
+pub(crate) mod ctx;
+pub mod reply;
+pub mod server;
+pub mod session;
+pub mod tool;
 
-pub mod complete;
-pub mod meta;
-pub mod sessions;
-pub mod todo;
-pub mod turn;
-pub mod usage;
-pub mod viewport;
+pub use crate::ipc::contract::Call;
+pub use reply::Reply;
 
-/// Answer one call: open a read connection, answer it, close it again.
-pub fn answer(cfg: &Config, call: Call) -> Result<Reply> {
+use ctx::Ctx;
+
+/// Answer one question on a read connection.
+pub fn answer(cfg: &Config, viewer: &Viewer, call: Call) -> Result<Reply> {
     let state = driver::state(cfg)?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
-    state.call(call)
-}
-
-/// The dispatch, on a connection the caller owns.
-pub(crate) fn dispatch(cfg: &Config, conn: &Connection, cwd: &Path, call: Call) -> Result<Reply> {
-    match call {
-        Call::Usage { session, lang } => Ok(Reply::Usage {
-            lang,
-            groups: usage::bill_for(cfg, conn, session)?,
-        }),
-        Call::Sessions { under } => Ok(Reply::SessionRows(sessions::rows(conn, under.as_deref())?)),
-        Call::Tail { session, limit } => window(viewport::tail(conn, session, limit)?),
-        Call::Older {
-            session,
-            before,
-            limit,
-            turn,
-        } => window(viewport::older(conn, session, before, limit, turn)?),
-        Call::Newer {
-            session,
-            after,
-            limit,
-            turn,
-        } => window(viewport::newer(conn, session, after, limit, turn)?),
-        Call::Todo { session } => Ok(Reply::Todo(todo::list(conn, session)?)),
-        Call::Turn { session, turn } => Ok(Reply::Turn {
-            turn,
-            blocks: turn::blocks(conn, session, turn)?,
-        }),
-        Call::Meta { session } => Ok(Reply::Meta(meta::state(conn, session, cwd)?)),
-        Call::Pools => Ok(Reply::Pools(complete::pools(cfg))),
-    }
-}
-
-/// A viewport answer: the blocks, and whether more exist past the window.
-fn window((blocks, more): (Vec<viewport::PlacedBlock>, bool)) -> Result<Reply> {
-    Ok(Reply::Blocks { blocks, more })
-}
-
-/// The read start: the newest compaction round at or before the list tail (`None` = never
-/// compacted).
-pub(crate) fn read_start(conn: &Connection, session: i64) -> Result<Option<i64>> {
-    let tail: Option<i64> = conn.query_row(
-        "SELECT MAX(idx) FROM session_turns WHERE session_id = ?1",
-        [session],
-        |r| r.get(0),
-    )?;
-    let Some(tail) = tail else {
-        return Ok(None);
+    let conn = Reader::open(&state.db)?;
+    let ctx = Ctx {
+        cfg: &state.cfg,
+        reader: &conn,
+        attached: state.relay.session_of(viewer),
+        sessions: &state.sessions,
+        running: &state.running,
     };
-    Ok(conn.query_row(
-        "SELECT MAX(idx) FROM session_turns
-          WHERE session_id = ?1 AND is_compaction AND idx <= ?2",
-        rusqlite::params![session, tail],
-        |r| r.get(0),
-    )?)
+    let out = dispatch(&ctx, call);
+    Reader::close(conn);
+    out
 }
 
-/// One round's blocks, in interval order (= write order).
-fn blocks_of(conn: &Connection, turn: &TurnRow) -> Result<Vec<Block>> {
-    let mut out = Vec::new();
-    for [lo, hi] in &turn.blocks {
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {BLOCK_COLS} FROM blocks
-              WHERE block_id >= ?1 AND block_id <= ?2 ORDER BY block_id"
-        ))?;
-        let found = stmt.query_map(
-            rusqlite::params![lo, hi],
-            crate::server::storage::decode::block_from_row,
-        )?;
-        for b in found {
-            out.push(b?);
-        }
-    }
-    Ok(out)
-}
-
-/// The user's own words inside one block (`None` = it carries none).
-fn user_text(block: &Block) -> Option<String> {
-    match block.kind {
-        BlockKind::User => block.content.clone(),
-        _ => None,
+fn dispatch(ctx: &Ctx, call: Call) -> Result<Reply> {
+    match call {
+        Call::Session { session, ask } => Ok(Reply::Session(session::answer(ctx, session, ask)?)),
+        Call::Tool(ask) => Ok(Reply::Tool(tool::answer(ctx, ask)?)),
+        Call::Server(ask) => Ok(Reply::Server(server::answer(ctx, ask)?)),
     }
 }

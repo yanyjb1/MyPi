@@ -21,8 +21,18 @@ pub fn execute(
         "tool `{}` is disabled by the active profile",
         tool.name
     );
+    anyhow::ensure!(
+        registry::available(env, tool.name),
+        "`{}` is unavailable in this session",
+        tool.name
+    );
     let args = Args::fill(tool.params, &call.function.arguments)?;
-    let out = (tool.run)(env, &args, progress)?;
+    let mut out = (tool.run)(env, &args, progress)?;
+    let ts = crate::server::platform::time::now_stamp();
+    for effect in &mut out.effects {
+        effect.call_id = call.id.clone();
+        effect.ts = ts.clone();
+    }
     Ok(spill(tool.name, env.limits, out))
 }
 

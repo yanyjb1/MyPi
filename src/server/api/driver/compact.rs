@@ -1,20 +1,18 @@
-//! The compaction door's machinery: gather the transcript, plan the cut, run the summarization
-//! round, hand the result to storage. The round trip runs on its own thread.
+//! The compaction machinery: gather, plan, run, and settle the round.
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use rusqlite::Connection;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::server::agent::r#loop::Live;
-use crate::server::agent::request::assembly::body::body_json;
 use crate::server::agent::request::assembly::compact::{self, Plan, TurnBlocks};
-use crate::server::agent::request::content::AnswerSink;
-use crate::server::agent::request::inbound::decode;
+use crate::server::agent::request::content::{BlockSink, RetrySink};
 use crate::server::agent::request::message::{Context, Message};
-use crate::server::agent::request::transport;
+use crate::server::agent::request::protocols::ProtocolRequest;
+use crate::server::agent::request::retry::RetryNotice;
 use crate::server::storage::decode::{BLOCK_COLS, block_from_row, parse_blocks};
-use crate::server::storage::{BORROWED, RequestMeta, Submit, Writer};
+use crate::server::storage::{BORROWED, NewBlock, RequestMeta, Submit, Writer};
 
 use super::relay::Relay;
 use super::running::Running;
@@ -23,22 +21,16 @@ use super::sessions::Sessions;
 /// One compaction, ready to run.
 pub(crate) struct Job {
     pub(crate) session: i64,
-    /// The session's state, borrowed for the summarization.
+    pub(crate) turn: i64,
     pub(crate) live: Live,
-    /// The round's stop flag (the door claimed the session).
     pub(crate) stop: Arc<AtomicBool>,
-    /// The instruction template, and the user's focus line (empty = none).
     pub(crate) instruction: String,
     pub(crate) focus: String,
-    /// The context the summarization request replays, and the cut it lands.
     pub(crate) ctx: Context,
     pub(crate) plan: Plan,
-    /// The provider this session is on; the archive records it.
     pub(crate) provider: String,
 }
 
-/// The session's rounds from `from` on, each with its blocks as messages — the shape
-/// [`compact::plan`] reads. A borrowed round is skipped.
 pub(crate) fn turns(conn: &Connection, session: i64, from: i64) -> Result<Vec<TurnBlocks>> {
     let mut list = conn.prepare(
         "SELECT s.turn_id, t.blocks, t.stop_reason FROM session_turns s
@@ -76,14 +68,7 @@ pub(crate) fn turns(conn: &Connection, session: i64, from: i64) -> Result<Vec<Tu
     Ok(out)
 }
 
-/// Run one compaction, then give the session back.
-pub(crate) fn run(
-    writer: Writer,
-    relay: Relay,
-    sessions: Sessions,
-    running: Running,
-    job: Job,
-) {
+pub(crate) fn run(writer: Writer, relay: Relay, sessions: Sessions, running: Running, job: Job) {
     match summarize(&writer, &job) {
         Ok(()) => sessions.arm_profile(job.session),
         Err(e) => {
@@ -94,7 +79,6 @@ pub(crate) fn run(
                     job.session
                 ),
             );
-            // Nothing reached storage, so nothing there will end this round: settle it here.
             if let Err(e) = writer.push(Submit::RoundEnd {
                 session: job.session,
                 stop_reason: None,
@@ -102,12 +86,15 @@ pub(crate) fn run(
             }) {
                 crate::server::platform::log::warn(
                     "api",
-                    format!("session {}: the dead compaction did not settle: {e:#}", job.session),
+                    format!(
+                        "session {}: the dead compaction did not settle: {e:#}",
+                        job.session
+                    ),
                 );
             }
         }
     }
-    // Nothing runs in this session any more: the state goes back when somebody watches it.
+    relay.ended(job.session, job.turn, None, None);
     running.release(job.session);
     if relay.watched(job.session) {
         sessions.put(job.session, job.live);
@@ -116,30 +103,21 @@ pub(crate) fn run(
     }
 }
 
-/// Summarize the planned region and land the compaction round.
 fn summarize(writer: &Writer, job: &Job) -> Result<()> {
     let live = &job.live;
-    let transport = &live.transport;
-    let mut silent = Silent;
-    let mut ask = |req: &Context| -> Result<String> {
-        let messages = serde_json::to_value(&req.messages)
-            .context("the replay context does not serialize")?;
-        let tools =
-            serde_json::to_value(&req.tools).context("the tool manuals do not serialize")?;
-        let body = body_json(
-            &transport.model,
-            live.settings.max_tokens,
-            true,
-            &messages,
-            &tools,
-            &transport.compat,
-            transport.session_id.as_deref(),
-        );
-        let reader = transport::send(transport, &body)?;
-        let answer = decode::streamed(reader, transport, job.stop.as_ref(), &mut silent)?;
+    let mut sink = Silent;
+    let mut retry = Silent;
+    let mut ask = |req: &ProtocolRequest| -> Result<String> {
+        let answer = live
+            .transport
+            .complete(req, &mut sink, &mut retry, job.stop.as_ref())?;
         Ok(answer.content)
     };
     let compacted = compact::compact(
+        live.transport.model(),
+        live.settings.max_output_tokens,
+        true,
+        live.transport.session_id.as_deref(),
         &job.ctx,
         &job.plan.compacted,
         &job.plan.kept_messages,
@@ -160,36 +138,33 @@ fn summarize(writer: &Writer, job: &Job) -> Result<()> {
             .iter()
             .map(|k| (k.turn_id, k.from_block))
             .collect(),
+        profile: live.settings.profile.clone(),
     })?;
     Ok(())
 }
 
-/// The summarization request's archive: what does not change with the
-/// conversation.
 fn archive(live: &Live, job: &Job) -> RequestMeta {
     RequestMeta {
         model: live.transport.model().to_string(),
         provider: job.provider.clone(),
-        protocol: live.transport.protocol().to_string(),
+        protocol: live.transport.protocol().as_str().to_string(),
         base_url: live.transport.base_url().to_string(),
+        profile: live.settings.profile.clone(),
         system: live.settings.system.clone(),
-        tools_json: serde_json::to_string(&live.roster)
-            .expect("tool serialization is infallible"),
-        max_tokens: live.settings.max_tokens,
-        compat_json: live.transport.user_compat_json(),
+        tools_json: serde_json::to_string(&live.roster).expect("tool serialization is infallible"),
+        max_tokens: live.settings.max_output_tokens,
+        compat_json: live.transport.compat_json(),
     }
 }
 
-/// The summarization's own output is not streamed anywhere: the summary lands
-/// as a block when it is complete.
 struct Silent;
 
-impl AnswerSink for Silent {
-    fn content(&mut self, _text: &str) -> bool {
+impl BlockSink for Silent {
+    fn block(&mut self, _block: NewBlock, _done: bool) -> bool {
         true
     }
+}
 
-    fn reasoning(&mut self, _text: &str) -> bool {
-        true
-    }
+impl RetrySink for Silent {
+    fn retry(&mut self, _notice: &RetryNotice) {}
 }

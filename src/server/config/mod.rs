@@ -12,9 +12,9 @@ use crate::server::config::paths::ConfigPaths;
 // The public surface, re-exported so a caller reaches for one name (`config::OutputLimits`).
 pub use read::config::{
     AgentConfig, ApiConfig, AppConfig, BrowserConfig, ColorSpec, CompactConfig, ConfigFile, Fence,
-    FxConfig, LoopConfig, OutputLimits, PlaceholderConfig, PlatformConfig, RequestConfig,
-    ServerConfig, StampConfig, StorageConfig, StreamMode, Theme, TodoFold, ToolsConfig, TuiConfig,
-    UsageAlign, UsageConfig, WebConfig,
+    FxConfig, KairosConfig, LoopConfig, McpConfig, McpServerConfig, OutputLimits,
+    PlaceholderConfig, PlatformConfig, RequestConfig, ServerConfig, StampConfig, StorageConfig,
+    StreamMode, SubagentConfig, Theme, TodoFold, ToolsConfig, TuiConfig, UsageAlign, UsageConfig,
 };
 pub use read::model::{
     Cost, Currency, ModelEntry, ModelsConfig, Provider, ResolvedModel, default_api, normalize_api,
@@ -26,6 +26,7 @@ pub use read::model::{
 pub struct Config {
     pub models: ModelsConfig,
     pub app: AppConfig,
+    pub mcp: McpConfig,
     pub paths: ConfigPaths,
     app_file: std::path::PathBuf,
 }
@@ -51,7 +52,7 @@ impl Config {
     /// Load both files from the roots in `paths`.
     pub fn load_from(paths: &ConfigPaths) -> anyhow::Result<Self> {
         // The compatibility rule table takes its final shape here: a broken table fails at startup.
-        crate::server::agent::request::assembly::compat::rules::install()?;
+        crate::server::agent::request::protocols::openai::completion::compat::rules::install()?;
 
         const TEMPLATE_URL: &str =
             "https://raw.githubusercontent.com/yanyjb1/MyPi/main/models_example.yml";
@@ -94,7 +95,7 @@ impl Config {
             }
         }
 
-        let (app, app_file): (AppConfig, std::path::PathBuf) =
+        let (app, mcp, app_file): (AppConfig, McpConfig, std::path::PathBuf) =
             match paths.config_files().first().map(|(_, p)| p.clone()) {
                 Some(path) => {
                     let text = std::fs::read_to_string(&path)
@@ -108,13 +109,15 @@ impl Config {
                             path.display()
                         )
                     })?;
-                    (file.config, path)
+                    (file.config, file.mcp, path)
                 }
                 None => {
                     // Bootstrap: the alphabetically-first display name, persisted (config.yaml is
                     // program-owned, unlike models.yml which is never written).
                     let first = Self::alphabetical_default(&models).ok_or_else(|| {
-                        anyhow!("models.yml declares no models — add at least one `- id: ...` entry")
+                        anyhow!(
+                            "models.yml declares no models — add at least one `- id: ...` entry"
+                        )
                     })?;
                     let root = paths.global_root().ok_or_else(|| {
                         anyhow!(
@@ -135,6 +138,7 @@ impl Config {
                     std::fs::create_dir_all(root)?;
                     let yaml = serde_yaml::to_string(&ConfigFile {
                         config: app.clone(),
+                        mcp: McpConfig::default(),
                     })?;
                     std::fs::write(&path, &yaml)
                         .with_context(|| format!("failed to write {}", path.display()))?;
@@ -143,13 +147,14 @@ impl Config {
                     println!("mypi: 没有配置文件，照默认生成了一份：{}", path.display());
                     println!("{yaml}");
                     println!("mypi: 想改就改这一份；不改，就照它走。");
-                    (app, path)
+                    (app, McpConfig::default(), path)
                 }
             };
 
         let cfg = Config {
             models,
             app,
+            mcp,
             paths: paths.clone(),
             app_file,
         };
@@ -212,6 +217,17 @@ impl Config {
             return Err(anyhow!(
                 "config.yaml → server.storage.batchTools 必须是正整数（0 没有意义）"
             ));
+        }
+        for (name, server) in &self.mcp.servers {
+            if name.trim().is_empty() {
+                anyhow::bail!("config.yaml → mcp.servers 的名字不能为空");
+            }
+            if server.command.trim().is_empty() {
+                anyhow::bail!("config.yaml → mcp.servers.{name}.command 不能为空");
+            }
+            if server.timeout_secs == 0 {
+                anyhow::bail!("config.yaml → mcp.servers.{name}.timeoutSecs 必须大于 0");
+            }
         }
         // Only the cutting rewind is built: a branch would need the block-sharing path, which
         // does not exist.
@@ -321,7 +337,11 @@ fn write_key(path: &std::path::Path, keys: &[&str], value: &str) -> anyhow::Resu
         None => {
             let (leaf, leaf_indent) = found.expect("the last level was found");
             let comment = trailing_comment(&lines[leaf]).to_string();
-            let nl = if lines[leaf].ends_with('\n') { "\n" } else { "" };
+            let nl = if lines[leaf].ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
             lines[leaf] = format!(
                 "{}{}: {value}{comment}{nl}",
                 pad(leaf_indent),
@@ -396,13 +416,7 @@ fn child_indent(lines: &[String], from: usize, to: usize, parent: usize) -> Opti
 }
 
 /// The first **direct** child of the block `from..to` that opens the key `key`.
-fn find_child(
-    lines: &[String],
-    from: usize,
-    to: usize,
-    parent: usize,
-    key: &str,
-) -> Option<usize> {
+fn find_child(lines: &[String], from: usize, to: usize, parent: usize, key: &str) -> Option<usize> {
     let at = child_indent(lines, from, to, parent)?;
     (from..to).find(|&i| indent(&lines[i]) == at && opens_with(&lines[i], key))
 }

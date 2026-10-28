@@ -30,22 +30,6 @@ pub fn temp_dir() -> PathBuf {
     std::env::temp_dir()
 }
 
-/// Where a cross-process endpoint's name lives: `$XDG_RUNTIME_DIR`, else a `mypi` directory
-/// under [`temp_dir`] (created 0700 on unix).
-pub fn runtime_dir() -> PathBuf {
-    let dir = match (os::current().family, var_os("XDG_RUNTIME_DIR")) {
-        (Family::Unix, Some(dir)) => PathBuf::from(dir),
-        _ => temp_dir().join("mypi"),
-    };
-    let _ = std::fs::create_dir_all(&dir);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
-    dir
-}
-
 /// One environment variable, as UTF-8. `None` = unset or not text.
 pub fn var(name: &str) -> Option<String> {
     std::env::var(name).ok()

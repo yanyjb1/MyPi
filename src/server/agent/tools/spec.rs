@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use super::workspace::Workspace;
+use crate::server::storage::{Effect, EffectKind};
 
 // ---- parameters ----
 
@@ -24,7 +25,7 @@ pub enum Kind {
     Choice(&'static [&'static str]),
     /// An array of strings.
     TextList,
-    /// An array of objects, fields per the given table (`mass_edit`'s `edits`, `todo`'s `list`).
+    /// An array of objects, fields per the given table (`edit`'s `edits`, `todo`'s `list`).
     Table(&'static [Param]),
 }
 
@@ -67,7 +68,12 @@ impl Param {
     }
 
     /// Optional: absent means the default.
-    pub const fn df(name: &'static str, kind: Kind, about: &'static str, default: &'static str) -> Self {
+    pub const fn df(
+        name: &'static str,
+        kind: Kind,
+        about: &'static str,
+        default: &'static str,
+    ) -> Self {
         Self {
             name,
             kind,
@@ -103,10 +109,9 @@ impl Param {
     /// The default as text, converted to a JSON value per its kind.
     fn typed_default(&self, text: &str) -> Value {
         match self.kind {
-            Kind::Number | Kind::Line => text
-                .parse::<i64>()
-                .map(|n| json!(n))
-                .unwrap_or(Value::Null),
+            Kind::Number | Kind::Line => {
+                text.parse::<i64>().map(|n| json!(n)).unwrap_or(Value::Null)
+            }
             Kind::Flag => json!(text == "true" || text == "1"),
             _ => json!(text),
         }
@@ -353,13 +358,15 @@ impl Args {
 
 // ---- what a tool hands back ----
 
-/// What one tool call hands back, in three parts: `text` goes to the model, `memo` to front ends
-/// (structured, never recomputable by them), `spill` holds the overflow the front door moved aside.
+/// What one tool call hands back: model text, a front-end memo, the overflow, side effects, and
+/// whether this result ends the round.
 #[derive(Debug)]
 pub struct ToolOutput {
     pub text: String,
     pub memo: Option<Value>,
     pub spill: Option<Spill>,
+    pub effects: Vec<Effect>,
+    pub stop: bool,
 }
 
 impl ToolOutput {
@@ -368,6 +375,8 @@ impl ToolOutput {
             text: text.into(),
             memo: None,
             spill: None,
+            effects: Vec::new(),
+            stop: false,
         }
     }
 
@@ -376,7 +385,25 @@ impl ToolOutput {
             text: text.into(),
             memo: Some(memo),
             spill: None,
+            effects: Vec::new(),
+            stop: false,
         }
+    }
+
+    /// Add a side effect; the front door fills `call_id` and `ts`.
+    pub fn effect(mut self, kind: EffectKind) -> Self {
+        self.effects.push(Effect {
+            call_id: String::new(),
+            ts: String::new(),
+            kind,
+        });
+        self
+    }
+
+    /// Mark this result as ending the round.
+    pub fn stop(mut self) -> Self {
+        self.stop = true;
+        self
     }
 }
 
@@ -404,14 +431,56 @@ pub trait Artifacts: Send + Sync {
     fn path_for(&self, id: i64) -> Result<std::path::PathBuf>;
 }
 
+/// What a memo read asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoReadOp {
+    List,
+    Show,
+    History,
+}
+
+/// One stored memo version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoVersion {
+    pub id: i64,
+    pub content: String,
+    pub ts: String,
+}
+
+/// What a memo read answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoView {
+    Names(Vec<String>),
+    Content(String),
+    History(Vec<MemoVersion>),
+}
+
+/// Memo reads for the `memo` tool; implemented by the caller, never by the tool.
+pub trait MemoRead: Send + Sync {
+    fn read(
+        &self,
+        session: i64,
+        scope: crate::server::storage::MemoScope,
+        op: MemoReadOp,
+        name: Option<&str>,
+    ) -> Result<MemoView>;
+}
+
 /// What the caller hands in: tools never touch the database.
 pub struct Inbox {
     /// For `todo`: this session's list.
-    pub todo: Vec<super::todo::state::TodoPhase>,
+    pub todo: Vec<super::memo::todo::state::TodoPhase>,
     /// For `context`: the window to look at.
-    pub window: super::context::Window,
+    pub window: super::bash::context::Window,
     /// For `bash`: artifact fetch. `None` = no channel, so `#<ref>` stays as written.
     pub artifacts: Option<std::sync::Arc<dyn Artifacts>>,
+    /// For `memo`: the session's id and its read port.
+    pub session: i64,
+    pub memo: Option<std::sync::Arc<dyn MemoRead>>,
+    /// For `kairos`: the session's background job service.
+    pub jobs: Option<std::sync::Arc<crate::server::agent::tools::jobs::JobService>>,
+    /// For `task` and `final`: the session's subagent service.
+    pub subagent: Option<std::sync::Arc<crate::server::agent::tools::subagent::Subagent>>,
 }
 
 impl Default for Inbox {
@@ -420,6 +489,10 @@ impl Default for Inbox {
             todo: Vec::new(),
             window: Default::default(),
             artifacts: None,
+            session: 0,
+            memo: None,
+            jobs: None,
+            subagent: None,
         }
     }
 }
@@ -453,11 +526,15 @@ pub struct Env {
     pub inbox: Inbox,
     /// `bash`'s timeout and stop flag.
     pub bash: BashEnv,
-    /// The bundle the three web tools need.
+    /// The web tool's browser config.
     pub browser: crate::server::config::BrowserConfig,
     /// The profile gate: `None` = every tool; `Some(list)` = only those. The roster and the front door
     /// read the same list.
     pub enabled: Option<std::collections::BTreeSet<String>>,
+    /// The aliases visible to `bash` this round.
+    pub aliases: std::collections::BTreeMap<String, String>,
+    /// The MCP bridge, if any server is configured.
+    pub mcp: Option<std::sync::Arc<dyn super::McpBridge>>,
 }
 
 impl Env {
@@ -469,6 +546,8 @@ impl Env {
             bash: BashEnv::default(),
             browser: Default::default(),
             enabled: None,
+            aliases: Default::default(),
+            mcp: None,
         }
     }
 
@@ -483,6 +562,12 @@ impl Env {
     /// Install the profile's list; `None` allows everything.
     pub fn with_enabled(mut self, names: Option<Vec<String>>) -> Self {
         self.enabled = names.map(|v| v.into_iter().collect());
+        self
+    }
+
+    /// Install the aliases visible to `bash`.
+    pub fn with_aliases(mut self, aliases: std::collections::BTreeMap<String, String>) -> Self {
+        self.aliases = aliases;
         self
     }
 }

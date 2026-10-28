@@ -9,6 +9,8 @@ pub enum BlockKind {
     /// The user's own message.
     #[default]
     User,
+    /// A system wake message.
+    Wake,
     /// The model's reply (final).
     Assistant,
     /// The model's thinking, when the protocol reports it separately.
@@ -24,6 +26,7 @@ impl BlockKind {
     pub fn as_str(self) -> &'static str {
         match self {
             BlockKind::User => "user",
+            BlockKind::Wake => "wake",
             BlockKind::Assistant => "assistant",
             BlockKind::Reasoning => "reasoning",
             BlockKind::ToolRequest => "tool_request",
@@ -36,6 +39,7 @@ impl BlockKind {
     pub fn parse(raw: &str) -> anyhow::Result<Self> {
         Ok(match raw {
             "user" => BlockKind::User,
+            "wake" => BlockKind::Wake,
             "assistant" => BlockKind::Assistant,
             "reasoning" => BlockKind::Reasoning,
             "tool_request" => BlockKind::ToolRequest,
@@ -243,14 +247,15 @@ pub struct SessionMeta {
     /// configured default.
     pub model_provider: Option<String>,
     pub model: Option<String>,
-    /// Whether the todo tool is on for this session. Read by the api's list
-    /// initializer; the list itself is replayed from the tool calls.
+    /// The current profile's name; `None` = no profile chosen.
+    pub profile: Option<String>,
+    /// Whether the todo tool is on for this session.
     pub todo_on: bool,
 }
 
 /// One round's usage, stored per round. Only tokens are stored: whoever draws the bill turns them
 /// into money.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct RoundUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -274,6 +279,8 @@ pub struct RequestMeta {
     pub protocol: String,
     /// The endpoint base (`https://host/v1`). Never a secret.
     pub base_url: String,
+    /// The profile name this request was built from.
+    pub profile: String,
     /// The system prompt **verbatim**.
     pub system: String,
     /// The tool manuals **verbatim** (the serialized `tools` array).
@@ -328,6 +335,57 @@ pub struct Artifact {
     pub content: String,
 }
 
+/// A memo write operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoOp {
+    Add,
+    Mod,
+    Del,
+}
+
+/// Where a memo lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoScope {
+    Current,
+    Global,
+}
+
+/// An alias write operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AliasOp {
+    Add,
+    Remove,
+}
+
+/// A side effect carried by a tool result block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Effect {
+    pub call_id: String,
+    pub ts: String,
+    pub kind: EffectKind,
+}
+
+/// What a tool result writes besides itself.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EffectKind {
+    Memo {
+        op: MemoOp,
+        scope: MemoScope,
+        /// Provenance for `Add` / `Mod`; `None` = the tool result block. Ignored by `Del`.
+        anchor: Option<i64>,
+        name: String,
+        content: Option<String>,
+    },
+    Alias {
+        op: AliasOp,
+        name: String,
+        command: Option<String>,
+    },
+    Subsession {
+        session: i64,
+    },
+}
+
 /// A change to a session row.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionChange {
@@ -338,6 +396,10 @@ pub enum SessionChange {
     /// `/cdp`: the absolute path, and the round the history is anchored on
     /// (`None` = the session has no rounds yet, so only the session row lands).
     Cwd { turn: Option<i64>, path: String },
+    /// The profile this session is now on.
+    Profile(String),
+    /// The todo marker: on/off, and the tool result it belongs to.
+    Todo { on: bool, call_id: String },
 }
 
 /// Which session a submission goes to, or the makings of a new one.
@@ -363,6 +425,8 @@ pub enum Submit {
         model: Option<(String, String)>,
         /// The display name; `None` = unnamed.
         name: Option<String>,
+        /// The profile this session starts on.
+        profile: Option<String>,
     },
     /// The user's message: opens a round and lands at once. `session` = `None`
     /// creates the session row first.
@@ -374,12 +438,20 @@ pub enum Submit {
         /// When this message lands (the caller reads the clock).
         ts: Option<String>,
     },
+    /// A system wake: opens a round without a user message.
+    Wake {
+        session: i64,
+        text: String,
+        ts: Option<String>,
+    },
     /// The blocks of one reply (or of one tool round): relayed at once, landed every `batch` tool
     /// rounds. `done` = these blocks are finished; an open one is still being written.
     Blocks {
         session: i64,
         blocks: Vec<NewBlock>,
         done: bool,
+        /// Side effects carried by tool result blocks; only finished blocks may carry them.
+        effects: Vec<Effect>,
     },
     /// The round is over: settle it at once.
     RoundEnd {
@@ -402,6 +474,8 @@ pub enum Submit {
         /// `(round, from)` — `from` = where the borrowed stretch starts
         /// (`None` = the whole round).
         kept: Vec<(i64, Option<i64>)>,
+        /// The profile fingerprint the summary block records.
+        profile: String,
     },
 }
 
@@ -424,16 +498,22 @@ pub enum Relay {
     /// are finished: the piece is the authoritative version, not another increment.
     Tail {
         session: i64,
+        turn: i64,
         blocks: Vec<NewBlock>,
         done: bool,
     },
     /// A batch just landed: its blocks, ids included, in order.
-    Blocks { session: i64, blocks: Vec<Block> },
+    Blocks {
+        session: i64,
+        turn: i64,
+        blocks: Vec<Block>,
+    },
     /// The round ended; the reason as stored (`None` = died before the gateway answered), and the
-    /// round id, so two surfaces each know which stretch just closed.
+    /// round id and usage, so two surfaces each know which stretch just closed.
     Ended {
         session: i64,
-        turn: Option<i64>,
+        turn: i64,
+        usage: Option<RoundUsage>,
         stop_reason: Option<String>,
     },
 }

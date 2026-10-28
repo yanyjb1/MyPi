@@ -1,15 +1,14 @@
-//! Creating a session before any message: the id has to come back before a round can open, which is
-//! why `Post::Init` is the one post that answers.
+//! Creating a session before any message: the id has to come back first.
 
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::server::api::types::ModelId;
 use crate::server::config::Config;
 use crate::server::storage::{Submit, Writer};
 
-/// Create the session row and answer with its id. The model is checked against the config first.
-pub fn create(
+use super::ModelId;
+
+pub(crate) fn create(
     cfg: &Config,
     w: &Writer,
     cwd: &Path,
@@ -28,6 +27,7 @@ pub fn create(
         cwd: cwd.display().to_string(),
         model,
         name: name.map(str::to_string),
+        profile: None,
     })?;
     landed.session.context("the writer created no session row")
 }

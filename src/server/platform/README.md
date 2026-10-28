@@ -118,7 +118,7 @@ Read through `Config`; this layer opens no file.
 | `config.server.platform.timezone` | the zone this process runs in; unset means whatever the machine says |
 | `config.server.platform.stamp.enabled` | whether a user message gets a timestamp prefix and suffix at all (off by default) |
 | `config.server.platform.stamp.prefix` / `.suffix` | the two templates, rendered when the message is written |
-| `config.server.platform.ipc` | which cross-process endpoint kind to use (`os` / `unix` / `pipe`); read by the entry point and by `ipc`, not by this layer |
+| `config.server.platform.ipc` | which cross-process endpoint kind to use (`os` / `unix` / `pipe`); read by the entry point, not by this layer |
 
 ## See also
 

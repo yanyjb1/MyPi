@@ -1,40 +1,32 @@
-//! One request's input, output, delta outlet and metadata. `RequestContent` carries the session id
-//! only; `AnswerSink` hands out the two streams, where `false` means stop.
-
 use crate::server::agent::request::message::{AssistantMessage, StopReason, ToolDef, Usage};
+use crate::server::agent::request::retry::RetryNotice;
+use crate::server::storage::NewBlock;
 
 /// One request's input.
 pub struct RequestContent {
-    /// The session id: history and filing both need it.
     pub session: i64,
-    /// The system prompt in force.
     pub system: String,
-    /// The tool manual.
     pub tools: Vec<ToolDef>,
-    /// The output cap for this turn.
-    pub max_tokens: u32,
+    pub max_output_tokens: u32,
+    pub profile: String,
 }
 
 /// One request's output.
 pub struct Answer {
-    /// The decoded reply.
     pub message: AssistantMessage,
-    /// How it stopped.
     pub stop: StopReason,
-    /// Tokens used.
     pub usage: Usage,
-    /// The request metadata, handed to storage.
     pub meta: RequestMeta,
 }
 
-/// Where the deltas go. `false` = stop.
-pub trait AnswerSink {
-    /// Text delta.
-    fn content(&mut self, text: &str) -> bool;
-    /// Reasoning delta.
-    fn reasoning(&mut self, text: &str) -> bool;
+/// Receives one decoded block piece; `false` stops the stream.
+pub trait BlockSink {
+    fn block(&mut self, block: NewBlock, done: bool) -> bool;
 }
 
-/// A request's metadata — the part of one round that does **not** change with the conversation. The
-/// shape belongs to storage; this only passes it out.
+/// Receives retry notices.
+pub trait RetrySink {
+    fn retry(&mut self, notice: &RetryNotice);
+}
+
 pub use crate::server::storage::RequestMeta;

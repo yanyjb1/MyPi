@@ -2,6 +2,9 @@
 //! workspace plus the system temp dir (rationale in `src/server/agent/README.md`).
 
 use anyhow::{Result, anyhow};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 /// Where the session stands, plus the directory it started in. `cwd` moves, `root` does not.
 pub struct Workspace {
@@ -42,6 +45,47 @@ impl Workspace {
     pub fn chdir(&mut self, real: std::path::PathBuf) {
         self.cwd = real;
     }
+
+    /// Run a read-modify-write under the path's exclusive lock.
+    pub fn with_write<T>(
+        &self,
+        path: &std::path::Path,
+        f: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let lock = path_lock(path);
+        let _guard = lock.write().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+}
+
+static LOCKS: LazyLock<Mutex<HashMap<std::path::PathBuf, Arc<RwLock<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn path_lock(path: &std::path::Path) -> Arc<RwLock<()>> {
+    let mut map = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(RwLock::new(())))
+        .clone()
+}
+
+static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
+
+/// Write through a sibling temp file, then rename over the target.
+pub fn write_atomic(path: &std::path::Path, content: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("no parent directory for {}", path.display()))?;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let tmp = parent.join(format!(
+        ".{name}.tmp-{}-{}",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = std::fs::write(&tmp, content).and_then(|_| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map_err(|e| anyhow!("failed to write {}: {e}", path.display()))
 }
 
 /// Canonicalize as far as it goes, then re-attach the tail. The `write` target may not exist yet,

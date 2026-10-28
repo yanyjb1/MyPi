@@ -91,7 +91,10 @@ pub fn push(level: Level, scope: impl Into<String>, text: impl Into<String>) {
         scope: scope.into(),
         text: text.into(),
     };
-    ring().lock().expect("log lock poisoned").push(rec, CAPACITY);
+    ring()
+        .lock()
+        .expect("log lock poisoned")
+        .push(rec, CAPACITY);
 }
 
 pub fn info(scope: impl Into<String>, text: impl Into<String>) {

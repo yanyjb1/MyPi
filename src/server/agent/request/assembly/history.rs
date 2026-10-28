@@ -1,8 +1,6 @@
 //! Stored messages → wire messages: a pure mapping, nothing injected, with a half tool round repaired.
 
-use crate::server::agent::request::message::{
-    FunctionCall, Message, ToolCall, WireMessage,
-};
+use crate::server::agent::request::message::{FunctionCall, Message, ToolCall, WireMessage};
 
 /// The state that carries across a rebuild.
 #[derive(Default)]
@@ -30,11 +28,9 @@ fn assemble_user_text(prefix: Option<&str>, content: &str, suffix: Option<&str>)
 }
 
 /// Map a run of messages, one by one, into protocol messages.
-pub(crate) fn to_wire(
-    messages: &[Message],
-    st: &mut Rebuild,
-) -> Vec<WireMessage> {
+pub(crate) fn to_wire(messages: &[Message], st: &mut Rebuild) -> Vec<WireMessage> {
     let mut rebuilt: Vec<WireMessage> = Vec::new();
+    let mut pending_text: Option<String> = None;
     // Only calls with a result count: a call without one is a dangling tail, not a half-open `tool_calls`.
     let mut complete: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for e in messages {
@@ -57,6 +53,14 @@ pub(crate) fn to_wire(
                 i += 1;
             }
             Message::Assistant { content, .. } => {
+                if matches!(
+                    messages.get(i + 1),
+                    Some(Message::ToolRequest { .. } | Message::ToolResult { .. })
+                ) {
+                    pending_text = Some(content.clone());
+                    i += 1;
+                    continue;
+                }
                 rebuilt.push(WireMessage::Assistant {
                     content: Some(content.clone()),
                     tool_calls: Vec::new(),
@@ -81,12 +85,9 @@ pub(crate) fn to_wire(
                     .map(|p| i + p)
                     .unwrap_or(messages.len());
                 let block = &messages[i..end];
+                let mut run_text = pending_text.take();
                 // Group by call: a `first` request opens a group, the rest of the batch follows.
-                type Group = (
-                    String,
-                    Vec<ToolCall>,
-                    Vec<(String, String)>,
-                );
+                type Group = (String, Vec<ToolCall>, Vec<(String, String)>);
                 // Two things that get the **whole request** rejected: blank ids/names (skipped with
                 // their result) and duplicate ids.
                 let mut plan: std::collections::BTreeMap<(String, u32), (String, bool)> =
@@ -120,7 +121,11 @@ pub(crate) fn to_wire(
                         Message::ToolResult { call_id, .. } => (call_id.clone(), false),
                         _ => unreachable!("block holds only tool messages"),
                     };
-                    let counter = if is_request { &mut req_nth } else { &mut res_nth };
+                    let counter = if is_request {
+                        &mut req_nth
+                    } else {
+                        &mut res_nth
+                    };
                     let n = *counter.entry(call_id.clone()).or_insert(0);
                     *counter.get_mut(&call_id).expect("just inserted") += 1;
                     let (wire_id, malformed) = plan
@@ -137,7 +142,8 @@ pub(crate) fn to_wire(
                             ..
                         } => {
                             if *first || groups.is_empty() {
-                                groups.push((text.clone(), Vec::new(), Vec::new()));
+                                let text = run_text.take().unwrap_or_else(|| text.clone());
+                                groups.push((text, Vec::new(), Vec::new()));
                             }
                             if malformed {
                                 continue;
