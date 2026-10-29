@@ -1,33 +1,41 @@
-//! Creating a session before any message: the id has to come back first.
+//! `init` — a session row before any message; the front end needs the id first.
 
-use anyhow::{Context, Result};
-use std::path::Path;
+use anyhow::Result;
+use serde_json::{Value, json};
 
-use crate::server::config::Config;
-use crate::server::storage::{Submit, Writer};
+use crate::server::api::route::{opt_str_of, str_of};
+use crate::server::api::{Api, Refuse};
+use crate::server::storage::{SessionChange, Submit};
 
-use crate::ipc::contract::post::ModelId;
+use super::emit;
 
-pub(crate) fn create(
-    cfg: &Config,
-    w: &Writer,
-    cwd: &Path,
-    model: Option<&ModelId>,
-    name: Option<&str>,
-) -> Result<i64> {
-    let model = match model {
-        Some(id) => {
-            let resolved = cfg.model_by_id(&id.addressed())?;
-            Some((resolved.provider_name.clone(), resolved.entry.id.clone()))
-        }
-        None => None,
+pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result<Value, Refuse> {
+    let cwd = str_of(ask, "cwd")?.to_string();
+    let name = opt_str_of(ask, "name")?.map(str::to_string);
+    let profile = opt_str_of(ask, "profile")?.map(str::to_string);
+    let model = match ask.get("model") {
+        Some(value) if !value.is_null() => Some(emit::model_of(value)?),
+        _ => None,
     };
-    let landed = w.push(Submit::NewSession {
+
+    let landed = api.writer().push(Submit::NewSession {
         started_at: crate::server::platform::time::now_stamp(),
-        cwd: cwd.display().to_string(),
+        cwd,
         model,
-        name: name.map(str::to_string),
-        profile: None,
+        name,
+        profile: profile.clone(),
     })?;
-    landed.session.context("the writer created no session row")
+    let session = landed
+        .session
+        .ok_or_else(|| Refuse::Internal("the writer created no session row".into()))?;
+    api.register().register(session);
+
+    if let Some(profile) = profile {
+        api.writer().push(Submit::Session {
+            session,
+            change: SessionChange::Profile(profile.clone()),
+        })?;
+        api.register().choose_profile(session, profile)?;
+    }
+    Ok(json!({"session": session}))
 }

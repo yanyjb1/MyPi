@@ -1,66 +1,73 @@
 # api
 
-The backend's one surface for front ends: a router on `(kind, name)`, and the session streams.
+## Design
 
-## Schema
+The api sits between the ipc server and the rest of the backend. It has three jobs, and nothing else belongs here:
 
-One entry point:
+- **Doors.** `call` answers from the database, `post` changes session data, `subscribe` changes who follows what.
+- **Reader.** Every `call` opens its own read connection and closes it.
+- **Stream.** One buffer per session, one outbound queue per connection.
 
-```text
-Api::receive(viewer, frame) -> Response
-Response = Frame(reply) | Stream(receiver) | Silence
-```
+### Wire
 
-Name table:
+A frame is `{"kind", "name", "payload"}`; `payload` is JSON and api defines no types of its own.
+Kinds: `register`, `call`, `post`, `subscribe`. A reply repeats the request's kind and name.
+A refusal is a reply whose payload is `{"error": {"code", "message"}}`; codes are
+`bad_payload`, `busy`, `permission_denied`, `internal`.
 
-| kind | names | reply |
-|---|---|---|
-| `register` | `hello`, `bye` | none (`Silence`); identity comes from the hello payload |
-| `call` | `init` `blocks` `meta` `usage` `todo` `memo` `children` `config` `pools` `sessions` | each name's query result |
-| `post` | `init` `name` `cwd` `switch` `profile` `todo_on` `todo_off` `delete` `interrupt` `rewind` `unwatch` `default_model` `reload` | `init` → `{session}`, `cwd` → `{cwd}`, `rewind` → `{cut}`, else `{}` |
-| `subscribe` | `watch` `submit` `compact` | `watch` → the stream, `submit`/`compact` → `{turn}` |
-| `notice` | outbound only | inbound `notice` is `unknown_name` |
+### Doors
 
-A reply's `kind` and `name` echo the request. Errors are payloads: `unknown_name`,
-`bad_payload`, `busy`, `internal`. `busy` means the session is in a round, or a reload has
-sessions running.
+`call`: `init`, `blocks`, `meta`, `usage`, `todo`, `memo`, `children`, `config`, `pools`, `sessions`.
+`post`: `init`, `name`, `cwd`, `switch`, `profile`, `todo_on`, `todo_off`, `delete`, `interrupt`,
+`rewind`, `default_model`, `reload`.
+`subscribe`: `watch`, `submit`, `compact`.
 
-Streams belong to sessions, not viewers:
+### Stream
 
-```text
-streams: HashMap<i64, SessionStream>
-SessionStream { turn: Option<TurnBuffer>, subscribers: Vec<Subscriber> }
-Subscriber { viewer, role: Writer | Watcher, turn: Option<i64>, tx: Sender<Frame> }
-```
+Hello opens the connection's stream and answers `register.opened`. Everything after that is pushed
+under kind `subscribe`:
 
-- One stream per session, many subscribers on it. A viewer attaches through `watch`
-  (Watcher, whole stream), `submit` or `compact` (Writer, one turn).
-- The turn buffer holds one round's frames; a new subscriber first gets the buffered frames
-  it is entitled to, then increments.
-- A Watcher receives everything on its stream. A Writer skips the post-metadata frames it
-  caused itself (`meta`, `rewound`, `deleted`).
-- `notice` goes to every subscriber of the session's stream regardless of role or watch
-  state; with nobody on it, it is dropped.
-- `round_ended` clears the turn buffer and drops turn filters pointing at it; `deleted`
-  destroys the whole stream. A failed channel send removes the subscriber on the spot.
+- `post` — a session-data change, carrying its issuer. The issuer never reads its own write back.
+- `stream` — block content produced by the backend.
+- `notice` — the server's own line.
+- `structure` — the closing event of a turn: the round id and the block id ranges it owns.
 
-## Design intent
+Rules:
 
-- One router: the name table is data in `route.rs`, so a new operation is one file plus one
-  line, and no other layer ever inspects a name.
-- Streams belong to sessions: several front ends on one session share one fan-out point, and
-  the turn buffer replays late joiners without a history store.
-- Roles are declarations, not state the server assigns: what a viewer receives follows from
-  which request it sent, so there is no role bookkeeping to corrupt.
-- `Api` methods are `&self`: all mutable state sits in the driver's one global lock, so the
-  ipc threads need no per-door synchronization.
+- A buffer exists only while the session has a subscriber. The first event with a subscriber creates
+  it; the last subscriber leaving destroys it. No subscriber, no record.
+- The buffer holds everything since its last clear, whatever the event kind.
+- It clears once: when the turn ends and its `structure` event has been handed to the current
+  subscribers.
+- Replies and stream events share one outbound queue per connection; one thread writes the socket.
+
+### Roles
+
+`submit` and `compact` take the session's writer slot; a new writer demotes the old one. A writer
+keeps the slot until it is taken, switches session, or disconnects. `post` is refused with
+`permission_denied` unless the caller holds that session's slot. `watch` only declares a session;
+a connection follows one session at a time, and switching is the only way to stop following.
+
+## Intent
+
+- The buffer belongs to the session, not to a connection: a front end may attach mid-turn, and a
+  reconnect must not change what the turn already produced.
+- `structure` is the clear marker because a turn is not finished for a reader until it knows which
+  blocks the turn owned.
+- Push frames reuse kind `subscribe` so the registry stays four kinds and no request id is needed.
+- api holds no wire types: the I/O document is the contract, so a new field never reaches across
+  domains.
 
 ## Unresolved
 
-- A viewer that never sends `unwatch` keeps its channel until a write fails. There is no
-  liveness probe; a dead connection is noticed only when a frame is sent.
+- `config`, `pools`, `default_model`, `reload` need the config, which lives outside this region.
+  They refuse with `internal` until the config is wired.
+- `submit` and `compact` expect the loop's `deliver` to return the new round id. The loop's current
+  signature returns nothing.
+- `notice` has no caller yet; the loop's outlets stay silent.
+- The ipc server still owns the socket write path; it must hand each connection a queue and drain it
+  on its own thread, and call `Api::connect` / `Api::disconnect`.
 
-## Config fields
+## Config keys
 
-None directly. The api passes `Config` through to `storage`, `agent`, and `config`; it reads
-no keys of its own.
+None.

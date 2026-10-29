@@ -1,19 +1,12 @@
-//! Watch: put the connection on the session's whole stream.
+//! `watch` — this connection follows this session; nothing is asked, nothing is answered.
 
 use anyhow::Result;
-use std::sync::mpsc;
+use serde_json::{Value, json};
 
-use crate::ipc::contract::{Frame, Viewer};
-use crate::server::api::driver::{Driver, subscriptions::Role};
+use crate::server::api::relay::Role;
+use crate::server::api::{Api, Refuse};
 
-pub(crate) fn apply(
-    driver: &Driver,
-    viewer: &Viewer,
-    session: i64,
-) -> Result<mpsc::Receiver<Frame>> {
-    let (tx, rx) = mpsc::channel();
-    driver
-        .relay
-        .attach(viewer, session, Role::Watcher, None, tx);
-    Ok(rx)
+pub(crate) fn apply(api: &Api, conn: u64, session: i64) -> Result<Value, Refuse> {
+    api.relay().declare(conn, session, Role::Watcher, None);
+    Ok(json!({}))
 }

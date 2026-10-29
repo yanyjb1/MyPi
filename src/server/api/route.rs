@@ -1,210 +1,124 @@
-//! Route: the name table. Payload decode, one handler per name, the reply frame.
+//! The name tables: kind and name pick the door, JSON picks the arguments.
 
-use crate::ipc::contract::call;
-use crate::ipc::contract::{ErrorCode as Code, Frame, Viewer};
-use crate::server::api::{Response, call as call_group, post as post_group, subscribe};
+use anyhow::Result;
+use serde_json::Value;
 
-/// Decode `payload` as `T`, or answer `bad_payload`.
-macro_rules! decode {
-    ($frame:expr, $t:ty) => {
-        match serde_json::from_value::<$t>($frame.payload.clone()) {
-            Ok(v) => v,
-            Err(e) => {
-                return Response::Frame(Frame::error_to(
-                    $frame,
-                    Code::BadPayload,
-                    &format!("{}: {e}", $frame.name),
-                ));
-            }
-        }
-    };
-}
+use crate::ipc::contract::Frame;
 
-/// Wrap a handler result; any error becomes `busy` when marked, else `internal`.
-macro_rules! answer {
-    ($frame:expr, $result:expr) => {{
-        let frame = $frame;
-        match $result {
-            Ok(value) => match serde_json::to_value(value) {
-                Ok(payload) => Response::Frame(Frame::reply_to(&frame, payload)),
-                Err(e) => {
-                    Response::Frame(Frame::error_to(&frame, Code::Internal, &format!("{e:#}")))
-                }
-            },
-            Err(e) => Response::Frame(Frame::error_to(&frame, Code::Internal, &format!("{e:#}"))),
-        }
-    }};
-}
+use super::call;
+use super::post;
+use super::subscribe;
+use super::{Api, Refuse};
 
-pub fn call(cfg: &crate::server::config::Config, viewer: &Viewer, frame: Frame) -> Response {
+pub(crate) fn call(api: &Api, _viewer: &str, frame: &Frame) -> Result<Value, Refuse> {
+    let ask = &frame.payload;
     match frame.name.as_str() {
-        "init" => {
-            let ask = decode!(&frame, call::init::Ask);
-            answer!(frame, call_group::init(cfg, viewer, ask.session, ask.limit))
-        }
-        "blocks" => {
-            let ask = decode!(&frame, call::blocks::Ask);
-            answer!(
-                frame,
-                call_group::blocks(cfg, viewer, ask.session, ask.ranges)
-            )
-        }
-        "meta" => {
-            let ask = decode!(&frame, call::meta::Ask);
-            answer!(frame, call_group::meta(cfg, viewer, ask.session))
-        }
-        "usage" => {
-            let ask = decode!(&frame, call::usage::Ask);
-            answer!(frame, call_group::usage(cfg, viewer, ask.session, ask.lang))
-        }
-        "todo" => {
-            let ask = decode!(&frame, call::todo::Ask);
-            answer!(frame, call_group::todo(cfg, viewer, ask.session))
-        }
-        "memo" => {
-            let ask = decode!(&frame, call::memo::Ask);
-            answer!(
-                frame,
-                call_group::memo(cfg, viewer, ask.session, ask.op, ask.scope, ask.name)
-            )
-        }
-        "children" => {
-            let ask = decode!(&frame, call::children::Ask);
-            answer!(frame, call_group::children(cfg, viewer, ask.session))
-        }
-        "config" => {
-            let ask = decode!(&frame, call::config::Ask);
-            answer!(frame, call_group::config(cfg, viewer, &ask.key))
-        }
-        "pools" => {
-            let _ask = decode!(&frame, call::pools::Ask);
-            answer!(frame, call_group::pools(cfg, viewer))
-        }
-        "sessions" => {
-            let ask = decode!(&frame, call::sessions::Ask);
-            answer!(frame, call_group::sessions(cfg, viewer, ask.under))
-        }
-        _ => unknown(frame),
+        "init" => call::init::answer(api, i64_of(ask, "session")?),
+        "blocks" => call::blocks::answer(api, i64_of(ask, "session")?, ranges_of(ask, "ranges")?),
+        "meta" => call::meta::answer(api, i64_of(ask, "session")?),
+        "usage" => call::usage::answer(api, i64_of(ask, "session")?),
+        "todo" => call::todo::answer(api, i64_of(ask, "session")?),
+        "memo" => call::memo::answer(
+            api,
+            opt_i64_of(ask, "session")?,
+            str_of(ask, "op")?,
+            str_of(ask, "scope")?,
+            opt_str_of(ask, "name")?,
+        ),
+        "children" => call::children::answer(api, i64_of(ask, "session")?),
+        "config" => call::config::answer(api, str_of(ask, "key")?),
+        "pools" => call::pools::answer(api),
+        "sessions" => call::sessions::answer(api, opt_str_of(ask, "under")?),
+        other => Err(Refuse::Internal(format!("no such name: {other}"))),
     }
 }
 
-pub fn post(cfg: &crate::server::config::Config, viewer: &Viewer, frame: Frame) -> Response {
-    let result = match frame.name.as_str() {
-        "init" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Init);
-            post_group::init(cfg, viewer, ask)
-        }
-        "name" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Name);
-            post_group::name(cfg, viewer, ask)
-        }
-        "cwd" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Cwd);
-            post_group::cwd(cfg, viewer, ask)
-        }
-        "switch" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Switch);
-            post_group::switch(cfg, viewer, ask)
-        }
-        "profile" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Profile);
-            post_group::profile(cfg, viewer, ask)
-        }
-        "todo_on" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Todo);
-            post_group::todo_on(cfg, viewer, ask)
-        }
-        "todo_off" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Todo);
-            post_group::todo_off(cfg, viewer, ask)
-        }
-        "delete" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Session);
-            post_group::delete(cfg, viewer, ask)
-        }
-        "interrupt" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Session);
-            post_group::interrupt(cfg, viewer, ask)
-        }
-        "rewind" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Rewind);
-            post_group::rewind(cfg, viewer, ask)
-        }
-        "unwatch" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::Session);
-            post_group::unwatch(cfg, viewer, ask)
-        }
-        "default_model" => {
-            let ask = decode!(&frame, crate::ipc::contract::post::ask::DefaultModel);
-            post_group::default_model(cfg, viewer, ask)
-        }
-        "reload" => post_group::reload(cfg, viewer),
-        _ => return unknown(frame),
-    };
-    match result {
-        Ok(payload) => Response::Frame(Frame::reply_to(&frame, payload)),
-        Err(e) => Response::Frame(Frame::error_to(&frame, Code::Internal, &format!("{e:#}"))),
-    }
-}
-
-pub fn subscribe(cfg: &crate::server::config::Config, viewer: &Viewer, frame: Frame) -> Response {
+pub(crate) fn post(api: &Api, conn: u64, viewer: &str, frame: &Frame) -> Result<Value, Refuse> {
+    let ask = &frame.payload;
     match frame.name.as_str() {
-        "watch" => {
-            let ask = decode!(&frame, crate::ipc::contract::subscribe::watch);
-            match subscribe::watch(cfg, viewer, ask.session) {
-                Ok(rx) => Response::Stream(rx),
-                Err(e) => {
-                    Response::Frame(Frame::error_to(&frame, Code::Internal, &format!("{e:#}")))
-                }
-            }
-        }
-        "submit" => {
-            let ask = decode!(&frame, crate::ipc::contract::subscribe::submit);
-            match subscribe::submit(
-                cfg,
-                viewer,
-                ask.session,
-                ask.prefix.as_deref(),
-                &ask.text,
-                ask.suffix.as_deref(),
-            ) {
-                Ok((_, Some(turn))) => {
-                    Response::Frame(Frame::reply_to(&frame, serde_json::json!({ "turn": turn })))
-                }
-                Ok((_, None)) => busy(&frame),
-                Err(e) => {
-                    Response::Frame(Frame::error_to(&frame, Code::Internal, &format!("{e:#}")))
-                }
-            }
-        }
-        "compact" => {
-            let ask = decode!(&frame, crate::ipc::contract::subscribe::compact);
-            match subscribe::compact(cfg, viewer, ask.session, ask.retention, ask.focus) {
-                Ok((_, Some(turn))) => {
-                    Response::Frame(Frame::reply_to(&frame, serde_json::json!({ "turn": turn })))
-                }
-                Ok((_, None)) => busy(&frame),
-                Err(e) => {
-                    Response::Frame(Frame::error_to(&frame, Code::Internal, &format!("{e:#}")))
-                }
-            }
-        }
-        _ => unknown(frame),
+        "init" => post::init::apply(api, conn, viewer, ask),
+        "name" => post::name::apply(api, viewer, ask),
+        "cwd" => post::cwd::apply(api, viewer, ask),
+        "switch" => post::switch::apply(api, viewer, ask),
+        "profile" => post::profile::apply(api, viewer, ask),
+        "todo_on" => post::todo_on::apply(api, viewer, ask),
+        "todo_off" => post::todo_off::apply(api, viewer, ask),
+        "delete" => post::delete::apply(api, viewer, ask),
+        "interrupt" => post::interrupt::apply(api, viewer, ask),
+        "rewind" => post::rewind::apply(api, viewer, ask),
+        "default_model" => post::default_model::apply(api, ask),
+        "reload" => post::reload::apply(api),
+        other => Err(Refuse::Internal(format!("no such name: {other}"))),
     }
 }
 
-fn busy(frame: &Frame) -> Response {
-    Response::Frame(Frame::error_to(
-        frame,
-        Code::Busy,
-        "the session is already in a round",
-    ))
+pub(crate) fn subscribe(
+    api: &Api,
+    conn: u64,
+    viewer: &str,
+    frame: &Frame,
+) -> Result<Option<Value>, Refuse> {
+    let ask = &frame.payload;
+    match frame.name.as_str() {
+        "watch" => subscribe::watch::apply(api, conn, i64_of(ask, "session")?).map(|_| None),
+        "submit" => subscribe::submit::apply(api, conn, viewer, ask).map(Some),
+        "compact" => subscribe::compact::apply(api, conn, viewer, ask).map(Some),
+        other => Err(Refuse::Internal(format!("no such name: {other}"))),
+    }
 }
 
-fn unknown(frame: Frame) -> Response {
-    Response::Frame(Frame::error_to(
-        &frame,
-        Code::UnknownName,
-        &format!("no such name: {}", frame.name),
-    ))
+pub(crate) fn i64_of(value: &Value, key: &str) -> Result<i64, Refuse> {
+    value
+        .get(key)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| Refuse::Bad(format!("missing or bad `{key}`")))
+}
+
+pub(crate) fn opt_i64_of(value: &Value, key: &str) -> Result<Option<i64>, Refuse> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| Refuse::Bad(format!("bad `{key}`"))),
+    }
+}
+
+pub(crate) fn str_of<'a>(value: &'a Value, key: &str) -> Result<&'a str, Refuse> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| Refuse::Bad(format!("missing or bad `{key}`")))
+}
+
+pub(crate) fn opt_str_of<'a>(value: &'a Value, key: &str) -> Result<Option<&'a str>, Refuse> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| Refuse::Bad(format!("bad `{key}`"))),
+    }
+}
+
+pub(crate) fn ranges_of(value: &Value, key: &str) -> Result<Vec<[i64; 2]>, Refuse> {
+    let items = value
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| Refuse::Bad(format!("missing or bad `{key}`")))?;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let pair = item
+            .as_array()
+            .filter(|p| p.len() == 2)
+            .ok_or_else(|| Refuse::Bad(format!("`{key}` holds a non-pair")))?;
+        let lo = pair[0]
+            .as_i64()
+            .ok_or_else(|| Refuse::Bad(format!("`{key}` holds a non-number")))?;
+        let hi = pair[1]
+            .as_i64()
+            .ok_or_else(|| Refuse::Bad(format!("`{key}` holds a non-number")))?;
+        out.push([lo, hi]);
+    }
+    Ok(out)
 }
