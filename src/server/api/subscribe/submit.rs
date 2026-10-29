@@ -1,11 +1,10 @@
-//! Submit: open a round and register the viewer on its turn.
+//! Submit: open a round and put the connection on its turn.
 
 use anyhow::Result;
+use std::sync::mpsc;
 
-use crate::ipc::contract::Viewer;
+use crate::ipc::contract::{Frame, Viewer};
 use crate::server::api::driver::Driver;
-
-use super::Opened;
 
 pub(crate) fn apply(
     driver: &mut Driver,
@@ -14,6 +13,8 @@ pub(crate) fn apply(
     prefix: Option<&str>,
     text: &str,
     suffix: Option<&str>,
-) -> Result<Opened> {
-    driver.submit(viewer, session, prefix, text, suffix)
+) -> Result<(mpsc::Receiver<Frame>, Option<i64>)> {
+    let (tx, rx) = mpsc::channel();
+    let turn = driver.submit(viewer, session, prefix, text, suffix, tx)?;
+    Ok((rx, turn))
 }

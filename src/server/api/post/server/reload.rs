@@ -3,15 +3,11 @@
 use anyhow::Result;
 
 use crate::server::api::driver::Driver;
-use crate::server::api::post::PostDone;
 use crate::server::config::Config;
 
-pub(crate) fn apply(driver: &mut Driver) -> Result<PostDone> {
-    if !driver.running.is_empty() {
-        return Ok(PostDone::Busy);
-    }
+pub(crate) fn apply(driver: &mut Driver) -> Result<()> {
     driver.cfg = Config::load()?;
     driver.reload_mcp();
     driver.sessions.invalidate();
-    Ok(PostDone::Done)
+    Ok(())
 }

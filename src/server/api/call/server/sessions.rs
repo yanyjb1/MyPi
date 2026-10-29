@@ -13,7 +13,8 @@ use crate::server::api::call::session::{blocks_of, read_start, user_text};
 pub(crate) const SESSION_COLS: &str =
     "id, name, started_at, cwd, model_provider, model, profile, todo_on";
 
-pub use crate::ipc::contract::{SessionRow, display_name};
+use crate::ipc::contract::call::sessions::SessionRow;
+use crate::ipc::contract::display_name;
 
 /// The picker's rows, newest first; child sessions are not sessions of their own.
 pub(crate) fn rows(conn: &Connection, under: Option<&std::path::Path>) -> Result<Vec<SessionRow>> {

@@ -8,17 +8,24 @@ use crate::server::api::driver::Driver;
 use crate::server::platform::env;
 use crate::server::storage::{Reader, SessionChange, Submit, Writer};
 
-pub(crate) fn apply(driver: &Driver, session: i64, raw: String) -> Result<()> {
+pub(crate) fn apply(driver: &Driver, session: i64, raw: String) -> Result<PathBuf> {
     let cwd = driver.live_cwd(session)?;
     let conn = Reader::open(&driver.db)?;
     let out = crate::commands::Cdp::set(&driver.writer, &conn, session, &cwd, &raw);
     Reader::close(conn);
-    out?;
-    driver.emit_meta(session)
+    let target = out?;
+    driver.emit_meta(session)?;
+    Ok(target)
 }
 
 impl crate::commands::Cdp {
-    pub fn set(w: &Writer, conn: &Connection, session: i64, cwd: &Path, raw: &str) -> Result<()> {
+    pub fn set(
+        w: &Writer,
+        conn: &Connection,
+        session: i64,
+        cwd: &Path,
+        raw: &str,
+    ) -> Result<PathBuf> {
         let target = resolve(cwd, raw)?;
         let turn = tip_turn(conn, session)?;
         w.push(Submit::Session {
@@ -28,7 +35,7 @@ impl crate::commands::Cdp {
                 path: target.display().to_string(),
             },
         })?;
-        Ok(())
+        Ok(target)
     }
 }
 

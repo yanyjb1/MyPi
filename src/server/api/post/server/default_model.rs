@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 
+use crate::ipc::contract::post::ModelId;
 use crate::server::api::driver::Driver;
-use crate::server::api::post::ModelId;
 
 pub(crate) fn apply(driver: &Driver, id: ModelId) -> Result<()> {
     crate::commands::Model::set_default(&driver.cfg, &id)?;

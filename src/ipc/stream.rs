@@ -1,39 +1,39 @@
-//! The server's half of one watch: a session's stream becomes lines.
+//! The server's half of one watch: frames become lines until either end gives up.
 
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use crate::ipc::contract::{Answer, Event, Post, SessionWrite, Viewer};
-use crate::ipc::frame::encode;
+use crate::ipc::contract::{Frame, Kind, Viewer};
+use crate::ipc::line;
+use crate::ipc::transport::Stream;
 use crate::server::api::Api;
 
 /// Write one session's stream to one connection until either end gives up.
-pub(crate) fn pump(
-    mut out: Box<dyn Write + Send>,
-    rx: Receiver<Event>,
-    api: Arc<Api>,
-    viewer: Viewer,
-    session: i64,
-) {
-    for item in rx {
-        let line = match encode(&Answer::Stream { event: item }) {
-            Ok(line) => line,
+pub(crate) fn pump(mut out: BufWriter<Stream>, rx: Receiver<Frame>, api: Arc<Api>, viewer: Viewer) {
+    let mut session: Option<i64> = None;
+    for frame in rx {
+        if session.is_none() {
+            session = frame.payload.get("session").and_then(|v| v.as_i64());
+        }
+        let bytes = match line::encode(&frame) {
+            Ok(bytes) => bytes,
             Err(e) => {
-                eprintln!("mypi: session {session} stream: {e}");
+                eprintln!("mypi: stream: {e}");
                 break;
             }
         };
-        if let Err(e) = out.write_all(&line).and_then(|()| out.flush()) {
-            eprintln!("mypi: session {session} stream closed: {e}");
+        if out.write_all(&bytes).and_then(|()| out.flush()).is_err() {
             break;
         }
     }
-    let post = Post::Session {
-        session,
-        write: SessionWrite::Unwatch,
-    };
-    if let Err(e) = api.post(&viewer, post) {
-        eprintln!("mypi: session {session} unwatch failed: {e:#}");
+    let unwatch = Frame::new(Kind::Post, "unwatch", session_json(session));
+    let _ = api.receive(&viewer, unwatch);
+}
+
+fn session_json(session: Option<i64>) -> serde_json::Value {
+    match session {
+        Some(session) => serde_json::json!({ "session": session }),
+        None => serde_json::json!({}),
     }
 }

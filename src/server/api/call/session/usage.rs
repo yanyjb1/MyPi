@@ -3,11 +3,10 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
+use crate::ipc::contract::call;
 use crate::server::api::call::ctx::Ctx;
 use crate::server::config::Config;
 use crate::server::storage::RoundUsage;
-
-pub use crate::ipc::contract::{ModelUsage, UsageCost, UsageLang, UsageReply};
 
 /// What one model charges, per million tokens.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -29,8 +28,12 @@ struct Rated {
     sheet: Option<PriceSheet>,
 }
 
-pub(crate) fn answer(ctx: &Ctx, session: i64, lang: UsageLang) -> Result<UsageReply> {
-    Ok(UsageReply {
+pub(crate) fn answer(
+    ctx: &Ctx,
+    session: i64,
+    lang: call::usage::UsageLang,
+) -> Result<call::usage::Reply> {
+    Ok(call::usage::Reply {
         lang,
         groups: bill_for(ctx.cfg, ctx.reader, session)?,
     })
@@ -70,7 +73,7 @@ fn tokens_by_model(conn: &Connection, session: i64) -> Result<Vec<Rated>> {
         .map_err(Into::into)
 }
 
-fn bill_for(cfg: &Config, conn: &Connection, session: i64) -> Result<Vec<ModelUsage>> {
+fn bill_for(cfg: &Config, conn: &Connection, session: i64) -> Result<Vec<call::usage::ModelUsage>> {
     let mut rated = tokens_by_model(conn, session)?;
     for r in &mut rated {
         r.sheet = sheet_of(cfg, r);
@@ -100,10 +103,10 @@ fn sheet_of(cfg: &Config, r: &Rated) -> Option<PriceSheet> {
     })
 }
 
-fn bill(rated: &[Rated]) -> Vec<ModelUsage> {
+fn bill(rated: &[Rated]) -> Vec<call::usage::ModelUsage> {
     rated
         .iter()
-        .map(|r| ModelUsage {
+        .map(|r| call::usage::ModelUsage {
             id: r.model.clone(),
             provider: r.provider.clone(),
             rounds: r.rounds,
@@ -118,7 +121,7 @@ fn bill(rated: &[Rated]) -> Vec<ModelUsage> {
         .collect()
 }
 
-fn cost_of(sheet: &PriceSheet, u: RoundUsage) -> UsageCost {
+fn cost_of(sheet: &PriceSheet, u: RoundUsage) -> call::usage::UsageCost {
     const PER_MILLION: f64 = 1_000_000.0;
     let cached = u.cached_tokens.min(u.prompt_tokens);
     let written = u
@@ -128,7 +131,7 @@ fn cost_of(sheet: &PriceSheet, u: RoundUsage) -> UsageCost {
         .prompt_tokens
         .saturating_sub(cached)
         .saturating_sub(written);
-    UsageCost {
+    call::usage::UsageCost {
         input: fresh as f64 * sheet.input / PER_MILLION,
         output: u.completion_tokens as f64 * sheet.output / PER_MILLION,
         cache_read: cached as f64 * sheet.cache_read / PER_MILLION,

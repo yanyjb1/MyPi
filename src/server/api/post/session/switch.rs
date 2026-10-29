@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 
+use crate::ipc::contract::post::ModelId;
 use crate::server::api::driver::Driver;
-use crate::server::api::post::ModelId;
 use crate::server::storage::{SessionChange, Submit, Writer};
 
 pub(crate) fn apply(driver: &Driver, session: i64, id: ModelId) -> Result<()> {

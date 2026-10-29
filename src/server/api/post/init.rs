@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::server::config::Config;
 use crate::server::storage::{Submit, Writer};
 
-use super::ModelId;
+use crate::ipc::contract::post::ModelId;
 
 pub(crate) fn create(
     cfg: &Config,

@@ -7,17 +7,19 @@ mod child;
 mod compact;
 mod relay;
 mod round;
-mod subscriptions;
+pub(crate) mod subscriptions;
 mod wake;
 
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::ipc::contract::Viewer;
+use crate::ipc::contract::subscribe::Retention;
+use crate::ipc::contract::subscribe::{StartKind, TurnUsage};
+use crate::ipc::contract::{Frame, Viewer};
 use crate::server::agent::r#loop::Live;
 use crate::server::agent::request::assembly::compact as cut;
 use crate::server::agent::request::assembly::history;
@@ -28,14 +30,13 @@ use crate::server::agent::tools::{McpBridge, SyncMcpBridge};
 use crate::server::api::call;
 use crate::server::api::post;
 use crate::server::api::subscribe::compact::COMPACT_MESSAGE;
-use crate::server::api::subscribe::event::{Event, StartKind};
-use crate::server::api::subscribe::{Opened, Retention};
 use crate::server::config::Config;
 use crate::server::storage::{Cut, Reader, SessionRef, Submit, Target, Writer};
 
 use relay::Relay;
 use running::Running;
 use sessions::Sessions;
+use subscriptions::Role;
 use wake::ChannelSink;
 
 fn mcp_bridge(cfg: &Config) -> Option<Arc<dyn McpBridge>> {
@@ -116,16 +117,6 @@ impl Driver {
         self.sessions.replace_mcp(mcp_bridge(&self.cfg));
     }
 
-    /// Register a viewer's one stream.
-    pub(crate) fn connect(&self, viewer: &Viewer) -> Receiver<Event> {
-        self.relay.connect(viewer)
-    }
-
-    /// Watch one session's whole stream.
-    pub(crate) fn watch(&self, viewer: &Viewer, session: i64) -> Result<()> {
-        self.relay.watch(viewer, session, None)
-    }
-
     /// Let a session's `Live` go when nobody watches it and nothing runs in it.
     pub(crate) fn reap(&self, session: i64) {
         if !self.relay.watched(session) {
@@ -136,7 +127,7 @@ impl Driver {
         }
     }
 
-    /// Land the user's message and put the round on a thread.
+    /// Land the user's message and put the round on a thread. `Ok(None)` = busy.
     pub(crate) fn submit(
         &self,
         viewer: &Viewer,
@@ -144,7 +135,8 @@ impl Driver {
         prefix: Option<&str>,
         text: &str,
         suffix: Option<&str>,
-    ) -> Result<Opened> {
+        tx: Sender<Frame>,
+    ) -> Result<Option<i64>> {
         let conn = Reader::open(&self.db)?;
         let child: Option<i64> = conn
             .query_row(
@@ -158,7 +150,7 @@ impl Driver {
             anyhow::bail!("a child session does not accept submits");
         }
         let Some(stop) = self.running.claim(session) else {
-            return Ok(Opened::Busy);
+            return Ok(None);
         };
         let turn = match self.open_round(session, stop, prefix, text, suffix) {
             Ok(turn) => turn,
@@ -167,24 +159,21 @@ impl Driver {
                 return Err(e);
             }
         };
-        if let Err(e) = self.relay.watch(viewer, session, Some(turn)) {
-            crate::server::platform::log::warn(
-                "api",
-                format!("session {session}: the submitter's stream did not attach: {e:#}"),
-            );
-        }
+        self.relay
+            .attach(viewer, session, Role::Writer, Some(turn), tx);
         self.relay.started(session, turn, StartKind::Submit);
-        Ok(Opened::Started { turn })
+        Ok(Some(turn))
     }
 
-    /// Land the fixed compact message, then run the summarization.
+    /// Land the fixed compact message, then run the summarization. `Ok(None)` = busy.
     pub(crate) fn compact(
         &self,
         viewer: &Viewer,
         session: i64,
         retention: Retention,
         focus: Option<String>,
-    ) -> Result<Opened> {
+        tx: Sender<Frame>,
+    ) -> Result<Option<i64>> {
         let conn = Reader::open(&self.db)?;
         let child: Option<i64> = conn
             .query_row(
@@ -198,17 +187,13 @@ impl Driver {
             anyhow::bail!("a child session does not accept compaction");
         }
         let Some(stop) = self.running.claim(session) else {
-            return Ok(Opened::Busy);
+            return Ok(None);
         };
-        let mut job = match self.plan(session, retention, focus, stop) {
-            Ok(Some(job)) => job,
-            Ok(None) => {
+        let mut job = match self.plan(session, retention, focus, stop)? {
+            Some(job) => job,
+            None => {
                 self.running.release(session);
-                return Ok(Opened::Busy);
-            }
-            Err(e) => {
-                self.running.release(session);
-                return Err(e);
+                return Ok(None);
             }
         };
         let turn = match self.land_user(session, None, COMPACT_MESSAGE, None) {
@@ -220,12 +205,8 @@ impl Driver {
             }
         };
         job.turn = turn;
-        if let Err(e) = self.relay.watch(viewer, session, Some(turn)) {
-            crate::server::platform::log::warn(
-                "api",
-                format!("session {session}: the compactor's stream did not attach: {e:#}"),
-            );
-        }
+        self.relay
+            .attach(viewer, session, Role::Writer, Some(turn), tx);
         self.relay.started(session, turn, StartKind::Compact);
 
         let writer = self.writer.clone();
@@ -239,7 +220,7 @@ impl Driver {
             self.running.release(session);
             return Err(e).context("cannot start the compaction thread");
         }
-        Ok(Opened::Started { turn })
+        Ok(Some(turn))
     }
 
     fn open_round(

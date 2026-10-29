@@ -10,12 +10,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use crate::ipc::contract::{Answer, Ask, ErrorCode, Opened, PROTOCOL_VERSION, Subscribe, Viewer};
+use crate::ipc::contract::{Frame, Kind, Viewer};
 use crate::ipc::endpoint::{self, Endpoint};
-use crate::ipc::frame::{self, Lines};
+use crate::ipc::line::{self, Lines};
 use crate::ipc::stream;
 use crate::ipc::transport::{self, Listener, Stream};
-use crate::server::api::Api;
+use crate::server::api::{Api, Response};
 
 /// How long an empty peer table must stay empty.
 const GRACE: Duration = Duration::from_millis(300);
@@ -130,116 +130,55 @@ fn accept_loop(listener: Listener, api: Arc<Api>, peers: Arc<Peers>, stopping: A
 
 fn handle(stream: Stream, api: Arc<Api>, peers: Arc<Peers>, id: u64) {
     let mut lines = Lines::new(BufReader::new(stream.clone()));
-    let mut out = Some(BufWriter::new(stream));
+    let mut out: Option<BufWriter<Stream>> = Some(BufWriter::new(stream));
     let mut registered = false;
     let mut viewer: Option<Viewer> = None;
 
     loop {
-        let line = match lines.next_line() {
-            Ok(Some(line)) => line,
+        let raw = match lines.next_line() {
+            Ok(Some(raw)) => raw,
             Ok(None) => break,
             Err(e) => {
                 eprintln!("mypi: ipc connection {id}: {e}");
                 break;
             }
         };
-        let ask = match frame::decode::<Ask>(line) {
-            Ok(ask) => ask,
+        let frame: Frame = match line::decode(&raw) {
+            Ok(frame) => frame,
             Err(e) => {
                 eprintln!("mypi: ipc connection {id}: {e}");
                 break;
             }
         };
-        let writer = out
-            .as_mut()
-            .expect("the writer is taken only to become a stream");
-        match ask {
-            Ask::Hello {
-                viewer: id,
-                protocol,
-            } => {
-                if protocol != PROTOCOL_VERSION {
-                    let e =
-                        anyhow::anyhow!("protocol {protocol} does not match {PROTOCOL_VERSION}");
-                    let _ = reply(writer, &Answer::error(ErrorCode::BadRequest, &e));
-                    break;
-                }
-                viewer = Some(id);
-                if !registered {
-                    registered = true;
-                    peers.joined();
-                }
-            }
-            Ask::Bye => break,
-            Ask::Call { call } => {
-                let Some(id) = viewer.as_ref() else {
-                    let e = anyhow::anyhow!("say hello first");
-                    if reply(writer, &Answer::error(ErrorCode::NoHello, &e)).is_err() {
-                        break;
+        if frame.kind == Kind::Register && frame.name == "hello" {
+            match serde_json::from_value::<Viewer>(frame.payload.clone()) {
+                Ok(id) => {
+                    viewer = Some(id);
+                    if !registered {
+                        registered = true;
+                        peers.joined();
                     }
-                    continue;
-                };
-                let answer = api
-                    .call(id, call)
-                    .map(|reply| Answer::Reply { reply })
-                    .unwrap_or_else(|e| Answer::error(ErrorCode::Internal, &e));
-                if reply(writer, &answer).is_err() {
+                }
+                Err(_) => break,
+            }
+            continue;
+        }
+        let Some(id) = viewer.clone() else {
+            continue;
+        };
+        match api.receive(&id, frame) {
+            Response::Frame(answer) => {
+                let writer = out.as_mut().expect("the writer is taken only by a stream");
+                if write(writer, &answer).is_err() {
                     break;
                 }
             }
-            Ask::Post { post } => {
-                let Some(id) = viewer.as_ref() else {
-                    let e = anyhow::anyhow!("say hello first");
-                    if reply(writer, &Answer::error(ErrorCode::NoHello, &e)).is_err() {
-                        break;
-                    }
-                    continue;
-                };
-                let answer = api
-                    .post(id, post)
-                    .map(|done| Answer::Done { done })
-                    .unwrap_or_else(|e| Answer::error(ErrorCode::Internal, &e));
-                if reply(writer, &answer).is_err() {
-                    break;
-                }
+            Response::Stream(rx) => {
+                let writer = out.take().expect("just checked");
+                stream::pump(writer, rx, api, id);
+                break;
             }
-            Ask::Subscribe { subscribe } => {
-                let Some(id) = viewer.as_ref() else {
-                    let e = anyhow::anyhow!("say hello first");
-                    if reply(writer, &Answer::error(ErrorCode::NoHello, &e)).is_err() {
-                        break;
-                    }
-                    continue;
-                };
-                match subscribe {
-                    Subscribe::Watch { session } => {
-                        let rx = api.connect(id);
-                        let watching = rx.and_then(|rx| {
-                            api.watch(id, session)?;
-                            Ok(rx)
-                        });
-                        match watching {
-                            Ok(rx) => {
-                                drop(writer);
-                                let out = out.take().expect("just checked");
-                                stream::pump(Box::new(out), rx, api, id.clone(), session);
-                            }
-                            Err(e) => {
-                                let _ = reply(writer, &Answer::error(ErrorCode::Internal, &e));
-                            }
-                        }
-                        break;
-                    }
-                    other => {
-                        let answer = open(&api, id, other)
-                            .map(|opened| Answer::Opened { opened })
-                            .unwrap_or_else(|e| Answer::error(ErrorCode::Internal, &e));
-                        if reply(writer, &answer).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
+            Response::Silence => {}
         }
     }
 
@@ -248,26 +187,9 @@ fn handle(stream: Stream, api: Arc<Api>, peers: Arc<Peers>, id: u64) {
     }
 }
 
-fn open(api: &Api, viewer: &Viewer, subscribe: Subscribe) -> Result<Opened> {
-    match subscribe {
-        Subscribe::Submit {
-            session,
-            prefix,
-            text,
-            suffix,
-        } => api.submit(viewer, session, prefix.as_deref(), &text, suffix.as_deref()),
-        Subscribe::Compact {
-            session,
-            retention,
-            focus,
-        } => api.compact(viewer, session, retention, focus),
-        Subscribe::Watch { .. } => bail!("watch is handled before this"),
-    }
-}
-
-fn reply(out: &mut impl Write, answer: &Answer) -> std::io::Result<()> {
-    out.write_all(&frame::encode(answer)?)?;
-    out.flush()
+fn write(out: &mut impl Write, frame: &Frame) -> std::io::Result<()> {
+    let bytes = line::encode(frame)?;
+    out.write_all(&bytes).and_then(|()| out.flush())
 }
 
 fn set_private(endpoint: &Endpoint) {

@@ -1,15 +1,15 @@
-//! The subscription table and the current-turn buffer: one stream per viewer.
+//! The subscription table: one stream per session, many subscribers on it.
 
-use anyhow::{Result, anyhow, bail};
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::ipc::contract::Viewer;
-use crate::server::api::notice::Notice;
-use crate::server::api::subscribe::event::{ContentEvent, Event, SessionEvent};
+use crate::ipc::contract::subscribe::{
+    Blocks, Deleted, Live, Meta, Rewound, RoundEnded, RoundStarted, ToolOutput,
+};
+use crate::ipc::contract::{Frame, Kind, Viewer};
 
-/// The subscription table.
+/// The stream table.
 #[derive(Clone, Default)]
 pub(crate) struct Subscriptions {
     state: Arc<Mutex<State>>,
@@ -17,150 +17,226 @@ pub(crate) struct Subscriptions {
 
 #[derive(Default)]
 struct State {
-    slots: HashMap<Viewer, Slot>,
-    current: HashMap<i64, TurnBuffer>,
-    pending: HashMap<i64, Vec<Notice>>,
+    streams: HashMap<i64, SessionStream>,
+    attached: HashMap<Viewer, i64>,
 }
 
-struct Slot {
-    sender: Sender<Event>,
-    session: Option<i64>,
+struct SessionStream {
+    turn: Option<TurnBuffer>,
+    subscribers: Vec<Subscriber>,
+}
+
+struct Subscriber {
+    viewer: Viewer,
+    role: Role,
     turn: Option<i64>,
+    tx: Sender<Frame>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Role {
+    Writer,
+    Watcher,
 }
 
 struct TurnBuffer {
     turn: i64,
-    events: Vec<Event>,
+    frames: Vec<Frame>,
 }
 
 impl Subscriptions {
-    /// Register a viewer's one stream.
-    pub(crate) fn connect(&self, viewer: &Viewer) -> Receiver<Event> {
-        let (sender, receiver) = mpsc::channel();
-        self.state().slots.insert(
-            viewer.clone(),
-            Slot {
-                sender,
-                session: None,
-                turn: None,
-            },
-        );
-        receiver
-    }
-
-    /// Point a viewer at a session, and at one turn when it asked for one.
-    pub(crate) fn watch(&self, viewer: &Viewer, session: i64, turn: Option<i64>) -> Result<()> {
+    /// Attach one subscriber to a session's stream; it first gets the buffered turn.
+    pub(crate) fn attach(
+        &self,
+        viewer: &Viewer,
+        session: i64,
+        role: Role,
+        turn: Option<i64>,
+        tx: Sender<Frame>,
+    ) {
         let mut state = self.state();
-        let State {
-            slots,
-            current,
-            pending,
-        } = &mut *state;
-        let Some(slot) = slots.get_mut(viewer) else {
-            bail!("viewer is not connected");
-        };
-        if let Some(buffer) = current.get(&session)
-            && (turn.is_none() || Some(buffer.turn) == turn)
+        let stream = state
+            .streams
+            .entry(session)
+            .or_insert_with(|| SessionStream {
+                turn: None,
+                subscribers: Vec::new(),
+            });
+        if let Some(buffer) = &stream.turn
+            && turn.is_none_or(|t| t == buffer.turn)
         {
-            for event in &buffer.events {
-                slot.sender
-                    .send(event.clone())
-                    .map_err(|_| anyhow!("the stream is closed"))?;
+            for frame in &buffer.frames {
+                if tx.send(frame.clone()).is_err() {
+                    return;
+                }
             }
         }
-        slot.session = Some(session);
-        slot.turn = turn;
-        if let Some(list) = pending.remove(&session) {
-            for notice in list {
-                slot.sender
-                    .send(Event::Notice(notice))
-                    .map_err(|_| anyhow!("the stream is closed"))?;
-            }
-        }
-        Ok(())
+        stream.subscribers.push(Subscriber {
+            viewer: viewer.clone(),
+            role,
+            turn,
+            tx,
+        });
+        state.attached.insert(viewer.clone(), session);
     }
 
-    /// Drop a viewer's stream.
+    /// Drop every subscription this viewer holds.
     pub(crate) fn detach(&self, viewer: &Viewer) {
-        self.state().slots.remove(viewer);
+        let mut state = self.state();
+        let Some(session) = state.attached.remove(viewer) else {
+            return;
+        };
+        if let Some(stream) = state.streams.get_mut(&session) {
+            stream.subscribers.retain(|s| s.viewer != *viewer);
+        }
     }
 
-    /// Is anybody watching this session?
+    /// Is anybody on this session's stream?
     pub(crate) fn watched(&self, session: i64) -> bool {
         self.state()
-            .slots
-            .values()
-            .any(|slot| slot.session == Some(session))
+            .streams
+            .get(&session)
+            .is_some_and(|s| !s.subscribers.is_empty())
     }
 
-    /// The session a viewer is attached to.
+    /// The session this viewer is attached to.
     pub(crate) fn session_of(&self, viewer: &Viewer) -> Option<i64> {
-        self.state().slots.get(viewer).and_then(|slot| slot.session)
+        self.state().attached.get(viewer).copied()
     }
 
-    /// Hand one event to the matching viewers.
-    pub(crate) fn publish(&self, event: Event) {
+    /// Deliver one frame to the stream named by the frame's own session.
+    pub(crate) fn deliver(&self, frame: Frame) {
+        let Some(session) = frame.payload.get("session").and_then(|v| v.as_i64()) else {
+            return;
+        };
         let mut state = self.state();
-        let State {
-            slots,
-            current,
-            pending,
-        } = &mut *state;
-        let session = event.session();
-        let turn = event.turn();
+        buffer_turn(&mut state.streams, session, &frame);
+        let Some(stream) = state.streams.get_mut(&session) else {
+            return;
+        };
 
-        if let Some(turn) = turn {
-            let buffer = current.entry(session).or_insert(TurnBuffer {
-                turn,
-                events: Vec::new(),
-            });
-            if buffer.turn != turn {
-                *buffer = TurnBuffer {
-                    turn,
-                    events: Vec::new(),
-                };
-            }
-            buffer.events.push(event.clone());
-        }
-
-        let mut sent = false;
+        let name = frame.name.as_str();
+        let turn = frame.payload.get("turn").and_then(|v| v.as_i64());
         let mut dead = Vec::new();
-        for (viewer, slot) in slots.iter_mut() {
-            if slot.session != Some(session) {
+        for sub in &mut stream.subscribers {
+            if sub.role == Role::Writer && is_post_metadata(name) {
                 continue;
             }
-            if let Some(turn) = turn
-                && slot.turn.is_some()
-                && slot.turn != Some(turn)
+            if let (Some(want), Some(now)) = (sub.turn, turn)
+                && want != now
             {
                 continue;
             }
-            sent = true;
-            if slot.sender.send(event.clone()).is_err() {
-                dead.push(viewer.clone());
+            if sub.tx.send(frame.clone()).is_err() {
+                dead.push(sub.viewer.clone());
             }
         }
-        for viewer in dead {
-            slots.remove(&viewer);
-        }
+        let stream = state.streams.get_mut(&session).expect("checked above");
+        stream.subscribers.retain(|s| !dead.contains(&s.viewer));
 
-        if let Event::Content(ContentEvent::Ended { turn, .. }) = &event {
-            current.remove(&session);
-            slots.retain(|_, slot| !(slot.session == Some(session) && slot.turn == Some(*turn)));
+        if name == "round_ended" {
+            if let Some(turn) = turn {
+                state.streams.get_mut(&session).map(|s| {
+                    s.turn = None;
+                    s.subscribers.retain(|sub| sub.turn != Some(turn));
+                });
+            }
         }
-        if let Event::Session(SessionEvent::Deleted { session }) = &event {
-            current.remove(session);
-            pending.remove(session);
-            slots.retain(|_, slot| slot.session != Some(*session));
-        }
-        if let Event::Notice(notice) = &event
-            && !sent
-        {
-            pending.entry(session).or_default().push(notice.clone());
+        if name == "deleted" {
+            state.streams.remove(&session);
+            state.attached.retain(|_, attached| *attached != session);
         }
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// Only a round's own frames are buffered, and only one round at a time.
+fn buffer_turn(streams: &mut HashMap<i64, SessionStream>, session: i64, frame: &Frame) {
+    let turn = match frame.name.as_str() {
+        "round_started" | "live" | "blocks" | "tool_output" | "round_ended" => {
+            frame.payload.get("turn").and_then(|v| v.as_i64())
+        }
+        _ => None,
+    };
+    let Some(turn) = turn else { return };
+    let stream = streams.entry(session).or_insert_with(|| SessionStream {
+        turn: None,
+        subscribers: Vec::new(),
+    });
+    match &mut stream.turn {
+        Some(buffer) if buffer.turn == turn => buffer.frames.push(frame.clone()),
+        Some(buffer) => {
+            *buffer = TurnBuffer {
+                turn,
+                frames: vec![frame.clone()],
+            }
+        }
+        None => {
+            stream.turn = Some(TurnBuffer {
+                turn,
+                frames: vec![frame.clone()],
+            })
+        }
+    }
+}
+
+/// Metadata writes the writer itself caused; it does not need them echoed back.
+fn is_post_metadata(name: &str) -> bool {
+    matches!(name, "meta" | "rewound" | "deleted")
+}
+
+/// Frame builders for the eight stream names.
+pub(crate) mod frames {
+    use super::*;
+
+    pub(crate) fn round_started(v: &RoundStarted) -> Frame {
+        frame("round_started", v)
+    }
+
+    pub(crate) fn notice(v: &crate::ipc::contract::Notice) -> Frame {
+        Frame::new(
+            Kind::Notice,
+            "notice",
+            serde_json::to_value(v).unwrap_or_else(|_| serde_json::json!({})),
+        )
+    }
+
+    pub(crate) fn live(v: &Live) -> Frame {
+        frame("live", v)
+    }
+
+    pub(crate) fn blocks(v: &Blocks) -> Frame {
+        frame("blocks", v)
+    }
+
+    pub(crate) fn tool_output(v: &ToolOutput) -> Frame {
+        frame("tool_output", v)
+    }
+
+    pub(crate) fn round_ended(v: &RoundEnded) -> Frame {
+        frame("round_ended", v)
+    }
+
+    pub(crate) fn meta(v: &Meta) -> Frame {
+        frame("meta", v)
+    }
+
+    pub(crate) fn rewound(v: &Rewound) -> Frame {
+        frame("rewound", v)
+    }
+
+    pub(crate) fn deleted(v: &Deleted) -> Frame {
+        frame("deleted", v)
+    }
+
+    fn frame(name: &str, payload: impl serde::Serialize) -> Frame {
+        Frame::new(
+            Kind::Subscribe,
+            name,
+            serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({})),
+        )
     }
 }

@@ -10,9 +10,7 @@ use crate::server::api::call::ctx::Ctx;
 use crate::server::api::call::session::block_ids;
 use crate::server::storage::Reader;
 
-use super::{MemoOp, MemoScope};
-
-pub use crate::ipc::contract::{MemoData, MemoEntry};
+use crate::ipc::contract::call::memo::{MemoData, MemoEntry, MemoOp, MemoScope};
 
 pub(crate) fn answer(
     ctx: &Ctx,

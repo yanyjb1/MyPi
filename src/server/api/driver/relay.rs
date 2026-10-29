@@ -1,17 +1,15 @@
 //! The relay: storage's one port, and the fan-out to the subscription table.
 
 use anyhow::{Context, Result};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Sender};
 
+use crate::ipc::contract::Notice;
 use crate::ipc::contract::Viewer;
+use crate::ipc::contract::subscribe::{self, StartKind, TurnUsage};
 use crate::server::api::convert;
-use crate::server::api::notice::Notice;
-use crate::server::api::subscribe::event::{
-    ContentEvent, Event, SessionEvent, StartKind, TurnUsage,
-};
 use crate::server::storage::{Relay as Piece, Writer};
 
-use super::subscriptions::Subscriptions;
+use super::subscriptions::{Role, Subscriptions, frames};
 
 /// The api's port and the subscribers behind it.
 #[derive(Clone, Default)]
@@ -31,19 +29,24 @@ impl Relay {
             .name("api-relay".to_string())
             .spawn(move || {
                 for piece in pieces {
-                    subs.publish(convert(piece));
+                    if let Some(frame) = piece_frame(piece) {
+                        subs.deliver(frame);
+                    }
                 }
             })
             .context("cannot start the relay thread")?;
         Ok(relay)
     }
 
-    pub(crate) fn connect(&self, viewer: &Viewer) -> Receiver<Event> {
-        self.subs.connect(viewer)
-    }
-
-    pub(crate) fn watch(&self, viewer: &Viewer, session: i64, turn: Option<i64>) -> Result<()> {
-        self.subs.watch(viewer, session, turn)
+    pub(crate) fn attach(
+        &self,
+        viewer: &Viewer,
+        session: i64,
+        role: Role,
+        turn: Option<i64>,
+        tx: Sender<crate::ipc::contract::Frame>,
+    ) {
+        self.subs.attach(viewer, session, role, turn, tx);
     }
 
     pub(crate) fn detach(&self, viewer: &Viewer) {
@@ -59,20 +62,22 @@ impl Relay {
     }
 
     pub(crate) fn started(&self, session: i64, turn: i64, kind: StartKind) {
-        self.subs.publish(Event::Content(ContentEvent::Started {
-            session,
-            turn,
-            kind,
-        }));
+        self.subs
+            .deliver(frames::round_started(&subscribe::RoundStarted {
+                session,
+                turn,
+                kind,
+            }));
     }
 
     pub(crate) fn tool_output(&self, session: i64, turn: i64, call_id: &str, text: &str) {
-        self.subs.publish(Event::Content(ContentEvent::ToolOutput {
-            session,
-            turn,
-            call_id: call_id.to_string(),
-            text: text.to_string(),
-        }));
+        self.subs
+            .deliver(frames::tool_output(&subscribe::ToolOutput {
+                session,
+                turn,
+                call_id: call_id.to_string(),
+                text: text.to_string(),
+            }));
     }
 
     pub(crate) fn ended(
@@ -82,23 +87,24 @@ impl Relay {
         stop_reason: Option<String>,
         usage: Option<TurnUsage>,
     ) {
-        self.subs.publish(Event::Content(ContentEvent::Ended {
-            session,
-            turn,
-            stop_reason,
-            usage,
-        }));
+        self.subs
+            .deliver(frames::round_ended(&subscribe::RoundEnded {
+                session,
+                turn,
+                stop_reason,
+                usage,
+            }));
     }
 
     pub(crate) fn session_meta(&self, session: i64, meta: crate::server::storage::SessionMeta) {
-        self.subs.publish(Event::Session(SessionEvent::Meta {
+        self.subs.deliver(frames::meta(&subscribe::Meta {
             session,
             meta: convert::session_meta(meta),
         }));
     }
 
     pub(crate) fn rewound(&self, session: i64, turn: i64, block: i64) {
-        self.subs.publish(Event::Session(SessionEvent::Rewound {
+        self.subs.deliver(frames::rewound(&subscribe::Rewound {
             session,
             turn,
             block,
@@ -107,46 +113,47 @@ impl Relay {
 
     pub(crate) fn deleted(&self, session: i64) {
         self.subs
-            .publish(Event::Session(SessionEvent::Deleted { session }));
+            .deliver(frames::deleted(&subscribe::Deleted { session }));
     }
 
     pub(crate) fn notice(&self, notice: Notice) {
-        self.subs.publish(Event::Notice(notice));
+        self.subs.deliver(frames::notice(&notice));
     }
 }
 
-fn convert(piece: Piece) -> Event {
+/// A storage piece becomes one `live` / `blocks` / `round_ended` frame.
+fn piece_frame(piece: Piece) -> Option<crate::ipc::contract::Frame> {
     match piece {
         Piece::Tail {
             session,
             turn,
             blocks,
             done,
-        } => Event::Content(ContentEvent::Live {
+        } => Some(frames::live(&subscribe::Live {
             session,
             turn,
             blocks: blocks.into_iter().map(convert::new_block).collect(),
             done,
-        }),
+        })),
         Piece::Blocks {
             session,
             turn,
             blocks,
-        } => Event::Content(ContentEvent::Blocks {
+        } => Some(frames::blocks(&subscribe::Blocks {
             session,
             turn,
             blocks: blocks.into_iter().map(convert::block).collect(),
-        }),
+        })),
         Piece::Ended {
             session,
             turn,
             stop_reason,
             usage,
-        } => Event::Content(ContentEvent::Ended {
+        } => Some(frames::round_ended(&subscribe::RoundEnded {
             session,
             turn,
             stop_reason,
             usage: usage.map(convert::turn_usage),
-        }),
+        })),
     }
 }

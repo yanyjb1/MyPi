@@ -1,22 +1,28 @@
-//! api — the front-end surface: three doors (`call`, `post`, `subscribe`), and the server's own
-//! notice.
+//! api — the front-end surface: one router on `(kind, name)`, and the session streams.
 
-pub mod call;
+pub(crate) mod call;
 mod convert;
 mod driver;
-pub mod notice;
-pub mod post;
+pub(crate) mod post;
+pub(crate) mod register;
+mod route;
 pub mod subscribe;
 
-pub use call::{Call, Reply};
-pub use notice::{Notice, NoticeLevel, notify};
-pub use post::{Post, PostDone};
-pub use subscribe::{Event, Opened, Subscribe};
-
+pub use crate::ipc::contract::{Frame, Kind};
 use std::sync::mpsc::Receiver;
 
-use crate::ipc::contract::{Retention, Viewer};
+use crate::ipc::contract::Viewer;
 use crate::server::config::Config;
+
+/// What one inbound frame turns into.
+pub enum Response {
+    /// Write this frame back on the same connection.
+    Frame(Frame),
+    /// Hand the connection to the stream pump.
+    Stream(Receiver<Frame>),
+    /// Nothing goes back.
+    Silence,
+}
 
 /// The backend's one surface for the IPC server: it owns the config, not the transport.
 pub struct Api {
@@ -28,40 +34,23 @@ impl Api {
         Api { cfg }
     }
 
-    pub fn call(&self, viewer: &Viewer, call: Call) -> anyhow::Result<Reply> {
-        call::answer(&self.cfg, viewer, call)
+    /// Route one inbound frame. The only place that reads `(kind, name)`.
+    pub fn receive(&self, viewer: &Viewer, frame: Frame) -> Response {
+        match frame.kind {
+            Kind::Register => register::receive(viewer, &frame),
+            Kind::Call => route::call(&self.cfg, viewer, frame),
+            Kind::Post => route::post(&self.cfg, viewer, frame),
+            Kind::Subscribe => route::subscribe(&self.cfg, viewer, frame),
+            Kind::Notice => unknown_name(frame),
+        }
     }
+}
 
-    pub fn post(&self, viewer: &Viewer, post: Post) -> anyhow::Result<PostDone> {
-        post::apply(&self.cfg, viewer, post)
-    }
-
-    pub fn connect(&self, viewer: &Viewer) -> anyhow::Result<Receiver<Event>> {
-        subscribe::connect(&self.cfg, viewer)
-    }
-
-    pub fn watch(&self, viewer: &Viewer, session: i64) -> anyhow::Result<()> {
-        subscribe::watch(&self.cfg, viewer, session)
-    }
-
-    pub fn submit(
-        &self,
-        viewer: &Viewer,
-        session: i64,
-        prefix: Option<&str>,
-        text: &str,
-        suffix: Option<&str>,
-    ) -> anyhow::Result<Opened> {
-        subscribe::submit(&self.cfg, viewer, session, prefix, text, suffix)
-    }
-
-    pub fn compact(
-        &self,
-        viewer: &Viewer,
-        session: i64,
-        retention: Retention,
-        focus: Option<String>,
-    ) -> anyhow::Result<Opened> {
-        subscribe::compact(&self.cfg, viewer, session, retention, focus)
-    }
+/// `notice` has no inbound name.
+fn unknown_name(frame: Frame) -> Response {
+    Response::Frame(Frame::error_to(
+        &frame,
+        crate::ipc::contract::ErrorCode::UnknownName,
+        "this name has no inbound form",
+    ))
 }

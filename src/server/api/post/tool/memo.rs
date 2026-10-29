@@ -3,14 +3,13 @@
 use anyhow::{Result, bail};
 use rusqlite::Transaction;
 
+use crate::ipc::contract::call::memo::MemoScope;
+use crate::ipc::contract::post::{MemoWrite, MemoWriteOp};
 use crate::server::api::call::session::block_ids;
-use crate::server::api::call::tool::MemoScope;
 use crate::server::api::driver::Driver;
 use crate::server::storage::decode::parse_blocks;
 use crate::server::storage::write::memos;
 use crate::server::storage::{MemoOp, MemoScope as StoredScope, Reader};
-
-use super::{MemoWrite, MemoWriteOp};
 
 pub(crate) fn apply(driver: &Driver, write: MemoWrite) -> Result<()> {
     let mut conn = Reader::open(&driver.db)?;

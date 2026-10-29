@@ -4,7 +4,6 @@ use anyhow::Result;
 use rusqlite::Connection;
 use std::collections::HashSet;
 
-use crate::ipc::contract::SessionReply;
 use crate::server::api::call::ctx::Ctx;
 use crate::server::storage::decode::{
     BLOCK_COLS, TURN_COLS, TURN_FROM, block_from_row, turn_from_row,
@@ -15,21 +14,6 @@ pub mod blocks;
 pub mod init;
 pub mod meta;
 pub mod usage;
-
-pub use crate::ipc::contract::{
-    InitReply, SessionAsk, SessionState, TurnBlock, TurnShape, UsageLang, UsageReply,
-};
-
-pub(crate) fn answer(ctx: &Ctx, session: i64, ask: SessionAsk) -> Result<SessionReply> {
-    match ask {
-        SessionAsk::Init { limit } => Ok(SessionReply::Init(init::answer(ctx, session, limit)?)),
-        SessionAsk::Blocks { ranges } => {
-            Ok(SessionReply::Blocks(blocks::answer(ctx, session, ranges)?))
-        }
-        SessionAsk::Meta => Ok(SessionReply::Meta(meta::answer(ctx, session)?)),
-        SessionAsk::Usage { lang } => Ok(SessionReply::Usage(usage::answer(ctx, session, lang)?)),
-    }
-}
 
 /// The read start: the newest compaction round at or before the list tail.
 pub(crate) fn read_start(conn: &Connection, session: i64) -> Result<Option<i64>> {

@@ -3,25 +3,21 @@
 
 pub mod call;
 pub mod data;
-pub mod envelope;
+pub mod error;
+pub mod message;
+pub mod notice;
 pub mod post;
-pub mod stream;
+pub mod register;
+pub mod subscribe;
 
-pub use call::{
-    Call, CandidatePools, ChildRow, ChildState, ConfigValue, InitReply, MemoData, MemoEntry,
-    MemoOp, MemoScope, ModelUsage, Reply, ServerAsk, ServerReply, SessionAsk, SessionReply,
-    SessionRow, SessionState, ToolAsk, ToolReply, TurnBlock, TurnShape, UsageCost, UsageLang,
-    UsageReply,
-};
+pub use call::children::{ChildRow, ChildState};
+pub use call::sessions::SessionRow;
 pub use data::{
     Block, BlockKind, ContentKey, NewBlock, SessionMeta, Spill, TodoPhase, TodoStatus, TodoTask,
     display_name,
 };
-pub use envelope::{Answer, Ask, ErrorCode, PROTOCOL_VERSION, Viewer};
-pub use post::{
-    MemoWrite, MemoWriteOp, ModelId, Post, PostDone, ServerWrite, SessionWrite, ToolWrite,
-};
-pub use stream::{
-    ContentEvent, Event, Notice, NoticeLevel, Opened, Retention, SessionEvent, StartKind,
-    Subscribe, TurnUsage,
-};
+pub use error::{ErrorCode, ErrorPayload};
+pub use message::{Frame, Kind};
+pub use notice::{Notice, NoticeLevel};
+pub use register::Viewer;
+pub use subscribe::{Retention, StartKind, TurnUsage};

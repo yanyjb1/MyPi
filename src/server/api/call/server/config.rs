@@ -7,7 +7,7 @@ use crate::server::api::call::ctx::Ctx;
 use crate::server::config::Config;
 use crate::server::config::read::profile;
 
-pub use crate::ipc::contract::ConfigValue;
+use crate::ipc::contract::call::config::ConfigValue;
 
 pub(crate) fn value(ctx: &Ctx, key: &str) -> Result<ConfigValue> {
     if key.starts_with("model.") {

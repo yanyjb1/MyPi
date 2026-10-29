@@ -2,14 +2,15 @@
 
 use anyhow::Result;
 
-use crate::ipc::contract::{Block, InitReply, TurnBlock, TurnShape};
+use crate::ipc::contract::Block;
+use crate::ipc::contract::call;
 use crate::server::api::call::ctx::Ctx;
 use crate::server::api::call::tool::todo;
 use crate::server::api::convert;
 
 use super::{blocks_of, borrowed, list_ids, read_start, turn};
 
-pub(crate) fn answer(ctx: &Ctx, session: i64, limit: usize) -> Result<InitReply> {
+pub(crate) fn answer(ctx: &Ctx, session: i64, limit: usize) -> Result<call::init::Reply> {
     let from = read_start(ctx.reader, session)?.unwrap_or(0);
     let ids = list_ids(ctx.reader, session, from)?;
 
@@ -18,15 +19,15 @@ pub(crate) fn answer(ctx: &Ctx, session: i64, limit: usize) -> Result<InitReply>
         let Some(row) = turn(ctx.reader, *turn_id)? else {
             continue;
         };
-        let mut blocks: Vec<TurnBlock> = blocks_of(ctx.reader, &row)?
+        let mut blocks: Vec<call::init::TurnBlock> = blocks_of(ctx.reader, &row)?
             .into_iter()
-            .map(|b| TurnBlock {
+            .map(|b| call::init::TurnBlock {
                 id: b.id,
                 hash: b.content_key().digest(),
             })
             .collect();
         blocks.reverse();
-        structure.push(TurnShape {
+        structure.push(call::init::TurnShape {
             turn: *turn_id,
             blocks,
         });
@@ -63,7 +64,7 @@ pub(crate) fn answer(ctx: &Ctx, session: i64, limit: usize) -> Result<InitReply>
         (false, _) => None,
     };
 
-    Ok(InitReply {
+    Ok(call::init::Reply {
         structure,
         blocks,
         todo,

@@ -3,8 +3,8 @@
 use anyhow::{Context, Result};
 
 use super::Driver;
+use crate::ipc::contract::subscribe::StartKind;
 use crate::server::agent::tools::jobs::{Wake, WakeSink};
-use crate::server::api::subscribe::event::StartKind;
 use crate::server::storage::{Reader, Submit};
 
 pub(crate) struct ChannelSink(pub std::sync::mpsc::Sender<Wake>);

@@ -1,66 +1,37 @@
-# ipc architecture
-
-What the pieces are and how they relate. The design is in `README.md`.
+# ipc ARCHITECTURE
 
 ## Files
 
-| file | holds |
+| Path | Holds |
 |---|---|
-| `mod.rs` | module declarations only |
-| `contract/` | the shared wire vocabulary: envelope, data, call, post, stream |
-| `frame.rs` | `encode`, `decode`, `Lines`, `MAX_LINE_BYTES` |
-| `transport/` | platform connection mechanics: `Kind`, `Listener`, `Stream`, `bind`, `connect`, `unlink` |
-| `endpoint.rs` | `Kind`, `Endpoint`, endpoint file read/write/remove, fingerprint, runtime directory |
-| `client.rs` | `Client`: connect, call, post, submit, compact, watch, bye |
-| `server.rs` | `Claim`, `claim`, `Bound`, `bind`, `serve`, `run`, accept loop, one connection, `Peers` |
-| `stream.rs` | `pump`: one watch's events to one connection |
+| `mod.rs` | Module table. |
+| `line.rs` | Line codec: `encode`, `decode`, `Scanner`, `Lines`, `MAX_LINE_BYTES`. Knows no frame contents. |
+| `contract/` | The wire vocabulary; the only code both processes name. |
+| `contract/message.rs` | `Frame { kind, name, payload }`, `Kind` (five values), reply and error constructors. |
+| `contract/error.rs` | `ErrorCode` (four values), the error payload shape. |
+| `contract/register.rs` | `Viewer`. |
+| `contract/notice.rs` | `Notice`, `NoticeLevel`. |
+| `contract/data.rs` | `Block`, `BlockKind`, `NewBlock`, `SessionMeta`, `Spill`, `TodoPhase`, `ContentKey`. Untouched by this wave. |
+| `contract/call/` | One file per read name: request and reply payloads, no behavior. |
+| `contract/post.rs` | The write names' payloads (`ask::`), reply payloads (`reply::`), `ModelId`, `Cut`, `SessionWrite`, `ServerWrite`, `MemoWrite`. |
+| `contract/subscribe.rs` | The three request payloads, `Retention`, `StartKind`, `TurnUsage`, the eight stream frame payloads. |
+| `client.rs` | `Client`: hello, `ask` (serial, mutex), `watch` (own connection, reader thread into a channel), `bye`. |
+| `server.rs` | `claim`/`bind`/`serve`/`run`, per-connection `handle`, `Peers` counting. |
+| `stream.rs` | `pump`: frames to one connection until either end gives up, then one `post.unwatch`. |
+| `endpoint.rs` | Socket path discovery. Unchanged. |
+| `transport/` | Unix socket, Windows pipe. Unchanged. |
 
-## Public surface
+## Relations
 
-| item | what it does |
-|---|---|
-| `contract::*` | wire types shared by both sides |
-| `endpoint::Endpoint` | one database's address |
-| `endpoint::{read, write, remove, file_path}` | endpoint discovery |
-| `transport::{bind, connect, unlink}` | platform mechanics |
-| `client::Client` | the front end's connection |
-| `server::{claim, bind, serve, run}` | the server's side |
+- `server.rs::handle` decodes a `Frame`, takes `viewer` from `register.hello`, and calls
+  `api.receive(viewer, frame)`. Per `Response` it writes a frame, hands the connection to
+  `stream::pump`, or stays silent. It reads no name, checks no kind semantics.
+- `client.rs` is used by `ui::session` and `oneshot.rs`; both must migrate to `ask`/`watch`.
+- `contract` never imports `server`, `ui`, or transport code. Both processes meet here.
+- `line.rs` knows bytes, not frames; `Frame` knows fields, not meanings.
 
-## Relationships
+## Not yet wired
 
-```text
-ui::session -> ipc::client -> ipc::contract
-                                   ^
-                                   |
-ipc::server -> server::api --------+
-```
-
-- `ui::session` names `ipc::client`, `ipc::contract`, and `ipc::endpoint`.
-- `ipc::client` names `contract`, `frame`, `transport`, `endpoint`; never `server`.
-- `ipc::server` names `contract`, `frame`, `transport`, `endpoint`, `stream`, and
-  `server::api::Api`; never config, storage, or agent.
-- `ipc::contract` names neither `server` nor `ui`.
-- `ipc::transport` and `ipc::endpoint` name neither `server` nor `ui`.
-
-## Threads
-
-| thread | created by | lives |
-|---|---|---|
-| accept loop | `server::serve` | until the server stops |
-| one per connection | accept loop | one connection; a watch becomes its writer |
-| watch reader | `Client::watch` | until the channel is dropped or the stream ends |
-
-## Must stay in step
-
-1. `PROTOCOL_VERSION` and `Hello`.
-2. `Endpoint` and both sides: the server binds what `Endpoint::for_db` names; the front end reads
-   what `server::bind` wrote.
-3. `frame::MAX_LINE_BYTES` and `Lines`.
-4. `Hello` registration and `Peers` grace.
-5. `Client::watch` opening move and `server`'s watch handling.
-6. `contract::ContentKey` hash fields and both sides' id-claim.
-
-## Not wired yet
-
-1. Windows named pipes: the interface exists; calls return `Unsupported`.
-2. No reconnect.
+- `ui::session`, `ui::tui`, and `oneshot.rs` still name the old contract (`Call`, `Reply`,
+  `Post`, `Event`, ...). That is the next wave's wiring work.
+- `stream.rs` sends `post.unwatch` without a session when no frame carried one.

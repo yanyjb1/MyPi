@@ -3,10 +3,10 @@
 use anyhow::Result;
 
 use crate::server::api::call::ctx::Ctx;
-use crate::server::api::call::server::sessions::{SessionRow, row};
+use crate::server::api::call::server::sessions::row;
 use crate::server::api::call::session::block_ids;
 
-pub use crate::ipc::contract::{ChildRow, ChildState};
+use crate::ipc::contract::{ChildRow, ChildState};
 
 pub(crate) fn list(ctx: &Ctx, session: i64) -> Result<Vec<ChildRow>> {
     let anchors = block_ids(ctx.reader, session)?;
@@ -21,7 +21,7 @@ pub(crate) fn list(ctx: &Ctx, session: i64) -> Result<Vec<ChildRow>> {
         if !anchors.contains(&anchor) {
             continue;
         }
-        let session = row(ctx.reader, child)?;
+        let session = crate::server::api::call::server::sessions::row(ctx.reader, child)?;
         let intent = intent(ctx, anchor)?;
         let state = if ctx.running.flag(child).is_some() {
             ChildState::Running

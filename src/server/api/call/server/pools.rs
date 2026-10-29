@@ -4,7 +4,7 @@ use crate::commands::Candidate;
 use crate::server::config::Config;
 use crate::server::config::read::profile;
 
-pub use crate::ipc::contract::CandidatePools;
+use crate::ipc::contract::call::pools::CandidatePools;
 
 pub(crate) fn pools(cfg: &Config) -> CandidatePools {
     CandidatePools {
