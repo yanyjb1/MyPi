@@ -15,7 +15,7 @@ pub use path::{DB_FILE, default_path};
 pub use reader::Reader;
 pub use schema::SCHEMA_VERSION;
 pub use shape::{
-    Block, BlockKind, Landed, NewBlock, Ref, Relay, RequestMeta, RoundUsage, Row, Submit, Table,
-    base36, parse_base36,
+    Block, BlockKind, Landed, NewBlock, Ref, RequestMeta, RoundUsage, Row, Structure, Submit,
+    Table, base36, parse_base36,
 };
 pub use writer::Writer;

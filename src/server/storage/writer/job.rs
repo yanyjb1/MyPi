@@ -5,7 +5,7 @@ use std::sync::mpsc::Sender;
 use anyhow::Result;
 
 use super::super::delete::rewind::{Cut, Target};
-use super::super::shape::{Landed, Relay, Submit, Table};
+use super::super::shape::{Landed, Structure, Submit, Table};
 
 /// What the writer is asked to do.
 pub(crate) enum What {
@@ -18,9 +18,7 @@ pub(crate) enum What {
     /// Write this session's memos into the download folder.
     Export(i64),
     /// Take this port as the relay destination.
-    Relay(Sender<Relay>),
-    /// Forward one piece at once; nothing lands.
-    Stream(Relay),
+    Relay(Sender<Structure>),
 }
 
 /// What the writer answers with.

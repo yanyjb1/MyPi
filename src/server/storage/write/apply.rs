@@ -3,15 +3,15 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::super::shape::{Landed, Ref, Relay, Row, Submit};
+use super::super::shape::{Landed, Ref, Row, Structure, Submit};
 use super::{aliases, artifacts, blocks, memos, sessions, shared, subsessions, turns};
 
 /// Carry one submission out. Ids the rows cannot know come back here; the relay pieces are
 /// returned for the writer's port.
-pub(crate) fn apply(conn: &mut Connection, submit: Submit) -> Result<(Landed, Vec<Relay>)> {
+pub(crate) fn apply(conn: &mut Connection, submit: Submit) -> Result<(Landed, Vec<Structure>)> {
     let tx = conn.transaction()?;
     let mut ids = vec![0i64; submit.rows.len()];
-    let mut pieces: Vec<Relay> = Vec::new();
+    let mut pieces: Vec<Structure> = Vec::new();
     for (at, row) in submit.rows.iter().enumerate() {
         ids[at] = one(&tx, row, &ids, &mut pieces)?;
     }
@@ -24,7 +24,7 @@ fn one(
     tx: &rusqlite::Transaction<'_>,
     row: &Row,
     ids: &[i64],
-    pieces: &mut Vec<Relay>,
+    pieces: &mut Vec<Structure>,
 ) -> Result<i64> {
     Ok(match row {
         Row::Session {
@@ -68,11 +68,10 @@ fn one(
             let turn = id_of(ids, turn)?;
             turns::settle(tx, turn, stop_reason.as_deref(), *usage)?;
             if let Some(session) = shared::session_of_turn(tx, turn)? {
-                pieces.push(Relay::Ended {
+                pieces.push(Structure {
                     session,
                     turn,
-                    usage: *usage,
-                    stop_reason: stop_reason.clone(),
+                    ranges: turns::ranges(tx, turn)?,
                 });
             }
             0
@@ -80,14 +79,7 @@ fn one(
         Row::Request { meta } => shared::put_request_meta(tx, meta)?,
         Row::Block { turn, block } => {
             let turn = id_of(ids, turn)?;
-            let landed = blocks::insert(tx, turn, block)?;
-            if let Some(session) = shared::session_of_turn(tx, turn)? {
-                pieces.push(Relay::Blocks {
-                    session,
-                    turn,
-                    blocks: vec![landed],
-                });
-            }
+            blocks::insert(tx, turn, block)?;
             0
         }
         Row::Artifact {

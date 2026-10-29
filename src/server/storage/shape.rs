@@ -359,37 +359,11 @@ pub struct Landed {
     pub ids: Vec<i64>,
 }
 
-/// What storage relays to the api while a round runs. Every piece names its session; the api
-/// hands it to whoever asked for that session.
+/// What the writer tells a live surface once a round is over: where it sits, and the closed id
+/// ranges its blocks occupy, in order and split where they are discontinuous.
 #[derive(Debug, Clone)]
-pub enum Relay {
-    /// The tail that has not landed yet (what a streaming reply produced). `done` = these blocks
-    /// are finished: the piece is the authoritative version, not another increment.
-    Tail {
-        session: i64,
-        turn: i64,
-        blocks: Vec<NewBlock>,
-        done: bool,
-    },
-    /// A batch just landed: its blocks, ids included, in order.
-    Blocks {
-        session: i64,
-        turn: i64,
-        blocks: Vec<Block>,
-    },
-    /// A running tool's output: relayed at once, never landed.
-    Tool {
-        session: i64,
-        turn: i64,
-        call_id: String,
-        text: String,
-    },
-    /// The round ended; the reason as stored (`None` = died before the gateway answered), and the
-    /// round id and usage, so two surfaces each know which stretch just closed.
-    Ended {
-        session: i64,
-        turn: i64,
-        usage: Option<RoundUsage>,
-        stop_reason: Option<String>,
-    },
+pub struct Structure {
+    pub session: i64,
+    pub turn: i64,
+    pub ranges: Vec<[i64; 2]>,
 }

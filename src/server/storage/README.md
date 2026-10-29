@@ -39,8 +39,8 @@ truth for every column.
   submission (the id exists only after that row runs).
 - The writer fills what only it can: auto-increment ids, the round's interval and byte count when a
   block lands, the request archive's hash and its deduplication.
-- `Writer::relay(port)` names where live pieces go, and `Writer::stream(piece)` forwards a running
-  tool's output or an unfinished tail.
+- `Writer::relay(port)` names where the round structure goes: when a round settles, its id and the
+  closed id ranges its blocks occupy. Nothing unlanded is relayed, and no block text is repeated.
 - Deletion is one door: `delete_rows(table, ids)` — the rows, whatever only they held, then the
   same sweep. A session's deletion is its row; the memo export is its own queued job.
 - A rewind is not row deletion: it rewrites a round's interval, then deletes the tail rows and
@@ -55,7 +55,7 @@ never leave storage either.
 
 ### What lives in memory
 
-The relay port, and nothing else.
+The structure port, and nothing else.
 
 ### Invariants
 

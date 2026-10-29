@@ -12,14 +12,14 @@ describes the code as it stands.
 | `mod.rs` | declarations and exports |
 | `path.rs` | the database's file name and its default location |
 | `schema.rs` | `prepare(path)`, the tables, `SCHEMA_VERSION`; a mismatch rebuilds |
-| `shape.rs` | every value crossing the boundary: blocks, rows, request archives, submissions, references, relay pieces, citation codec |
+| `shape.rs` | every value crossing the boundary: blocks, rows, request archives, submissions, references, the round structure, citation codec |
 | `decode.rs` | column lists (`SESSION_COLS`, `TURN_COLS`, `REQUEST_COLS`, `BLOCK_COLS`) and row decoders, private to the reader |
 | `reader.rs` | `Reader`: one connection, one accessor per table, rows out as JSON |
 | `writer/mod.rs` | declarations and exports |
 | `writer/handle.rs` | the `Writer` handle and what the thread owns |
 | `writer/job.rs` | one queue job and its answer |
 | `writer/thread.rs` | the thread body |
-| `write/apply.rs` | one submission as one transaction: row dispatch, reference resolution, relay pieces |
+| `write/apply.rs` | one submission as one transaction: row dispatch, reference resolution, the structure it reports |
 | `write/sessions.rs` | session rows and the cwd history |
 | `write/turns.rs` | round rows and their usage columns |
 | `write/blocks.rs` | block rows, and the round's interval and byte count |
@@ -41,7 +41,6 @@ describes the code as it stands.
 | `Writer::open(path)` | opens or creates the database, starts the writer thread |
 | `Writer::push(submit)` | one transaction; returns one id per row |
 | `Writer::relay(port)` | names the port live pieces go to |
-| `Writer::stream(piece)` | forwards one live piece; nothing lands |
 | `Writer::rewind(target)` | cuts a session's list back and sweeps |
 | `Writer::delete_rows(table, ids)` | removes those rows and whatever only they held; returns how many |
 | `Writer::export_memos(session)` | writes this session's memos into the download folder |
@@ -64,8 +63,8 @@ Everything else is `pub(crate)` or private.
                                               -> write/*, delete/*
                                                         |
                                                         v
-                                            Relay (session + round,
-                                             tool output)
+                                            Structure (turn,
+                                             its block id ranges)
                                                         |
                                                         v
                                             api -> whoever asked

@@ -8,14 +8,14 @@ use rusqlite::Connection;
 
 use super::super::delete::rewind::{Cut, Target};
 use super::super::schema;
-use super::super::shape::{Landed, Relay, Submit, Table};
+use super::super::shape::{Landed, Structure, Submit, Table};
 use super::job::{Answer, Job, What};
 use super::thread;
 
 /// What the writer thread owns: the connection and the relay port.
 pub(crate) struct Store {
     pub(crate) conn: Connection,
-    pub(crate) relay: Option<Sender<Relay>>,
+    pub(crate) relay: Option<Sender<Structure>>,
 }
 
 impl Store {
@@ -24,7 +24,7 @@ impl Store {
     }
 
     /// Hand one piece to the relay port, if anybody listens.
-    pub(crate) fn relay_out(&mut self, piece: Relay) {
+    pub(crate) fn relay_out(&mut self, piece: Structure) {
         let dead = match self.relay.as_ref() {
             Some(port) => port.send(piece).is_err(),
             None => false,
@@ -73,13 +73,8 @@ impl Writer {
     }
 
     /// Take this port as the relay destination: every new piece goes there.
-    pub fn relay(&self, port: Sender<Relay>) -> Result<()> {
+    pub fn relay(&self, port: Sender<Structure>) -> Result<()> {
         self.call(What::Relay(port)).map(|_| ())
-    }
-
-    /// Forward one piece at once without landing anything.
-    pub fn stream(&self, piece: Relay) -> Result<()> {
-        self.call(What::Stream(piece)).map(|_| ())
     }
 
     /// Cut a session's list back to the picked block, then sweep what nothing references.

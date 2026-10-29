@@ -27,10 +27,6 @@ pub(crate) fn run(work: Receiver<Job>, mut store: Store) {
                 store.relay = Some(port);
                 Ok(Answer::Done)
             }
-            What::Stream(piece) => {
-                store.relay_out(piece);
-                Ok(Answer::Done)
-            }
         };
         let _ = job.back.send(answer);
     }

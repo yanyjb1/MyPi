@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use super::super::decode::encode_blocks;
+use super::super::decode::{encode_blocks, parse_blocks};
 use super::super::shape::RoundUsage;
 
 /// A new round row.
@@ -37,6 +37,14 @@ pub(crate) fn settle(
         rusqlite::params![stop_reason, p, c, k, w, turn],
     )?;
     Ok(())
+}
+
+/// `turns.blocks`: the intervals this round occupies.
+pub(crate) fn ranges(tx: &rusqlite::Transaction<'_>, turn: i64) -> Result<Vec<[i64; 2]>> {
+    let raw: String = tx.query_row("SELECT blocks FROM turns WHERE turn_id = ?1", [turn], |r| {
+        r.get(0)
+    })?;
+    parse_blocks(&raw)
 }
 
 /// `turns.blocks`: the intervals this round occupies.
