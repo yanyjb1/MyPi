@@ -64,11 +64,6 @@ pub fn once(
         .run_calls(w, env, &answer.message, out, Some(turn.turn_id))?;
     let stopped = ran.iter().any(|r| r.stop);
     request::hand_results(w, turn.session, &answer.message, &ran)?;
-    if let Some(subagent) = live.subagent.as_ref() {
-        for run in &ran {
-            subagent.activate_effects(&run.effects);
-        }
-    }
     Ok(Lap {
         verdict: if stopped {
             Verdict::Done(StopReason::Stop)

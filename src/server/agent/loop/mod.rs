@@ -1,5 +1,6 @@
 mod artifacts;
 mod env;
+pub mod register;
 mod round;
 
 pub mod budget;
@@ -18,10 +19,8 @@ use crate::server::agent::request::content::RequestContent;
 use crate::server::agent::request::message::{StopReason, ToolDef, Usage};
 use crate::server::agent::request::retry::RetryPolicy;
 use crate::server::agent::request::transport::client::Client;
-use crate::server::agent::tools::TodoPhase;
+use crate::server::agent::tools::Artifacts;
 use crate::server::agent::tools::jobs::{JobService, WakeSink};
-use crate::server::agent::tools::subagent::Subagent;
-use crate::server::agent::tools::{Artifacts, MemoRead};
 use crate::server::config::{BrowserConfig, OutputLimits};
 use crate::server::storage::{BlockKind, NewBlock, RoundUsage, Submit, Writer};
 
@@ -36,10 +35,7 @@ pub struct Live {
     pub stop: Arc<AtomicBool>,
     pub killed: Arc<AtomicBool>,
     pub artifacts: Option<Arc<dyn Artifacts>>,
-    pub memo: Option<Arc<dyn MemoRead>>,
-    pub todo: Vec<TodoPhase>,
     pub jobs: Option<Arc<JobService>>,
-    pub subagent: Option<Arc<Subagent>>,
     pub mcp: Option<Arc<dyn crate::server::agent::tools::McpBridge>>,
     pub wakes: Arc<Mutex<Vec<String>>>,
     pub wake_sink: Option<Arc<dyn WakeSink>>,
@@ -204,6 +200,5 @@ fn add(total: &mut RoundUsage, one: &Usage) {
     total.prompt_tokens += one.prompt_tokens;
     total.completion_tokens += one.completion_tokens;
     total.cached_tokens += one.cached_tokens.unwrap_or(0);
-    total.reasoning_tokens += one.reasoning_tokens.unwrap_or(0);
     total.cache_write_tokens += one.cache_write_tokens.unwrap_or(0);
 }

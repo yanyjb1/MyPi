@@ -34,15 +34,25 @@ pub fn build(r: &Connection, live: &mut Live, session: i64) -> Env {
     };
     env.inbox = Inbox {
         session,
-        memo: live.memo.clone(),
-        todo: live.todo.clone(),
+        todo: todo_initial(r, session),
         jobs: live.jobs.clone(),
-        subagent: live.subagent.clone(),
         window: window(r, session),
         artifacts: live.artifacts.clone(),
         ..Inbox::default()
     };
     env
+}
+
+/// The todo workbench: rebuilt from the session's blocks at every turn.
+fn todo_initial(r: &Connection, session: i64) -> Vec<tools::TodoPhase> {
+    let Ok((on, cwd)) = r.query_row(
+        "SELECT todo_on, cwd FROM sessions WHERE id = ?1",
+        [session],
+        |r| Ok((r.get::<_, i64>(0)? != 0, r.get::<_, Option<String>>(1)?)),
+    ) else {
+        return Vec::new();
+    };
+    tools::todo_replay(r, session, on, cwd).unwrap_or_default()
 }
 
 /// The context tool's window.

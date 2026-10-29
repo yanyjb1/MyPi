@@ -8,7 +8,7 @@ use super::outlet::{Outlet, ToolEvent};
 use crate::server::agent::request::ToolRun;
 use crate::server::agent::request::message::AssistantMessage;
 use crate::server::agent::tools::{self, Env, ToolProgress, Workspace};
-use crate::server::storage::{SessionChange, Submit, Writer};
+use crate::server::storage::{Relay, SessionChange, Submit, Writer};
 
 /// Per-session tool state: cwd and budget.
 pub struct Driver {
@@ -123,8 +123,18 @@ impl Driver {
             self.budget.record(call.name());
             let call_id = call.id.clone();
             let outcome = {
-                let mut progress = |p: ToolProgress| match p {
-                    ToolProgress::Output(text) => out.tool_output(&call_id, &text),
+                let session = self.session;
+                let mut progress = |p: ToolProgress| {
+                    if let ToolProgress::Output(text) = p
+                        && let Some(turn) = turn
+                    {
+                        let _ = w.stream(Relay::Tool {
+                            session,
+                            turn,
+                            call_id: call_id.clone(),
+                            text,
+                        });
+                    }
                 };
                 tools::execute(env, call, &mut progress)
             };
