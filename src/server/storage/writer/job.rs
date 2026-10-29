@@ -17,6 +17,8 @@ pub(crate) enum What {
     DeleteSession(i64),
     /// Take this port as the relay destination.
     Relay(Sender<Relay>),
+    /// Forward one piece at once; nothing lands.
+    Stream(Relay),
 }
 
 /// What the writer answers with.

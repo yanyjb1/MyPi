@@ -101,31 +101,26 @@ pub(crate) fn turn_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> 
             .unwrap_or(None)
             .unwrap_or(0)
             .max(0) as u64,
-        reasoning_tokens: r
-            .get::<_, Option<i64>>(8)
-            .unwrap_or(None)
-            .unwrap_or(0)
-            .max(0) as u64,
         cache_write_tokens: r
-            .get::<_, Option<i64>>(9)
+            .get::<_, Option<i64>>(8)
             .unwrap_or(None)
             .unwrap_or(0)
             .max(0) as u64,
     });
     let request_id: Option<i64> = r.get(1)?;
-    let request = match (request_id, r.get::<_, Option<String>>(11)?) {
+    let request = match (request_id, r.get::<_, Option<String>>(10)?) {
         (Some(id), Some(model)) => {
             let _ = id;
             Some(RequestMeta {
                 model,
-                provider: r.get::<_, Option<String>>(12)?.unwrap_or_default(),
-                protocol: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
-                base_url: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
-                profile: r.get::<_, Option<String>>(19)?.unwrap_or_default(),
-                system: r.get::<_, Option<String>>(15)?.unwrap_or_default(),
-                tools_json: r.get::<_, Option<String>>(16)?.unwrap_or_default(),
-                max_tokens: r.get::<_, Option<i64>>(17)?.unwrap_or(0).max(0) as u32,
-                compat_json: r.get(18)?,
+                provider: r.get::<_, Option<String>>(11)?.unwrap_or_default(),
+                protocol: r.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                base_url: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
+                profile: r.get::<_, Option<String>>(18)?.unwrap_or_default(),
+                system: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+                tools_json: r.get::<_, Option<String>>(15)?.unwrap_or_default(),
+                max_tokens: r.get::<_, Option<i64>>(16)?.unwrap_or(0).max(0) as u32,
+                compat_json: r.get(17)?,
             })
         }
         _ => None,
@@ -163,7 +158,7 @@ pub(crate) const BLOCK_BYTES_SQL: &str =
 /// Columns of a round row plus its joined request archive, in
 /// [`turn_from_row`] read order.
 pub(crate) const TURN_COLS: &str = "t.turn_id, t.request_id, t.blocks, t.stop_reason, t.bytes,
-     t.prompt_tokens, t.completion_tokens, t.cached_tokens, t.reasoning_tokens,
+     t.prompt_tokens, t.completion_tokens, t.cached_tokens,
      t.cache_write_tokens,
      r.hash, r.model, r.provider, r.protocol, r.base_url, r.system,
      r.tools_json, r.max_tokens, r.compat_json, r.profile";

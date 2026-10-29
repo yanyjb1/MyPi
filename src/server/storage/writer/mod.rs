@@ -37,6 +37,7 @@ impl Store {
 #[derive(Clone)]
 pub struct Writer {
     jobs: Sender<Job>,
+    path: Option<std::path::PathBuf>,
 }
 
 impl Writer {
@@ -49,7 +50,15 @@ impl Writer {
             .name("storage-writer".to_string())
             .spawn(move || thread::run(work, store))
             .context("cannot start the writer thread")?;
-        Ok(Writer { jobs })
+        Ok(Writer {
+            jobs,
+            path: Some(path.to_path_buf()),
+        })
+    }
+
+    /// The database path, for readers that open their own connections.
+    pub fn path(&self) -> std::path::PathBuf {
+        self.path.clone().unwrap_or_default()
     }
 
     /// Hand one thing over, and wait for what landed.
@@ -63,6 +72,11 @@ impl Writer {
     /// Take this port as the relay destination: every new piece goes there.
     pub fn relay(&self, port: Sender<Relay>) -> Result<()> {
         self.call(What::Relay(port)).map(|_| ())
+    }
+
+    /// Forward one piece at once without landing anything.
+    pub fn stream(&self, piece: Relay) -> Result<()> {
+        self.call(What::Stream(piece)).map(|_| ())
     }
 
     /// Cut a session's list back to the picked block (prune mode), then sweep

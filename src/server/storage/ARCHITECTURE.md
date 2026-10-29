@@ -58,7 +58,8 @@ Everything else is `pub(crate)` or private.
                                               -> write/*, delete/*
                                                         |
                                                         v
-                                            Relay (session + round)
+                                            Relay (session + round,
+                                             tool output)
                                                         |
                                                         v
                                             api -> whoever asked

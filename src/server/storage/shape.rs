@@ -261,8 +261,6 @@ pub struct RoundUsage {
     pub completion_tokens: u64,
     /// The cache-read part of `prompt_tokens`.
     pub cached_tokens: u64,
-    /// The reasoning part of `completion_tokens` (thinking models only).
-    pub reasoning_tokens: u64,
     /// The part of `prompt_tokens` written into the cache.
     pub cache_write_tokens: u64,
 }
@@ -507,6 +505,13 @@ pub enum Relay {
         session: i64,
         turn: i64,
         blocks: Vec<Block>,
+    },
+    /// A running tool's output: relayed at once, never landed.
+    Tool {
+        session: i64,
+        turn: i64,
+        call_id: String,
+        text: String,
     },
     /// The round ended; the reason as stored (`None` = died before the gateway answered), and the
     /// round id and usage, so two surfaces each know which stretch just closed.

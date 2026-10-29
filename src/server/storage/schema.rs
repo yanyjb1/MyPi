@@ -56,8 +56,6 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
             PRIMARY KEY (session_id, idx)
         );
         CREATE INDEX IF NOT EXISTS session_turns_by_turn ON session_turns(turn_id);
-        CREATE INDEX IF NOT EXISTS session_turns_compaction
-            ON session_turns(session_id, idx) WHERE is_compaction;
         CREATE TABLE IF NOT EXISTS turns (
             turn_id            INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id         INTEGER REFERENCES request_meta(request_id),
@@ -67,7 +65,6 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
             prompt_tokens      INTEGER,
             completion_tokens  INTEGER,
             cached_tokens      INTEGER,
-            reasoning_tokens   INTEGER,
             cache_write_tokens INTEGER
         );
         CREATE TABLE IF NOT EXISTS request_meta (

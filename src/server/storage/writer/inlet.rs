@@ -366,7 +366,7 @@ impl Store {
     }
 
     /// Hand one piece to the relay port, if anybody listens.
-    fn relay_out(&mut self, piece: Relay) {
+    pub(crate) fn relay_out(&mut self, piece: Relay) {
         let dead = match self.inlet.relay.as_ref() {
             Some(port) => port.send(piece).is_err(),
             None => false,

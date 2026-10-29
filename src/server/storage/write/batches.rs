@@ -89,22 +89,21 @@ impl Store {
         stop_reason: Option<&str>,
         usage: Option<RoundUsage>,
     ) -> Result<()> {
-        let (p, c, k, r, w) = match usage {
+        let (p, c, k, w) = match usage {
             Some(u) => (
                 Some(u.prompt_tokens as i64),
                 Some(u.completion_tokens as i64),
                 Some(u.cached_tokens as i64),
-                Some(u.reasoning_tokens as i64),
                 Some(u.cache_write_tokens as i64),
             ),
-            None => (None, None, None, None, None),
+            None => (None, None, None, None),
         };
         self.conn.execute(
             "UPDATE turns SET stop_reason = ?1, prompt_tokens = ?2,
-                    completion_tokens = ?3, cached_tokens = ?4, reasoning_tokens = ?5,
-                    cache_write_tokens = ?6
-              WHERE turn_id = ?7",
-            rusqlite::params![stop_reason, p, c, k, r, w, turn_id],
+                    completion_tokens = ?3, cached_tokens = ?4,
+                    cache_write_tokens = ?5
+              WHERE turn_id = ?6",
+            rusqlite::params![stop_reason, p, c, k, w, turn_id],
         )?;
         Ok(())
     }
