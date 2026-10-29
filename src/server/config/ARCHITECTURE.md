@@ -1,76 +1,60 @@
 # config architecture
 
-What the pieces are and how they relate. The design — the three areas, how a key is named, and the
-invariants this layer keeps — is in `README.md`.
-
----
-
 ## Files
 
 | file | holds |
 |---|---|
-| `mod.rs` | the declarations, `Config` itself, and the one load path: read both files, validate, write a bootstrap file when none exists |
-| `paths.rs` | `ConfigPaths`: where the two files live (the `config.yaml` root, the `models.yml` beside it, the profile folder), the project root, and `absolute` |
-| `read/config.rs` | `ConfigFile` (`config:` plus top-level `mcp:`), `AppConfig` (`server` / `ui` / `tui`), `McpConfig` / `McpServerConfig`, `ServerConfig` (`api` / `request` / `agent` / `storage` / `platform`), the per-area structs and their defaults, validation, the bootstrap writer, and `write_key` |
-| `read/model.rs` | the `models.` area: `ModelsConfig`, `Provider`, `ModelEntry`, prices, the compatibility switches |
-| `read/profile.rs` | the `profile.` area: finding the profile folder, listing names, resolving one (its system prompt, its compaction instruction, which tools it enables), and the active name |
-| `prompts/` | the built-in texts, one file each, compiled into the binary with `include_str!` |
+| `mod.rs` | module declarations and re-exports only |
+| `registry/` | `types` (kinds, defaults, values, `Key`), `macros` (the `keys!` macro), `table` (lookup, predicates, key helpers, `template`) |
+| `schema.rs` | the one `keys!` invocation: every `config.*` and `models.*` key with kind, default and comment |
+| `load/` | `types` (`Config`, `Inner`, `Layers`, `Effective`), `entry` (load/reload), `api` (default model, profiles, writes), `source` (layer reading, bootstrap), `effective` (per-key merge), `check` (merged-value checks) |
+| `model/` | `types` (providers, models, prices, currency), `parse` (the file and providers), `entry` (one model), `query` (keyed lookup) |
+| `profile/` | `types` (`ResolvedProfile`), `discover` (scan, precedence, duplicate names), `resolve` (prompts, tools, compaction) |
+| `paths.rs` | `ConfigPaths`: project and global roots, the files and folders under them |
+| `notice.rs` | `ConfigNotice` and the shared warning constructor |
+| `write.rs` | textual `write_key` for `config.yaml` |
+| `prompts/` | compiled prompts: `omp_system`, `compact_instruction`, `compact_context` |
 
-## The public surface
+## Public surface
 
-| item | what it does |
-|---|---|
-| `Config::load()` / `Config::load_from(paths)` | read both files through `ConfigPaths`, resolve every model and profile, validate, and write a fresh `config.yaml` when there is none |
-| `Config::models()` | every model in `models.yml`, as `<provider>:<id>` |
-| `Config::default_model()` | the configured default, resolved (provider, entry, key) |
-| `Config::model_by_id(id)` | one model addressed `<provider>:<id>` |
-| `Config::resolve_key(provider)` | the provider's API key, with `${ENV_VAR}` expanded through `platform::env` |
-| `Config::set_default_model(id)` | write the default back into `config.yaml` (the `/model` path), and return the file it wrote |
-| `ConfigPaths` | the roots, resolved to absolute paths when they are built |
-| `AppConfig` and the per-area structs | the whole `config.` area, handed out as values |
-| `McpConfig` / `McpServerConfig` | top-level `mcp.servers`: command, args, env, cwd, timeout |
-| `KairosConfig` | `config.server.agent.tools.kairos`: pool, timeout, output cap, retention |
-| `read::model::{Provider, ModelEntry, …}`, `ResolvedModel` | the `models.` area, resolved |
-| `read::profile::{resolve, list, active_name}` | the `profile.` area |
-| `prompts::{builtin_system, compact_instruction, compact_context}` | the built-in texts |
-
-Everything else in this folder is private or crate-internal.
+- `Config::load`, `Config::load_from(ConfigPaths)`, `Config::reload()`
+- `Config::get(key, profile)`, `Config::get_json(key, profile)` — one value; unknown key is an error
+- `Config::effective(profile)` — all `config.*` values for one profile
+- `Config::models`, `model_by_id`, `default_model(profile)`, `resolve_key(provider)`
+- `Config::resolve_profile(name)`, `Config::notices(profile)`, `Config::set_default_model(id)`
+- `Config::paths`
+- `Value`, `ConfigNotice`, `ResolvedProfile`
+- `ModelsConfig`, `Provider`, `ModelEntry`, `Cost`, `Currency`, `ResolvedModel`
+- `paths::ConfigPaths`
+- `KEY_*` constants from `schema.rs`; `registry::{lookup, template, model_key, provider_key}`
+- `prompts::{omp_system, compact_instruction, compact_context}`
 
 ## Relationships
 
-- **Who calls config**: the api (the default model, the active profile's name, the whole `AppConfig`
-  it resolves `Live.settings` from), and its own `paths` (whoever needs the profile folder). The
-  agent and storage layers do not call it at all: they receive values, already resolved.
-- **Who config calls**: `platform::env` (the home directory, the XDG roots, environment variables),
-  `platform::os` (which family this is, so the bootstrap can pick its defaults), and the filesystem —
-  the two files and the profile folder.
-- **What it does not know**: the api, the agent, storage's schema, any front end. It reads files and
-  hands out values; nothing else under `server/` opens a config file.
-- **One reader per area**: `read/config.rs`, `read/model.rs`, `read/profile.rs`. A new key goes into
-  the reader matching its area; there is no fourth place.
+- **Who calls config**: the api (`Call::Config`, default model, pools), the agent register
+  (`resolve_profile`, models, default model), and the web tools (browser settings through values).
+- **Who config calls**: `platform::env` — the environment and the global config root; its
+  `config_dir()` must answer the platform's native directory (`%APPDATA%\mypi` on Windows) —
+  `platform::os` indirectly through it, and `agent::request::protocols::ProtocolId` to validate a
+  provider's `api`.
+- **What it does not know**: the api, storage's schema, any front end, `mcp`. It reads three sources
+  and hands out values.
 
-## Parts that must stay in step
+## Must stay in step
 
-1. A struct's field names and the file's keys: `serde` with `camelCase` and `default`, so a missing
-   key falls back to the type's default and an unknown one is ignored.
-2. `config.yaml`'s literal `config:` layer and the top-level `mcp:` layer: the loader
-   (`ConfigFile`) and the writer (`write_key`) must agree on them — a file missing `config:` is an
-   error; a missing `mcp:` falls back to no servers.
-3. `read/config.rs`'s doc headings (`` /// `config.server.api:` `` and the like) spell the key prefix
-   out; they are the in-code statement of the naming rule the README sets.
-4. `prompts/mod.rs`'s `include_str!` paths and the file names in `prompts/`.
-5. `paths.rs`'s rule that a path is absolute from the moment `ConfigPaths` is built — the load path
-   relies on it, and so does every later `absolute` call.
-6. The bootstrap writer and the loader: the file the bootstrap writes must be one the loader reads
-   back into the same shape.
+1. `schema.rs` and `registry::template()`: a key exists in exactly one place, and the template is
+   rendered from the table.
+2. `profile.rs`'s file names (`system.md`, `tools.yaml`, `compact.md`, `config.yaml`) and
+   `paths.rs`'s constants.
+3. `write.rs`'s key path `config.server.api.defaultModel` and the schema entry.
+4. `load.rs`'s bootstrap prompt sources and `prompts/`'s compiled texts.
+5. The README's key table and `schema.rs`.
 
 ## Not wired yet
 
-1. `config.server.agent.reloadOnCompaction` — declared, and the semantics (re-read the profile's tool
-   list after a compaction) are not implemented (`memo.md`, 会话从哪儿算起).
-2. The process's working directory: `paths.rs` calls `std::env::current_dir()` itself instead of
-   asking `platform` (第 22 条 — the rule that a built path never moves again has to survive that
-   move).
-4. `config.server.request.streaming` is honored at the backend-to-front-end edge
-   (`src/ipc/stream.rs`): `immediate` / `buffered`. Whether the **gateway** answers with increments
-   is a different question, and no key in this file answers it.
+1. `src/server/api/call/config.rs` still answers `Refuse::Internal`; it needs `Call::Config` to carry
+   an optional session so the profile layer can be resolved.
+2. Warnings are collected but not forwarded through the notice channel.
+3. External call sites still use the old typed `cfg.app.*`, `McpConfig` and no-argument
+   `default_model`; they move when their own domains are refactored.
+4. Skills are not read here yet.

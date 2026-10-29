@@ -1,135 +1,106 @@
 # config
 
-Every setting the user can change is read here and nowhere else: two files and a folder of profiles.
-Nothing else under `server/` opens them.
+Every setting comes from one of three sources, and only this domain opens them: a layered
+`config.yaml`, one global `models.yml`, and the `profiles/` folder.
 
-## 1. The design
+## 1. Design
 
-### Three areas
+### Sources and layers
 
-| area | source | holds |
+| source | location | layers |
 |---|---|---|
-| configuration | `config.yaml` | switches and numbers |
-| model | `models.yml` | providers, models, prices, compatibility switches |
-| profile | the `profiles/` folder | system prompt, compaction instruction, tool list |
+| configuration | `config.yaml` | profile overlay > project root > global root > built-in default |
+| model | `models.yml` | global root only; one file, never written |
+| profile | `profiles/<name>/` | project root > global root |
 
-`read/` mirrors that: one file per area — `read/config.rs`, `read/model.rs`, `read/profile.rs`. A new
-key goes into the reader matching its area.
+A configuration key is resolved per key: the highest layer that has a valid value wins. A value
+that does not parse, or an unknown key, produces a warning and the next layer is tried. A key that
+no layer has takes the built-in default. `MYPI_CONFIG_DIR` replaces both roots with that one
+directory.
 
-### Where the values come from
+### Platform
 
-Roots, in order: the project root, then the global root. `MYPI_CONFIG_DIR`, when it is set, is the
-only root. Each root may carry `config.yaml`, `models.yml` and `profiles/`, and the first root that
-has a file is the one read. A root is absolute from the moment it is built.
+The global root is not built here: `platform::env::config_dir()` answers it. Unix uses
+`$XDG_CONFIG_HOME/mypi`, else `~/.config/mypi`; Windows must answer `%APPDATA%\mypi`. The project
+root is the process startup directory. `MYPI_CONFIG_DIR`, when set, is the only root: no project
+search, no global search, and every source is read from under it. Paths are composed with `Path` and
+`PathBuf`; no separator is written literally.
 
-`models.yml` is the user's file and the program never writes it. When no root has a `config.yaml`, a
-fresh one is written from the built-in defaults.
+A profile is a directory under `profiles/`; its dotted relative path is its name. `system.md` is the
+prompt, `tools.yaml` is an optional tool list, `compact.md` an optional compaction instruction, and
+`config.yaml` an optional full configuration overlay. `default` is the default profile; `oh-my-pi`
+is a second built-in name. Both built-ins use the compiled prompt.
 
-### How a key is named
+The active profile is chosen by the session, not by a configuration key. The name is resolved
+project-first; the same name in both roots uses the project copy and warns; the same name twice in
+one root makes that name unusable; an unknown name is an error. A missing `default` falls back to
+the compiled prompt.
 
-A key's name is its whole address: **area . path . name**.
+### The key table
 
-| area | written as | controls | example |
-|---|---|---|---|
-| configuration | `config.` | the app half of `config.yaml` | `config.server.api.defaultModel` |
-| mcp | `mcp.` | the top-level MCP half of `config.yaml` | `mcp.servers.local.command` |
-| model | `models.` | everything `models.yml` carries | `models.providers.<name>.baseUrl` |
-| profile | `profile.` | what the enabled profile supplies | `profile.system` |
+A key's name is `head.path.name`, all three stored separately. Heads: `config` for `config.yaml`,
+`models` for `models.yml`. `path` mirrors the tree under the head; `name` is the leaf. The table is
+the schema: `registry.rs` holds the types and lookup, `schema.rs` declares every key with its kind,
+default and comment. `template()` renders the default `config.yaml` from that table.
 
-1. **area** — `config`, `models` or `profile`.
-2. **path** — mirrors the `src/server` tree: `config.server.agent.loop`, `config.server.api`.
-3. **name** — says what it is: `maxToolCalls`, `outputMaxBytes`.
-4. All camelCase.
-5. A section follows its reader: a key read only by the request layer lives under
-   `config.server.request`.
-6. One value, one entry, named after the layer that hands it out.
-7. What every front end reads lives under `config.ui.*`; a front end's own switches live under a
-   section named after it (`config.tui.*`). Placeholders hang under `config.ui.placeholder.*`, each
-   leaf named after what it shows.
-8. Where a key breaks one of these rules, the reason is stated at that key's own definition, in one
-   line, and nowhere else.
+`Config::get(key, profile)` returns the value for one key. Model keys name the full address:
+`models.provider.<provider>.<field>`, `models.model.<provider>:<id>.<field>`. An unknown key is an
+error, never a default.
 
-### The profile area
+### Bootstrap
 
-`profile.*` names the **enabled** profile, resolved when it is asked for: `profile.system` is the
-system prompt of whichever profile is enabled right now, and the other two values work the same way.
-The area has no `path` segment and no sub-layers: three values, each named for what it is.
+When an artifact is missing, it is written next to `models.yml` in the global root: `config.yaml`
+from the table, and `profiles/default/system.md` plus `compact.md` from the compiled prompts. Nothing
+existing is overwritten. Other profiles are created by the user in the same layout.
 
-A profile is a directory under `profiles/`, and its dotted relative path is its name (`default`,
-`work.rust`). `system.md` is the prompt; `tools.yaml`, when present, is the list of enabled tools;
-`compact.md`, when present, overrides the compaction instruction. Two names are built in
-(`oh-my-pi`, `default`).
+### Warnings
 
-### Invariants
-
-1. Read here, and only here: nobody else opens the three sources.
-2. A bad user value counts as absent: illegal input falls back to the built-in copy. Those copies
-   live in `prompts/`, one file per prompt, compiled into the binary.
-3. A numeric default sits next to the type that owns the value.
-4. The compatibility rule table is compiled in and never read from disk.
-5. `paths.rs` says where things are; everyone else asks it.
+A written key that is not used — unknown, wrong type, wrong enum or out of range — produces a
+`ConfigNotice` and the next layer or default is used. A missing key does not warn. Only warning level
+is produced.
 
 ### What lives in memory
 
-One loaded `Config` per process. `Post::Server::Reload` replaces it; callers re-read what they need.
+One `Config` per process: the parsed layer trees and the model list. Effective values are built per
+profile and cached. Disk stays the source of truth.
+
+`Config::reload` re-reads both files with the roots this `Config` was built with; `MYPI_CONFIG_DIR`
+is read by `Config::load` only and never again on reload. A failed reload leaves the old `Config`
+alone; the caller keeps it.
 
 ## 2. Design intent
 
-**Three areas, one reader each.** A value's origin decides who may edit it, and one reader per source
-makes "where do I change this" one answer.
+**Three sources, one reader each.** A value's origin decides who may edit it.
 
-**The name carries its area.** A value can come from three places, so its name says which.
+**The name carries its head.** `config.` and `models.` never share a namespace.
 
-**A bad value counts as absent.** The program starts on a typo, and the built-in copy is the
-documented behaviour.
+**A bad value never stops the program.** It is reported and replaced by the next valid layer.
+
+**Profiles are presentation and behavior, not process state.** The profile overlay is the top layer;
+the session carries which profile it uses.
 
 ## 3. Open questions
 
-1. **Reload does not push.** `Post::Server::Reload` replaces the config, but other front ends are not
-   told; each must re-ask for the lists it built from the old one (第 20 条).
-2. **`config.server.agent.reloadOnCompaction` has no semantics.** The key is declared; "re-read the
-   profile's tool list after a compaction" is not implemented.
-3. **The process's working directory is read from the environment, not from `platform`** (第 22 条).
-4. **`config.server.request.streaming` is honored at the backend-to-front-end edge**
-   (`src/ipc/stream.rs`). Whether the gateway itself answers with increments is a different question,
-   and no key in this file answers it.
+1. **Skills.** Deferred; the reader will mirror profiles (directory, name, description).
+2. **`mcp`.** Removed from this domain; not a configuration source here.
+3. **`config.server.agent.reloadOnCompaction`.** Declared, no semantics.
 
-## 4. Config
+## 4. Config fields
 
-This layer owns the three sources. Other domains ask it for values; none of them reads a file.
+This domain owns the keys below; consumers ask it for values.
 
-| source | root keys | file |
-|---|---|---|
-| configuration | `config.server.*` (api, request, agent, storage, platform) and `config.tui.*` | `config.yaml`, under each root |
-| mcp | `mcp.servers.<name>.*` — command, args, env, cwd, timeout | `config.yaml`, top-level |
-| model | `models.providers.<name>.*` — where the provider is, its wire protocol, its key, its models' prices and switches | `models.yml`, under each root |
-| profile | `profile.system`, `profile.tools`, `profile.compactInstruction` | `profiles/<name>/`, under each root |
+| area | keys |
+|---|---|
+| `config.server.api` | `defaultModel` |
+| `config.server.request` | `streaming`; `compact.retainTail`, `compact.instructionFile` |
+| `config.server.agent` | `reloadOnCompaction`; `loop.maxToolCalls`; `tools.*`; `subagent.maxToolCalls` |
+| `config.server.storage` | `batchTools` |
+| `config.server.platform` | `timezone`, `stamp.*`, `ipc` |
+| `config.server` | `pruneOnRewind` |
+| `config.ui` | `session.preloadCache`, `placeholder.*` |
+| `config.tui` | `theme.*`, `renderMargin`, `todoFold`, `usage.align`, `fx.usdCny` |
+| `models.provider.<name>` | `baseUrl`, `api`, `apiKey`, `authHeader`, `models` |
+| `models.model.<provider>:<id>` | `id`, `name`, `contextWindow`, `maxOutputTokens`, `currency`, `cost.*` |
 
-The job limits live under `config.server.agent.tools.kairos`:
-
-| key | default | purpose |
-|---|---:|---|
-| `maxConcurrent` | 4 | jobs allowed at once in one session |
-| `timeoutSecs` | 3600 | default command timeout |
-| `maxOutputBytes` | 8388608 | bytes captured per job |
-| `maxRetained` | 8 | completed unread results kept per session |
-
-The subagent key lives under `config.server.agent.subagent`:
-
-| key | default | purpose |
-|---|---:|---|
-| `maxToolCalls` | 1000 | non-`final` calls one child may make; `task` can override per child |
-
-MCP servers live at top-level `mcp:`:
-
-| key | default | purpose |
-|---|---|---|
-| `servers.<name>.command` | required | executable to start; no shell |
-| `servers.<name>.args` | `[]` | argv passed as is |
-| `servers.<name>.env` | `{}` | extra environment over the inherited one |
-| `servers.<name>.cwd` | process cwd | child working directory |
-| `servers.<name>.timeoutSecs` | 120 | start, handshake, list and call timeout |
-
-## See also
-
-`ARCHITECTURE.md` — the files, the relationships, and what is not wired yet.
+`models.yml` top level is `providers` only. `baseUrl`, `api` and `models` are required; `api` has
+no default. `currency` is `CNY` or `USD`; `cost` is per 1M tokens and all-zero means no quote.
