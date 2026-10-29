@@ -7,8 +7,6 @@ pub struct Cli {
     /// Run the server alone (--server).
     pub server: bool,
     pub attach: Option<i64>,
-    /// One-shot `sessions` listing (no front end).
-    pub sessions: bool,
     /// Open the resume picker immediately (--resume).
     pub resume: bool,
     /// Model override for this session (`provider:id`).
@@ -22,7 +20,6 @@ Usage:
   mypi [options]             the whole product: a server if none is running,
                              then a front end on this terminal
   mypi attach <id>           attach the front end to a stored session
-  mypi sessions              list sessions (reads the database itself)
   mypi --server              run the server alone (it exits when the last
                              front end is gone)
 
@@ -71,7 +68,6 @@ impl Cli {
                         anyhow::anyhow!("attach expects a numeric session id, got `{v}`")
                     })?);
                 }
-                "sessions" => cli.sessions = true,
                 other => anyhow::bail!("unknown argument `{other}` — see `mypi --help`"),
             }
         }

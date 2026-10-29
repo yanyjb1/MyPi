@@ -37,8 +37,7 @@ pair (`ipc/README.md`, `ipc/ARCHITECTURE.md`).
   (values); the agent calls `storage`, `config` and `platform`; `storage` and `config` call
   `platform`.
 - **Who reads the database**: the api and the agent, each opening its own connection and writing its
-  own SQL; storage answers no query. (`oneshot`, outside this folder, does the same for a one-shot
-  command.)
+  own SQL; storage answers no query.
 - **Who reads a file**: `config`, and nothing else.
 - **Who asks the operating system**: `platform`, and nothing else — everyone asks it.
 - **The contract**: the guard table in `src/lib.rs` (`mod architecture`) lists, per module prefix,

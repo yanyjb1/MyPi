@@ -29,19 +29,6 @@ pub(crate) fn changed(api: &Api, viewer: &str, session: i64, action: &str) -> Re
     Ok(())
 }
 
-/// The session's current working directory, as stored.
-pub(crate) fn stored_cwd(api: &Api, session: i64) -> Result<Option<String>, Refuse> {
-    let conn = Reader::open(api.db())?;
-    let cwd: Option<String> = conn
-        .query_row("SELECT cwd FROM sessions WHERE id = ?1", [session], |r| {
-            r.get(0)
-        })
-        .ok()
-        .flatten();
-    Reader::close(conn);
-    Ok(cwd)
-}
-
 /// The newest round in the session's list.
 pub(crate) fn tip_turn(api: &Api, session: i64) -> Result<Option<i64>, Refuse> {
     let conn = Reader::open(api.db())?;

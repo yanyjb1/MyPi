@@ -14,7 +14,7 @@ use super::emit;
 pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refuse> {
     let session = i64_of(ask, "session")?;
     emit::require_writer(api, viewer, session)?;
-    if api.relay().running(session) || api.register().running(session) {
+    if api.relay().running(session) {
         return Err(Refuse::Busy("the session is busy".into()));
     }
 

@@ -28,7 +28,7 @@ Hello opens the connection's stream and answers `register.opened`. Everything af
 under kind `subscribe`:
 
 - `post` — a session-data change, carrying its issuer. The issuer never reads its own write back.
-- `stream` — block content produced by the backend.
+- `stream` — content produced by the backend: blocks, and a running tool's live output.
 - `notice` — the server's own line.
 - `structure` — the closing event of a turn: the round id and the block id ranges it owns.
 
@@ -62,11 +62,6 @@ a connection follows one session at a time, and switching is the only way to sto
 
 - `config`, `pools`, `default_model`, `reload` need the config, which lives outside this region.
   They refuse with `internal` until the config is wired.
-- `submit` and `compact` expect the loop's `deliver` to return the new round id. The loop's current
-  signature returns nothing.
-- `notice` has no caller yet; the loop's outlets stay silent.
-- The ipc server still owns the socket write path; it must hand each connection a queue and drain it
-  on its own thread, and call `Api::connect` / `Api::disconnect`.
 
 ## Config keys
 

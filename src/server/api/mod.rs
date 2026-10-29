@@ -2,7 +2,6 @@
 
 pub(crate) mod call;
 mod convert;
-mod notice;
 pub(crate) mod post;
 mod relay;
 mod route;

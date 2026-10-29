@@ -17,7 +17,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         session,
         change: SessionChange::Profile(profile.clone()),
     })?;
-    api.register().choose_profile(session, profile)?;
+    api.register().set(session, "profile", &profile)?;
     emit::changed(api, viewer, session, "profile")?;
     Ok(serde_json::json!({}))
 }

@@ -42,8 +42,12 @@ pub(crate) struct Relay {
 }
 
 impl Relay {
-    /// Take the writer's port; every piece becomes a stream event.
-    pub(crate) fn start(db: PathBuf, writer: &Writer) -> Result<Relay> {
+    /// Take the writer's port; every piece becomes a stream event. The returned sender is the
+    /// loop's way in: live signals that never become blocks.
+    pub(crate) fn start(
+        db: PathBuf,
+        writer: &Writer,
+    ) -> Result<(Relay, Sender<crate::server::agent::r#loop::outlet::Event>)> {
         let relay = Relay {
             state: Arc::new(Mutex::new(State::default())),
             db: Arc::new(db),
@@ -61,7 +65,18 @@ impl Relay {
                 }
             })
             .context("cannot start the relay thread")?;
-        Ok(relay)
+
+        let (events, live) = mpsc::channel();
+        let me = relay.clone();
+        std::thread::Builder::new()
+            .name("api-live".to_string())
+            .spawn(move || {
+                for event in live {
+                    me.event(event);
+                }
+            })
+            .context("cannot start the live thread")?;
+        Ok((relay, events))
     }
 
     pub(crate) fn attach(&self, conn: u64, tx: Sender<Frame>) {
@@ -126,10 +141,7 @@ impl Relay {
     }
 
     /// Claim the session's running slot; `false` = a turn is already running.
-    pub(crate) fn claim(&self, session: i64, busy: bool) -> bool {
-        if busy {
-            return false;
-        }
+    pub(crate) fn claim(&self, session: i64) -> bool {
         self.state().running.insert(session)
     }
 
@@ -206,9 +218,14 @@ impl Relay {
         }
     }
 
-    pub(crate) fn notice(&self, session: i64, level: &str, content: &str) {
-        let payload = json!({"session": session, "level": level, "content": content});
-        self.deliver(session, frame("notice", payload), None);
+    /// One live line from the loop.
+    fn event(&self, event: crate::server::agent::r#loop::outlet::Event) {
+        let payload = json!({
+            "session": event.session,
+            "level": event.level,
+            "content": event.content,
+        });
+        self.deliver(event.session, frame("notice", payload), None);
     }
 
     fn piece(&self, piece: Piece) {
@@ -236,6 +253,20 @@ impl Relay {
                     "session": session,
                     "turn": turn,
                     "blocks": blocks.into_iter().map(convert::block).collect::<Vec<_>>(),
+                });
+                self.deliver(session, frame("stream", payload), None);
+            }
+            Piece::Tool {
+                session,
+                turn,
+                call_id,
+                text,
+            } => {
+                let payload = json!({
+                    "session": session,
+                    "turn": turn,
+                    "call_id": call_id,
+                    "text": text,
                 });
                 self.deliver(session, frame("stream", payload), None);
             }

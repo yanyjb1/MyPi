@@ -67,6 +67,18 @@ pub struct Api {
 }
 
 impl Api {
+    /// Open the writer, the relay's ports, and the loop's register, in that order.
+    pub fn open(
+        db: PathBuf,
+        cfg: crate::server::config::Config,
+        batch: usize,
+    ) -> anyhow::Result<Api> {
+        let writer = Writer::open(&db, batch)?;
+        let (relay, events) = Relay::start(db.clone(), &writer)?;
+        let register = Register::new(writer.clone(), cfg, events);
+        Ok(Api::new(db, writer, register, relay))
+    }
+
     pub fn new(db: PathBuf, writer: Writer, register: Register, relay: Relay) -> Api {
         Api {
             db,

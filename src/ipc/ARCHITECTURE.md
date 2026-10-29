@@ -28,7 +28,7 @@
 
 ## Not yet wired
 
-- `ui::session` and `oneshot.rs` still call the old client methods (`call`, `post`, `watch`,
-  `submit`, `open_stream`); they must move to `ask` / `send` / `drain`.
+- `ui::session` still calls the old client methods (`call`, `post`, `watch`, `submit`,
+  `open_stream`); it must move to `ask` / `send` / `drain`.
 - `main.rs` still builds `Api::new(cfg)`; it must open the writer first and hand `Api::new` the
   database path, the writer, the loop's register, and the relay.

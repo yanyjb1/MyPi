@@ -22,7 +22,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         session,
         change: SessionChange::Model(Some(model)),
     })?;
-    api.register().retarget(session, &addressed)?;
+    api.register().set(session, "model", &addressed)?;
     emit::changed(api, viewer, session, "switch")?;
     Ok(serde_json::json!({}))
 }

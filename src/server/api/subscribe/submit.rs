@@ -14,7 +14,7 @@ pub(crate) fn apply(api: &Api, conn: u64, _viewer: &str, ask: &Value) -> Result<
     let text = str_of(ask, "text")?.to_string();
     let suffix = opt_str_of(ask, "suffix")?.map(str::to_string);
 
-    if !api.relay().claim(session, api.register().running(session)) {
+    if !api.relay().claim(session) {
         return Err(Refuse::Busy("the session is already in a turn".into()));
     }
     let turn: i64 = match api.register().deliver(
@@ -25,7 +25,11 @@ pub(crate) fn apply(api: &Api, conn: u64, _viewer: &str, ask: &Value) -> Result<
             suffix,
         },
     ) {
-        Ok(turn) => turn,
+        Ok(Some(turn)) => turn,
+        Ok(None) => {
+            api.relay().release(session);
+            return Err(Refuse::Internal("the loop opened no round".into()));
+        }
         Err(e) => {
             api.relay().release(session);
             return Err(e.into());

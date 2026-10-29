@@ -28,14 +28,13 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
     let session = landed
         .session
         .ok_or_else(|| Refuse::Internal("the writer created no session row".into()))?;
-    api.register().register(session);
 
     if let Some(profile) = profile {
         api.writer().push(Submit::Session {
             session,
             change: SessionChange::Profile(profile.clone()),
         })?;
-        api.register().choose_profile(session, profile)?;
+        api.register().set(session, "profile", &profile)?;
     }
     Ok(json!({"session": session}))
 }

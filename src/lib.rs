@@ -6,7 +6,6 @@ pub mod cli;
 pub mod commands;
 pub mod git;
 pub mod ipc;
-pub mod oneshot;
 pub mod server;
 pub mod ui;
 #[cfg(feature = "web")]

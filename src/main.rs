@@ -24,9 +24,6 @@ fn main() -> anyhow::Result<()> {
     if cli.server {
         return run_server(&db);
     }
-    if cli.sessions {
-        return mypi::oneshot::run_sessions(&Endpoint::file_path(&db));
-    }
     if let Some(file) = std::env::var_os("MYPI_ENDPOINT") {
         return front_end(PathBuf::from(file), &cli);
     }
@@ -42,7 +39,8 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("another mypi owns {}", db.display());
     };
     time::init(cfg.app.server.platform.timezone.as_deref());
-    let api = Arc::new(Api::new(cfg));
+    let batch = cfg.app.server.storage.batch_tools;
+    let api = Arc::new(Api::open(db.clone(), cfg, batch)?);
     let bound = server::bind(api, &db, endpoint, claim)?;
     let mut front = std::process::Command::new(std::env::current_exe()?)
         .env("MYPI_ENDPOINT", &file)
@@ -62,7 +60,13 @@ fn run_server(db: &Path) -> anyhow::Result<()> {
     time::init(cfg.app.server.platform.timezone.as_deref());
     let kind = cfg.app.server.platform.ipc.cost();
     let endpoint = Endpoint::for_db(db, kind);
-    server::run(Api::new(cfg), db, endpoint, claim)
+    let batch = cfg.app.server.storage.batch_tools;
+    server::run(
+        Api::open(db.to_path_buf(), cfg, batch)?,
+        db,
+        endpoint,
+        claim,
+    )
 }
 
 /// The front end's own process, once the server is reachable.
