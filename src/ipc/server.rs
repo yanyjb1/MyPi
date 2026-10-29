@@ -1,23 +1,22 @@
-//! The server's half of the wire: the database lock, the listener, the peers.
-//! Requests go to [`crate::server::api::Api`]; an empty peer table is when it stops.
+// The server's half of the wire: the database lock, the listener, one reader and one writer per
+// connection. Every frame, including hello and bye, goes to `crate::server::api::Api`.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
-use crate::ipc::contract::{Frame, Kind, Viewer};
+use crate::ipc::contract::Frame;
 use crate::ipc::endpoint::{self, Endpoint};
 use crate::ipc::line::{self, Lines};
 use crate::ipc::stream;
 use crate::ipc::transport::{self, Listener, Stream};
-use crate::server::api::{Api, Response};
+use crate::server::api::Api;
 
-/// How long an empty peer table must stay empty.
+/// A connection is watched for silence this long before the server may stop.
 const GRACE: Duration = Duration::from_millis(300);
 
 /// The database lock, held while this process is the server.
@@ -70,7 +69,7 @@ pub fn bind(api: Arc<Api>, db: &Path, endpoint: Endpoint, claim: Claim) -> Resul
     })
 }
 
-/// Serve until the peer table empties.
+/// Serve until the api says every front end is gone.
 pub fn serve(bound: Bound) -> Result<()> {
     let Bound {
         listener,
@@ -79,19 +78,20 @@ pub fn serve(bound: Bound) -> Result<()> {
         api,
         claim: _claim,
     } = bound;
-    let peers = Arc::new(Peers::default());
     let stopping = Arc::new(AtomicBool::new(false));
 
     {
-        let peers = Arc::clone(&peers);
+        let api = Arc::clone(&api);
         let stopping = Arc::clone(&stopping);
         std::thread::Builder::new()
             .name("ipc-accept".to_string())
-            .spawn(move || accept_loop(listener, api, peers, stopping))
+            .spawn(move || accept_loop(listener, api, stopping))
             .context("cannot start the accept loop")?;
     }
 
-    while !peers.empty_after_grace(GRACE) {}
+    while !api.idle_for(GRACE) {
+        std::thread::sleep(Duration::from_millis(250));
+    }
     stopping.store(true, Ordering::Relaxed);
     transport::unlink(&endpoint);
     endpoint::remove(&endpoint_file);
@@ -103,7 +103,7 @@ pub fn run(api: Api, db: &Path, endpoint: Endpoint, claim: Claim) -> Result<()> 
     serve(bind(Arc::new(api), db, endpoint, claim)?)
 }
 
-fn accept_loop(listener: Listener, api: Arc<Api>, peers: Arc<Peers>, stopping: Arc<AtomicBool>) {
+fn accept_loop(listener: Listener, api: Arc<Api>, stopping: Arc<AtomicBool>) {
     let mut next = 0u64;
     loop {
         if stopping.load(Ordering::Relaxed) {
@@ -118,22 +118,28 @@ fn accept_loop(listener: Listener, api: Arc<Api>, peers: Arc<Peers>, stopping: A
         };
         next += 1;
         let api = Arc::clone(&api);
-        let peers = Arc::clone(&peers);
         if let Err(e) = std::thread::Builder::new()
             .name(format!("ipc-conn-{next}"))
-            .spawn(move || handle(stream, api, peers, next))
+            .spawn(move || handle(stream, api, next))
         {
             eprintln!("mypi: cannot start connection {next}: {e}");
         }
     }
 }
 
-fn handle(stream: Stream, api: Arc<Api>, peers: Arc<Peers>, id: u64) {
-    let mut lines = Lines::new(BufReader::new(stream.clone()));
-    let mut out: Option<BufWriter<Stream>> = Some(BufWriter::new(stream));
-    let mut registered = false;
-    let mut viewer: Option<Viewer> = None;
+fn handle(stream: Stream, api: Arc<Api>, id: u64) {
+    let (conn, queue) = api.connect();
+    let out = BufWriter::new(stream.clone());
+    if let Err(e) = std::thread::Builder::new()
+        .name(format!("ipc-write-{id}"))
+        .spawn(move || stream::write(out, queue))
+    {
+        eprintln!("mypi: cannot start connection {id}'s writer: {e}");
+        api.disconnect(&conn);
+        return;
+    }
 
+    let mut lines = Lines::new(BufReader::new(stream));
     loop {
         let raw = match lines.next_line() {
             Ok(Some(raw)) => raw,
@@ -150,46 +156,15 @@ fn handle(stream: Stream, api: Arc<Api>, peers: Arc<Peers>, id: u64) {
                 break;
             }
         };
-        if frame.kind == Kind::Register && frame.name == "hello" {
-            match serde_json::from_value::<Viewer>(frame.payload.clone()) {
-                Ok(id) => {
-                    viewer = Some(id);
-                    if !registered {
-                        registered = true;
-                        peers.joined();
-                    }
-                }
-                Err(_) => break,
-            }
-            continue;
-        }
-        let Some(id) = viewer.clone() else {
-            continue;
-        };
-        match api.receive(&id, frame) {
-            Response::Frame(answer) => {
-                let writer = out.as_mut().expect("the writer is taken only by a stream");
-                if write(writer, &answer).is_err() {
-                    break;
-                }
-            }
-            Response::Stream(rx) => {
-                let writer = out.take().expect("just checked");
-                stream::pump(writer, rx, api, id);
-                break;
-            }
-            Response::Silence => {}
+        if let Some(answer) = api.receive(&conn, frame)
+            && !conn.send(answer)
+        {
+            break;
         }
     }
 
-    if registered {
-        peers.left();
-    }
-}
-
-fn write(out: &mut impl Write, frame: &Frame) -> std::io::Result<()> {
-    let bytes = line::encode(frame)?;
-    out.write_all(&bytes).and_then(|()| out.flush())
+    api.disconnect(&conn);
+    drop(conn);
 }
 
 fn set_private(endpoint: &Endpoint) {
@@ -202,36 +177,4 @@ fn set_private(endpoint: &Endpoint) {
     }
     #[cfg(not(unix))]
     let _ = endpoint;
-}
-
-#[derive(Default)]
-struct Peers {
-    live: Mutex<usize>,
-    changed: Condvar,
-}
-
-impl Peers {
-    fn joined(&self) {
-        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        *live += 1;
-        self.changed.notify_all();
-    }
-
-    fn left(&self) {
-        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        *live = live.saturating_sub(1);
-        self.changed.notify_all();
-    }
-
-    fn empty_after_grace(&self, grace: Duration) -> bool {
-        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        if *live > 0 {
-            let _ = self.changed.wait_timeout(live, Duration::from_millis(250));
-            return false;
-        }
-        drop(live);
-        std::thread::sleep(grace);
-        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        *live == 0
-    }
 }
