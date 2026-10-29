@@ -1,16 +1,15 @@
-//! Rewind: cut the conversation back to one block (prune mode). The surface names the round it was
-//! showing, because a block can be referenced by two rounds at once. See the folder's `README.md`.
+//! Rewind: cut the conversation back to one block. The surface names the round it was showing,
+//! because a block can be referenced by two rounds at once.
 
 use anyhow::{Context, Result};
-use rusqlite::params;
 
-use super::super::decode::BLOCK_BYTES_SQL;
-use super::super::write::shared::read_turn;
+use super::super::shape::Table;
+use super::super::write::shared::{self, read_turn};
+use super::super::write::turns;
 use super::super::writer::Store;
-use super::prune;
+use super::{rows, sweep};
 
-/// What the surface saw: which block the user picked, and which round was
-/// on screen when they picked it.
+/// What the surface saw: which block the user picked, and which round was on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Target {
     pub session: i64,
@@ -31,8 +30,7 @@ pub enum Cut {
 }
 
 impl Store {
-    /// Cut `session`'s list back to `block` of `turn`, then sweep what
-    /// nothing references any more.
+    /// Cut `session`'s list back to `block` of `turn`, then sweep what nothing references.
     pub fn rewind(&mut self, t: Target) -> Result<Cut> {
         let turn = read_turn(&self.conn, t.turn)?
             .with_context(|| format!("round {} does not exist", t.turn))?;
@@ -40,7 +38,7 @@ impl Store {
             .conn
             .query_row(
                 "SELECT idx FROM session_turns WHERE session_id = ?1 AND turn_id = ?2",
-                params![t.session, t.turn],
+                rusqlite::params![t.session, t.turn],
                 |r| r.get(0),
             )
             .with_context(|| format!("round {} is not in session {}'s list", t.turn, t.session))?;
@@ -57,50 +55,31 @@ impl Store {
             t.turn
         );
 
-        // The picked block is this round's opening user message = "I want
-        // those words back": the whole round goes.
+        // The picked block is this round's opening user message = "I want those words back":
+        // the whole round goes.
         let opens_with_user = t.block == first && opens_with_user(&self.conn, t.block)?;
 
         let tx = self.conn.transaction()?;
         let cut = if opens_with_user {
-            tx.execute(
-                "DELETE FROM session_turns WHERE session_id = ?1 AND idx >= ?2",
-                params![t.session, idx],
-            )?;
-            tx.execute("DELETE FROM turns WHERE turn_id = ?1", [t.turn])?;
+            shared::delete_list_from(&tx, t.session, idx)?;
+            rows::remove(&tx, Table::Turns, t.turn)?;
             Cut::Retyped {
                 turn: previous_turn(&tx, t.session, idx)?,
             }
         } else if t.block == last {
-            // Exactly the round's tail: the round survives whole, only what
-            // follows it is cut away.
-            tx.execute(
-                "DELETE FROM session_turns WHERE session_id = ?1 AND idx > ?2",
-                params![t.session, idx],
-            )?;
+            // Exactly the round's tail: the round survives whole, only what follows it is cut away.
+            shared::delete_list_after(&tx, t.session, idx)?;
             Cut::Boundary { turn: t.turn }
         } else {
-            // Split in half: the kept head becomes a new round that copies the original's index.
+            // Split in half: the kept head becomes a new round carrying the original's archive.
             let kept = head(&turn.blocks, t.block);
-            let bytes = block_bytes(&tx, &kept)?;
-            tx.execute(
-                "INSERT INTO turns (request_id, blocks, stop_reason, bytes)
-                 VALUES (?1, ?2, 'rewind', ?3)",
-                params![turn.request_id, serde_json::to_string(&kept)?, bytes],
-            )?;
-            let rescued = tx.last_insert_rowid();
-            tx.execute(
-                "UPDATE session_turns SET turn_id = ?1, is_compaction = 0
-                  WHERE session_id = ?2 AND idx = ?3",
-                params![rescued, t.session, idx],
-            )?;
-            tx.execute(
-                "DELETE FROM session_turns WHERE session_id = ?1 AND idx > ?2",
-                params![t.session, idx],
-            )?;
+            let rescued = turns::insert(&tx, turn.request_id, Some("rewind"), None)?;
+            turns::set_blocks(&tx, rescued, &kept)?;
+            shared::set_list_turn(&tx, t.session, idx, rescued)?;
+            shared::delete_list_after(&tx, t.session, idx)?;
             Cut::Rescued { turn: rescued }
         };
-        prune(&tx)?;
+        sweep::run(&tx)?;
         tx.commit()?;
         Ok(cut)
     }
@@ -112,13 +91,13 @@ fn previous_turn(tx: &rusqlite::Transaction<'_>, session: i64, idx: i64) -> Resu
         .query_row(
             "SELECT turn_id FROM session_turns
               WHERE session_id = ?1 AND idx < ?2 ORDER BY idx DESC LIMIT 1",
-            params![session, idx],
+            rusqlite::params![session, idx],
             |r| r.get(0),
         )
         .ok())
 }
 
-/// Is this block a user message? (The block carries its kind already.)
+/// Is this block a user message?
 fn opens_with_user(conn: &rusqlite::Connection, block: i64) -> Result<bool> {
     let kind: String = conn.query_row(
         "SELECT type FROM blocks WHERE block_id = ?1",
@@ -138,21 +117,4 @@ fn head(blocks: &[[i64; 2]], upto: i64) -> Vec<[i64; 2]> {
         out.push([*lo, (*hi).min(upto)]);
     }
     out
-}
-
-/// Total byte volume covered by a run of intervals (the same measure the
-/// write path uses — `decode::BLOCK_BYTES_SQL`).
-fn block_bytes(tx: &rusqlite::Transaction<'_>, blocks: &[[i64; 2]]) -> Result<i64> {
-    let mut total = 0i64;
-    for [lo, hi] in blocks {
-        total += tx.query_row(
-            &format!(
-                "SELECT COALESCE(SUM({BLOCK_BYTES_SQL}), 0) FROM blocks
-                  WHERE block_id >= ?1 AND block_id <= ?2"
-            ),
-            params![lo, hi],
-            |r| r.get::<_, i64>(0),
-        )?;
-    }
-    Ok(total)
 }

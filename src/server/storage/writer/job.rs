@@ -5,7 +5,7 @@ use std::sync::mpsc::Sender;
 use anyhow::Result;
 
 use super::super::delete::rewind::{Cut, Target};
-use super::super::shape::{Landed, Relay, Submit};
+use super::super::shape::{Landed, Relay, Submit, Table};
 
 /// What the writer is asked to do.
 pub(crate) enum What {
@@ -13,8 +13,10 @@ pub(crate) enum What {
     Submit(Submit),
     /// Cut a session's list back to the picked block.
     Rewind(Target),
-    /// Remove a session and everything only it referenced.
-    DeleteSession(i64),
+    /// Delete rows of one table, then sweep.
+    DeleteRows(Table, Vec<i64>),
+    /// Write this session's memos into the download folder.
+    Export(i64),
     /// Take this port as the relay destination.
     Relay(Sender<Relay>),
     /// Forward one piece at once; nothing lands.
@@ -27,6 +29,10 @@ pub(crate) enum Answer {
     Landed(Landed),
     /// What survived a cut.
     Cut(Cut),
+    /// How many rows the delete removed.
+    Rows(usize),
+    /// Where the export landed (`None` = nothing to export).
+    Export(Option<std::path::PathBuf>),
     /// Nothing to hand back.
     Done,
 }
@@ -37,6 +43,8 @@ impl Answer {
         match self {
             Answer::Landed(_) => "landed",
             Answer::Cut(_) => "cut",
+            Answer::Rows(_) => "rows",
+            Answer::Export(_) => "export",
             Answer::Done => "done",
         }
     }

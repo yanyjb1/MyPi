@@ -1,10 +1,12 @@
-//! The write half: everything that lands goes through here. The **when** belongs to the inlet.
+//! The write half: one module per table. A row names its table and its fields; nothing here
+//! decides what a caller meant.
 
 pub(crate) mod aliases;
+pub(crate) mod apply;
 pub(crate) mod artifacts;
-pub(crate) mod batches;
-pub(crate) mod compaction;
-pub(crate) mod effects;
+pub(crate) mod blocks;
 pub(crate) mod memos;
 pub(crate) mod sessions;
 pub(crate) mod shared;
+pub(crate) mod subsessions;
+pub(crate) mod turns;

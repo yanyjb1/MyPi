@@ -1,10 +1,9 @@
-//! The artifacts table: a block that spilled lands its artifact in the same transaction as the
-//! block itself. The block's id is the key; reading one back is the caller's query.
+//! Artifact rows: the full text of one oversized tool result, keyed by its block.
 
 use anyhow::Result;
 
-/// Store one artifact's row, inside the transaction that lands its block.
-pub(crate) fn put_artifact(
+/// One artifact row.
+pub(crate) fn insert(
     tx: &rusqlite::Transaction<'_>,
     block: i64,
     name: &str,

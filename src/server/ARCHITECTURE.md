@@ -33,11 +33,10 @@ pair (`ipc/README.md`, `ipc/ARCHITECTURE.md`).
 ```
 
 - **Who calls what**: the entry point starts the wire; the wire calls the api's three doors; the api
-  calls `agent` (one round), `storage` (the writer, and a read connection it opens) and `config`
-  (values); the agent calls `storage`, `config` and `platform`; `storage` and `config` call
-  `platform`.
-- **Who reads the database**: the api and the agent, each opening its own connection and writing its
-  own SQL; storage answers no query.
+  calls `agent` (one round), `storage` (the writer, and the reader) and `config` (values); the agent
+  calls `storage`, `config` and `platform`; `storage` and `config` call `platform`.
+- **Who reads the database**: everybody through `storage::Reader`, which owns every query and every
+  decode; nobody outside storage writes SQL or parses a stored shape.
 - **Who reads a file**: `config`, and nothing else.
 - **Who asks the operating system**: `platform`, and nothing else — everyone asks it.
 - **The contract**: the guard table in `src/lib.rs` (`mod architecture`) lists, per module prefix,

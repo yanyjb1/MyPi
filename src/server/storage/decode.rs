@@ -1,9 +1,9 @@
-//! Decoding: a database row becomes a [`shape`](super::shape) value. Storage is the only place that
-//! knows the column layout, so callers name columns through the constants here.
+//! Decoding: a database row becomes a [`shape`](super::shape) value. It is internal to storage: the
+//! reader uses it, and no caller names a column.
 
 use anyhow::{Context, Result};
 
-use super::shape::{Artifact, Block, BlockKind, RequestMeta, RoundUsage, SessionMeta, TurnRow};
+use super::shape::{Block, BlockKind, RequestMeta, RoundUsage, SessionMeta, TurnRow};
 
 /// Decode a run of interval ids into `Vec<[i64; 2]>`. An unreadable value is
 /// a broken row: error, never silently empty.
@@ -25,8 +25,7 @@ pub(crate) fn session_meta(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMet
         cwd: r.get(3)?,
         model_provider: r.get(4)?,
         model: r.get(5)?,
-        profile: r.get(6)?,
-        todo_on: r.get::<_, i64>(7)? != 0,
+        todo_on: r.get::<_, i64>(6)? != 0,
     })
 }
 
@@ -72,67 +71,36 @@ fn flag(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<bool>> {
     Ok(r.get::<_, Option<i64>>(i)?.map(|v| v != 0))
 }
 
-/// One artifact row, in [`ARTIFACT_COLS`] order. Its block is its id: one
-/// block spills at most one artifact.
-pub(crate) fn artifact_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
-    Ok(Artifact {
-        block: r.get(0)?,
-        name: r.get(1)?,
-        total_lines: r.get(2)?,
-        content: r.get(3)?,
-    })
-}
-
 pub(crate) fn turn_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> {
     let blocks: String = r.get(2)?;
     let blocks = parse_blocks(&blocks).unwrap_or_default();
-    // The three token columns live and die together: probe the prompt column
+    // The four token columns live and die together: probe the prompt column
     // and backfill zeros — no "half a usage" state exists.
-    let prompt: Option<i64> = r.get(5)?;
+    let prompt: Option<i64> = r.get(4)?;
     let usage = prompt.map(|p| RoundUsage {
         prompt_tokens: p.max(0) as u64,
         completion_tokens: r
-            .get::<_, Option<i64>>(6)
+            .get::<_, Option<i64>>(5)
             .unwrap_or(None)
             .unwrap_or(0)
             .max(0) as u64,
         cached_tokens: r
-            .get::<_, Option<i64>>(7)
+            .get::<_, Option<i64>>(6)
             .unwrap_or(None)
             .unwrap_or(0)
             .max(0) as u64,
         cache_write_tokens: r
-            .get::<_, Option<i64>>(8)
+            .get::<_, Option<i64>>(7)
             .unwrap_or(None)
             .unwrap_or(0)
             .max(0) as u64,
     });
-    let request_id: Option<i64> = r.get(1)?;
-    let request = match (request_id, r.get::<_, Option<String>>(10)?) {
-        (Some(id), Some(model)) => {
-            let _ = id;
-            Some(RequestMeta {
-                model,
-                provider: r.get::<_, Option<String>>(11)?.unwrap_or_default(),
-                protocol: r.get::<_, Option<String>>(12)?.unwrap_or_default(),
-                base_url: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
-                profile: r.get::<_, Option<String>>(18)?.unwrap_or_default(),
-                system: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
-                tools_json: r.get::<_, Option<String>>(15)?.unwrap_or_default(),
-                max_tokens: r.get::<_, Option<i64>>(16)?.unwrap_or(0).max(0) as u32,
-                compat_json: r.get(17)?,
-            })
-        }
-        _ => None,
-    };
     Ok(TurnRow {
         turn_id: r.get(0)?,
-        request_id,
+        request_id: r.get(1)?,
         blocks,
         stop_reason: r.get(3)?,
-        bytes: r.get(4)?,
         usage,
-        request,
     })
 }
 
@@ -144,25 +112,37 @@ pub(crate) const BLOCK_COLS: &str = "block_id, type, content, prefix, suffix,
      usage_reasoning, call_id, name, args, intent, text, first, ok, result, memo,
      duration_ms, ts";
 
-/// An artifact row's columns, in [`artifact_from_row`] read order.
-pub(crate) const ARTIFACT_COLS: &str = "block_id, name, total_lines, content";
+/// A session row's columns, in [`session_meta`] read order.
+pub(crate) const SESSION_COLS: &str = "id, name, started_at, cwd, model_provider, model, todo_on";
 
-/// A block's byte volume, for the queries that sum it (the write side mirrors
-/// this in `write/batches.rs::bytes_of` — keep the two in step).
-pub(crate) const BLOCK_BYTES_SQL: &str =
-    "LENGTH(COALESCE(content, '')) + LENGTH(COALESCE(prefix, ''))
-     + LENGTH(COALESCE(suffix, '')) + LENGTH(COALESCE(call_id, '')) + LENGTH(COALESCE(name, ''))
-     + LENGTH(COALESCE(args, '')) + LENGTH(COALESCE(intent, '')) + LENGTH(COALESCE(text, ''))
-     + LENGTH(COALESCE(result, '')) + LENGTH(COALESCE(memo, '')) + LENGTH(COALESCE(ts, ''))";
+/// A request archive row's columns, in [`request_from_row`] read order.
+pub(crate) const REQUEST_COLS: &str = "request_id, hash, model, provider, protocol, base_url,
+     profile, system, tools_json, max_tokens, compat_json";
 
-/// Columns of a round row plus its joined request archive, in
-/// [`turn_from_row`] read order.
-pub(crate) const TURN_COLS: &str = "t.turn_id, t.request_id, t.blocks, t.stop_reason, t.bytes,
-     t.prompt_tokens, t.completion_tokens, t.cached_tokens,
-     t.cache_write_tokens,
-     r.hash, r.model, r.provider, r.protocol, r.base_url, r.system,
-     r.tools_json, r.max_tokens, r.compat_json, r.profile";
+/// One request archive row: its id, its hash, and the archive itself.
+pub(crate) fn request_from_row(
+    r: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(i64, String, RequestMeta)> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        RequestMeta {
+            model: r.get(2)?,
+            provider: r.get(3)?,
+            protocol: r.get(4)?,
+            base_url: r.get(5)?,
+            profile: r.get(6)?,
+            system: r.get(7)?,
+            tools_json: r.get(8)?,
+            max_tokens: r.get::<_, i64>(9)?.max(0) as u32,
+            compat_json: r.get(10)?,
+        },
+    ))
+}
 
-/// Round rows left-joined to their request archive.
-pub(crate) const TURN_FROM: &str =
-    "FROM turns t LEFT JOIN request_meta r ON r.request_id = t.request_id";
+/// A round row's columns, in [`turn_from_row`] read order.
+pub(crate) const TURN_COLS: &str = "t.turn_id, t.request_id, t.blocks, t.stop_reason,
+     t.prompt_tokens, t.completion_tokens, t.cached_tokens, t.cache_write_tokens";
+
+/// The round table, aliased `t`.
+pub(crate) const TURN_FROM: &str = "FROM turns t";

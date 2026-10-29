@@ -6,6 +6,14 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 use super::super::write::shared::{in_ranges, session_blocks};
+use super::super::writer::Store;
+
+impl Store {
+    /// Write this session's memos into the download folder; `None` = nothing to export.
+    pub fn export_memos(&mut self, session: i64) -> Result<Option<PathBuf>> {
+        current(&self.conn, session)
+    }
+}
 
 /// Write one markdown file per session; `None` = there is nothing to export.
 pub(crate) fn current(conn: &Connection, session: i64) -> Result<Option<PathBuf>> {
@@ -38,8 +46,8 @@ pub(crate) fn current(conn: &Connection, session: i64) -> Result<Option<PathBuf>
     if groups.is_empty() {
         return Ok(None);
     }
-    let home = crate::server::platform::env::home().context("no home directory for memo export")?;
-    let dir = home.join("Downloads");
+    let dir = crate::server::platform::env::downloads_dir()
+        .context("no download directory for the memo export")?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("cannot create export directory {}", dir.display()))?;
     let path = dir.join(format!("memos-{session}.md"));

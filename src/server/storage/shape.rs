@@ -1,5 +1,5 @@
 //! Shapes: what one database row becomes in memory — the block, the round, the session, the
-//! request archive, an artifact, and what is submitted to the write inlet.
+//! request archive, an artifact, and what a caller submits.
 
 /// What a block is (the `type` column, typed).
 #[derive(
@@ -85,20 +85,10 @@ pub struct NewBlock {
     pub result: Option<String>,
     /// Extra material for a front end (tool result); never enters a request.
     pub memo: Option<String>,
-    /// The whole text of an oversized tool output, riding the block until it has an id.
-    pub spill: Option<Spill>,
     /// How long the tool took (tool result).
     pub duration_ms: Option<i64>,
     /// When this block landed.
     pub ts: Option<String>,
-}
-
-/// The full text of an oversized tool output, waiting for its block's id: one block, one
-/// artifact, the block's id is the artifact's id.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Spill {
-    pub name: String,
-    pub content: String,
 }
 
 /// The base-36 spelling of a block id: what a citation names. The id is frozen from the moment
@@ -183,57 +173,6 @@ pub struct Block {
     pub ts: Option<String>,
 }
 
-/// What both sides can see of one block before its id lands: the recipe for the id-claim hash.
-/// A front end recomputes it from the same columns, so the two must not drift.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ContentKey<'a> {
-    pub kind: BlockKind,
-    pub content: Option<&'a str>,
-    pub call_id: Option<&'a str>,
-    pub name: Option<&'a str>,
-    pub args: Option<&'a str>,
-    pub result: Option<&'a str>,
-    pub text: Option<&'a str>,
-}
-
-impl ContentKey<'_> {
-    /// The hash that claims an id: `DefaultHasher` (SipHash-1-3), same build on both sides.
-    pub fn digest(&self) -> u64 {
-        use std::hash::{Hash as _, Hasher as _};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
-impl Block {
-    pub fn content_key(&self) -> ContentKey<'_> {
-        ContentKey {
-            kind: self.kind,
-            content: self.content.as_deref(),
-            call_id: self.call_id.as_deref(),
-            name: self.name.as_deref(),
-            args: self.args.as_deref(),
-            result: self.result.as_deref(),
-            text: self.text.as_deref(),
-        }
-    }
-}
-
-impl NewBlock {
-    pub fn content_key(&self) -> ContentKey<'_> {
-        ContentKey {
-            kind: self.kind,
-            content: self.content.as_deref(),
-            call_id: self.call_id.as_deref(),
-            name: self.name.as_deref(),
-            args: self.args.as_deref(),
-            result: self.result.as_deref(),
-            text: self.text.as_deref(),
-        }
-    }
-}
-
 /// A session row.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMeta {
@@ -247,8 +186,6 @@ pub struct SessionMeta {
     /// configured default.
     pub model_provider: Option<String>,
     pub model: Option<String>,
-    /// The current profile's name; `None` = no profile chosen.
-    pub profile: Option<String>,
     /// Whether the todo tool is on for this session.
     pub todo_on: bool,
 }
@@ -299,15 +236,12 @@ pub struct TurnRow {
     /// The blocks this round occupies, as `[start, end]` pairs in order (one
     /// interval per landed batch).
     pub blocks: Vec<[i64; 2]>,
-    /// How the round ended: `"rewind"`, `"compaction"`,
-    /// [`BORROWED`](super::write::compaction::BORROWED); `None` = not finished yet.
+    /// How the round ended (`stop` / `interrupted` / `broken` / `killed`) or what the row is
+    /// (`rewind` / `compaction` / `borrowed`); `None` = not finished yet.
     pub stop_reason: Option<String>,
-    /// This round's block volume (borrowed intervals included).
-    pub bytes: i64,
     /// Usage; `None` = never received (died mid-flight, the gateway does not
     /// report, or a borrowed row).
     pub usage: Option<RoundUsage>,
-    pub request: Option<RequestMeta>,
 }
 
 impl TurnRow {
@@ -322,170 +256,107 @@ impl TurnRow {
     }
 }
 
-/// One oversized tool output. Its identity is the block it came from, so nothing maps a citation
-/// to a row.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Artifact {
-    /// The block that produced it.
-    pub block: i64,
-    pub name: String,
-    pub total_lines: i64,
-    pub content: String,
+/// A row id: known now, or produced by an earlier row of the same submission.
+#[derive(Debug, Clone, Copy)]
+pub enum Ref {
+    Known(i64),
+    Batch(usize),
 }
 
-/// A memo write operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemoOp {
-    Add,
-    Mod,
-    Del,
-}
-
-/// Where a memo lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemoScope {
-    Current,
-    Global,
-}
-
-/// An alias write operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AliasOp {
-    Add,
-    Remove,
-}
-
-/// A side effect carried by a tool result block.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Effect {
-    pub call_id: String,
-    pub ts: String,
-    pub kind: EffectKind,
-}
-
-/// What a tool result writes besides itself.
-#[derive(Debug, Clone, PartialEq)]
-pub enum EffectKind {
-    Memo {
-        op: MemoOp,
-        scope: MemoScope,
-        /// Provenance for `Add` / `Mod`; `None` = the tool result block. Ignored by `Del`.
-        anchor: Option<i64>,
-        name: String,
-        content: Option<String>,
-    },
-    Alias {
-        op: AliasOp,
-        name: String,
-        command: Option<String>,
-    },
-    Subsession {
-        session: i64,
-    },
-}
-
-/// A change to a session row.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SessionChange {
-    /// `/name` (`None` = clear it).
-    Name(Option<String>),
-    /// `/switch` (`None` = follow the configured default).
-    Model(Option<(String, String)>),
-    /// `/cdp`: the absolute path, and the round the history is anchored on
-    /// (`None` = the session has no rounds yet, so only the session row lands).
-    Cwd { turn: Option<i64>, path: String },
-    /// The profile this session is now on.
-    Profile(String),
-    /// The todo marker: on/off, and the tool result it belongs to.
-    Todo { on: bool, call_id: String },
-}
-
-/// Which session a submission goes to, or the makings of a new one.
+/// One statement: a table and the fields it writes. No row carries another table's data.
 #[derive(Debug, Clone)]
-pub enum SessionRef {
-    /// Continue this session.
-    Id(i64),
-    /// Start a new one: when it starts and where it was launched (the caller
-    /// reads the clock and knows the working directory).
-    New { started_at: String, cwd: String },
-}
-
-/// What is handed to the write inlet: one thing at a time, each naming the
-/// table it lands in.
-#[derive(Debug, Clone)]
-pub enum Submit {
-    /// A session row on its own, before any message: the front end needs the id first.
-    NewSession {
+pub enum Row {
+    /// A new session row.
+    Session {
         started_at: String,
         cwd: String,
-        /// This session's model (`provider`, bare id); `None` = follow the
-        /// configured default.
         model: Option<(String, String)>,
-        /// The display name; `None` = unnamed.
         name: Option<String>,
-        /// The profile this session starts on.
-        profile: Option<String>,
     },
-    /// The user's message: opens a round and lands at once. `session` = `None`
-    /// creates the session row first.
-    UserMessage {
-        session: SessionRef,
-        prefix: Option<String>,
-        text: String,
-        suffix: Option<String>,
-        /// When this message lands (the caller reads the clock).
-        ts: Option<String>,
-    },
-    /// A system wake: opens a round without a user message.
-    Wake {
+    /// `sessions.name`.
+    Rename { session: i64, name: Option<String> },
+    /// `sessions.model_provider` + `sessions.model`.
+    Switch {
         session: i64,
-        text: String,
-        ts: Option<String>,
+        model: Option<(String, String)>,
     },
-    /// The blocks of one reply (or of one tool round): relayed at once, landed every `batch` tool
-    /// rounds. `done` = these blocks are finished; an open one is still being written.
-    Blocks {
-        session: i64,
-        blocks: Vec<NewBlock>,
-        done: bool,
-        /// Side effects carried by tool result blocks; only finished blocks may carry them.
-        effects: Vec<Effect>,
-    },
-    /// The round is over: settle it at once.
-    RoundEnd {
-        session: i64,
+    /// `sessions.cwd`.
+    MoveCwd { session: i64, cwd: String },
+    /// `sessions.todo_on`.
+    TodoOn { session: i64, on: bool },
+    /// A new round row.
+    Turn {
+        request: Option<Ref>,
         stop_reason: Option<String>,
         usage: Option<RoundUsage>,
     },
-    /// One request's archive, reported before the round sends it.
-    Request {
-        session: i64,
-        meta: Box<RequestMeta>,
+    /// `turns.stop_reason` + the four usage columns.
+    Settle {
+        turn: Ref,
+        stop_reason: Option<String>,
+        usage: Option<RoundUsage>,
     },
-    /// A change to the session row.
-    Session { session: i64, change: SessionChange },
-    /// A compaction: the summary round plus the rounds borrowing an index.
-    Compaction {
+    /// A request archive, deduplicated by content.
+    Request { meta: RequestMeta },
+    /// One block; its id joins its round's interval and byte count.
+    Block { turn: Ref, block: NewBlock },
+    /// One artifact row.
+    Artifact {
+        block: Ref,
+        name: String,
+        content: String,
+    },
+    /// One memo row.
+    Memo {
+        anchor: Ref,
+        name: String,
+        content: String,
+        ts: String,
+    },
+    /// One alias row.
+    Alias {
+        anchor: Ref,
+        name: String,
+        command: String,
+        ts: String,
+    },
+    /// One child-session link.
+    Subsession { subsession_id: i64, anchor: Ref },
+    /// One working-directory entry.
+    Cwd {
         session: i64,
-        summary: NewBlock,
-        request: Option<Box<RequestMeta>>,
-        /// `(round, from)` — `from` = where the borrowed stretch starts
-        /// (`None` = the whole round).
-        kept: Vec<(i64, Option<i64>)>,
-        /// The profile fingerprint the summary block records.
-        profile: String,
+        turn: Ref,
+        cwd: String,
+    },
+    /// One place in a session's list.
+    List {
+        session: i64,
+        turn: Ref,
+        is_compaction: bool,
     },
 }
 
-/// What one `push` landed.
+/// A table whose rows stand alone: deleting one leaves nothing dangling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Table {
+    Sessions,
+    Turns,
+    Artifacts,
+    Memos,
+    Aliases,
+    Subsessions,
+}
+
+/// One submission: the rows of one transaction, in order.
+#[derive(Debug, Clone, Default)]
+pub struct Submit {
+    pub rows: Vec<Row>,
+}
+
+/// What one submission landed: one id per row, `0` where the row has none.
 #[derive(Debug, Clone, Default)]
 pub struct Landed {
-    /// The session it created, when it created one.
-    pub session: Option<i64>,
-    /// The round it touched, when there is one.
-    pub turn: Option<i64>,
-    /// The blocks that just landed, ids included (empty when nothing landed).
-    pub blocks: Vec<Block>,
+    pub ids: Vec<i64>,
 }
 
 /// What storage relays to the api while a round runs. Every piece names its session; the api

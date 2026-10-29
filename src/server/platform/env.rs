@@ -25,6 +25,11 @@ pub fn config_dir() -> PathBuf {
     base("XDG_CONFIG_HOME", ".config").join("mypi")
 }
 
+/// The user's download folder, where exports land: `~/Downloads`.
+pub fn downloads_dir() -> Option<PathBuf> {
+    home().map(|home| home.join("Downloads"))
+}
+
 /// Scratch space: the system's per-user temporary directory.
 pub fn temp_dir() -> PathBuf {
     std::env::temp_dir()
