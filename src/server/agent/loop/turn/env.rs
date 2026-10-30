@@ -6,8 +6,8 @@ use std::sync::mpsc::Sender;
 
 use super::ask::ToolCall;
 use super::batch::BatchInput;
-use crate::server::agent::r#loop::out::Event;
 use crate::server::agent::r#loop::session::artifact::ArtifactStore;
+use crate::server::agent::request::live::Event;
 
 /// Build the per-turn tool input. The tool layer owns the concrete `Env`.
 pub fn build(

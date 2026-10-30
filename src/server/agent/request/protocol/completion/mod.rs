@@ -5,31 +5,32 @@ use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 
-use crate::server::agent::request::content::BlockSink;
 use crate::server::agent::request::message::AssistantMessage;
-use crate::server::agent::request::protocols::{Protocol, ProtocolRequest, WireRequest};
-use crate::server::agent::request::transport::client::Client;
+use crate::server::agent::request::protocol::{
+    self, Endpoint, Output, Protocol, ProtocolRequest, WireRequest,
+};
 
 pub mod compat;
+pub mod inband;
+pub mod markup;
+pub mod stream;
 
-use self::compat::{Compat, Resolved, resolve};
+use self::compat::{Resolved, resolve};
 
 pub struct Completion {
     compat: Resolved,
-    user: Option<Compat>,
 }
 
 impl Completion {
-    pub fn new(base_url: &str, model: &str, user: Option<&Compat>) -> Self {
+    pub fn new(base_url: &str, model: &str) -> Self {
         Self {
-            compat: resolve(base_url, model, user),
-            user: user.cloned(),
+            compat: resolve(base_url, model),
         }
     }
 }
 
 impl Protocol for Completion {
-    fn request(&self, client: &Client, req: &ProtocolRequest) -> Result<WireRequest> {
+    fn request(&self, endpoint: &Endpoint, req: &ProtocolRequest) -> Result<WireRequest> {
         let messages = messages_to_wire(&req.messages, &self.compat);
         let tools = serde_json::to_value(&req.tools).expect("tool serialization is infallible");
         let body = body_json(
@@ -41,16 +42,22 @@ impl Protocol for Completion {
             &self.compat,
             req.session_id.as_deref(),
         );
-        let mut headers = vec![(
-            "Authorization".to_string(),
-            format!("Bearer {}", client.api_key),
-        )];
+        let mut headers = Vec::new();
+        if endpoint.auth_header {
+            headers.push((
+                "Authorization".to_string(),
+                format!("Bearer {}", endpoint.api_key),
+            ));
+        }
         if let (Some(name), Some(sid)) = (&self.compat.prompt_cache_session_header, &req.session_id)
         {
             headers.push((name.clone(), sid.clone()));
         }
         Ok(WireRequest {
-            url: format!("{}/chat/completions", client.base_url.trim_end_matches('/')),
+            url: format!(
+                "{}/chat/completions",
+                endpoint.base_url.trim_end_matches('/')
+            ),
             headers,
             body,
         })
@@ -59,16 +66,10 @@ impl Protocol for Completion {
     fn decode(
         &self,
         reader: Box<dyn BufRead>,
-        sink: &mut dyn BlockSink,
+        out: &mut dyn Output,
         cancel: &AtomicBool,
     ) -> Result<AssistantMessage> {
-        super::stream::decode_completion(reader, &self.compat, sink, cancel)
-    }
-
-    fn compat_json(&self) -> Option<String> {
-        self.user
-            .as_ref()
-            .map(|c| serde_json::to_string(c).expect("compat serialization is infallible"))
+        protocol::completion::stream::decode(reader, &self.compat, out, cancel)
     }
 }
 
@@ -80,10 +81,10 @@ pub(crate) fn body_json(
     stream: bool,
     messages: &serde_json::Value,
     tools: &serde_json::Value,
-    compat: &crate::server::agent::request::protocols::openai::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
     session_id: Option<&str>,
 ) -> serde_json::Value {
-    use crate::server::agent::request::protocols::openai::completion::compat::{
+    use crate::server::agent::request::protocol::completion::compat::{
         ReasoningDisableMode, ThinkingFormat,
     };
     use serde_json::{Map, Value, json};
@@ -108,7 +109,7 @@ pub(crate) fn body_json(
     {
         body.insert(
             "prompt_cache_key".to_string(),
-            Value::String(normalize_cache_key(sid)),
+            Value::String(sid.to_string()),
         );
     }
     body.insert("messages".to_string(), messages.clone());
@@ -155,7 +156,7 @@ pub(crate) fn body_json(
         // `strict: true` is not just "add a field": it requires `additionalProperties: false` on every
         // object and every `properties` key in `required`; missing either is a 400.
         if compat.supports_strict_mode
-            && compat.tool_strict_mode == crate::server::agent::request::protocols::openai::completion::compat::ToolStrictMode::AllStrict
+            && compat.tool_strict_mode == crate::server::agent::request::protocol::completion::compat::ToolStrictMode::AllStrict
             && let Some(arr) = wire_tools.as_array_mut()
         {
             for tool in arr {
@@ -431,7 +432,7 @@ pub(crate) fn body_json(
 /// default, opened switch by switch. Also fixes tool-result `name` and tool-call ids.
 pub(crate) fn messages_to_wire(
     messages: &[crate::server::agent::request::message::WireMessage],
-    compat: &crate::server::agent::request::protocols::openai::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
 ) -> serde_json::Value {
     use serde_json::{Value, json};
 
@@ -566,7 +567,7 @@ pub(crate) fn messages_to_wire(
 /// **before** the cache breakpoint.
 fn maybe_patch_images(
     messages: &mut [serde_json::Value],
-    compat: &crate::server::agent::request::protocols::openai::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
 ) {
     use serde_json::json;
 
@@ -605,9 +606,9 @@ fn maybe_patch_images(
 /// content. Off by default — writing a cache costs extra, so only someone who knows why turns it on.
 fn maybe_add_anthropic_cache_control(
     messages: &mut [serde_json::Value],
-    compat: &crate::server::agent::request::protocols::openai::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
 ) {
-    use crate::server::agent::request::protocols::openai::completion::compat::CacheControlFormat;
+    use crate::server::agent::request::protocol::completion::compat::CacheControlFormat;
     use serde_json::json;
 
     if compat.cache_control_format != Some(CacheControlFormat::Anthropic) {
@@ -643,7 +644,7 @@ fn patch_assistant(
     obj: &mut serde_json::Map<String, serde_json::Value>,
     reasoning: Option<&str>,
     has_tool_calls: bool,
-    compat: &crate::server::agent::request::protocols::openai::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
 ) {
     use serde_json::json;
 
@@ -675,7 +676,8 @@ fn patch_assistant(
     let by_tools = compat.requires_reasoning_content_for_tool_calls;
     let by_all = compat.requires_reasoning_content_for_all_assistant_turns;
     let by_cache = compat.resend_reasoning_content;
-    let by_dialect = compat.thinking_format == crate::server::agent::request::protocols::openai::completion::compat::ThinkingFormat::Zai;
+    let by_dialect = compat.thinking_format
+        == crate::server::agent::request::protocol::completion::compat::ThinkingFormat::Zai;
     if !(by_tools || by_all || by_cache || by_dialect) {
         return;
     }
@@ -784,20 +786,6 @@ fn already_nullable(node: &serde_json::Value) -> bool {
                 .iter()
                 .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("null"))
         })
-}
-
-/// Normalise a session id to what `prompt_cache_key` accepts (64 characters). Longer becomes a stable
-/// hash, and it must be deterministic: a new key every round caches nothing.
-fn normalize_cache_key(id: &str) -> String {
-    if id.len() <= 64 {
-        return id.to_string();
-    }
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 偏移基
-    for b in id.as_bytes() {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x0000_0100_0000_01b3); // FNV 质数
-    }
-    format!("pc_{h:x}")
 }
 
 /// Mark the last **stable** input message with an explicit cache breakpoint: the last user message is

@@ -1,4 +1,4 @@
-//! The session's artifact files. They die with the live state.
+//! The session's artifact directory. It dies with the live state.
 
 use std::path::{Path, PathBuf};
 
@@ -12,16 +12,6 @@ impl ArtifactStore {
         let dir = std::env::temp_dir().join(format!("mypi-{session}"));
         let _ = std::fs::create_dir_all(&dir);
         Self { dir }
-    }
-
-    pub fn path_for(&self, reference: &str) -> PathBuf {
-        self.dir.join(reference)
-    }
-
-    pub fn materialize(&self, reference: &str, content: &str) -> std::io::Result<PathBuf> {
-        let path = self.path_for(reference);
-        std::fs::write(&path, content)?;
-        Ok(path)
     }
 
     pub fn dir(&self) -> &Path {

@@ -12,12 +12,12 @@ use super::change::{self, Change};
 use super::handle::Handle;
 use super::mailbox::Mailbox;
 use super::settings::Settings;
-use crate::server::agent::r#loop::out::Event;
 use crate::server::agent::r#loop::pen;
 use crate::server::agent::r#loop::turn;
 use crate::server::agent::r#loop::turn::ask::Ask;
 use crate::server::agent::r#loop::turn::batch::Batch;
 use crate::server::agent::r#loop::turn::cycle::Mode;
+use crate::server::agent::request::live::Event;
 use crate::server::storage::Writer;
 
 /// What a caller needs to open one session. The caller resolves the profile
@@ -29,6 +29,8 @@ pub struct Birth {
     pub model: String,
     pub system: String,
     pub tools: Vec<serde_json::Value>,
+    /// The compaction instruction template; `{{focus}}` marks where the focus goes.
+    pub compact: String,
     pub meta: Option<i64>,
     pub cwd: Option<PathBuf>,
 }
@@ -47,12 +49,7 @@ pub enum Message {
     },
 }
 
-/// How much of the history a compaction keeps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Retention {
-    Tokens(usize),
-    Blocks(usize),
-}
+pub use crate::server::agent::request::contract::Retention;
 
 /// The loop object. One per process; every session hangs off it.
 pub struct Loop {
@@ -271,7 +268,7 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
     }
     handle.stop.store(false, Ordering::Release);
     let mode = mode_of(&start);
-    let live = handle.take_live(&inner.settings);
+    let live = handle.take_live();
     let turn = match pen::turn::open(&inner.writer, handle.id, start, &live.cwd) {
         Ok(turn) => turn,
         Err(e) => {

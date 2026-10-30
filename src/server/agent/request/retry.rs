@@ -1,11 +1,17 @@
+//! Retry policy, failure classes, and the notice one failure produces.
+
 use std::time::Duration;
 
-use crate::server::agent::request::message::NoticeLevel;
+use super::live::{Notice, NoticeLevel};
 
+/// What one request is allowed to do before giving up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
+    /// Retries after the first attempt.
     pub max_retries: u32,
+    /// The fixed wait between attempts.
     pub interval: Duration,
+    /// How long one attempt may wait for the first byte.
     pub timeout: Duration,
 }
 
@@ -21,8 +27,11 @@ impl Default for RetryPolicy {
 
 #[derive(Debug)]
 pub enum Failure {
+    /// Nothing arrived at all: a timeout, a refused connection, a dead worker.
     NoResponse { source: String },
+    /// The host answered with a status outside 2xx.
     Http { status: u16, body: String },
+    /// The user pressed escape.
     Cancelled,
 }
 
@@ -40,51 +49,42 @@ impl std::fmt::Display for Failure {
 impl std::error::Error for Failure {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RetryClass {
-    NoResponse,
-    TooManyRequests,
+pub enum Class {
+    Retry,
     Fatal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetryNotice {
-    pub level: NoticeLevel,
-    pub reason: String,
-    pub attempt: u32,
-    pub max: u32,
-}
-
-pub fn classify(failure: &Failure, emitted: bool, cancelled: bool) -> RetryClass {
+/// Only two things are worth another attempt: nothing arrived, or the host asked us to slow down.
+pub fn classify(failure: &Failure, emitted: bool, cancelled: bool) -> Class {
     if cancelled || emitted {
-        return RetryClass::Fatal;
+        return Class::Fatal;
     }
     match failure {
-        Failure::Cancelled => RetryClass::Fatal,
-        Failure::NoResponse { .. } => RetryClass::NoResponse,
-        Failure::Http { status: 429, .. } => RetryClass::TooManyRequests,
-        Failure::Http { .. } => RetryClass::Fatal,
+        Failure::Cancelled => Class::Fatal,
+        Failure::NoResponse { .. } => Class::Retry,
+        Failure::Http { status: 429, .. } => Class::Retry,
+        Failure::Http { .. } => Class::Fatal,
     }
 }
 
-pub fn notice(failure: &Failure, attempt: u32, max: u32, timeout: Duration) -> RetryNotice {
+/// The one line a watcher reads. A status error carries the host's body verbatim.
+pub fn notice(failure: &Failure, timeout: Duration) -> Notice {
     match failure {
-        Failure::Http { body, .. } => RetryNotice {
+        Failure::Http { status, body } => Notice {
             level: NoticeLevel::Error,
-            reason: body.clone(),
-            attempt,
-            max,
+            text: if body.trim().is_empty() {
+                format!("HTTP {status}")
+            } else {
+                body.clone()
+            },
         },
-        Failure::NoResponse { .. } => RetryNotice {
+        Failure::NoResponse { .. } => Notice {
             level: NoticeLevel::Warn,
-            reason: format!("request timeout: {timeout:?}"),
-            attempt,
-            max,
+            text: format!("request timeout: {timeout:?}"),
         },
-        Failure::Cancelled => RetryNotice {
+        Failure::Cancelled => Notice {
             level: NoticeLevel::Warn,
-            reason: "cancelled".to_string(),
-            attempt,
-            max,
+            text: "cancelled".to_string(),
         },
     }
 }

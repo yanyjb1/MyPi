@@ -26,9 +26,9 @@ pub(crate) trait Scanner: Send {
 
 /// Pick a scanner for this host. `None` = nothing to parse (the structured fields are there).
 pub(crate) fn scanner_for(
-    compat: &crate::server::agent::request::protocols::openai::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
 ) -> Option<Box<dyn Scanner>> {
-    use crate::server::agent::request::protocols::openai::completion::compat::MarkupHealing;
+    use crate::server::agent::request::protocol::completion::compat::MarkupHealing;
     match compat.stream_markup_healing_pattern? {
         MarkupHealing::Kimi => Some(Box::new(KimiScanner::new())),
         MarkupHealing::Dsml => Some(Box::new(XmlScanner::new())),
@@ -545,7 +545,7 @@ impl Scanner for QwenXmlScanner {
                 continue;
             }
             let Some(close) = self.buf.find("</tool_calls>") else {
-                return out; // 没闭合，等下一个 chunk
+                return out; // not closed yet: wait for the next chunk
             };
             let body = self.buf["<tool_calls>".len()..close].to_string();
             out.extend(parse_qwen_calls(&body));

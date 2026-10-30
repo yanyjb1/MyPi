@@ -231,7 +231,6 @@ compat_table! {
 
     /// The streaming response carries `finish_reason`. When false, the end of the stream decides
     /// between stop and tool calls.
-    value supports_finish_reason: bool = true;
 
     /// **Remove** `thinking` when `reasoning_effort` is set: some hosts (Fireworks) reject both at
     /// once. Judged after the `extra_body` merge, so a hand-written field counts too.

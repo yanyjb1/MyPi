@@ -6,9 +6,10 @@ use std::sync::mpsc::Sender;
 
 use anyhow::Result;
 
-use super::ask::{Artifact, ToolCall};
-use crate::server::agent::r#loop::out::Event;
+use super::ask::ToolCall;
 use crate::server::agent::r#loop::session::artifact::ArtifactStore;
+use crate::server::agent::request::contract::Spill;
+use crate::server::agent::request::live::Event;
 
 /// One tool effect the loop turns into rows.
 #[derive(Debug, Clone)]
@@ -43,7 +44,7 @@ pub struct ToolResult {
     pub ok: bool,
     pub result: String,
     pub memo: Option<String>,
-    pub artifact: Option<Artifact>,
+    pub spill: Option<Spill>,
     pub duration_ms: u64,
     pub effects: Vec<Effect>,
     pub stop: bool,

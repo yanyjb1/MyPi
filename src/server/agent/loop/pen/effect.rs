@@ -65,6 +65,7 @@ pub fn write(w: &Writer, effects: &[Effect]) -> Result<Vec<Born>> {
                         model: model.clone(),
                         system: system.clone(),
                         tools: tools.clone(),
+                        compact: String::new(),
                         meta: None,
                         cwd: Some(cwd.clone()),
                     },

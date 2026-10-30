@@ -21,9 +21,9 @@ const THINKING_TAGS: &[&[&str]] = &[&["<thinking>", "</thinking>"]];
 impl TemplateMarkupFilter {
     /// Build one for this host's switches; the default (nothing on) is a straight `push_str`.
     pub(crate) fn for_compat(
-        c: &crate::server::agent::request::protocols::openai::completion::compat::Resolved,
+        c: &crate::server::agent::request::protocol::completion::compat::Resolved,
     ) -> Self {
-        use crate::server::agent::request::protocols::openai::completion::compat::MarkupHealing;
+        use crate::server::agent::request::protocol::completion::compat::MarkupHealing;
         Self {
             held: String::new(),
             pipes: c.strip_deepseek_special_tokens,

@@ -1,3 +1,5 @@
+//! Anthropic Messages: `messages` in, events out.
+
 use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -5,33 +7,34 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::server::agent::request::content::BlockSink;
+use crate::server::agent::request::contract::Kind;
+use crate::server::agent::request::live::Stream;
 use crate::server::agent::request::message::{
-    AssistantMessage, ContentPart, DEFAULT_EMPTY_REPLY, INTERRUPTED_REPLY, StopReason, ToolCall,
-    ToolDef, Usage, UserContent, WireMessage,
+    AssistantMessage, ContentPart, DEFAULT_EMPTY_REPLY, INTERRUPTED_REPLY, ToolDef, Usage,
+    UserContent, WireCall, WireMessage,
 };
-use crate::server::agent::request::protocols::anthropic::stream::read_event;
-use crate::server::agent::request::protocols::openai::stream::{
-    assistant_block, text_block, tool_block,
+use crate::server::agent::request::protocol::anthropic::stream::read_event;
+use crate::server::agent::request::protocol::blocks;
+use crate::server::agent::request::protocol::{
+    Endpoint, Output, Protocol, ProtocolRequest, WireRequest,
 };
-use crate::server::agent::request::protocols::{Protocol, ProtocolRequest, WireRequest};
-use crate::server::agent::request::transport::client::Client;
-use crate::server::storage::BlockKind;
 
-pub struct Messages {
-    _model: String,
-}
+pub struct Messages;
 
 impl Messages {
-    pub fn new(model: &str) -> Self {
-        Self {
-            _model: model.to_string(),
-        }
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for Messages {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl Protocol for Messages {
-    fn request(&self, client: &Client, req: &ProtocolRequest) -> Result<WireRequest> {
+    fn request(&self, endpoint: &Endpoint, req: &ProtocolRequest) -> Result<WireRequest> {
         let mut body = json!({
             "model": req.model,
             "max_tokens": req.max_output_tokens,
@@ -45,12 +48,13 @@ impl Protocol for Messages {
         if !req.tools.is_empty() {
             body["tools"] = json!(tools(&req.tools));
         }
+        let mut headers = vec![("anthropic-version".to_string(), "2023-06-01".to_string())];
+        if endpoint.auth_header {
+            headers.push(("x-api-key".to_string(), endpoint.api_key.clone()));
+        }
         Ok(WireRequest {
-            url: format!("{}/messages", client.base_url.trim_end_matches('/')),
-            headers: vec![
-                ("x-api-key".to_string(), client.api_key.clone()),
-                ("anthropic-version".to_string(), "2023-06-01".to_string()),
-            ],
+            url: format!("{}/messages", endpoint.base_url.trim_end_matches('/')),
+            headers,
             body,
         })
     }
@@ -58,14 +62,10 @@ impl Protocol for Messages {
     fn decode(
         &self,
         reader: Box<dyn BufRead>,
-        sink: &mut dyn BlockSink,
+        out: &mut dyn Output,
         cancel: &AtomicBool,
     ) -> Result<AssistantMessage> {
-        decode(reader, sink, cancel)
-    }
-
-    fn compat_json(&self) -> Option<String> {
-        None
+        decode(reader, out, cancel)
     }
 }
 
@@ -121,7 +121,7 @@ fn messages(messages: &[WireMessage]) -> Vec<Value> {
                 vec![json!({
                     "type": "tool_result",
                     "tool_use_id": &tool_call_id,
-                    "content": &content,
+                    "content": content,
                 })],
             ),
         }
@@ -167,27 +167,35 @@ fn tools(tools: &[ToolDef]) -> Vec<Value> {
         .collect()
 }
 
+/// One content block as the stream builds it.
 #[derive(Default)]
-struct Block {
-    kind: u8,
+struct Chunk {
+    role: Role,
     text: String,
     id: String,
     name: String,
     args: String,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Role {
+    #[default]
+    Text,
+    Thinking,
+    Tool,
+}
+
 fn decode(
     mut reader: Box<dyn BufRead>,
-    sink: &mut dyn BlockSink,
+    out: &mut dyn Output,
     cancel: &AtomicBool,
 ) -> Result<AssistantMessage> {
-    let mut blocks: BTreeMap<u64, Block> = BTreeMap::new();
+    let mut chunks: BTreeMap<u64, Chunk> = BTreeMap::new();
     let mut order: Vec<u64> = Vec::new();
     let mut usage = Usage::default();
-    let mut stop_reason: Option<String> = None;
     let mut interrupted = false;
 
-    while let Some(event) = read_event(&mut reader)? {
+    while let Some(event) = read_event(reader.as_mut())? {
         if cancel.load(Ordering::Relaxed) {
             interrupted = true;
             break;
@@ -207,22 +215,22 @@ fn decode(
                 }
             }
             "content_block_start" => {
-                let index = data.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                let index = data.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let Some(block) = data.get("content_block") else {
                     continue;
                 };
-                let mut b = Block::default();
+                let mut chunk = Chunk::default();
                 match block.get("type").and_then(|v| v.as_str()).unwrap_or("") {
-                    "text" => b.kind = 0,
-                    "thinking" => b.kind = 1,
+                    "text" => chunk.role = Role::Text,
+                    "thinking" => chunk.role = Role::Thinking,
                     "tool_use" => {
-                        b.kind = 2;
-                        b.id = block
+                        chunk.role = Role::Tool;
+                        chunk.id = block
                             .get("id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        b.name = block
+                        chunk.name = block
                             .get("name")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
@@ -230,52 +238,49 @@ fn decode(
                     }
                     _ => continue,
                 }
-                if !blocks.contains_key(&index) {
+                if !chunks.contains_key(&index) {
                     order.push(index);
                 }
-                blocks.insert(index, b);
+                chunks.insert(index, chunk);
             }
             "content_block_delta" => {
-                let index = data.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
-                let Some(block) = blocks.get_mut(&index) else {
+                let index = data.get("index").and_then(Value::as_u64).unwrap_or(0);
+                let Some(chunk) = chunks.get_mut(&index) else {
                     continue;
                 };
                 let Some(delta) = data.get("delta") else {
                     continue;
                 };
-                let d = delta
+                let piece = delta
                     .get("text")
                     .or_else(|| delta.get("thinking"))
                     .or_else(|| delta.get("partial_json"))
-                    .and_then(|v| v.as_str())
+                    .and_then(Value::as_str)
                     .unwrap_or("");
-                if d.is_empty() {
+                if piece.is_empty() {
                     continue;
                 }
-                block.text.push_str(d);
-                if block.kind == 2 {
-                    block.args.push_str(d);
-                } else {
-                    let kind = if block.kind == 1 {
-                        BlockKind::Reasoning
-                    } else {
-                        BlockKind::Assistant
-                    };
-                    if !sink.block(text_block(kind, d), false) {
-                        interrupted = true;
-                        break;
+                chunk.text.push_str(piece);
+                match chunk.role {
+                    Role::Tool => {
+                        chunk.args.push_str(piece);
+                        let id = chunk.id.clone();
+                        out.stream(Stream::Arguments {
+                            call_id: id,
+                            text: piece.to_string(),
+                        });
                     }
+                    Role::Thinking => out.stream(Stream::Thinking(piece.to_string())),
+                    Role::Text => out.stream(Stream::Text(piece.to_string())),
                 }
             }
             "message_delta" => {
-                if let Some(reason) = data.get("delta").and_then(|d| d.get("stop_reason")) {
-                    stop_reason = reason.as_str().map(str::to_string);
-                }
-                if let Some(u) = data.get("usage") {
-                    let output = u.get("output_tokens").and_then(|v| v.as_u64());
-                    if let Some(output) = output {
-                        usage.completion_tokens = output;
-                    }
+                if let Some(output) = data
+                    .get("usage")
+                    .and_then(|u| u.get("output_tokens"))
+                    .and_then(Value::as_u64)
+                {
+                    usage.completion = output;
                 }
             }
             "error" => anyhow::bail!("anthropic stream failed: {}", event.data),
@@ -288,68 +293,58 @@ fn decode(
     let mut reasoning = String::new();
     let mut calls = Vec::new();
     for index in order {
-        let Some(block) = blocks.remove(&index) else {
+        let Some(chunk) = chunks.remove(&index) else {
             continue;
         };
-        match block.kind {
-            0 => {
-                content.push_str(&block.text);
-            }
-            1 => {
-                reasoning.push_str(&block.text);
-            }
-            _ => {
-                calls.push(ToolCall::new(block.id, block.name, block.args));
-            }
+        match chunk.role {
+            Role::Text => content.push_str(&chunk.text),
+            Role::Thinking => reasoning.push_str(&chunk.text),
+            Role::Tool => calls.push(WireCall::new(chunk.id, chunk.name, chunk.args)),
         }
     }
 
-    let stop = if interrupted {
-        StopReason::Interrupted
-    } else if !calls.is_empty() {
-        StopReason::ToolCalls
-    } else {
-        match stop_reason.as_deref() {
-            Some("max_tokens") => StopReason::Length,
-            Some("tool_use") => StopReason::ToolCalls,
-            _ => StopReason::Stop,
-        }
-    };
-
-    if calls.is_empty() && content.is_empty() {
-        let text = if interrupted {
-            INTERRUPTED_REPLY
+    if !reasoning.is_empty() {
+        out.block(blocks::text(Kind::Reasoning, &reasoning));
+    }
+    if calls.is_empty() {
+        let body = if !content.is_empty() {
+            content.clone()
+        } else if interrupted {
+            INTERRUPTED_REPLY.to_string()
         } else {
-            DEFAULT_EMPTY_REPLY
+            DEFAULT_EMPTY_REPLY.to_string()
         };
-        let _ = sink.block(assistant_block(text, &usage), true);
-    } else if calls.is_empty() {
-        let _ = sink.block(assistant_block(&content, &usage), true);
+        out.block(blocks::assistant(&body));
     } else {
+        if !content.is_empty() {
+            out.block(blocks::assistant(&content));
+        }
         for (i, call) in calls.iter().enumerate() {
-            let _ = sink.block(tool_block(call, i == 0), true);
+            out.block(blocks::call(call, i == 0));
         }
     }
 
     Ok(AssistantMessage {
         content,
-        tool_calls: calls,
-        stop_reason: stop,
+        calls,
         usage,
         reasoning: (!reasoning.is_empty()).then_some(reasoning),
+        interrupted,
     })
 }
 
 fn usage_from(u: &Value) -> Usage {
     Usage {
-        prompt_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        completion_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        total_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
-            + u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        reasoning_tokens: None,
-        cached_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()),
-        cache_write_tokens: u
+        prompt: u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+        completion: u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+        cached: u
+            .get("cache_read_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cache_write: u
             .get("cache_creation_input_tokens")
-            .and_then(|v| v.as_u64()),
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        reasoning: 0,
     }
 }

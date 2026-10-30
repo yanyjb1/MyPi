@@ -1,6 +1,6 @@
 //! One artifact row, keyed by the block it spilled from.
 
-use crate::server::agent::r#loop::turn::ask::Artifact;
+use crate::server::agent::request::contract::Artifact;
 use crate::server::storage::{Ref, Row};
 
 pub fn rows(block: Ref, artifact: Artifact) -> Vec<Row> {

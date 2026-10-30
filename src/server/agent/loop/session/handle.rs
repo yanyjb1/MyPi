@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use super::book::Birth;
 use super::live::Live;
 use super::mailbox::Mailbox;
-use super::settings::Settings;
 
 pub(crate) struct Handle {
     pub id: i64,
@@ -35,12 +34,12 @@ impl Handle {
         self.birth.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    pub(crate) fn take_live(&self, settings: &Settings) -> Live {
+    pub(crate) fn take_live(&self) -> Live {
         if let Some(live) = self.live.lock().unwrap_or_else(|e| e.into_inner()).take() {
             return live;
         }
         let birth = self.birth();
-        Live::new(&birth, settings)
+        Live::new(&birth)
     }
 
     pub(crate) fn put_live(&self, live: Live) {

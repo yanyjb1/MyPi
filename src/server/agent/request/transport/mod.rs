@@ -1,24 +1,37 @@
+//! Sending one call: the worker subprocess when it runs, a direct connection otherwise.
+
 pub mod client;
 pub mod worker;
 
 use std::io::BufRead;
 
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 
-use crate::server::agent::request::protocols::WireRequest;
-use crate::server::agent::request::retry::Failure;
-use crate::server::agent::request::transport::client::{ChannelReader, Client};
+use self::client::{ChannelReader, Client};
+use super::protocol::{ProtocolId, WireRequest};
+use super::retry::Failure;
 
-pub(crate) fn send(client: &Client, wire: &WireRequest) -> anyhow::Result<Box<dyn BufRead>> {
-    let worker_slot = client.worker.lock().ok().and_then(|slot| slot.clone());
-    if let Some(worker_slot) = worker_slot {
+/// One provider as the configuration resolved it.
+#[derive(Debug, Clone)]
+pub struct Provider {
+    pub name: String,
+    pub base_url: String,
+    pub protocol: ProtocolId,
+    pub api_key: String,
+    /// False sends no credential header at all.
+    pub auth_header: bool,
+}
+
+pub(crate) fn send(client: &Client, wire: &WireRequest) -> Result<Box<dyn BufRead>> {
+    let worker = client.worker();
+    if let Some(worker) = worker {
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let url = wire.url.clone();
         let body = wire.body.clone();
         let headers = wire.headers.clone();
         let timeout_ms = client.retry.timeout.as_millis() as u64;
         std::thread::spawn(move || {
-            let result = worker_slot
+            let result = worker
                 .lock()
                 .map_err(|_| anyhow!("HTTP worker lock poisoned"))
                 .and_then(|mut w| {
@@ -36,13 +49,11 @@ pub(crate) fn send(client: &Client, wire: &WireRequest) -> anyhow::Result<Box<dy
         })));
     }
 
-    let mut req = client.http.post(&wire.url);
+    let mut req = client.http().post(&wire.url);
     for (name, value) in &wire.headers {
         req = req.header(name, value);
     }
-    let resp = req
-        .send_json(&wire.body)
-        .map_err(crate::server::agent::request::transport::client::send_error)?;
+    let resp = req.send_json(&wire.body).map_err(client::send_error)?;
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         let body = resp

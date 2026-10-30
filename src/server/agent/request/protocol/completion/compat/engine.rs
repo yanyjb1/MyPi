@@ -31,10 +31,6 @@ impl Resolved {
     }
 }
 
-pub fn resolve(base_url: &str, model_id: &str, user: Option<&Compat>) -> Resolved {
-    let mut r = Resolved::detect(base_url, model_id);
-    if let Some(u) = user {
-        r.apply(u);
-    }
-    r
+pub fn resolve(base_url: &str, model_id: &str) -> Resolved {
+    Resolved::detect(base_url, model_id)
 }

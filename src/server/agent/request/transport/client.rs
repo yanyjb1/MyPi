@@ -1,13 +1,16 @@
+//! One provider connection: retry, cancellation, and the worker that owns the socket.
+
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use crate::server::agent::request::content::{BlockSink, RetrySink};
+use anyhow::Result;
+
+use crate::server::agent::request::live::Line;
 use crate::server::agent::request::message::AssistantMessage;
-use crate::server::agent::request::protocols::openai::completion::compat::Compat;
-use crate::server::agent::request::protocols::{
-    Protocol, ProtocolId, ProtocolRequest, WireRequest,
-};
-use crate::server::agent::request::retry::{Failure, RetryClass, RetryPolicy, classify, notice};
+use crate::server::agent::request::protocol::{Endpoint, Output, Protocol, ProtocolRequest};
+use crate::server::agent::request::retry::{self, Class, Failure, RetryPolicy};
+use crate::server::agent::request::transport::Provider;
 use crate::server::agent::request::transport::worker::{HttpWorker, SharedWorker};
 
 pub(crate) struct ChannelReader {
@@ -31,40 +34,32 @@ impl std::io::Read for ChannelReader {
     }
 }
 
+/// One provider, one model, one protocol instance.
 pub struct Client {
-    pub(crate) base_url: String,
-    pub(crate) api_key: String,
-    pub(crate) model: String,
-    pub(crate) session_id: Option<String>,
-    protocol_id: ProtocolId,
+    endpoint: Endpoint,
     protocol: Box<dyn Protocol>,
-    pub(crate) http: ureq::Agent,
+    model: String,
+    http: ureq::Agent,
     pub(crate) retry: RetryPolicy,
-    pub(crate) worker: Arc<Mutex<Option<SharedWorker>>>,
-    pub(crate) worker_pid: Arc<AtomicU32>,
+    worker: Mutex<Option<SharedWorker>>,
+    pid: Arc<AtomicU32>,
 }
 
 impl Client {
-    pub fn new(
-        base_url: &str,
-        api_key: &str,
-        model: &str,
-        protocol: ProtocolId,
-        user: Option<&Compat>,
-    ) -> Self {
-        let base_url = base_url.trim_end_matches('/').to_string();
-        let retry = RetryPolicy::default();
+    pub fn new(provider: &Provider, model: &str, retry: RetryPolicy) -> Self {
+        let base_url = provider.base_url.trim_end_matches('/').to_string();
         Self {
-            base_url: base_url.clone(),
-            api_key: api_key.to_string(),
+            endpoint: Endpoint {
+                base_url: base_url.clone(),
+                api_key: provider.api_key.clone(),
+                auth_header: provider.auth_header,
+            },
+            protocol: provider.protocol.build(&base_url, model),
             model: model.to_string(),
-            session_id: None,
-            protocol_id: protocol,
-            protocol: protocol.build(&base_url, model, user),
             http: agent(retry.timeout),
             retry,
-            worker: Arc::new(Mutex::new(None)),
-            worker_pid: Arc::new(AtomicU32::new(0)),
+            worker: Mutex::new(None),
+            pid: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -72,68 +67,35 @@ impl Client {
         &self.model
     }
 
-    pub fn base_url(&self) -> &str {
-        &self.base_url
+    pub(crate) fn http(&self) -> &ureq::Agent {
+        &self.http
     }
 
-    pub fn protocol(&self) -> &ProtocolId {
-        &self.protocol_id
+    /// The worker, spawned on first use. `None` means every call goes direct.
+    pub(crate) fn worker(&self) -> Option<SharedWorker> {
+        let mut slot = self.worker.lock().ok()?;
+        if slot.is_none() {
+            let fresh = HttpWorker::spawn().ok()?;
+            self.pid
+                .store(HttpWorker::pid(&fresh).unwrap_or(0), Ordering::Release);
+            *slot = Some(fresh);
+        }
+        slot.clone()
     }
 
-    pub fn compat_json(&self) -> Option<String> {
-        self.protocol.compat_json()
-    }
-
-    pub fn set_session_id(&mut self, id: impl Into<String>) {
-        self.session_id = Some(id.into());
-    }
-
-    pub fn with_own_worker(mut self) -> Self {
-        let fresh = HttpWorker::spawn().ok();
-        let pid = fresh.as_ref().and_then(HttpWorker::pid).unwrap_or(0);
-        self.worker = Arc::new(Mutex::new(fresh));
-        self.worker_pid = Arc::new(AtomicU32::new(pid));
-        self
-    }
-
-    pub fn with_compat(mut self, user: Option<&Compat>) -> Self {
-        self.protocol = self.protocol_id.build(&self.base_url, &self.model, user);
-        self
-    }
-
-    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
-        self.retry = retry;
-        self.http = agent(retry.timeout);
-        self
-    }
-
-    pub fn switch_model(
-        &mut self,
-        base_url: &str,
-        api_key: &str,
-        model: &str,
-        protocol: ProtocolId,
-        user: Option<&Compat>,
-    ) {
-        self.base_url = base_url.trim_end_matches('/').to_string();
-        self.api_key = api_key.to_string();
-        self.model = model.to_string();
-        self.protocol_id = protocol;
-        self.protocol = protocol.build(&self.base_url, model, user);
-    }
-
-    pub fn interrupt_worker(&self) {
-        let pid = self.worker_pid.swap(0, Ordering::AcqRel);
+    /// Kill the worker (and with it the socket) and put a fresh one in its place.
+    fn replace_worker(&self) {
+        let pid = self.pid.swap(0, Ordering::AcqRel);
         if pid != 0 {
             HttpWorker::kill_pid(pid);
         }
-        let fresh = HttpWorker::spawn();
+        let fresh = HttpWorker::spawn().ok();
         if let Ok(mut slot) = self.worker.lock() {
             match fresh {
-                Ok(fresh) => {
+                Some(fresh) => {
                     let new_pid = HttpWorker::pid(&fresh).unwrap_or(0);
                     let old = slot.replace(fresh);
-                    self.worker_pid.store(new_pid, Ordering::Release);
+                    self.pid.store(new_pid, Ordering::Release);
                     if let Some(old) = old {
                         std::thread::spawn(move || {
                             if let Ok(mut old) = old.lock() {
@@ -142,88 +104,125 @@ impl Client {
                         });
                     }
                 }
-                Err(_) => {
-                    slot.take();
-                    self.worker_pid.store(0, Ordering::Release);
+                None => {
+                    let _ = slot.take();
+                    self.pid.store(0, Ordering::Release);
                 }
             }
         }
     }
 
+    /// One call, retried per policy. Every failure is said out loud exactly once.
     pub fn complete(
         &self,
         req: &ProtocolRequest,
-        sink: &mut dyn BlockSink,
-        retry: &mut dyn RetrySink,
-        cancel: &AtomicBool,
-    ) -> anyhow::Result<AssistantMessage> {
+        out: &mut dyn Output,
+        line: &Line,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<AssistantMessage> {
+        let done = Arc::new(AtomicBool::new(false));
+        let watcher = {
+            let cancel = cancel.clone();
+            let done = done.clone();
+            let pid = self.pid.clone();
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Relaxed) {
+                    if cancel.load(Ordering::Relaxed) {
+                        let pid = pid.load(Ordering::Relaxed);
+                        if pid != 0 {
+                            HttpWorker::kill_pid(pid);
+                        }
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            })
+        };
+
         let mut emitted = false;
-        let mut last: Option<anyhow::Error> = None;
-        for attempt in 0..=self.retry.max_retries {
+        let mut attempt = 0u32;
+
+        let outcome = loop {
             if cancel.load(Ordering::Relaxed) {
-                return Err(anyhow::Error::new(Failure::Cancelled));
+                break Err(anyhow::Error::new(Failure::Cancelled));
             }
-            let wire = self.protocol.request(self, req)?;
-            let result =
-                crate::server::agent::request::transport::send(self, &wire).and_then(|reader| {
-                    let mut tracked = Tracked {
-                        inner: sink,
-                        emitted: &mut emitted,
-                    };
-                    self.protocol.decode(reader, &mut tracked, cancel)
-                });
-            match result {
-                Ok(message) => return Ok(message),
+            let wire = match self.protocol.request(&self.endpoint, req) {
+                Ok(wire) => wire,
+                Err(e) => break Err(e),
+            };
+            let attempt_result = super::send(self, &wire).and_then(|reader| {
+                let mut tracked = Tracked {
+                    inner: out,
+                    emitted: &mut emitted,
+                };
+                self.protocol.decode(reader, &mut tracked, cancel)
+            });
+            match attempt_result {
+                Ok(message) => break Ok(message),
                 Err(e) => {
                     let Some(failure) = e.downcast_ref::<Failure>() else {
-                        return Err(e);
+                        break Err(e);
                     };
-                    let class = classify(failure, emitted, cancel.load(Ordering::Relaxed));
-                    if class == RetryClass::Fatal || attempt >= self.retry.max_retries {
+                    let cancelled = cancel.load(Ordering::Relaxed);
+                    let class = retry::classify(failure, emitted, cancelled);
+                    if class == Class::Fatal {
+                        if !cancelled {
+                            line.send(crate::server::agent::request::live::Element::Notice(
+                                retry::notice(failure, self.retry.timeout),
+                            ));
+                        }
                         crate::server::platform::log::error(&self.model, format!("{e:#}"));
-                        return Err(e);
+                        break Err(e);
                     }
-                    let n = attempt + 1;
-                    retry.retry(&notice(
-                        failure,
-                        n,
-                        self.retry.max_retries,
-                        self.retry.timeout,
+                    line.send(crate::server::agent::request::live::Element::Notice(
+                        retry::notice(failure, self.retry.timeout),
                     ));
+                    attempt += 1;
                     crate::server::platform::log::warn(
                         &self.model,
                         format!(
-                            "request failed: {e:#}; retrying {n}/{}",
+                            "request failed: {e:#}; retrying {attempt}/{}",
                             self.retry.max_retries
                         ),
                     );
-                    self.interrupt_worker();
+                    if attempt > self.retry.max_retries {
+                        break Err(e);
+                    }
+                    self.replace_worker();
                     std::thread::sleep(self.retry.interval);
-                    last = Some(e);
                 }
             }
-        }
-        Err(last.unwrap_or_else(|| anyhow::anyhow!("request failed")))
+        };
+
+        done.store(true, Ordering::Relaxed);
+        let _ = watcher.join();
+        outcome
     }
 }
 
+/// Counts whether anything reached the front end: after that, retrying would duplicate it.
 struct Tracked<'a> {
-    inner: &'a mut dyn BlockSink,
+    inner: &'a mut dyn Output,
     emitted: &'a mut bool,
 }
 
-impl BlockSink for Tracked<'_> {
-    fn block(&mut self, block: crate::server::storage::NewBlock, done: bool) -> bool {
+impl Output for Tracked<'_> {
+    fn stream(&mut self, piece: crate::server::agent::request::live::Stream) {
         *self.emitted = true;
-        self.inner.block(block, done)
+        self.inner.stream(piece);
+    }
+
+    fn block(&mut self, block: crate::server::agent::request::contract::Block) {
+        *self.emitted = true;
+        self.inner.block(block);
     }
 }
 
-fn agent(timeout: std::time::Duration) -> ureq::Agent {
+fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
-        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_response(Some(timeout))
-        .timeout_recv_body(Some(std::time::Duration::from_secs(1)))
+        .timeout_recv_body(Some(Duration::from_secs(1)))
         .http_status_as_error(false)
         .build()
         .into()

@@ -5,14 +5,16 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 
-use super::ask::{CompactInput, LapInput, Stop, Usage};
+use super::ask::{CompactInput, LapInput, ResultsInput, Stop, Usage};
 use super::env;
 use super::fence::Fence;
 use crate::server::agent::r#loop::pen::{self, Pen};
 use crate::server::agent::r#loop::session::book::{Inner, Retention};
 use crate::server::agent::r#loop::session::handle::Handle;
+use crate::server::agent::r#loop::session::history::Transcript;
 use crate::server::agent::r#loop::session::live::Live;
-use crate::server::storage::Reader;
+use crate::server::agent::r#loop::turn::batch::ToolResult;
+use crate::server::agent::request::contract::{History, ToolResult as Reported};
 
 /// Which machine a turn runs.
 #[derive(Clone)]
@@ -32,21 +34,17 @@ pub fn run(
     mode: Mode,
 ) -> Result<Stop> {
     if let Mode::Compact { retention, focus } = mode {
-        let blocks = Arc::new(Pen::new(inner.writer.clone(), turn));
-        let reader = Reader::open(&inner.writer.path())?;
         let reply = match inner.ask.compact(CompactInput {
             session: handle.id,
-            turn,
-            reader,
+            history: Arc::new(Transcript::open(&inner.writer.path())?),
             transport: live.transport(),
             system: live.system.clone(),
             tools: live.tools.clone(),
             retention,
             focus,
+            instruction: live.compact.clone(),
             stop: handle.stop.clone(),
-            out: inner.out.clone(),
-            blocks: blocks.clone(),
-            artifacts: live.artifacts.clone(),
+            live: inner.out.clone(),
         }) {
             Ok(reply) => reply,
             Err(e) => {
@@ -70,6 +68,7 @@ pub fn run(
         )?;
         return Ok(Stop::Model);
     }
+
     let mut usage = Usage::default();
     let mut fence = Fence::new(inner.settings.max_tool_rounds);
     let mut stop = Stop::Model;
@@ -88,20 +87,16 @@ pub fn run(
         }
 
         let blocks = Arc::new(Pen::new(inner.writer.clone(), turn));
-        let reader = Reader::open(&inner.writer.path())?;
+        let history: Arc<dyn History> = Arc::new(Transcript::open(&inner.writer.path())?);
         let lap = match inner.ask.lap(LapInput {
             session: handle.id,
-            turn,
-            reader,
+            history: history.clone(),
+            blocks: blocks.clone(),
             transport: live.transport(),
             system: live.system.clone(),
             tools: live.tools.clone(),
-            max_output_tokens: live.settings.max_output_tokens,
             stop: handle.stop.clone(),
-            out: inner.out.clone(),
-            blocks: blocks.clone(),
-            artifacts: live.artifacts.clone(),
-            first,
+            live: inner.out.clone(),
         }) {
             Ok(lap) => lap,
             Err(e) => {
@@ -139,10 +134,14 @@ pub fn run(
                 return Err(e);
             }
         };
-        if let Err(e) = inner
-            .ask
-            .hand_results(handle.id, turn, &lap.calls, &results, &*blocks)
-        {
+        let reported = ResultsInput {
+            session: handle.id,
+            history: history.clone(),
+            artifacts: live.artifacts.dir().to_path_buf(),
+            calls: lap.calls.clone(),
+            results: results.iter().map(report).collect(),
+        };
+        if let Err(e) = inner.ask.results(reported, &*blocks) {
             broken(inner, handle, turn, usage, baseline);
             return Err(e);
         }
@@ -153,6 +152,7 @@ pub fn run(
         if !effects.is_empty() {
             for mut born in pen::effect::write(&inner.writer, &effects)? {
                 born.birth.meta = handle.meta();
+                born.birth.compact = live.compact.clone();
                 crate::server::agent::r#loop::session::book::book_child(
                     inner, born.birth, born.start,
                 )?;
@@ -167,6 +167,18 @@ pub fn run(
 
     pen::turn::settle(&inner.writer, turn, stop, usage, baseline, handle.meta())?;
     Ok(stop)
+}
+
+/// One finished call, as the request half takes it.
+fn report(result: &ToolResult) -> Reported {
+    Reported {
+        call_id: result.call_id.clone(),
+        ok: result.ok,
+        result: result.result.clone(),
+        memo: result.memo.clone(),
+        spill: result.spill.clone(),
+        duration_ms: result.duration_ms,
+    }
 }
 
 fn broken(inner: &Arc<Inner>, handle: &Handle, turn: i64, usage: Usage, baseline: Option<u64>) {

@@ -3,10 +3,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::Transport;
 use super::artifact::ArtifactStore;
 use super::book::Birth;
-use super::settings::Settings;
-use super::transport::Transport;
 
 /// One session's live state.
 pub struct Live {
@@ -14,13 +13,14 @@ pub struct Live {
     pub model: String,
     pub system: String,
     pub tools: Vec<serde_json::Value>,
+    /// The compaction instruction template; it comes from the profile the caller resolved.
+    pub compact: String,
     pub cwd: PathBuf,
-    pub settings: Settings,
     pub artifacts: Arc<ArtifactStore>,
 }
 
 impl Live {
-    pub fn new(birth: &Birth, settings: &Settings) -> Self {
+    pub fn new(birth: &Birth) -> Self {
         let cwd = birth
             .cwd
             .clone()
@@ -31,8 +31,8 @@ impl Live {
             model: birth.model.clone(),
             system: birth.system.clone(),
             tools: birth.tools.clone(),
+            compact: birth.compact.clone(),
             cwd,
-            settings: settings.clone(),
             artifacts: Arc::new(ArtifactStore::new(birth.session)),
         }
     }
