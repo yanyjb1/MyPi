@@ -12,7 +12,7 @@ describes the code as it stands.
 | `mod.rs` | declarations and exports |
 | `path.rs` | the database's file name and its default location |
 | `schema.rs` | `prepare(path)`, the tables, `SCHEMA_VERSION`; a mismatch rebuilds |
-| `shape.rs` | every value crossing the boundary: blocks, rows, request archives, submissions, references, the round structure, citation codec |
+| `shape.rs` | every value crossing the boundary: blocks, rows, session anchors, submissions, references, the round structure |
 | `decode.rs` | column lists (`SESSION_COLS`, `TURN_COLS`, `REQUEST_COLS`, `BLOCK_COLS`) and row decoders, private to the reader |
 | `reader.rs` | `Reader`: one connection, one accessor per table, rows out as JSON |
 | `writer/mod.rs` | declarations and exports |
@@ -26,7 +26,7 @@ describes the code as it stands.
 | `write/artifacts.rs` | the row an oversized output lands |
 | `write/memos.rs` | memo rows |
 | `write/aliases.rs` | alias rows |
-| `write/shared.rs` | the list tail, the session of a round, request archives and their hash |
+| `write/shared.rs` | the list tail, the session of a round, session anchors and their hash |
 | `delete/mod.rs` | declarations and exports |
 | `delete/sweep.rs` | the one sweep: dead list places and trail entries, rounds, blocks, anchored rows |
 | `delete/rewind.rs` | prune-mode cut (`Target`, `Cut`) |
@@ -86,8 +86,8 @@ Everything else is `pub(crate)` or private.
 4. `write/blocks.rs`'s insert list and `decode::BLOCK_COLS`.
 5. `NewBlock` and `Block`; `NewBlock::landed` converts.
 6. `write/blocks.rs`'s interval append and `turns::set_blocks`; one encoding, `decode::encode_blocks`.
-7. `shape::base36` / `parse_base36`; a citation names a block id.
-8. `write/shared.rs::request_hash` and `put_request_meta`; every field in the hash must be stored.
+7. `shape::Row::Artifact`'s `hash` / `reference`; a citation names content, not a block id.
+8. `write/shared.rs::request_hash` and `put_request_meta`; every anchor field in the hash must be stored.
 9. `shape::Row` and `write/apply.rs`'s dispatch; a new row is one arm on each side.
 10. `delete/rows.rs`'s per-table removals and `delete/mod.rs::sweep`; both use the same survival
     rule.

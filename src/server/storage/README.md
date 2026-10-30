@@ -37,7 +37,7 @@ truth for every column.
 - A row that needs another row's id names it: a known number, or an earlier row of the same
   submission (the id exists only after that row runs).
 - The writer fills what only it can: auto-increment ids, the round's interval and byte count when a
-  block lands, the request archive's hash and its deduplication.
+  block lands, the session anchor's hash and its deduplication.
 - `Writer::relay(port)` names where the round structure goes: when a round settles, its id and the
   closed id ranges its blocks occupy. Nothing unlanded is relayed, and no block text is repeated.
 - Deletion is one door: `delete_rows(table, ids)` — the rows, whatever only they held, then the

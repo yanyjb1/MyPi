@@ -6,8 +6,10 @@ use std::sync::mpsc::Sender;
 use anyhow::Result;
 
 use crate::server::agent::r#loop::out::Event;
+use crate::server::agent::r#loop::session::artifact::ArtifactStore;
 use crate::server::agent::r#loop::session::transport::Transport;
-use crate::server::storage::{NewBlock, Reader};
+use crate::server::agent::request::Block;
+use crate::server::storage::Reader;
 
 /// Why a turn stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +74,7 @@ pub struct Artifact {
 /// The write end of the block path. The request half owns what a block is;
 /// the loop only turns it into storage rows.
 pub trait BlockSink: Send + Sync {
-    fn block(&self, block: NewBlock, artifact: Option<Artifact>) -> Result<()>;
+    fn block(&self, block: Block, artifact: Option<Artifact>) -> Result<()>;
 }
 
 /// One lap's input.
@@ -87,6 +89,7 @@ pub struct LapInput {
     pub stop: std::sync::Arc<AtomicBool>,
     pub out: Sender<Event>,
     pub blocks: std::sync::Arc<dyn BlockSink>,
+    pub artifacts: std::sync::Arc<ArtifactStore>,
     pub first: bool,
 }
 
@@ -110,6 +113,7 @@ pub struct CompactInput {
     pub stop: std::sync::Arc<AtomicBool>,
     pub out: Sender<Event>,
     pub blocks: std::sync::Arc<dyn BlockSink>,
+    pub artifacts: std::sync::Arc<ArtifactStore>,
 }
 
 /// One old turn's retained intervals, in list order.

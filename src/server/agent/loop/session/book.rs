@@ -99,7 +99,14 @@ impl Loop {
             }
             slots.insert(id, handle.clone());
         }
-        spawn_scheduler(&self.inner, handle)?;
+        if let Err(e) = spawn_scheduler(&self.inner, handle) {
+            self.inner
+                .slots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id);
+            return Err(e);
+        }
         Ok(id)
     }
 
@@ -107,6 +114,9 @@ impl Loop {
     pub fn deliver(&self, session: i64, msg: Message) -> Result<Option<i64>> {
         let handle = self.handle(session)?;
         if handle.busy.load(Ordering::Acquire) {
+            if matches!(&msg, Message::Compact { .. }) {
+                bail!("session {} is already in a turn", handle.id);
+            }
             handle.mailbox.push_user(msg);
             return Ok(None);
         }
@@ -186,7 +196,14 @@ pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Res
         }
         slots.insert(handle.id, handle.clone());
     }
-    spawn_scheduler(inner, handle.clone())?;
+    if let Err(e) = spawn_scheduler(inner, handle.clone()) {
+        inner
+            .slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&handle.id);
+        return Err(e);
+    }
     start_turn(
         inner,
         &handle,
@@ -227,12 +244,15 @@ fn schedule(weak: Weak<Inner>, handle: Arc<Handle>) {
             break;
         };
         if !handle.busy.load(Ordering::Acquire) {
-            if let Err(e) = start_turn(&inner, &handle, start) {
+            if let Err(e) = start_turn(&inner, &handle, start.clone()) {
                 crate::server::platform::log::error(
                     "loop",
                     format!("session {}: queued mail did not start: {e:#}", handle.id),
                 );
+                requeue(&handle, start);
             }
+        } else {
+            requeue(&handle, start);
         }
     }
 }
@@ -260,30 +280,33 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
         }
     };
     let inner = inner.clone();
-    let handle = handle.clone();
-    std::thread::Builder::new()
-        .name(format!("turn-{}", handle.id))
+    let thread_handle = handle.clone();
+    let spawned = std::thread::Builder::new()
+        .name(format!("turn-{}", thread_handle.id))
         .spawn(move || {
             let mut live = live;
             let mut current = turn;
             let mut mode = mode;
             loop {
-                match turn::cycle::run(&inner, &handle, current, &mut live, mode.clone()) {
+                match turn::cycle::run(&inner, &thread_handle, current, &mut live, mode.clone()) {
                     Ok(turn::Stop::User) => {
-                        if handle.gone.load(Ordering::Acquire) {
+                        if thread_handle.gone.load(Ordering::Acquire) {
                             break;
                         }
-                        let Some(start) = next_start(&handle) else {
+                        let Some(start) = next_start(&thread_handle) else {
                             break;
                         };
-                        handle.stop.store(false, Ordering::Release);
+                        thread_handle.stop.store(false, Ordering::Release);
                         mode = mode_of(&start);
-                        match pen::turn::open(&inner.writer, handle.id, start, &live.cwd) {
+                        match pen::turn::open(&inner.writer, thread_handle.id, start, &live.cwd) {
                             Ok(next) => current = next,
                             Err(e) => {
                                 crate::server::platform::log::error(
                                     "loop",
-                                    format!("session {}: follow-up did not open: {e:#}", handle.id),
+                                    format!(
+                                        "session {}: follow-up did not open: {e:#}",
+                                        thread_handle.id
+                                    ),
                                 );
                                 break;
                             }
@@ -293,19 +316,42 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
                     Err(e) => {
                         crate::server::platform::log::error(
                             "loop",
-                            format!("session {}: turn {current} died: {e:#}", handle.id),
+                            format!("session {}: turn {current} died: {e:#}", thread_handle.id),
                         );
                         break;
                     }
                 }
             }
-            handle.put_live(live);
-            handle.stop.store(false, Ordering::Release);
-            handle.busy.store(false, Ordering::Release);
-            handle.mailbox.notify();
-        })
-        .context("cannot start a turn thread")?;
+            thread_handle.put_live(live);
+            thread_handle.stop.store(false, Ordering::Release);
+            thread_handle.busy.store(false, Ordering::Release);
+            thread_handle.mailbox.notify();
+        });
+    if let Err(e) = spawned {
+        handle.busy.store(false, Ordering::Release);
+        return Err(e.into());
+    }
     Ok(turn)
+}
+
+fn requeue(handle: &Handle, start: pen::turn::Start) {
+    match start {
+        pen::turn::Start::Wake { text } => handle.mailbox.push_wake(text),
+        pen::turn::Start::User {
+            prefix,
+            text,
+            suffix,
+        } => handle.mailbox.push_user(Message::Submit {
+            prefix,
+            text,
+            suffix,
+        }),
+        pen::turn::Start::Compact { retention, focus } => {
+            handle
+                .mailbox
+                .push_user(Message::Compact { retention, focus });
+        }
+    }
 }
 
 fn mode_of(start: &pen::turn::Start) -> Mode {

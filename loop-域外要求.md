@@ -7,6 +7,7 @@
 - 历史：从 loop 注入的读口读，不 `import storage`，不持 `Writer`。
 - 解码：流式解码；增量与块边界直接写 loop 给的 channel。正文、思考各带来源说明；工具参数不带，下游靠 `call_id` 认。
 - 写块：块级写库经 loop 给的写块口；块类型由 request 唯一决定；工具结果整批切；缺一个调用结果就整体失败。
+  request 暴露 `Block`；loop 在 `pen` 里实现到 `storage::NewBlock` 的映射。
 - 交回：`Stop`、`Usage`、`call_id / name / args / intent`；压缩时交回摘要文本。
 - 不派工具、不开回合、不碰会话状态、不认识工具名。
 - artifact 引用：全文 FNV-1a 64，取 4/6/8/10/12/14/16 位十六进制前缀；同内容同引用；不同内容前缀冲突时加长。引用随块交给 loop。

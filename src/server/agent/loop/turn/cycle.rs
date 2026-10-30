@@ -46,6 +46,7 @@ pub fn run(
             stop: handle.stop.clone(),
             out: inner.out.clone(),
             blocks: blocks.clone(),
+            artifacts: live.artifacts.clone(),
         }) {
             Ok(reply) => reply,
             Err(e) => {
@@ -61,7 +62,6 @@ pub fn run(
         pen::turn::borrow(&inner.writer, handle.id, &reply.borrows)?;
         pen::turn::settle(
             &inner.writer,
-            handle.id,
             turn,
             Stop::Model,
             usage,
@@ -96,10 +96,11 @@ pub fn run(
             transport: live.transport(),
             system: live.system.clone(),
             tools: live.tools.clone(),
-            max_output_tokens: None,
+            max_output_tokens: live.settings.max_output_tokens,
             stop: handle.stop.clone(),
             out: inner.out.clone(),
             blocks: blocks.clone(),
+            artifacts: live.artifacts.clone(),
             first,
         }) {
             Ok(lap) => lap,
@@ -129,6 +130,7 @@ pub fn run(
             lap.calls.clone(),
             handle.stop.clone(),
             inner.out.clone(),
+            live.artifacts.clone(),
         );
         let results = match inner.batch.run(input) {
             Ok(results) => results,
@@ -163,22 +165,13 @@ pub fn run(
         fence.count();
     }
 
-    pen::turn::settle(
-        &inner.writer,
-        handle.id,
-        turn,
-        stop,
-        usage,
-        baseline,
-        handle.meta(),
-    )?;
+    pen::turn::settle(&inner.writer, turn, stop, usage, baseline, handle.meta())?;
     Ok(stop)
 }
 
 fn broken(inner: &Arc<Inner>, handle: &Handle, turn: i64, usage: Usage, baseline: Option<u64>) {
     let _ = pen::turn::settle(
         &inner.writer,
-        handle.id,
         turn,
         Stop::Broken,
         usage,

@@ -9,6 +9,7 @@ use crate::server::agent::r#loop::turn::ask::{Stop, Usage};
 use crate::server::storage::{BlockKind, NewBlock, Ref, RoundUsage, Row, Submit, Writer};
 
 /// How a turn opens.
+#[derive(Clone)]
 pub enum Start {
     User {
         prefix: Option<String>,
@@ -160,8 +161,8 @@ pub fn borrow(
     borrows: &[crate::server::agent::r#loop::turn::ask::Borrow],
 ) -> Result<()> {
     let mut rows = Vec::new();
-    for (at, borrow) in borrows.iter().enumerate() {
-        let turn = at * 3;
+    for borrow in borrows {
+        let turn = rows.len();
         rows.push(Row::Turn {
             stop_reason: Some("borrowed".to_string()),
             usage: None,
@@ -185,14 +186,12 @@ pub fn borrow(
 /// Close one turn and lower the archive's prompt baseline.
 pub fn settle(
     w: &Writer,
-    session: i64,
     turn: i64,
     stop: Stop,
     usage: Usage,
     baseline: Option<u64>,
     meta: Option<i64>,
 ) -> Result<()> {
-    let _ = session;
     let round = RoundUsage {
         prompt_tokens: usage.prompt,
         completion_tokens: usage.completion,

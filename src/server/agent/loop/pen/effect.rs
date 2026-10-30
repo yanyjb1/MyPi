@@ -49,30 +49,27 @@ pub fn write(w: &Writer, effects: &[Effect]) -> Result<Vec<Born>> {
                 cwd,
                 start,
             } => {
-                let landed = w.push(Submit {
-                    rows: vec![Row::Session {
-                        started_at: crate::server::platform::time::now_stamp(),
-                        cwd: cwd.to_string_lossy().into_owned(),
-                        model: Some((provider.clone(), model.clone())),
-                        name: None,
-                        anchor: Some(Ref::Known(*anchor)),
+                let id = super::birth::child(
+                    w,
+                    &crate::server::platform::time::now_stamp(),
+                    &cwd.to_string_lossy(),
+                    provider,
+                    model,
+                    Ref::Known(*anchor),
+                    None,
+                )?;
+                children.push(Born {
+                    birth: Birth {
+                        session: id,
+                        provider: provider.clone(),
+                        model: model.clone(),
+                        system: system.clone(),
+                        tools: tools.clone(),
                         meta: None,
-                    }],
-                })?;
-                if let Some(id) = landed.ids.into_iter().find(|id| *id > 0) {
-                    children.push(Born {
-                        birth: Birth {
-                            session: id,
-                            provider: provider.clone(),
-                            model: model.clone(),
-                            system: system.clone(),
-                            tools: tools.clone(),
-                            meta: None,
-                            cwd: Some(cwd.clone()),
-                        },
-                        start: start.clone(),
-                    });
-                }
+                        cwd: Some(cwd.clone()),
+                    },
+                    start: start.clone(),
+                });
             }
         }
     }

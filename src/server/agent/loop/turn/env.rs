@@ -7,6 +7,7 @@ use std::sync::mpsc::Sender;
 use super::ask::ToolCall;
 use super::batch::BatchInput;
 use crate::server::agent::r#loop::out::Event;
+use crate::server::agent::r#loop::session::artifact::ArtifactStore;
 
 /// Build the per-turn tool input. The tool layer owns the concrete `Env`.
 pub fn build(
@@ -16,6 +17,7 @@ pub fn build(
     calls: Vec<ToolCall>,
     stop: std::sync::Arc<AtomicBool>,
     out: Sender<Event>,
+    artifacts: std::sync::Arc<ArtifactStore>,
 ) -> BatchInput {
     BatchInput {
         session,
@@ -24,5 +26,6 @@ pub fn build(
         calls,
         stop,
         out,
+        artifacts,
     }
 }

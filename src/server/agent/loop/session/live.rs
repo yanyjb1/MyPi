@@ -1,6 +1,7 @@
 //! The state that outlives one turn.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::artifact::ArtifactStore;
 use super::book::Birth;
@@ -15,7 +16,7 @@ pub struct Live {
     pub tools: Vec<serde_json::Value>,
     pub cwd: PathBuf,
     pub settings: Settings,
-    pub artifacts: ArtifactStore,
+    pub artifacts: Arc<ArtifactStore>,
 }
 
 impl Live {
@@ -32,7 +33,7 @@ impl Live {
             tools: birth.tools.clone(),
             cwd,
             settings: settings.clone(),
-            artifacts: ArtifactStore::new(birth.session),
+            artifacts: Arc::new(ArtifactStore::new(birth.session)),
         }
     }
 

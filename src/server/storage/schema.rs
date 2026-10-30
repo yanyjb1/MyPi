@@ -22,7 +22,8 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "foreign_keys", "OFF")?;
         conn.execute_batch(
-            "DROP TABLE IF EXISTS aliases;
+            "DROP TABLE IF EXISTS subsessions;
+             DROP TABLE IF EXISTS aliases;
              DROP TABLE IF EXISTS memos;
              DROP TABLE IF EXISTS artifacts;
              DROP TABLE IF EXISTS cwd_history;

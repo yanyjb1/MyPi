@@ -52,6 +52,7 @@ the tool boundary.
 
 - `turn/ask` and `turn/batch` are the domain boundary; the request and tool implementations are
   outside this domain.
+- `turn/ask::BlockSink` takes `request::Block`; `pen` maps it into the storage block row.
 
 ## 4. Config Fields
 

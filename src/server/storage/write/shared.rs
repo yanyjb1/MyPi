@@ -112,7 +112,7 @@ pub(crate) fn read_turn(
         .optional()?)
 }
 
-/// Write a request archive row (deduplicated by content hash), returning its `request_id`.
+/// Write a session anchor row (deduplicated by content hash), returning its `request_id`.
 pub(crate) fn put_request_meta(tx: &rusqlite::Transaction<'_>, r: &RequestMeta) -> Result<i64> {
     let hash = request_hash(r);
     if let Some(id) = tx

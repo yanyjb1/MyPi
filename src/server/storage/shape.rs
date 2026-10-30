@@ -1,5 +1,5 @@
 //! Shapes: what one database row becomes in memory — the block, the round, the session, the
-//! request archive, an artifact, and what a caller submits.
+//! request anchor, an artifact, and what a caller submits.
 
 /// What a block is (the `type` column, typed).
 #[derive(
@@ -89,30 +89,6 @@ pub struct NewBlock {
     pub duration_ms: Option<i64>,
     /// When this block landed.
     pub ts: Option<String>,
-}
-
-/// The base-36 spelling of a block id: what a citation names. The id is frozen from the moment
-/// the block lands, so a citation stays valid across rewinds and forks.
-pub fn base36(mut n: i64) -> String {
-    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    if n <= 0 {
-        return "0".to_string();
-    }
-    let mut out = Vec::new();
-    while n > 0 {
-        out.push(DIGITS[(n % 36) as usize]);
-        n /= 36;
-    }
-    out.reverse();
-    String::from_utf8(out).expect("the digits are ASCII")
-}
-
-/// Read a citation's spelling back. `None` = not a block id.
-pub fn parse_base36(s: &str) -> Option<i64> {
-    if s.is_empty() {
-        return None;
-    }
-    i64::from_str_radix(s, 36).ok()
 }
 
 impl NewBlock {
@@ -206,8 +182,8 @@ pub struct RoundUsage {
     pub cache_write_tokens: u64,
 }
 
-/// The conversation-invariant part of one request (the request archive). It never enters the
-/// message list; one row per distinct archive (deduplicated by `hash`).
+/// The conversation-invariant part of one session anchor. It never enters the message list;
+/// one row per distinct anchor, deduplicated by `hash`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct RequestMeta {
     pub model: String,
@@ -222,7 +198,7 @@ pub struct RequestMeta {
     pub baseline_prompt: Option<u64>,
 }
 
-/// One round (a `turns` row plus its request archive).
+/// One round (a `turns` row and its block intervals).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnRow {
     pub turn_id: i64,
@@ -292,9 +268,9 @@ pub enum Row {
         stop_reason: Option<String>,
         usage: Option<RoundUsage>,
     },
-    /// A request archive, deduplicated by content.
+    /// A session anchor, deduplicated by content.
     Request { meta: RequestMeta },
-    /// Lower one archive's prompt baseline; it never grows.
+    /// Lower one anchor's prompt baseline; it never grows.
     Baseline { request: Ref, prompt: u64 },
     /// One block; its id joins its round's interval and byte count.
     Block { turn: Ref, block: NewBlock },

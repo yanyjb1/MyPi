@@ -8,6 +8,7 @@ use anyhow::Result;
 
 use super::ask::{Artifact, ToolCall};
 use crate::server::agent::r#loop::out::Event;
+use crate::server::agent::r#loop::session::artifact::ArtifactStore;
 
 /// One tool effect the loop turns into rows.
 #[derive(Debug, Clone)]
@@ -56,6 +57,7 @@ pub struct BatchInput {
     pub calls: Vec<ToolCall>,
     pub stop: std::sync::Arc<AtomicBool>,
     pub out: Sender<Event>,
+    pub artifacts: std::sync::Arc<ArtifactStore>,
 }
 
 /// The tool layer, as the loop sees it.
