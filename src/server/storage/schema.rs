@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 /// Layout version. A mismatch wipes the database and rebuilds it.
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 /// Open (or create) the database and make sure its layout is current.
 pub fn prepare(path: &std::path::Path) -> Result<Connection> {
@@ -22,8 +22,7 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "foreign_keys", "OFF")?;
         conn.execute_batch(
-            "DROP TABLE IF EXISTS subsessions;
-             DROP TABLE IF EXISTS aliases;
+            "DROP TABLE IF EXISTS aliases;
              DROP TABLE IF EXISTS memos;
              DROP TABLE IF EXISTS artifacts;
              DROP TABLE IF EXISTS cwd_history;
@@ -42,8 +41,10 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
             name           TEXT,
             started_at     TEXT NOT NULL,
             cwd            TEXT,
-            model_provider TEXT,
+            provider       TEXT,
             model          TEXT,
+            anchor         INTEGER,
+            meta           INTEGER,
             todo_on        INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS session_turns (
@@ -56,7 +57,6 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS session_turns_by_turn ON session_turns(turn_id);
         CREATE TABLE IF NOT EXISTS turns (
             turn_id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            request_id         INTEGER REFERENCES request_meta(request_id),
             blocks             TEXT NOT NULL DEFAULT '[]',
             stop_reason        TEXT,
             prompt_tokens      INTEGER,
@@ -67,15 +67,11 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS request_meta (
             request_id  INTEGER PRIMARY KEY AUTOINCREMENT,
             hash        TEXT NOT NULL UNIQUE,
-            model       TEXT NOT NULL,
-            provider    TEXT NOT NULL,
-            protocol    TEXT NOT NULL,
-            base_url    TEXT NOT NULL,
-            profile     TEXT NOT NULL,
-            system      TEXT NOT NULL,
-            tools_json  TEXT NOT NULL,
-            max_tokens  INTEGER NOT NULL,
-            compat_json TEXT
+            model           TEXT NOT NULL,
+            provider        TEXT NOT NULL,
+            system          TEXT NOT NULL,
+            tools_json      TEXT NOT NULL,
+            baseline_prompt INTEGER
         );
         CREATE TABLE IF NOT EXISTS blocks (
             block_id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,8 +107,11 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
             block_id    INTEGER PRIMARY KEY,
             name        TEXT NOT NULL,
             total_lines INTEGER NOT NULL,
-            content     TEXT NOT NULL
+            content     TEXT NOT NULL,
+            hash        TEXT NOT NULL,
+            reference   TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS artifacts_by_reference ON artifacts(reference);
         CREATE TABLE IF NOT EXISTS memos (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
             anchor  INTEGER,
@@ -129,12 +128,7 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
             command TEXT NOT NULL,
             ts      TEXT NOT NULL
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS aliases_by_anchor ON aliases(anchor, name);
-        CREATE TABLE IF NOT EXISTS subsessions (
-            subsession_id INTEGER PRIMARY KEY,
-            anchor        INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS subsessions_by_anchor ON subsessions(anchor);",
+        CREATE UNIQUE INDEX IF NOT EXISTS aliases_by_anchor ON aliases(anchor, name);",
     )?;
     Ok(conn)
 }

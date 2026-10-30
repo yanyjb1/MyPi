@@ -127,23 +127,46 @@ pub(crate) fn put_request_meta(tx: &rusqlite::Transaction<'_>, r: &RequestMeta) 
     }
     tx.execute(
         "INSERT INTO request_meta
-            (hash, model, provider, protocol, base_url, profile, system, tools_json, max_tokens,
-             compat_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            (hash, model, provider, system, tools_json, baseline_prompt)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
             hash,
             r.model,
             r.provider,
-            r.protocol,
-            r.base_url,
-            r.profile,
             r.system,
             r.tools_json,
-            r.max_tokens as i64,
-            r.compat_json
+            r.baseline_prompt.map(|v| v as i64)
         ],
     )?;
     Ok(tx.last_insert_rowid())
+}
+
+/// Point one session at an archive, or clear the pointer.
+pub(crate) fn set_meta(
+    tx: &rusqlite::Transaction<'_>,
+    session: i64,
+    meta: Option<i64>,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE sessions SET meta = ?1 WHERE id = ?2",
+        rusqlite::params![meta, session],
+    )?;
+    Ok(())
+}
+
+/// Lower one archive's prompt baseline; it never grows.
+pub(crate) fn lower_baseline(
+    tx: &rusqlite::Transaction<'_>,
+    request: i64,
+    prompt: u64,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE request_meta SET baseline_prompt = ?1
+          WHERE request_id = ?2
+            AND (baseline_prompt IS NULL OR baseline_prompt > ?1)",
+        rusqlite::params![prompt as i64, request],
+    )?;
+    Ok(())
 }
 
 /// The request archive's fingerprint: FNV-1a 64-bit plus each field's length, so concatenation is
@@ -158,12 +181,7 @@ fn request_hash(r: &RequestMeta) -> String {
     };
     eat(r.model.as_bytes());
     eat(r.provider.as_bytes());
-    eat(r.protocol.as_bytes());
-    eat(r.base_url.as_bytes());
-    eat(r.profile.as_bytes());
     eat(r.system.as_bytes());
     eat(r.tools_json.as_bytes());
-    eat(&(r.max_tokens as u64).to_be_bytes());
-    eat(r.compat_json.as_deref().unwrap_or("\u{0}none").as_bytes());
     format!("{h:016x}")
 }

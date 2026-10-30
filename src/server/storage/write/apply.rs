@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 use super::super::shape::{Landed, Ref, Row, Structure, Submit};
-use super::{aliases, artifacts, blocks, memos, sessions, shared, subsessions, turns};
+use super::{aliases, artifacts, blocks, memos, sessions, shared, turns};
 
 /// Carry one submission out. Ids the rows cannot know come back here; the relay pieces are
 /// returned for the writer's port.
@@ -32,13 +32,41 @@ fn one(
             cwd,
             model,
             name,
-        } => sessions::insert(tx, started_at, cwd, model.as_ref(), name.as_deref())?,
+            anchor,
+            meta,
+        } => {
+            let anchor = match anchor {
+                Some(a) => Some(id_of(ids, a)?),
+                None => None,
+            };
+            let meta = match meta {
+                Some(m) => Some(id_of(ids, m)?),
+                None => None,
+            };
+            sessions::insert(
+                tx,
+                started_at,
+                cwd,
+                model.as_ref(),
+                name.as_deref(),
+                anchor,
+                meta,
+            )?
+        }
         Row::Rename { session, name } => {
             sessions::rename(tx, *session, name.as_deref())?;
             0
         }
         Row::Switch { session, model } => {
             sessions::switch(tx, *session, model.as_ref())?;
+            0
+        }
+        Row::Meta { session, meta } => {
+            let meta = match meta {
+                Some(meta) => Some(id_of(ids, meta)?),
+                None => None,
+            };
+            shared::set_meta(tx, *session, meta)?;
             0
         }
         Row::MoveCwd { session, cwd } => {
@@ -49,17 +77,7 @@ fn one(
             sessions::todo_on(tx, *session, *on)?;
             0
         }
-        Row::Turn {
-            request,
-            stop_reason,
-            usage,
-        } => {
-            let request = match request {
-                Some(r) => Some(id_of(ids, r)?),
-                None => None,
-            };
-            turns::insert(tx, request, stop_reason.as_deref(), *usage)?
-        }
+        Row::Turn { stop_reason, usage } => turns::insert(tx, stop_reason.as_deref(), *usage)?,
         Row::Settle {
             turn,
             stop_reason,
@@ -77,17 +95,22 @@ fn one(
             0
         }
         Row::Request { meta } => shared::put_request_meta(tx, meta)?,
+        Row::Baseline { request, prompt } => {
+            shared::lower_baseline(tx, id_of(ids, request)?, *prompt)?;
+            0
+        }
         Row::Block { turn, block } => {
             let turn = id_of(ids, turn)?;
-            blocks::insert(tx, turn, block)?;
-            0
+            blocks::insert(tx, turn, block)?.id
         }
         Row::Artifact {
             block,
             name,
             content,
+            hash,
+            reference,
         } => {
-            artifacts::insert(tx, id_of(ids, block)?, name, content)?;
+            artifacts::insert(tx, id_of(ids, block)?, name, content, hash, reference)?;
             0
         }
         Row::Memo {
@@ -112,13 +135,6 @@ fn one(
             aliases::insert(tx, id_of(ids, anchor)?, name, command, ts)?;
             0
         }
-        Row::Subsession {
-            subsession_id,
-            anchor,
-        } => {
-            subsessions::insert(tx, *subsession_id, id_of(ids, anchor)?)?;
-            0
-        }
         Row::Cwd { session, turn, cwd } => {
             sessions::cwd_row(tx, *session, id_of(ids, turn)?, cwd)?;
             0
@@ -129,6 +145,10 @@ fn one(
             is_compaction,
         } => {
             shared::append_list_row(tx, *session, id_of(ids, turn)?, *is_compaction)?;
+            0
+        }
+        Row::Borrow { turn, ranges } => {
+            turns::set_blocks(tx, id_of(ids, turn)?, ranges)?;
             0
         }
     })

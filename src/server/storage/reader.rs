@@ -135,7 +135,8 @@ impl Reader {
     /// The artifact an oversized tool output spilled into.
     pub fn artifact(&self, block_id: i64) -> Result<Option<Value>> {
         self.one(
-            "SELECT name, total_lines, content FROM artifacts WHERE block_id = ?1",
+            "SELECT name, total_lines, content, hash, reference
+               FROM artifacts WHERE block_id = ?1",
             [block_id],
             |r| {
                 Ok(json!({
@@ -143,6 +144,28 @@ impl Reader {
                     "name": r.get::<_, String>(0)?,
                     "total_lines": r.get::<_, i64>(1)?,
                     "content": r.get::<_, String>(2)?,
+                    "hash": r.get::<_, String>(3)?,
+                    "reference": r.get::<_, String>(4)?,
+                }))
+            },
+        )
+    }
+
+    /// Every artifact row a reference spelling matches. Equal text may have
+    /// several block rows; they carry the same reference and content.
+    pub fn artifacts_by_ref(&self, reference: &str) -> Result<Vec<Value>> {
+        self.rows(
+            "SELECT block_id, name, total_lines, content, hash, reference
+               FROM artifacts WHERE reference = ?1 ORDER BY block_id",
+            [reference],
+            |r| {
+                Ok(json!({
+                    "block_id": r.get::<_, i64>(0)?,
+                    "name": r.get::<_, String>(1)?,
+                    "total_lines": r.get::<_, i64>(2)?,
+                    "content": r.get::<_, String>(3)?,
+                    "hash": r.get::<_, String>(4)?,
+                    "reference": r.get::<_, String>(5)?,
                 }))
             },
         )
@@ -179,22 +202,6 @@ impl Reader {
                     "name": r.get::<_, String>(2)?,
                     "command": r.get::<_, String>(3)?,
                     "ts": r.get::<_, String>(4)?,
-                }))
-            },
-        )
-    }
-
-    // ---- child sessions ----
-
-    /// Every link between a spawning block and its child session.
-    pub fn subsessions(&self) -> Result<Vec<Value>> {
-        self.rows(
-            "SELECT subsession_id, anchor FROM subsessions ORDER BY subsession_id",
-            rusqlite::params![],
-            |r| {
-                Ok(json!({
-                    "subsession_id": r.get::<_, i64>(0)?,
-                    "anchor": r.get::<_, i64>(1)?,
                 }))
             },
         )
@@ -247,8 +254,10 @@ fn session_json(row: SessionMeta) -> Value {
         "name": row.name,
         "started_at": row.started_at,
         "cwd": row.cwd,
-        "model_provider": row.model_provider,
+        "provider": row.provider,
         "model": row.model,
+        "anchor": row.anchor,
+        "meta": row.meta,
         "todo_on": row.todo_on,
     })
 }
@@ -257,7 +266,6 @@ fn turn_json(row: TurnRow) -> Value {
     let usage = row.usage;
     json!({
         "turn_id": row.turn_id,
-        "request_id": row.request_id,
         "ranges": row.blocks,
         "stop_reason": row.stop_reason,
         "prompt_tokens": usage.map(|u| u.prompt_tokens),
@@ -272,16 +280,9 @@ fn request_json(request_id: i64, row: RequestMeta) -> Result<Value> {
         "request_id": request_id,
         "model": row.model,
         "provider": row.provider,
-        "protocol": row.protocol,
-        "base_url": row.base_url,
-        "profile": row.profile,
         "system": row.system,
         "tools": json_column(&row.tools_json, "request tools")?,
-        "max_tokens": row.max_tokens,
-        "compat": match &row.compat_json {
-            Some(raw) => json_column(raw, "request compat")?,
-            None => Value::Null,
-        },
+        "baseline_prompt": row.baseline_prompt,
     }))
 }
 

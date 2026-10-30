@@ -8,5 +8,4 @@ pub(crate) mod blocks;
 pub(crate) mod memos;
 pub(crate) mod sessions;
 pub(crate) mod shared;
-pub(crate) mod subsessions;
 pub(crate) mod turns;

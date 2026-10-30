@@ -184,8 +184,12 @@ pub struct SessionMeta {
     pub cwd: Option<String>,
     /// Which model this session is on (provider + id); `None` = follow the
     /// configured default.
-    pub model_provider: Option<String>,
+    pub provider: Option<String>,
     pub model: Option<String>,
+    /// The block that spawned this session; `None` = a main session.
+    pub anchor: Option<i64>,
+    /// The request archive this session reads its system prompt and tools from.
+    pub meta: Option<i64>,
     /// Whether the todo tool is on for this session.
     pub todo_on: bool,
 }
@@ -210,29 +214,18 @@ pub struct RequestMeta {
     /// Provider name. The same model id can live under two providers; the
     /// bill must tell them apart.
     pub provider: String,
-    /// The wire protocol id, e.g. `openai-chat-completions`.
-    pub protocol: String,
-    /// The endpoint base (`https://host/v1`). Never a secret.
-    pub base_url: String,
-    /// The profile name this request was built from.
-    pub profile: String,
     /// The system prompt **verbatim**.
     pub system: String,
     /// The tool manuals **verbatim** (the serialized `tools` array).
     pub tools_json: String,
-    /// The token ceiling this request carried.
-    pub max_tokens: u32,
-    /// The `compat:` block from `models.yml`, verbatim; `None` = none.
-    pub compat_json: Option<String>,
+    /// The smallest prompt measurement seen under this model: never grows.
+    pub baseline_prompt: Option<u64>,
 }
 
 /// One round (a `turns` row plus its request archive).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnRow {
     pub turn_id: i64,
-    /// The request archive's row id; `None` = this round carried no archive
-    /// (an in-memory caller).
-    pub request_id: Option<i64>,
     /// The blocks this round occupies, as `[start, end]` pairs in order (one
     /// interval per landed batch).
     pub blocks: Vec<[i64; 2]>,
@@ -272,21 +265,24 @@ pub enum Row {
         cwd: String,
         model: Option<(String, String)>,
         name: Option<String>,
+        anchor: Option<Ref>,
+        meta: Option<Ref>,
     },
     /// `sessions.name`.
     Rename { session: i64, name: Option<String> },
-    /// `sessions.model_provider` + `sessions.model`.
+    /// `sessions.provider` + `sessions.model`.
     Switch {
         session: i64,
         model: Option<(String, String)>,
     },
+    /// `sessions.meta`.
+    Meta { session: i64, meta: Option<Ref> },
     /// `sessions.cwd`.
     MoveCwd { session: i64, cwd: String },
     /// `sessions.todo_on`.
     TodoOn { session: i64, on: bool },
     /// A new round row.
     Turn {
-        request: Option<Ref>,
         stop_reason: Option<String>,
         usage: Option<RoundUsage>,
     },
@@ -298,6 +294,8 @@ pub enum Row {
     },
     /// A request archive, deduplicated by content.
     Request { meta: RequestMeta },
+    /// Lower one archive's prompt baseline; it never grows.
+    Baseline { request: Ref, prompt: u64 },
     /// One block; its id joins its round's interval and byte count.
     Block { turn: Ref, block: NewBlock },
     /// One artifact row.
@@ -305,6 +303,8 @@ pub enum Row {
         block: Ref,
         name: String,
         content: String,
+        hash: String,
+        reference: String,
     },
     /// One memo row.
     Memo {
@@ -320,8 +320,6 @@ pub enum Row {
         command: String,
         ts: String,
     },
-    /// One child-session link.
-    Subsession { subsession_id: i64, anchor: Ref },
     /// One working-directory entry.
     Cwd {
         session: i64,
@@ -334,6 +332,8 @@ pub enum Row {
         turn: Ref,
         is_compaction: bool,
     },
+    /// Borrow a set of block intervals into an existing round.
+    Borrow { turn: Ref, ranges: Vec<[i64; 2]> },
 }
 
 /// A table whose rows stand alone: deleting one leaves nothing dangling.
@@ -344,7 +344,6 @@ pub enum Table {
     Artifacts,
     Memos,
     Aliases,
-    Subsessions,
 }
 
 /// One submission: the rows of one transaction, in order.

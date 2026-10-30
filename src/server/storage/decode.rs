@@ -23,9 +23,11 @@ pub(crate) fn session_meta(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMet
         name: r.get(1)?,
         started_at: r.get(2)?,
         cwd: r.get(3)?,
-        model_provider: r.get(4)?,
+        provider: r.get(4)?,
         model: r.get(5)?,
-        todo_on: r.get::<_, i64>(6)? != 0,
+        anchor: r.get(6)?,
+        meta: r.get(7)?,
+        todo_on: r.get::<_, i64>(8)? != 0,
     })
 }
 
@@ -72,34 +74,33 @@ fn flag(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<bool>> {
 }
 
 pub(crate) fn turn_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> {
-    let blocks: String = r.get(2)?;
+    let blocks: String = r.get(1)?;
     let blocks = parse_blocks(&blocks).unwrap_or_default();
     // The four token columns live and die together: probe the prompt column
     // and backfill zeros — no "half a usage" state exists.
-    let prompt: Option<i64> = r.get(4)?;
+    let prompt: Option<i64> = r.get(3)?;
     let usage = prompt.map(|p| RoundUsage {
         prompt_tokens: p.max(0) as u64,
         completion_tokens: r
-            .get::<_, Option<i64>>(5)
+            .get::<_, Option<i64>>(4)
             .unwrap_or(None)
             .unwrap_or(0)
             .max(0) as u64,
         cached_tokens: r
-            .get::<_, Option<i64>>(6)
+            .get::<_, Option<i64>>(5)
             .unwrap_or(None)
             .unwrap_or(0)
             .max(0) as u64,
         cache_write_tokens: r
-            .get::<_, Option<i64>>(7)
+            .get::<_, Option<i64>>(6)
             .unwrap_or(None)
             .unwrap_or(0)
             .max(0) as u64,
     });
     Ok(TurnRow {
         turn_id: r.get(0)?,
-        request_id: r.get(1)?,
         blocks,
-        stop_reason: r.get(3)?,
+        stop_reason: r.get(2)?,
         usage,
     })
 }
@@ -113,11 +114,12 @@ pub(crate) const BLOCK_COLS: &str = "block_id, type, content, prefix, suffix,
      duration_ms, ts";
 
 /// A session row's columns, in [`session_meta`] read order.
-pub(crate) const SESSION_COLS: &str = "id, name, started_at, cwd, model_provider, model, todo_on";
+pub(crate) const SESSION_COLS: &str =
+    "id, name, started_at, cwd, provider, model, anchor, meta, todo_on";
 
 /// A request archive row's columns, in [`request_from_row`] read order.
-pub(crate) const REQUEST_COLS: &str = "request_id, hash, model, provider, protocol, base_url,
-     profile, system, tools_json, max_tokens, compat_json";
+pub(crate) const REQUEST_COLS: &str =
+    "request_id, hash, model, provider, system, tools_json, baseline_prompt";
 
 /// One request archive row: its id, its hash, and the archive itself.
 pub(crate) fn request_from_row(
@@ -129,19 +131,15 @@ pub(crate) fn request_from_row(
         RequestMeta {
             model: r.get(2)?,
             provider: r.get(3)?,
-            protocol: r.get(4)?,
-            base_url: r.get(5)?,
-            profile: r.get(6)?,
-            system: r.get(7)?,
-            tools_json: r.get(8)?,
-            max_tokens: r.get::<_, i64>(9)?.max(0) as u32,
-            compat_json: r.get(10)?,
+            system: r.get(4)?,
+            tools_json: r.get(5)?,
+            baseline_prompt: r.get::<_, Option<i64>>(6)?.map(|v| v.max(0) as u64),
         },
     ))
 }
 
 /// A round row's columns, in [`turn_from_row`] read order.
-pub(crate) const TURN_COLS: &str = "t.turn_id, t.request_id, t.blocks, t.stop_reason,
+pub(crate) const TURN_COLS: &str = "t.turn_id, t.blocks, t.stop_reason,
      t.prompt_tokens, t.completion_tokens, t.cached_tokens, t.cache_write_tokens";
 
 /// The round table, aliased `t`.

@@ -65,11 +65,31 @@ pub(crate) fn run(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         [],
     )?;
     tx.execute(
-        "DELETE FROM subsessions WHERE anchor NOT IN (SELECT block_id FROM blocks)",
+        "DELETE FROM session_turns WHERE session_id IN (
+            SELECT id FROM sessions WHERE anchor IS NOT NULL
+              AND anchor NOT IN (SELECT block_id FROM blocks))",
         [],
     )?;
     tx.execute(
-        "DELETE FROM subsessions WHERE subsession_id NOT IN (SELECT id FROM sessions)",
+        "DELETE FROM cwd_history WHERE session_id IN (
+            SELECT id FROM sessions WHERE anchor IS NOT NULL
+              AND anchor NOT IN (SELECT block_id FROM blocks))",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM sessions WHERE anchor IS NOT NULL
+            AND anchor NOT IN (SELECT block_id FROM blocks)",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE sessions SET meta = NULL
+          WHERE meta IS NOT NULL
+            AND meta NOT IN (SELECT request_id FROM request_meta)",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM request_meta
+          WHERE request_id NOT IN (SELECT meta FROM sessions WHERE meta IS NOT NULL)",
         [],
     )?;
     Ok(())

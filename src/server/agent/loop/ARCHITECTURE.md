@@ -3,44 +3,56 @@
 ## Files
 
 ```text
-mod.rs              run, Live, Settings, Turn, Stop, Ended
-driver.rs           Driver: cwd, serial tool calls, cwd persistence
-budget.rs           ToolBudget: cumulative count, final exception, exhaustion
-round.rs            one lap: request, tools, results
-env.rs              Env build, todo workbench, context window
-artifacts.rs        artifact fetch and temp-file lifetime
-outlet.rs           Outlet, ToolEvent, RetryToOutlet
-register/mod.rs     Register, Handle, Slot: deliver, interrupt, drop, set
-register/build.rs   Live assembly from the stored row
-register/compact.rs the compaction round
-register/outlets.rs silent outlets for wakes
+mod.rs                  declarations and public exports
+session/mod.rs          session types
+session/book.rs         Loop, Birth, Message, scheduler, turn start
+session/handle.rs       per-session state: birth, live, mailbox, flags
+session/live.rs         cwd, provider/model, system, tools, artifacts
+session/settings.rs     fence and scrooge
+session/transport.rs    provider/model pair
+session/mailbox.rs      two queues and the wake wait
+session/change.rs       Model and Cwd
+session/artifact.rs     the session's artifact directory
+turn/mod.rs             turn types
+turn/cycle.rs           lap loop, mailbox drain, settle
+turn/ask.rs             request boundary and block sink
+turn/batch.rs           tool boundary and effects
+turn/env.rs             per-turn tool input
+turn/fence.rs           tool-round count
+pen/mod.rs              row writers
+pen/turn.rs             turn open, append, settle
+pen/blocks.rs           request block sink
+pen/spill.rs            artifact row
+pen/birth.rs            child session row
+pen/effect.rs           memo, alias, subagent rows
+out/mod.rs              live line types
+out/element.rs          Element and Event
+out/sink.rs             sending end
 ```
 
 ## Relations
 
-- `run` builds one `Env`, loops over laps, sums usage, and writes `RoundEnd`.
-- `run` asks `round::once` for a lap. `round::once` builds `RequestContent`, calls `request::start`,
-  records the first request archive, and runs tools through `Driver`.
-- `request::start` writes `Submit::Blocks` itself and returns `Answer`; the loop passes
-  `RetryToOutlet` and the session stop flag.
-- `Driver::run_calls` applies the budget, executes tools serially, emits `ToolEvent`, and calls
-  `request::hand_results` through `round::once`.
-- A successful `cd` updates the driver cwd and writes `SessionChange::Cwd`.
-- `env::build` gives tools the driver cwd, limits, browser, bash settings, profile gate, context
-  window, and artifact handle. It rebuilds the todo workbench from the session's blocks every turn.
-- `register::deliver` opens a round (submit, compact, wake), spawns its thread, and returns the round
-  id. `set` moves the live transport, the driver cwd, or a pending profile.
-- A turn's outlet is `EventOutlet`: retry notices and budget exhaustion leave through the sender
-  given to `Register::new`. Tool output goes to the writer as a relay-only piece instead.
-- `register/build.rs` assembles `Live` from the session row and lands a pending profile when due.
-- `register/compact.rs` plans and runs a compaction; the loop owns the summary text.
-- `ArtifactStore` owns the session's temp files; dropping `Live` drops the handle and cleans them.
-- `loop` does not parse config, open the database, decode protocols, or write blocks.
-- `loop` does not know subscriptions, front-end rendering, subagents, or tool implementations.
+- `Loop::book` inserts a handle, starts the session scheduler.
+- `Loop::deliver` either opens a turn through `pen::turn::open` and starts `turn::cycle::run`, or
+  pushes the message into the mailbox when the handle is busy.
+- The scheduler waits on `Mailbox::wait_any`; when idle it takes the first queued item (wake first) and opens a turn.
+- `turn::cycle::run` drains the mailbox, asks through `Ask::lap`, runs `Batch::run`, hands results
+  back through `Ask::hand_results`, and settles through `pen::turn::settle`.
+- `pen::blocks::Pen` implements `BlockSink`: one block row, plus an artifact row that refers to the
+  block row in the same submission.
+- `pen::turn::settle` writes `Row::Settle` and, when the first lap reported a prompt, a
+  `Row::Baseline`.
+- `session::change` writes `Row::Switch` or `Row::MoveCwd` and updates the handle.
+- `out::Sink` is the live line; the request half writes increments directly, the loop writes tool
+  events and notices.
 
 ## Callers
 
-- The API calls `Register::deliver`, `interrupt`, `drop`, and `set`; it never touches `Live`.
-- Storage supplies the read connection and consumes submissions.
-- Request supplies `Client`, `RequestContent`, `ToolRun`, and `hand_results`.
-- Tools supply `Env`, `Workspace`, `ToolOutput`, and execution.
+- The API calls `Loop::book`, `deliver`, `interrupt`, `drop`, `change`, `mailbox`.
+- The scheduler and turn threads live inside this domain.
+- Request and tools implement `Ask` and `Batch`; they do not touch `Handle`, `Live` or `pen`.
+- Storage consumes `Row`s and returns `Landed` ids; the loop never writes SQL.
+
+## Not wired
+
+- `Ask` and `Batch` implementations are outside this domain.

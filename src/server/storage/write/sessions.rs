@@ -9,15 +9,17 @@ pub(crate) fn insert(
     cwd: &str,
     model: Option<&(String, String)>,
     name: Option<&str>,
+    anchor: Option<i64>,
+    meta: Option<i64>,
 ) -> Result<i64> {
     let (provider, id) = match model {
         Some((p, m)) => (Some(p.as_str()), Some(m.as_str())),
         None => (None, None),
     };
     tx.execute(
-        "INSERT INTO sessions (started_at, cwd, model_provider, model, name)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![started_at, cwd, provider, id, name],
+        "INSERT INTO sessions (started_at, cwd, provider, model, name, anchor, meta)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![started_at, cwd, provider, id, name, anchor, meta],
     )?;
     Ok(tx.last_insert_rowid())
 }
@@ -35,7 +37,7 @@ pub(crate) fn rename(
     Ok(())
 }
 
-/// `sessions.model_provider` + `sessions.model` (`None` = follow the configured default).
+/// `sessions.provider` + `sessions.model` (`None` = follow the configured default).
 pub(crate) fn switch(
     tx: &rusqlite::Transaction<'_>,
     session: i64,
@@ -46,7 +48,7 @@ pub(crate) fn switch(
         None => (None, None),
     };
     tx.execute(
-        "UPDATE sessions SET model_provider = ?1, model = ?2 WHERE id = ?3",
+        "UPDATE sessions SET provider = ?1, model = ?2 WHERE id = ?3",
         rusqlite::params![p, m, session],
     )?;
     Ok(())

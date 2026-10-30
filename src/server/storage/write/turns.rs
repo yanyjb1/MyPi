@@ -8,16 +8,15 @@ use super::super::shape::RoundUsage;
 /// A new round row.
 pub(crate) fn insert(
     tx: &rusqlite::Transaction<'_>,
-    request: Option<i64>,
     stop_reason: Option<&str>,
     usage: Option<RoundUsage>,
 ) -> Result<i64> {
     let (p, c, k, w) = usage_columns(usage);
     tx.execute(
-        "INSERT INTO turns (request_id, stop_reason, prompt_tokens, completion_tokens,
+        "INSERT INTO turns (stop_reason, prompt_tokens, completion_tokens,
                 cached_tokens, cache_write_tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![request, stop_reason, p, c, k, w],
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![stop_reason, p, c, k, w],
     )?;
     Ok(tx.last_insert_rowid())
 }

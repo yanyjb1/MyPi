@@ -26,7 +26,6 @@ describes the code as it stands.
 | `write/artifacts.rs` | the row an oversized output lands |
 | `write/memos.rs` | memo rows |
 | `write/aliases.rs` | alias rows |
-| `write/subsessions.rs` | child-session links |
 | `write/shared.rs` | the list tail, the session of a round, request archives and their hash |
 | `delete/mod.rs` | declarations and exports |
 | `delete/sweep.rs` | the one sweep: dead list places and trail entries, rounds, blocks, anchored rows |
@@ -45,7 +44,7 @@ describes the code as it stands.
 | `Writer::delete_rows(table, ids)` | removes those rows and whatever only they held; returns how many |
 | `Writer::export_memos(session)` | writes this session's memos into the download folder |
 | `Reader::open(path)` | opens the read connection; every query lives behind it |
-| `Reader::sessions / session / list / turns / turn / request / blocks / block / artifact / memos / aliases / subsessions / cwd_trail` | the reads, decoded: rows out as JSON |
+| `Reader::sessions / session / list / turns / turn / request / blocks / block / artifact / artifacts_by_ref / memos / aliases / cwd_trail` | the reads, decoded: rows out as JSON |
 | `Submit`, `Row`, `Ref`, `Table` | one submission, its rows, how a row names another row's id, and what `delete_rows` may remove |
 | `Target`, `Cut` | rewind input and result |
 | `shape::*`, `decode::*` | values and the row decoders, internal to the reader |

@@ -26,7 +26,6 @@ pub(crate) fn remove(tx: &rusqlite::Transaction<'_>, table: Table, id: i64) -> R
         Table::Sessions => {
             tx.execute("DELETE FROM session_turns WHERE session_id = ?1", [id])?;
             tx.execute("DELETE FROM cwd_history WHERE session_id = ?1", [id])?;
-            tx.execute("DELETE FROM subsessions WHERE subsession_id = ?1", [id])?;
             tx.execute("DELETE FROM sessions WHERE id = ?1", [id])?
         }
         Table::Turns => {
@@ -36,8 +35,5 @@ pub(crate) fn remove(tx: &rusqlite::Transaction<'_>, table: Table, id: i64) -> R
         Table::Artifacts => tx.execute("DELETE FROM artifacts WHERE block_id = ?1", [id])?,
         Table::Memos => tx.execute("DELETE FROM memos WHERE id = ?1", [id])?,
         Table::Aliases => tx.execute("DELETE FROM aliases WHERE id = ?1", [id])?,
-        Table::Subsessions => {
-            tx.execute("DELETE FROM subsessions WHERE subsession_id = ?1", [id])?
-        }
     })
 }
