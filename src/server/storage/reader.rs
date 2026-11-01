@@ -234,22 +234,6 @@ impl Reader {
         )
     }
 
-    // ---- the working-directory trail ----
-
-    /// Each turn's working directory, in turn order.
-    pub fn cwd_trail(&self, session: i64) -> Result<Vec<Value>> {
-        self.rows(
-            "SELECT turn_id, cwd FROM cwd_history WHERE session_id = ?1 ORDER BY turn_id",
-            [session],
-            |r| {
-                Ok(json!({
-                    "turn_id": r.get::<_, i64>(0)?,
-                    "cwd": r.get::<_, String>(1)?,
-                }))
-            },
-        )
-    }
-
     // ---- the generic plan ----
 
     /// Run one read plan. Columns are validated against the sheet; values are bound.

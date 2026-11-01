@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use crate::ipc::contract::ErrorCode;
 use crate::ipc::contract::Frame;
 use crate::server::agent::r#loop::{Birth, Loop, Settings};
 use crate::server::agent::request::{Options, Request, RetryPolicy, Streaming};
@@ -19,6 +20,7 @@ use super::route;
 
 /// Why a door refused.
 pub enum Refuse {
+    Unknown(String),
     Bad(String),
     Busy(String),
     Permission(String),
@@ -26,18 +28,23 @@ pub enum Refuse {
 }
 
 impl Refuse {
-    pub(crate) fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> ErrorCode {
         match self {
-            Refuse::Bad(_) => "bad_payload",
-            Refuse::Busy(_) => "busy",
-            Refuse::Permission(_) => "permission_denied",
-            Refuse::Internal(_) => "internal",
+            Refuse::Unknown(_) => ErrorCode::UnknownName,
+            Refuse::Bad(_) => ErrorCode::BadPayload,
+            Refuse::Busy(_) => ErrorCode::Busy,
+            Refuse::Permission(_) => ErrorCode::PermissionDenied,
+            Refuse::Internal(_) => ErrorCode::Internal,
         }
     }
 
     pub(crate) fn message(&self) -> &str {
         match self {
-            Refuse::Bad(m) | Refuse::Busy(m) | Refuse::Permission(m) | Refuse::Internal(m) => m,
+            Refuse::Unknown(m)
+            | Refuse::Bad(m)
+            | Refuse::Busy(m)
+            | Refuse::Permission(m)
+            | Refuse::Internal(m) => m,
         }
     }
 }
@@ -136,7 +143,7 @@ impl Api {
             }
             _ => Some(error(
                 &frame,
-                &Refuse::Internal(format!("unknown kind: {}", frame.kind)),
+                &Refuse::Unknown(format!("unknown kind: {}", frame.kind)),
             )),
         }
     }
@@ -268,8 +275,5 @@ fn names_of(manuals: &serde_json::Value) -> Vec<String> {
 }
 
 fn error(request: &Frame, refuse: &Refuse) -> Frame {
-    Frame::reply_to(
-        request,
-        json!({"error": {"code": refuse.code(), "message": refuse.message()}}),
-    )
+    Frame::error_to(request, refuse.code(), refuse.message())
 }

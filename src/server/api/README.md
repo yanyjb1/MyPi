@@ -117,8 +117,9 @@ goes away.
 
 ### Errors
 
-`bad_payload`, `busy`, `permission_denied`, `internal`. A `call` or `post` frame before `hello`
-answers `permission_denied`.
+`unknown_name`, `bad_payload`, `busy`, `permission_denied`, `internal`, all from
+`ipc::contract::ErrorCode`. A `call`, `post` or `subscribe` frame before `hello` answers
+`permission_denied`.
 
 ## 2. Design intent
 

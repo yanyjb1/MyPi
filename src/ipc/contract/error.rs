@@ -9,6 +9,7 @@ pub enum ErrorCode {
     UnknownName,
     BadPayload,
     Busy,
+    PermissionDenied,
     Internal,
 }
 
@@ -18,6 +19,7 @@ impl std::fmt::Display for ErrorCode {
             ErrorCode::UnknownName => "unknown_name",
             ErrorCode::BadPayload => "bad_payload",
             ErrorCode::Busy => "busy",
+            ErrorCode::PermissionDenied => "permission_denied",
             ErrorCode::Internal => "internal",
         };
         f.write_str(name)

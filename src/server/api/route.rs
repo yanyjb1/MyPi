@@ -29,7 +29,7 @@ pub(crate) fn call(api: &Api, _viewer: &str, frame: &Frame) -> Result<Value, Ref
         "config" => call::config::answer(api, str_of(ask, "key")?),
         "pools" => call::pools::answer(api),
         "sessions" => call::sessions::answer(api, opt_str_of(ask, "under")?),
-        other => Err(Refuse::Internal(format!("no such name: {other}"))),
+        other => Err(Refuse::Unknown(format!("no such name: {other}"))),
     }
 }
 
@@ -44,7 +44,7 @@ pub(crate) fn post(api: &Api, conn: u64, viewer: &str, frame: &Frame) -> Result<
         "interrupt" => post::interrupt::apply(api, viewer, ask),
         "rewind" => post::rewind::apply(api, viewer, ask),
         "default_model" => post::default_model::apply(api, ask),
-        other => Err(Refuse::Internal(format!("no such name: {other}"))),
+        other => Err(Refuse::Unknown(format!("no such name: {other}"))),
     }
 }
 
@@ -59,7 +59,7 @@ pub(crate) fn subscribe(
         "watch" => subscribe::watch::apply(api, conn, i64_of(ask, "session")?).map(|_| None),
         "submit" => subscribe::submit::apply(api, conn, viewer, ask).map(Some),
         "compact" => subscribe::compact::apply(api, conn, viewer, ask).map(Some),
-        other => Err(Refuse::Internal(format!("no such name: {other}"))),
+        other => Err(Refuse::Unknown(format!("no such name: {other}"))),
     }
 }
 

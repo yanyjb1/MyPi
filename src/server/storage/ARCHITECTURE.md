@@ -46,7 +46,7 @@ describes the code as it stands.
 | `Writer::export_memos(session)` | writes this session's memos into the download folder |
 | `Reader::open(path)` | opens the read connection; every query lives behind it |
 | `Reader::query(plan)` | one read plan: sheet, columns, conditions, order, limit; rows out as JSON |
-| `Reader::sessions / session / list / turns / turn / ranges / request / blocks / block / artifact / artifacts_by_ref / memos / aliases / cwd_trail` | the named reads, decoded: rows out as JSON; `ranges` is every block interval a session's list covers |
+| `Reader::sessions / session / list / turns / turn / ranges / turn_ranges / request / blocks / block / artifact / artifacts_by_ref / memos / aliases` | the named reads, decoded: rows out as JSON; `ranges` is every block interval a session's list covers, `turn_ranges` one round's |
 | `Submit`, `Row`, `Ref`, `Table` | one submission, its rows, how a row names another row's id, and what `delete_rows` may remove |
 | `Target`, `Cut` | rewind input and result |
 | `shape::*`, `decode::*` | values and the row decoders, internal to the reader |
