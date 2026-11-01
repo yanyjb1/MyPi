@@ -372,7 +372,7 @@ fn records(reader: &Reader, requests: Vec<Value>) -> Result<Vec<CallRecord>> {
                 .map(|(result, ok)| (result.clone(), *ok))
                 .unwrap_or((None, false));
             CallRecord {
-                block: row["id"].as_i64(),
+                block: row["id"].as_i64().unwrap_or_default(),
                 tool: row["name"].as_str().unwrap_or_default().to_string(),
                 args: row["args"].as_str().unwrap_or_default().to_string(),
                 result,

@@ -103,9 +103,17 @@ pub(crate) fn exact_text(text: &str, old: &str, new: &str) -> Result<(String, Va
         1 => {
             let pos = text.find(old).expect("count == 1 checked above");
             let at = line_of(text, pos);
+            // The memo must survive the file: old text, new text, and the lines each sat on.
+            let deletions = numbered(at, &lines_of(old));
+            let insertions = numbered(at, &lines_of(new));
             Ok((
                 text.replacen(old, new, 1),
-                json!({ "kind": "diff", "atLine": at }),
+                json!({
+                    "kind": "diff",
+                    "atLine": at,
+                    "deletions": deletions,
+                    "insertions": insertions,
+                }),
                 "replaced".to_string(),
             ))
         }
@@ -137,16 +145,16 @@ pub(crate) fn mass_text(text: &str, edits: &[(usize, String)]) -> Result<(String
         ));
     }
 
-    let mut originals = Vec::with_capacity(edits.len());
+    let mut deletions = Vec::with_capacity(edits.len());
+    let mut insertions = Vec::with_capacity(edits.len());
+    let mut at = usize::MAX;
     for (line, new) in edits {
-        originals.push(json!({
-            "line": line,
-            "text": lines[line - 1].clone(),
-        }));
+        deletions.push(json!({ "line": line, "text": lines[line - 1].clone() }));
         lines[line - 1] = new;
+        insertions.push(json!({ "line": line, "text": lines[line - 1].clone() }));
+        at = at.min(line);
     }
-    originals.reverse();
-    let changed = originals.len();
+    let changed = deletions.len();
 
     let mut out = lines.join("\n");
     if text.ends_with('\n') {
@@ -154,7 +162,12 @@ pub(crate) fn mass_text(text: &str, edits: &[(usize, String)]) -> Result<(String
     }
     Ok((
         out,
-        json!({ "kind": "diff", "deletions": originals }),
+        json!({
+            "kind": "diff",
+            "atLine": at,
+            "deletions": deletions,
+            "insertions": insertions,
+        }),
         format!("replaced {changed} line(s)"),
     ))
 }
@@ -162,6 +175,27 @@ pub(crate) fn mass_text(text: &str, edits: &[(usize, String)]) -> Result<(String
 /// Which line (1-based) a byte position sits on.
 fn line_of(text: &str, pos: usize) -> usize {
     text[..pos.min(text.len())].matches('\n').count() + 1
+}
+
+/// A text's lines, with no empty line for the newline that ends it.
+fn lines_of(text: &str) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    if text.ends_with('\n') {
+        lines.pop();
+    }
+    lines
+}
+
+/// The lines of one text, numbered from `first`.
+fn numbered(first: usize, lines: &[String]) -> Vec<Value> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(at, text)| json!({ "line": first + at, "text": text }))
+        .collect()
 }
 
 /// One line for a history listing: which file, and which lines when the call names them.

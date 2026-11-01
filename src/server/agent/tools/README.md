@@ -163,6 +163,17 @@ guard belongs to the unix shells only; `pwsh` and `niu` run the line as written.
 - Past ten listing lines, or past three shown blocks, the text lands in `Export::dir()` and the reply
   names the file; the name is built from the parameters, so the same query overwrites its own file.
 
+### edit's memo
+
+```text
+{ "kind": "diff", "atLine": n,
+  "deletions":  [{ "line": n, "text": old }],
+  "insertions": [{ "line": n, "text": new }] }
+```
+
+Both `exact` and `mass` answer this shape. The old text is kept because the file may be gone by the
+time a front end renders the call; `line` is where each fragment sat, `atLine` the first of them.
+
 ### Jobs and children
 
 - `jobs` is a per-session service: a scheduler thread, a concurrency pool, per-job output files

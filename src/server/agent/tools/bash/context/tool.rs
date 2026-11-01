@@ -147,11 +147,9 @@ fn show(env: &Env, args: &Args) -> Result<ToolOutput> {
 
 /// One listing line: block number, tool, verdict, summary.
 fn render(record: &CallRecord) -> String {
-    let at = record
-        .block
-        .map_or_else(|| "current".to_string(), |b| b.to_string());
     format!(
-        "{at} {} {}: {}",
+        "{} {} {}: {}",
+        record.block,
         record.tool,
         if record.ok { "ok" } else { "failed" },
         summary_of(record)
@@ -167,12 +165,9 @@ fn summary_of(record: &CallRecord) -> String {
 }
 
 fn block_range(records: &[CallRecord]) -> String {
-    match (
-        records.iter().find_map(|r| r.block),
-        records.iter().rev().find_map(|r| r.block),
-    ) {
-        (Some(first), Some(last)) => format!("{first}..{last}"),
-        _ => "not yet in the store".to_string(),
+    match (records.first(), records.last()) {
+        (Some(first), Some(last)) => format!("{}..{}", first.block, last.block),
+        _ => String::new(),
     }
 }
 

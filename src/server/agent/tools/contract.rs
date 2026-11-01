@@ -246,7 +246,8 @@ pub enum Direction {
 /// One call, as history queries hand it over.
 #[derive(Debug, Clone)]
 pub struct CallRecord {
-    pub block: Option<i64>,
+    /// The request block's id: what `context show` and an anchor take as a number.
+    pub block: i64,
     pub tool: String,
     pub args: String,
     pub result: Option<String>,
