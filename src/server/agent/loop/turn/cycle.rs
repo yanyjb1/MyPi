@@ -9,13 +9,16 @@ use super::ask::{CompactInput, LapInput, ResultsInput, Stop, Usage};
 use super::env;
 use super::fence::Fence;
 use crate::server::agent::r#loop::pen::{self, Pen};
-use crate::server::agent::r#loop::session::book::{Birth, Inner, Retention, book_child};
+use crate::server::agent::r#loop::session::agent::AgentRunner;
+use crate::server::agent::r#loop::session::book::{Birth, Inner, Message, Retention};
+use crate::server::agent::r#loop::session::child::State as ChildState;
 use crate::server::agent::r#loop::session::handle::Handle;
 use crate::server::agent::r#loop::session::history::Transcript;
 use crate::server::agent::r#loop::session::live::Live;
 use crate::server::agent::r#loop::turn::batch::ToolResult;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
-use crate::server::agent::tools::contract::{Effect, Source};
+use crate::server::agent::tools::contract::job::{JobHost, JobRunner, JobSpec, Schedule};
+use crate::server::agent::tools::contract::{Child, Effect, Source};
 use crate::server::agent::tools::{Availability, roster};
 use crate::server::platform::time::now_stamp;
 use crate::server::storage::Row;
@@ -38,6 +41,7 @@ pub fn run(
     mode: Mode,
 ) -> Result<Stop> {
     let shape = shape(inner, handle.id);
+    let child = inner.source.child(handle.id);
     if let Mode::Compact { retention, focus } = mode {
         let reply = match inner.ask.compact(CompactInput {
             session: handle.id,
@@ -118,6 +122,18 @@ pub fn run(
         if lap.calls.is_empty() {
             blocks.flush()?;
             if handle.mailbox.is_empty() {
+                if let Some(text) = child.as_ref().and_then(|child| child.nag()) {
+                    pen::turn::append_user(
+                        &inner.writer,
+                        turn,
+                        Message::Submit {
+                            prefix: None,
+                            text: text.to_string(),
+                            suffix: None,
+                        },
+                    )?;
+                    continue;
+                }
                 stop = lap.stop;
                 break;
             }
@@ -158,14 +174,17 @@ pub fn run(
             if id <= 0 {
                 return Err(anyhow!("a sub-session row was not created"));
             }
+            let jobs = inner
+                .source
+                .jobs(handle.id)
+                .ok_or_else(|| anyhow!("session {} has no job service", handle.id))?;
             inner.source.attach_child(
                 id,
-                Arc::new(crate::server::agent::r#loop::session::child::State::child(
-                    spec.budget,
-                )),
+                Arc::new(ChildState::child(spec.answer.clone(), spec.budget)),
             );
-            book_child(
-                inner,
+            let runner: Arc<dyn JobRunner> = Arc::new(AgentRunner::new(
+                Arc::downgrade(inner),
+                id,
                 Birth {
                     session: id,
                     provider: live.provider.clone(),
@@ -177,7 +196,17 @@ pub fn run(
                     cwd: Some(spec.cwd),
                 },
                 spec.start,
-            )?;
+                spec.answer,
+            ));
+            jobs.start(JobSpec {
+                runner,
+                schedule: Schedule::After(std::time::Duration::ZERO),
+                timeout: None,
+                output: false,
+                needs_slot: true,
+                kind: "agent",
+                wake_on_done: true,
+            })?;
         }
         if !deletes.is_empty() {
             pen::effect::apply(&inner.writer, handle.id, &deletes)?;
@@ -199,6 +228,7 @@ struct Spawn {
     cwd: std::path::PathBuf,
     start: String,
     budget: u32,
+    answer: std::path::PathBuf,
 }
 
 /// Put every effect into the lap's commit; return what still needs acting after it lands.
@@ -223,6 +253,7 @@ fn effects(
                     cwd,
                     start,
                     max_tool_calls,
+                    answer,
                 } => {
                     let at = blocks.len();
                     blocks.push(vec![Row::Session {
@@ -240,6 +271,7 @@ fn effects(
                             cwd: cwd.clone(),
                             start: start.clone(),
                             budget: *max_tool_calls,
+                            answer: answer.clone(),
                         },
                     ));
                 }
@@ -259,7 +291,7 @@ fn effects(
 /// One session's shape, read once per turn.
 pub(crate) fn shape(inner: &Arc<Inner>, session: i64) -> Availability {
     Availability {
-        child: inner.source.child(session).is_some_and(|c| c.is_child()),
+        child: inner.source.child(session).is_some(),
         jobs: inner.source.jobs(session).is_some(),
         mcp: crate::server::agent::tools::contract::Furnish::mcp(&*inner.source).is_some(),
     }

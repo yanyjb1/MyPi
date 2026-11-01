@@ -4,17 +4,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use crate::server::config::KairosConfig;
+use crate::server::agent::tools::contract::job::{JobCtx, JobOutcome, OutputSink};
 use crate::server::platform::time;
 
+use super::Values;
 use super::job::{Id, Job, State, TaskState};
 use super::output::OutputDir;
-use super::runner::{JobCtx, JobOutcome};
 use super::wake::{self, Wake, WakeSink};
 
 pub(crate) fn spawn(
     session: i64,
-    cfg: KairosConfig,
+    values: Values,
     wake: Arc<dyn WakeSink>,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
@@ -23,12 +23,12 @@ pub(crate) fn spawn(
 ) {
     let _ = std::thread::Builder::new()
         .name(format!("mypi-jobs-{session}"))
-        .spawn(move || run(session, cfg, wake, state, stop, bell, dir));
+        .spawn(move || run(session, values, wake, state, stop, bell, dir));
 }
 
 fn run(
     session: i64,
-    cfg: KairosConfig,
+    values: Values,
     wake: Arc<dyn WakeSink>,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
@@ -36,7 +36,7 @@ fn run(
     dir: OutputDir,
 ) {
     while !stop.load(Ordering::Relaxed) {
-        tick(session, cfg, &wake, &state, &bell, &dir);
+        tick(session, values, &wake, &state, &bell, &dir);
         let guard = bell.0.lock().unwrap_or_else(|e| e.into_inner());
         let _ = bell
             .1
@@ -47,7 +47,7 @@ fn run(
 
 fn tick(
     session: i64,
-    cfg: KairosConfig,
+    values: Values,
     wake: &Arc<dyn WakeSink>,
     state: &Arc<Mutex<State>>,
     bell: &Arc<(Mutex<()>, Condvar)>,
@@ -58,8 +58,8 @@ fn tick(
     let mut messages = Vec::new();
     let pending = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        start_after(&mut st, cfg, now, &mut starts);
-        start_every(&mut st, cfg, now, &mut starts, &mut messages, dir);
+        start_after(&mut st, values, now, &mut starts);
+        start_every(&mut st, values, now, &mut starts, &mut messages, dir);
         prune(&mut st, dir);
         st.pending_wakes.append(&mut messages);
         std::mem::take(&mut st.pending_wakes)
@@ -71,11 +71,11 @@ fn tick(
         });
     }
     for id in starts {
-        run_job(session, state.clone(), bell.clone(), id);
+        run_job(state.clone(), bell.clone(), id);
     }
 }
 
-fn start_after(st: &mut State, cfg: KairosConfig, now: i64, starts: &mut Vec<Id>) {
+fn start_after(st: &mut State, values: Values, now: i64, starts: &mut Vec<Id>) {
     let ids: Vec<Id> = st
         .tasks
         .iter()
@@ -89,7 +89,7 @@ fn start_after(st: &mut State, cfg: KairosConfig, now: i64, starts: &mut Vec<Id>
         let Some(task) = st.tasks.get_mut(&id) else {
             continue;
         };
-        if task.needs_slot && st.running >= cfg.max_concurrent {
+        if task.needs_slot && st.running >= values.max_concurrent {
             task.state = TaskState::Waiting;
             continue;
         }
@@ -104,7 +104,7 @@ fn start_after(st: &mut State, cfg: KairosConfig, now: i64, starts: &mut Vec<Id>
 
 fn start_every(
     st: &mut State,
-    cfg: KairosConfig,
+    values: Values,
     now: i64,
     starts: &mut Vec<Id>,
     messages: &mut Vec<String>,
@@ -125,7 +125,7 @@ fn start_every(
                 .running
                 .and_then(|id| st.tasks.get(&id))
                 .is_some_and(|t| t.state == TaskState::Running);
-            let full = schedule.spec.needs_slot && st.running >= cfg.max_concurrent;
+            let full = schedule.spec.needs_slot && st.running >= values.max_concurrent;
             if running || full {
                 let first = schedule.skipped == 0;
                 let reason = if running {
@@ -162,7 +162,8 @@ fn start_every(
         let remove = schedule.remaining == Some(0);
         if schedule.skipped > 0 {
             messages.push(format!(
-                "job s{sid} skipped {} times before running",
+                "{} skipped {} times before running",
+                Id::Schedule(sid),
                 schedule.skipped
             ));
             schedule.skipped = 0;
@@ -172,7 +173,7 @@ fn start_every(
             match dir.create(run) {
                 Ok(output) => Some(output),
                 Err(e) => {
-                    messages.push(format!("job {run} failed to start: {e:#}"));
+                    messages.push(format!("{run} failed to start: {e:#}"));
                     schedule.running = None;
                     continue;
                 }
@@ -180,7 +181,7 @@ fn start_every(
         } else {
             None
         };
-        let mut task = Job::new(run, spec, dir.task_dir(run), output, None);
+        let mut task = Job::new(run, spec, output, None);
         task.schedule = Some(sid);
         task.state = TaskState::Running;
         task.started = Some(now);
@@ -249,7 +250,6 @@ fn prune(st: &mut State, dir: &OutputDir) {
 }
 
 pub(crate) fn run_job(
-    session: i64,
     state: Arc<Mutex<State>>,
     bell: Arc<(Mutex<()>, Condvar)>,
     id: Id,
@@ -259,7 +259,7 @@ pub(crate) fn run_job(
     let _ = std::thread::Builder::new()
         .name(format!("mypi-jobs-run-{id}"))
         .spawn(move || {
-            let (runner, dir, timeout, cancel, needs_slot, mut output) = {
+            let (runner, timeout, cancel, needs_slot, mut output) = {
                 let mut st = worker_state.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(task) = st.tasks.get_mut(&id) else {
                     return;
@@ -270,7 +270,6 @@ pub(crate) fn run_job(
                 let output = task.output.take();
                 (
                     runner,
-                    task.dir.clone(),
                     task.timeout,
                     task.cancel.clone(),
                     task.needs_slot,
@@ -279,12 +278,9 @@ pub(crate) fn run_job(
             };
             let result = {
                 let mut ctx = JobCtx {
-                    session,
-                    job: id,
                     cancel: cancel.clone(),
-                    dir: dir.clone(),
                     timeout,
-                    output: output.as_mut(),
+                    output: output.as_mut().map(|file| file as &mut dyn OutputSink),
                 };
                 runner.run(&mut ctx)
             };

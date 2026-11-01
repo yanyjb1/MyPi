@@ -1,9 +1,11 @@
+pub mod agent;
 pub mod book;
 pub mod change;
 pub mod child;
 pub mod export;
 pub mod handle;
 pub mod history;
+pub mod jobs;
 pub mod live;
 pub mod mailbox;
 pub mod settings;

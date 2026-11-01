@@ -1,5 +1,7 @@
 //! The tool layer's outward shape: one batch in, one result per call out.
 
+pub mod job;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -10,7 +12,6 @@ use std::time::Duration;
 use anyhow::Result;
 use serde_json::Value;
 
-use super::jobs::JobService;
 use super::mcp::McpBridge;
 use super::workspace::Workspace;
 use crate::server::agent::request::contract::{Spill, ToolCall};
@@ -72,6 +73,8 @@ pub enum Effect {
         cwd: PathBuf,
         start: String,
         max_tool_calls: u32,
+        /// Where the sub-session's final text is written; the name is fixed when it is spawned.
+        answer: PathBuf,
     },
 }
 
@@ -209,12 +212,16 @@ impl Default for Browser {
     }
 }
 
-/// Where the project sits and where its two folders are.
+/// Where the project sits and where its folders are.
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub project: PathBuf,
+    /// The project's templates.
     pub agents: PathBuf,
+    /// The answers a sub-session's final text lands in.
     pub answers: PathBuf,
+    /// The templates that belong to the user, not to this project.
+    pub global_agents: PathBuf,
 }
 
 /// Reads the loop owns; tools never open the database.
@@ -233,7 +240,7 @@ pub trait Source: Send + Sync {
     /// The newest result block whose memo carries `marker`, with that memo: where a replay restarts.
     fn last_reset(&self, session: i64, marker: &str) -> Result<Option<(i64, String)>>;
     fn block(&self, session: i64, id: i64) -> Result<Option<BlockPair>>;
-    fn jobs(&self, session: i64) -> Option<Arc<JobService>>;
+    fn jobs(&self, session: i64) -> Option<Arc<dyn job::JobHost>>;
     fn child(&self, session: i64) -> Option<Arc<dyn Child>>;
 }
 
@@ -261,12 +268,19 @@ pub struct BlockPair {
     pub result: Option<Value>,
 }
 
-/// One sub-session's live state: its draft and what is left of its budget.
+/// One sub-session's live state: its draft, its budget and its answer file.
 pub trait Child: Send + Sync {
-    fn is_child(&self) -> bool;
     fn draft(&self) -> &dyn Draft;
-    fn left(&self) -> Option<u32>;
+    /// What is left of the tool-call budget.
+    fn left(&self) -> u32;
     fn charge(&self) -> Result<()>;
+    /// The file `final submit` writes; its name was fixed when the child was spawned.
+    fn answer(&self) -> &Path;
+    /// Record that the draft has landed; the parent's job is done only after this.
+    fn submit(&self);
+    fn submitted(&self) -> bool;
+    /// The nudge to append when a round ends without a submit; `None` once they are spent.
+    fn nag(&self) -> Option<&'static str>;
 }
 
 /// The draft a sub-session leaves behind. The tool applies its own edit semantics and writes back.

@@ -7,18 +7,19 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
+use crate::server::agent::tools::McpBridge;
+use crate::server::agent::tools::contract::job::JobHost;
 use crate::server::agent::tools::contract::{
     BlockPair, CallRecord, Child, Direction, Furnish, MemoRead, MemoReadOp, MemoScope, MemoVersion,
     MemoView, Source,
 };
-use crate::server::agent::tools::{JobService, McpBridge};
 use crate::server::storage::Reader;
 use crate::server::storage::query::{Cond, Order, Query, Sheet, Val};
 
 /// One database path, plus the handles the loop attaches as sessions come alive.
 pub struct Db {
     path: PathBuf,
-    jobs: Mutex<HashMap<i64, Arc<JobService>>>,
+    jobs: Mutex<HashMap<i64, Arc<dyn JobHost>>>,
     children: Mutex<HashMap<i64, Arc<dyn Child>>>,
     mcp: Mutex<Option<Arc<dyn McpBridge>>>,
 }
@@ -37,11 +38,18 @@ impl Db {
         Reader::open(&self.path)
     }
 
-    pub fn attach_jobs(&self, session: i64, service: Arc<JobService>) {
+    pub fn attach_jobs(&self, session: i64, service: Arc<dyn JobHost>) {
         self.jobs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(session, service);
+    }
+
+    pub fn detach_jobs(&self, session: i64) {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&session);
     }
 
     pub fn attach_child(&self, session: i64, child: Arc<dyn Child>) {
@@ -49,6 +57,13 @@ impl Db {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(session, child);
+    }
+
+    pub fn detach_child(&self, session: i64) {
+        self.children
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&session);
     }
 
     pub fn attach_mcp(&self, bridge: Arc<dyn McpBridge>) {
@@ -190,7 +205,7 @@ impl Source for Db {
         Ok(Some(BlockPair { request, result }))
     }
 
-    fn jobs(&self, session: i64) -> Option<Arc<JobService>> {
+    fn jobs(&self, session: i64) -> Option<Arc<dyn JobHost>> {
         self.jobs
             .lock()
             .unwrap_or_else(|e| e.into_inner())

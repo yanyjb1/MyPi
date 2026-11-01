@@ -8,6 +8,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 |---|---|
 | `mod.rs` | module declarations and re-exports |
 | `contract.rs` | the outward shapes: `Batch`, `BatchInput`, `ToolResult`, `Effect`, `ToolOutput`, `Env`, `Cwd`, `Limits`, `BashEnv`, `Browser`, `Paths`, and the `Source`, `Furnish`, `Export`, `Child`, `Draft`, `MemoRead` ports |
+| `contract/job.rs` | the job vocabulary a tool shares with the loop: `JobSpec`, `Schedule`, `JobRunner`, `JobCtx`, `JobOutcome`, `Receipt`, `Row`, `Status`, and the `JobHost` port |
 | `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure, events |
 | `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `Tool`, `Run`, `Summary`, `ToolProgress` |
 | `summary.rs` | one recorded call's arguments, and the clip every tool's history summary reuses |
@@ -25,17 +26,11 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `bash/cd/{mod,tool}.rs` | `cd` |
 | `bash/alias/{mod,tool}.rs` | `alias` add/list/remove |
 | `bash/context/{mod,tool}.rs` | `context`: `query` through `Source::history`, `show` through `Source::block`, long listings to `Export::dir` |
-| `jobs/mod.rs` | `JobFactory`, `JobService`, re-exports |
-| `jobs/job.rs` | `Id`, `JobSpec`, `Schedule`, `TaskState`, `Job`, `Receipt`, `Row`, `Status` |
-| `jobs/scheduler.rs` | the per-session scheduler thread, workers, pruning, wake merging |
-| `jobs/cron.rs` | five-field cron parse and `next` |
-| `jobs/duration.rs` | relative duration parse |
-| `jobs/runner.rs` | `JobCtx`, `JobOutcome`, `JobRunner` |
-| `jobs/output.rs` | the job temp directory and `OutputFile`, an `OutputSink` |
-| `jobs/wake.rs` | `Wake`, `WakeSink`, wake text |
 | `kairos/mod.rs` | the `kairos` tool manual and parameters |
 | `kairos/service.rs` | `kairos` operation dispatch and rendering |
 | `kairos/command.rs` | a frozen shell command as a `JobRunner`: alias, guard, artifacts, `run_to` |
+| `kairos/text.rs` | the text `JobRunner`: nothing to run, so only the clock makes it due |
+| `kairos/duration.rs` | relative duration parse (`10min`, `1h30m`) |
 | `mcp/mod.rs` | the `mcp` tool: list and call |
 | `mcp/bridge.rs` | `McpBridge`, `ServerInfo`, `ToolInfo`, `McpResult`, `McpContent` |
 | `mcp/sync.rs` | `SyncMcpBridge`: one lazy stdio server per name |
@@ -46,24 +41,22 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `memo/todo/replay.rs` | the pure replay: a call sequence → the list, plus the switch-aware read |
 | `memo/todo/ops.rs` | the three todo operations (`set`, `tick`, `view`) and their batch apply |
 | `memo/todo/state.rs` | `TodoItem`, `counts` |
-| `subagent/mod.rs` | declarations and re-exports (`TASK`, `FINAL`, `Subagent`, `SubagentFactory`, `ChildSpec`, `Spawn`, `START`) |
-| `subagent/task.rs` | the `task` tool |
-| `subagent/final.rs` | the `final` tool |
-| `subagent/service.rs` | `SubagentFactory`, `Subagent`: templates, child rows, reservation, `final_op` |
-| `subagent/spawn.rs` | `Spawn`, `ChildSpec`, `create` |
-| `subagent/runner.rs` | `AgentRunner`: a `JobRunner` that spawns a child and finishes its draft |
-| `subagent/template.rs` | template lookup, front matter, `{{var}}` rendering, roster subset checks |
-| `subagent/draft.rs` | the child draft files and `Drafts` |
-| `subagent/contract.rs` | the fixed child system text and start text |
+| `subagent/mod.rs` | declarations and re-exports (`TASK`, `FINAL`) |
+| `subagent/task.rs` | the `task` tool: template, variables, answer name, the `Child` effect |
+| `subagent/final.rs` | the `final` tool: the child's draft, its edits, the one submit |
+| `subagent/template.rs` | template lookup, front matter, `{{var}}` rendering, roster subset checks, the stem |
+| `subagent/answer.rs` | the answer file: the first free name under the answers folder, and the one stamped write |
 | `web/mod.rs` | the `web` tool entry and `close_session`; built only with the `web` feature |
 
 ## What it talks to
 
-- **`storage`**: not imported by the wrapper; only the tool bodies still do, until they migrate.
-- **`config`**: not imported by the wrapper; the loop reads the keys and hands values in.
-- **`platform`**: `time::now_stamp`, `log::warn`, `env::temp_dir`, `env::config_dir`,
-  `shell::Shell` (the session's shell: program, one-shot argument shape, stored-text read form),
-  `proc` (process group spawn, group signal, tree teardown).
+- **`storage`**: not imported here at all; a tool reaches the database only through `Source` and
+  `Export`, both answered by the loop.
+- **`config`**: not imported by any tool; the loop reads the keys and hands values in. The two
+  exceptions are `mcp/sync.rs` and `mcp/stdio.rs`, which still name deleted config types.
+- **`platform`**: `time::now_stamp` (the effect stamp) and the local-time parts, `log::warn`,
+  `env::temp_dir`, `shell::Shell` (the session's shell: program, one-shot argument shape,
+  stored-text read form), `proc` (process group spawn, group signal, tree teardown).
 - **`request`**: `ToolCall`, `ToolDef`, `Message` for definitions and the context window.
 - **`web`**: `WebArgs`, `run`, `close_session`, only from the `web` tool.
 - **Who calls it**: `loop/turn` (one batch at a time, `Batch::run`), `loop/session/book` (builds
@@ -78,8 +71,9 @@ Engine::run
   → Args::fill
   → Tool::run
       bash/*          ── shell, file tools, alias, context
-      kairos          ── jobs
-      task/final      ── subagent ── jobs, storage::Writer
+      kairos          ── Source::jobs (a JobHost) ── loop/job
+      task            ── template, answer name ── Effect::Child
+      final           ── Source::child (a Child) ── draft, answer file
       mcp             ── mcp::sync ── mcp::stdio
       web             ── crate::web
       memo/todo       ── Source, and the pure todo replay
@@ -87,8 +81,8 @@ Engine::run
 ```
 
 - `Env` is built once per batch by `engine`, from the `BatchInput` the loop passes.
-- `JobService` and a sub-session's `Child` reach a tool through `Source`; the loop attaches both
-  when it builds them.
+- A `JobHost` and a sub-session's `Child` reach a tool through `Source`; the loop attaches both when
+  it books a session and takes both off when it drops one. A job is only ever created by the loop.
 - The guard is used in two places — the `bash` tool and `alias add` — and judges the expanded
   command in both.
 
@@ -104,14 +98,15 @@ Engine::run
 6. `Workspace::zones` and `guard::escapes_zone`: two independent zone laws; changing one does not
    change the other.
 7. `subagent::template` and the parent roster: a template may only name tools the parent has.
-8. `jobs::JobService` and `subagent::service`: a child holds a reserved slot until it activates.
-9. `web` feature and three places: the `mod.rs` declaration, the `TOOLS` row, and
-   `close_web_session` in `api/post/session/delete.rs`.
+8. `contract::job::JobHost` and `loop/job`: the port is the whole surface a tool sees; a new job
+   field starts there.
+9. `web` feature and two places: the `mod.rs` declaration and the `TOOLS` row.
 
 ## Not wired yet
 
-1. The tool bodies still bind `spec::Env`, `Inbox` and `storage::EffectKind`; they migrate next.
-2. `Source::jobs` is an empty table: the job wave attaches a `JobService` per session.
-3. `Furnish::mcp` answers `None` until the MCP bridge moves onto the new contract.
-4. The todo replay's front-end handoff is not built: the loop side reads the switch and the last
+1. `web` does not build: it binds the removed `spec::Env` and `Inbox`.
+2. `mcp` does not build: `mod.rs` binds the same removed `Env`, and `sync.rs` with `stdio.rs` name
+   `config::McpConfig` and `config::McpServerConfig`, which are gone. The bridge must take its
+   servers from `mcp.json`, and `Furnish::mcp` answers `None` until it does.
+3. The todo replay's front-end handoff is not built: the loop side reads the switch and the last
    off block, the api door that returns the list is still to come.

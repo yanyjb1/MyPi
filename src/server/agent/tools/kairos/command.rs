@@ -1,16 +1,15 @@
 //! A command frozen at tool-call time; stored texts resolved only when it runs.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Result, bail};
 
-use crate::server::agent::tools::Env;
-use crate::server::agent::tools::Export;
 use crate::server::agent::tools::bash::bash::shell::{self, OutputSink};
 use crate::server::agent::tools::bash::bash::{expand_alias, guard, rewrite_refs};
-use crate::server::agent::tools::jobs::{JobCtx, JobOutcome, JobRunner, OutputFile};
+use crate::server::agent::tools::contract::job::{JobCtx, JobOutcome, JobRunner};
+use crate::server::agent::tools::contract::{Env, Export};
 use crate::server::platform::shell::Shell;
 
 #[derive(Debug, Clone)]
@@ -50,7 +49,7 @@ impl Command {
         export: &dyn Export,
         timeout: std::time::Duration,
         cancel: Arc<AtomicBool>,
-        output: &mut OutputFile,
+        output: &mut dyn OutputSink,
     ) -> Result<shell::Exit> {
         let cmd = rewrite_refs(&self.template, export, shell)?;
         if shell.guarded() {
@@ -82,11 +81,11 @@ impl Command {
 pub(crate) struct CommandRunner {
     command: Command,
     shell: Shell,
-    export: Option<Arc<dyn Export>>,
+    export: Arc<dyn Export>,
 }
 
 impl CommandRunner {
-    pub(crate) fn new(command: Command, shell: Shell, export: Option<Arc<dyn Export>>) -> Self {
+    pub(crate) fn new(command: Command, shell: Shell, export: Arc<dyn Export>) -> Self {
         Self {
             command,
             shell,
@@ -101,29 +100,18 @@ impl JobRunner for CommandRunner {
             bail!("a command job needs an output file");
         };
         let output = &mut **output;
-        let missing = NoExport;
-        let export = self.export.as_deref().unwrap_or(&missing);
-        let exit =
-            self.command
-                .run(&self.shell, export, ctx.timeout, ctx.cancel.clone(), output)?;
+        let exit = self.command.run(
+            &self.shell,
+            self.export.as_ref(),
+            ctx.timeout,
+            ctx.cancel.clone(),
+            output,
+        )?;
         Ok(JobOutcome {
             ok: exit.code == Some(0),
             text: None,
             wake: None,
             exit: exit.code,
         })
-    }
-}
-
-/// No export channel: a background command has no stored text to reach for.
-struct NoExport;
-
-impl Export for NoExport {
-    fn dir(&self) -> &Path {
-        Path::new(".")
-    }
-
-    fn path(&self, reference: &str) -> Result<PathBuf> {
-        bail!("no export channel for a background command; cannot read #{reference}")
     }
 }

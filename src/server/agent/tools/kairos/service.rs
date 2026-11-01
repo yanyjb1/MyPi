@@ -4,49 +4,47 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 
-use crate::server::agent::tools::Env;
-use crate::server::agent::tools::jobs::{
-    Cron, Id, JobCtx, JobOutcome, JobRunner, JobService, JobSpec, Schedule, Status, parse_duration,
+use crate::server::agent::tools::contract::Env;
+use crate::server::agent::tools::contract::ToolOutput;
+use crate::server::agent::tools::contract::job::{
+    JobHost, JobRunner, JobSpec, Schedule, Status,
 };
-use crate::server::agent::tools::spec::{Args, ToolOutput};
+use crate::server::agent::tools::spec::Args;
 
 use super::command::{Command, CommandRunner};
+use super::duration::parse as parse_duration;
+use super::text::TextRunner;
 use super::{CONTENT, COUNT, DELAY, EXPR, ID, NOTIFY, OP, TIMEOUT, TYPE};
 
 pub(crate) fn run(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     let jobs = env
-        .inbox
-        .jobs
-        .as_ref()
+        .source
+        .jobs(env.session)
         .ok_or_else(|| anyhow::anyhow!("`kairos` is unavailable in this session"))?;
     let op = args.choice(OP)?;
     let text = match op.as_str() {
         "now" => {
-            let (content, timeout) = content_and_timeout(args)?;
-            start(env, jobs, args, content, timeout, Schedule::Now)?
+            let kind = args.choice(TYPE)?;
+            if kind != "command" {
+                bail!("`text` runs on `after` or `every` only; `now` has nothing to wait for");
+            }
+            start(env, jobs.as_ref(), args, &kind, Schedule::Now)?
         }
         "after" => {
             let delay = parse_duration(&args.str(DELAY)?)?;
-            let (content, timeout) = content_and_timeout(args)?;
-            start(env, jobs, args, content, timeout, Schedule::After(delay))?
+            let kind = args.choice(TYPE)?;
+            start(env, jobs.as_ref(), args, &kind, Schedule::After(delay))?
         }
         "every" => {
-            let cron = Cron::parse(&args.str(EXPR)?)?;
+            let expr = args.str(EXPR)?;
             let count = count(args)?;
-            let (content, timeout) = content_and_timeout(args)?;
-            start(
-                env,
-                jobs,
-                args,
-                content,
-                timeout,
-                Schedule::Every(cron, count),
-            )?
+            let kind = args.choice(TYPE)?;
+            start(env, jobs.as_ref(), args, &kind, Schedule::Every { expr, count })?
         }
-        "list" => list(jobs),
-        "status" => status(jobs, id(args)?)?,
-        "result" => jobs.result(id(args)?)?,
-        "cancel" => jobs.cancel(id(args)?, args.flag(NOTIFY)?)?,
+        "list" => list(jobs.as_ref()),
+        "status" => render_status(&jobs.status(&args.str(ID)?)?),
+        "result" => jobs.result(&args.str(ID)?)?,
+        "cancel" => jobs.cancel(&args.str(ID)?, args.flag(NOTIFY)?)?,
         _ => unreachable!(),
     };
     Ok(ToolOutput::text(text))
@@ -54,24 +52,24 @@ pub(crate) fn run(env: &mut Env, args: &Args) -> Result<ToolOutput> {
 
 fn start(
     env: &Env,
-    jobs: &JobService,
+    jobs: &dyn JobHost,
     args: &Args,
-    content: String,
-    timeout: Option<std::time::Duration>,
+    kind: &str,
     schedule: Schedule,
 ) -> Result<String> {
-    let spec = match args.choice(TYPE)?.as_str() {
+    let spec = match kind {
         "command" => {
+            let content = args.str(CONTENT)?;
             let command = Command::prepare(env, &content)?;
             let runner: Arc<dyn JobRunner> = Arc::new(CommandRunner::new(
                 command,
                 env.bash.shell.clone(),
-                Some(env.export.clone()),
+                env.export.clone(),
             ));
             JobSpec {
                 runner,
                 schedule,
-                timeout,
+                timeout: timeout(args)?,
                 output: true,
                 needs_slot: true,
                 kind: "command",
@@ -79,7 +77,9 @@ fn start(
             }
         }
         "text" => JobSpec {
-            runner: Arc::new(TextRunner { text: content }) as Arc<dyn JobRunner>,
+            runner: Arc::new(TextRunner {
+                text: args.str(CONTENT)?,
+            }),
             schedule,
             timeout: None,
             output: false,
@@ -92,45 +92,21 @@ fn start(
     Ok(jobs.start(spec)?.text)
 }
 
-struct TextRunner {
-    text: String,
-}
-
-impl JobRunner for TextRunner {
-    fn run(&self, _ctx: &mut JobCtx<'_>) -> Result<JobOutcome> {
-        Ok(JobOutcome {
-            ok: true,
-            text: Some(self.text.clone()),
-            wake: Some(self.text.clone()),
-            exit: None,
-        })
-    }
-}
-
-fn content_and_timeout(args: &Args) -> Result<(String, Option<std::time::Duration>)> {
-    let content = args.str(CONTENT)?;
-    let timeout = args
-        .opt_str(TIMEOUT)?
+fn timeout(args: &Args) -> Result<Option<std::time::Duration>> {
+    args.opt_str(TIMEOUT)?
         .map(|text| parse_duration(&text))
-        .transpose()?;
-    Ok((content, timeout))
+        .transpose()
 }
 
 fn count(args: &Args) -> Result<Option<u32>> {
-    let count = args.opt_int(COUNT)?.unwrap_or(3);
-    match count {
+    match args.int(COUNT)? {
         -1 => Ok(None),
         n if n > 0 => Ok(Some(n as u32)),
         _ => bail!("`count` must be positive or -1"),
     }
 }
 
-fn id(args: &Args) -> Result<Id> {
-    let text = args.str(ID)?;
-    Id::parse(&text).ok_or_else(|| anyhow::anyhow!("`id` must look like `k1`, `s1`, or `s1.1`"))
-}
-
-fn list(jobs: &JobService) -> String {
+fn list(jobs: &dyn JobHost) -> String {
     let rows = jobs.list();
     if rows.is_empty() {
         return "no jobs".to_string();
@@ -139,10 +115,6 @@ fn list(jobs: &JobService) -> String {
         .map(|row| format!("{} {} {} {}B", row.id, row.kind, row.state, row.bytes))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn status(jobs: &JobService, id: Id) -> Result<String> {
-    Ok(render_status(&jobs.status(id)?))
 }
 
 fn render_status(status: &Status) -> String {

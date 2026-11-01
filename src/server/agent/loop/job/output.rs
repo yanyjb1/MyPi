@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 
 use super::job::Id;
-use crate::server::agent::tools::bash::bash::shell::{Exit, OutputSink};
+use crate::server::agent::tools::contract::job::{Exit, OutputSink};
 
 /// The per-session output directory.
 #[derive(Clone)]

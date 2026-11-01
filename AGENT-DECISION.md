@@ -3,7 +3,8 @@
 本文件只保留仍然有效、且会影响下一步改造的决策。已完成的 loop 与 storage 不再重复：
 现状与设计见 `src/server/agent/loop/README.md`、`src/server/agent/loop/ARCHITECTURE.md`、
 `src/server/storage/README.md`、`src/server/storage/ARCHITECTURE.md`。
-request、tools、config、api 的接口形状见 `loop-域外要求.md`。
+request 与 tools 的接口形状见两域 README；api、ui、config、mcp、web 的剩余接线见
+`api-loop-目标形态.md` 与 `agent-剩余接线.md`。
 
 ## 1. 三方职责
 
@@ -28,7 +29,8 @@ storage ──► loop ──► { request, tools }
 
 - 结果只交文本、memo、中性 effect、是否终止回合、进度增量；溢出由前门量、由 loop 落库。
 - 不自己量输出；`cd` 只改自己看到的目录，批内看批开始快照。
-- 子代理只回意图：模板、变量、工具子集、预算、cwd、启动消息；system 与模型继承本会话，不走 effect，不建会话行。
+- 子代理只回意图：模板、变量、工具子集、预算、cwd、启动消息、答案名；system 与模型继承本会话；
+  会话行由 loop 在 effect 落地时写。
 - `final` 只给子会话，`task` 只给主会话，`kairos` 不给子会话。
 - 摘要按工具各一份，挂在工具声明旁；没有摘要的工具在 `context` 里退回它的参数文本。
 - `todo` 只有三条操作：`set`（整表替换，空表即清空）、`tick`（按序号打勾，`done:false` 取消）、

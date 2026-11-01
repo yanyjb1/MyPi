@@ -1,10 +1,9 @@
 //! The registry: one slot per session, and the only way a turn starts.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 
 use anyhow::{Context, Result, bail};
 
@@ -12,12 +11,14 @@ use super::change::{self, Change};
 use super::handle::Handle;
 use super::mailbox::Mailbox;
 use super::settings::Settings;
+use crate::server::agent::r#loop::job;
 use crate::server::agent::r#loop::pen;
 use crate::server::agent::r#loop::turn;
 use crate::server::agent::r#loop::turn::ask::Ask;
 use crate::server::agent::r#loop::turn::batch::Batch;
 use crate::server::agent::r#loop::turn::cycle::Mode;
 use crate::server::agent::request::live::Event;
+use crate::server::agent::tools::contract::Source;
 use crate::server::storage::Writer;
 
 /// What a caller needs to open one session. The caller resolves the profile
@@ -65,7 +66,8 @@ pub(crate) struct Inner {
     pub(crate) batch: Arc<dyn Batch>,
     pub(crate) source: Arc<super::source::Db>,
     pub(crate) dir: PathBuf,
-    pub(crate) slots: Mutex<HashMap<i64, Arc<Handle>>>,
+    pub(crate) slots: Arc<super::jobs::Slots>,
+    pub(crate) factory: job::Factory,
 }
 
 impl Loop {
@@ -102,8 +104,15 @@ impl Loop {
                 project: project.project,
                 agents: project.agents,
                 answers: project.answers,
+                global_agents: cfg
+                    .paths()
+                    .global_root()
+                    .unwrap_or_default()
+                    .join("agents"),
             },
         );
+        let slots = super::jobs::Slots::new();
+        let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
         Self {
             inner: Arc::new(Inner {
                 writer,
@@ -113,7 +122,8 @@ impl Loop {
                 batch: Arc::new(batch),
                 source,
                 dir,
-                slots: Mutex::new(HashMap::new()),
+                slots,
+                factory,
             }),
         }
     }
@@ -128,19 +138,15 @@ impl Loop {
     pub fn book(&self, birth: Birth) -> Result<i64> {
         let id = birth.session;
         let handle = Arc::new(Handle::new(birth));
-        {
-            let mut slots = self.inner.slots.lock().unwrap_or_else(|e| e.into_inner());
-            if slots.contains_key(&id) {
-                bail!("session {id} is already booked");
-            }
-            slots.insert(id, handle.clone());
+        if !self.inner.slots.insert(id, handle.clone()) {
+            bail!("session {id} is already booked");
         }
+        self.inner
+            .source
+            .attach_jobs(id, self.inner.factory.make(id));
         if let Err(e) = spawn_scheduler(&self.inner, handle) {
-            self.inner
-                .slots
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(&id);
+            self.inner.slots.remove(id);
+            self.inner.source.detach_jobs(id);
             return Err(e);
         }
         Ok(id)
@@ -148,6 +154,9 @@ impl Loop {
 
     /// Deliver one message. A busy session queues it for its current turn.
     pub fn deliver(&self, session: i64, msg: Message) -> Result<Option<i64>> {
+        if Source::child(self.inner.source.as_ref(), session).is_some() {
+            bail!("session {session} is a sub-session; it takes no messages");
+        }
         let handle = self.handle(session)?;
         if handle.busy.load(Ordering::Acquire) {
             if matches!(&msg, Message::Compact { .. }) {
@@ -178,16 +187,7 @@ impl Loop {
     }
 
     pub fn drop(&self, id: i64) {
-        let handle = self
-            .inner
-            .slots
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&id);
-        if let Some(handle) = handle {
-            handle.gone.store(true, Ordering::Release);
-            handle.interrupt();
-        }
+        unbook(&self.inner, id);
     }
 
     pub fn change(&self, session: i64, change: Change) -> Result<()> {
@@ -211,15 +211,16 @@ impl Loop {
     fn handle(&self, session: i64) -> Result<Arc<Handle>> {
         self.inner
             .slots
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&session)
-            .cloned()
+            .get(session)
             .with_context(|| format!("session {session} is not booked"))
     }
 }
 
-pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Result<()> {
+pub(crate) fn book_child(
+    inner: &Arc<Inner>,
+    birth: Birth,
+    start: String,
+) -> Result<Arc<Handle>> {
     if let Some(meta) = birth.meta {
         inner.writer.push(crate::server::storage::Submit {
             rows: vec![crate::server::storage::Row::Meta {
@@ -229,19 +230,11 @@ pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Res
         })?;
     }
     let handle = Arc::new(Handle::new(birth));
-    {
-        let mut slots = inner.slots.lock().unwrap_or_else(|e| e.into_inner());
-        if slots.contains_key(&handle.id) {
-            bail!("session {} is already booked", handle.id);
-        }
-        slots.insert(handle.id, handle.clone());
+    if !inner.slots.insert(handle.id, handle.clone()) {
+        bail!("session {} is already booked", handle.id);
     }
     if let Err(e) = spawn_scheduler(inner, handle.clone()) {
-        inner
-            .slots
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&handle.id);
+        inner.slots.remove(handle.id);
         return Err(e);
     }
     start_turn(
@@ -253,7 +246,17 @@ pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Res
             suffix: None,
         },
     )?;
-    Ok(())
+    Ok(handle)
+}
+
+/// Take a session off the table: its job service, its child state, its handle.
+pub(crate) fn unbook(inner: &Arc<Inner>, id: i64) {
+    inner.source.detach_jobs(id);
+    inner.source.detach_child(id);
+    if let Some(handle) = inner.slots.remove(id) {
+        handle.gone.store(true, Ordering::Release);
+        handle.interrupt();
+    }
 }
 
 fn spawn_scheduler(inner: &Arc<Inner>, handle: Arc<Handle>) -> Result<()> {

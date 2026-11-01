@@ -28,13 +28,20 @@ from `request::contract`; tool shapes come from `agent::tools::contract`; both a
 so a caller names one vocabulary. `Retention` is `Chars(n)` or `Blocks(n)`.
 
 `book` only opens the session; the caller has already written the `sessions` row and resolved the
-system prompt, the tool names and the compaction instruction. `deliver` opens a turn and returns
-its id, or queues the message when the session is busy. `book` starts one scheduler thread per
-session; that thread turns a wake into a turn.
+system prompt, the tool names and the compaction instruction. It also starts the turn scheduler and
+attaches the session's job service to `Source`. `deliver` opens a turn and returns its id, or queues
+the message when the session is busy; a sub-session refuses it outright.
 
 `Mailbox` has two queues: wake text from tool results, and user messages. Wake is deterministic and
 is written as a `wake` block; user messages may be taken back before the loop reads them. A turn
-stops when the user interrupts, or when both queues are empty and the model asks for no tools.
+stops when the user interrupts, or when both queues are empty and the model asks for no tools. A
+sub-session whose turn ends without `final submit` gets one more user message, up to three, before
+the turn is allowed to end.
+
+`job` is the scheduler behind every background task: a per-session service, a concurrency pool, a
+cron clock, one output file per run, and a wake that starts a turn. A tool describes a job and holds
+`JobHost`; the loop owns creation, cancellation and the runner — `kairos` and a child's runner are
+both clients.
 
 `pen` is the only writer of storage rows. `session::history::Transcript` is the read side: it
 implements `request::contract::History` over storage's reader. `turn/ask` is the request boundary,
@@ -54,6 +61,12 @@ half's, and the loop only adds tool events to it.
   on the mailbox and starts only when the slot is free.
 - **The user's turns and the tool's wake share one mechanism but not one queue.** User text is
   mutable; wake text is a fact and is never taken back.
+- **A job is the loop's, its description is the tool's.** A tool cannot write a session row or own a
+  thread, so it names what to run and keeps a five-action port; everything with a lifetime belongs
+  to the loop.
+- **A child ends only by submitting.** A round that ends without `final submit` is not the end of
+  the task: the loop nudges it, three times at most, then settles the job as failed. The answer file
+  is what the parent reads, not the session row.
 - **Baseline is the first lap's prompt.** It is attached to the archive and only lowered; a later
   model switch starts from a different archive and its own baseline.
 - **Compaction is a turn mode.** Its first block is the user message carrying the focus, the summary
@@ -62,7 +75,7 @@ half's, and the loop only adds tool events to it.
 
 ## 3. Unresolved
 
-- `Source::jobs` and `Furnish::mcp` are empty: the job and MCP waves attach their services.
+- `Furnish::mcp` answers `None`: no one reads `mcp.json` or builds the bridge yet.
 - The API does not construct the loop yet; `Loop::new` takes `&Config`.
 - Same-batch calls that have not landed are invisible to `Source`.
 
@@ -73,6 +86,7 @@ half's, and the loop only adds tool events to it.
 - `config.server.agent.tools.outputMaxLines` / `outputMaxBytes` — the inline budget handed to the tool layer.
 - `config.server.agent.tools.bashTimeout` — one command's wall-clock cap.
 - `config.server.agent.tools.browser.{bin,port,profileDir,headless,userAgent,extraArgs}` — the web tool's launch values.
+- `config.server.agent.tools.kairos.*` — `maxConcurrent`, `timeoutSecs`, `maxOutputBytes`, `maxRetained`: the job scheduler's numbers.
 - `config.server.agent.subagent.maxToolCalls` — the default budget for a sub-session.
 
 The output cap of a request body is not here: it belongs to the request half's startup options. The

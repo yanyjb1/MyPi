@@ -1,5 +1,6 @@
 //! The loop: one session's turns, and the rows they leave.
 
+pub mod job;
 pub mod pen;
 pub mod session;
 pub mod turn;

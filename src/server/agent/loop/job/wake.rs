@@ -20,7 +20,14 @@ pub(crate) fn job_status(
     bytes: usize,
     truncated: bool,
 ) -> String {
-    let mut text = format!("job {id} {state}");
+    let word = match state {
+        TaskState::Done => "finished",
+        TaskState::Failed => "failed",
+        TaskState::Canceled => "canceled",
+        TaskState::Expired => "expired",
+        TaskState::Running | TaskState::Waiting | TaskState::Scheduled => "ended",
+    };
+    let mut text = format!("{id} {word}");
     if let Some(code) = exit {
         text.push_str(&format!(", exit {code}"));
     }
@@ -32,9 +39,9 @@ pub(crate) fn job_status(
 }
 
 pub(crate) fn skipped(id: Id, reason: &str, skipped: u32) -> String {
-    format!("job {id} skipped ({reason}), {skipped} skipped so far")
+    format!("{id} skipped ({reason}), {skipped} times so far")
 }
 
 pub(crate) fn canceled(id: Id) -> String {
-    format!("job {id} canceled")
+    format!("{id} canceled")
 }

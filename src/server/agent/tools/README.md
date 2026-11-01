@@ -46,8 +46,7 @@ ToolCall { name, args, intent }
   → ToolResult
 ```
 
-Unknown names error. With the `web` feature off, the three historical names `fetch`, `browser`
-and `search` say so explicitly instead of "unknown tool".
+Unknown names error.
 
 ### Schema
 
@@ -65,7 +64,7 @@ tool; no tool declares it.
 | `bash` | `command` req |
 | `alias` | `op` req (`add`/`list`/`remove`), `name`, `command` |
 | `kairos` | `op` req (`now`/`after`/`every`/`list`/`status`/`result`/`cancel`), `type` (`command`/`text`), `content`, `timeout`, `delay`, `expr`, `count`, `id`, `notify` |
-| `task` | `template` req, `vars`, `cwd`, `maxToolCalls` |
+| `task` | `template` req, `vars`, `cwd`, `maxToolCalls`, `name` |
 | `final` | `op` req (`write`/`edit`/`mass_edit`/`read`/`submit`), `content`, `old`, `new`, `edits` |
 | `mcp` | `op` req (`list`/`call`), `server`, `tool`, `args` |
 | `web` | `op` req (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`net`/`screenshot`), `url`, `raw`, `query`, `provider`, `page`, `selector`, `value`, `filter`, `max`, `full_page`, `reserve` |
@@ -101,7 +100,7 @@ Env {
   default_budget: u32,
   mcp: Option<Arc<dyn McpBridge>>,
   export: Arc<dyn Export>,   // a full text out of the database as a file
-  paths: Paths,              // project, agents, answers
+  paths: Paths,              // project, agents, answers, globalAgents
   source: Arc<dyn Source>,   // reads the loop owns
 }
 ```
@@ -176,12 +175,18 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
 
 ### Jobs and children
 
-- `jobs` is a per-session service: a scheduler thread, a concurrency pool, per-job output files
-  under `$TMP/mypi-jobs/<session>`, and a wake channel that turns a finished job into a new round.
-- `kairos` is the only model-facing door to it; `task` and `final` borrow the same service to hold
-  a child's slot.
-- A child session is a session: it gets its own `Env`, root and tool set. `task` is parent-only,
-  `final` is child-only.
+- A job is created by the loop, never by a tool. The tool writes a `contract::job::JobSpec` and holds
+  the session's `JobHost`; the scheduler, the pool, the per-run files and the wakes live in
+  `loop/job`.
+- One job, one completion: a command finishes, a child submits, or the clock arrives. The receipt
+  names the job; the wake reports it done under the same id.
+- `kairos` is the tool face. A text job has no completion of its own, so it refuses `now`.
+- A child is a job too: `task` resolves a template and picks an answer name, the loop writes the
+  session row, and a loop-side runner books the child, nudges it three times when it ends without a
+  submit, then drops it.
+- The answer file is `<answers>/<name>.md`; the name is fixed at spawn, from `name` or the template's
+  stem, with `-1`, `-2` when taken. `final submit` writes it and is the only thing that ends a child.
+- A child takes no user messages; `task` is parent-only, `final` child-only.
 
 ### Invariants
 
@@ -193,6 +198,7 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
 6. `edit` has one path in, one read, one atomic write; `mass_edit` is not a tool.
 7. `alias` expands once, the first token only, and adds no variables, functions or multi-line forms.
 8. One call runs at a time inside a session; different sessions run concurrently.
+9. A tool starts no job and writes no session row; it describes both and the loop acts.
 
 ## 2. Design intent
 
@@ -223,17 +229,14 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
 
 ## 3. Unresolved
 
-1. The bash family, `memo` and `todo` are on the new `Env`; `kairos`, `task`, `final`, `mcp` and
-   `web` still bind the old `Inbox`-based one and migrate with their own waves.
-2. The api doors still speak the old shapes: `api/call/todo.rs` replays by itself and
-   `api/convert.rs` maps phases and five states. `Loop::todo` hands the replayed list over, and the
-   front end's contract keeps its own shape, so both move in the api wave.
-2. `Source::jobs` and `Source::child` are empty tables until the job and subagent waves attach
-   their services.
-3. `Furnish::mcp` answers `None` until the bridge moves onto the new contract.
+1. `web` does not build: it still binds the removed `Inbox`-based `Env`.
+2. `mcp` does not build: `mod.rs` binds the same removed `Env`, and `sync.rs` and `stdio.rs` name
+   `config::McpConfig` and `config::McpServerConfig`, which no longer exist. The bridge must take
+   its servers from `mcp.json`, which no one reads yet; `Furnish::mcp` answers `None`.
+3. The api doors are not updated: `api/call/todo.rs` replays by itself and `api/convert.rs` maps
+   phases and five states, while `Loop::todo` hands the replayed list over.
 4. MCP carries text content only; a server-initiated request is answered `-32601`.
 5. Template front matter reads `tools` only.
-6. `licensed_zones` has no caller inside the wrapper.
 
 ## 4. Config fields
 
@@ -243,9 +246,5 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
 | `config.server.agent.tools.outputMaxLines` | inline line budget; also caps `read`'s `limit` |
 | `config.server.agent.tools.outputMaxBytes` | inline byte budget |
 | `config.server.agent.tools.browser.*` | `bin`, `port`, `profileDir`, `headless`, `userAgent`, `extraArgs`, handed to `Env.browser` |
-| `config.server.agent.tools.kairos.maxConcurrent` | jobs running at once |
-| `config.server.agent.tools.kairos.timeoutSecs` | one job's deadline |
-| `config.server.agent.tools.kairos.maxOutputBytes` | one job's retained output |
-| `config.server.agent.tools.kairos.maxRetained` | finished jobs kept for `result` |
-| `config.server.agent.subagent.maxToolCalls` | one child's tool-call budget, passed to the factory |
-| `mcp.servers.<name>.command`, `.args`, `.env`, `.cwd`, `.timeoutSecs` | one stdio MCP server |
+| `config.server.agent.tools.kairos.*` | `maxConcurrent`, `timeoutSecs`, `maxOutputBytes`, `maxRetained`; the job scheduler's numbers, read by the loop |
+| `config.server.agent.subagent.maxToolCalls` | one child's tool-call budget; read by the loop |

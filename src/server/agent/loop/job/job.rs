@@ -3,12 +3,13 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use super::cron::Cron;
 use super::output::OutputFile;
-use super::runner::JobRunner;
+use crate::server::agent::tools::contract::job::{JobRunner, JobSpec, Schedule};
 
-/// A job (`k1`), a schedule (`s1`), or one schedule run (`s1.1`).
+/// A task (`k1`), a schedule (`s1`), or one schedule run (`s1.1`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Id {
     Task(u64),
@@ -71,29 +72,37 @@ impl std::fmt::Display for TaskState {
     }
 }
 
+/// A run's conditions, with its schedule taken apart.
 #[derive(Clone)]
-pub(crate) enum Schedule {
-    Now,
-    After(std::time::Duration),
-    Every(Cron, Option<u32>),
-}
-
-#[derive(Clone)]
-pub(crate) struct JobSpec {
+pub(crate) struct Spec {
     pub(crate) runner: Arc<dyn JobRunner>,
-    pub(crate) schedule: Schedule,
-    pub(crate) timeout: Option<std::time::Duration>,
+    pub(crate) timeout: Option<Duration>,
     pub(crate) output: bool,
     pub(crate) needs_slot: bool,
     pub(crate) kind: &'static str,
     pub(crate) wake_on_done: bool,
 }
 
+impl Spec {
+    /// Split one submitted task into what a run needs and when it is due.
+    pub(crate) fn take(spec: JobSpec) -> (Self, Schedule) {
+        let taken = Self {
+            runner: spec.runner,
+            timeout: spec.timeout,
+            output: spec.output,
+            needs_slot: spec.needs_slot,
+            kind: spec.kind,
+            wake_on_done: spec.wake_on_done,
+        };
+        (taken, spec.schedule)
+    }
+}
+
 pub(crate) struct Job {
     pub(crate) id: Id,
     pub(crate) runner: Option<Arc<dyn JobRunner>>,
     pub(crate) kind: String,
-    pub(crate) timeout: std::time::Duration,
+    pub(crate) timeout: Duration,
     pub(crate) output: Option<OutputFile>,
     pub(crate) state: TaskState,
     pub(crate) started: Option<i64>,
@@ -103,7 +112,6 @@ pub(crate) struct Job {
     pub(crate) truncated: bool,
     pub(crate) cancel: Arc<AtomicBool>,
     pub(crate) consumed: bool,
-    pub(crate) dir: std::path::PathBuf,
     pub(crate) start_at: Option<i64>,
     pub(crate) schedule: Option<u64>,
     pub(crate) wake_on_done: bool,
@@ -114,8 +122,7 @@ pub(crate) struct Job {
 impl Job {
     pub(crate) fn new(
         id: Id,
-        spec: JobSpec,
-        dir: std::path::PathBuf,
+        spec: Spec,
         output: Option<OutputFile>,
         start_at: Option<i64>,
     ) -> Self {
@@ -133,7 +140,6 @@ impl Job {
             truncated: false,
             cancel: Arc::new(AtomicBool::new(false)),
             consumed: false,
-            dir,
             start_at,
             schedule: None,
             wake_on_done: spec.wake_on_done,
@@ -153,37 +159,13 @@ impl Job {
 pub(crate) struct ScheduleEntry {
     pub(crate) id: u64,
     pub(crate) cron: Cron,
-    pub(crate) spec: JobSpec,
+    pub(crate) spec: Spec,
     pub(crate) remaining: Option<u32>,
     pub(crate) next: Option<i64>,
     pub(crate) skipped: u32,
     pub(crate) running: Option<Id>,
     pub(crate) runs: VecDeque<Id>,
     pub(crate) next_run: u32,
-}
-
-pub(crate) struct Receipt {
-    pub(crate) id: Id,
-    pub(crate) text: String,
-}
-
-pub(crate) struct Row {
-    pub(crate) id: Id,
-    pub(crate) kind: String,
-    pub(crate) state: String,
-    pub(crate) bytes: usize,
-}
-
-pub(crate) struct Status {
-    pub(crate) id: Id,
-    pub(crate) state: String,
-    pub(crate) exit: Option<i32>,
-    pub(crate) duration: u64,
-    pub(crate) bytes: usize,
-    pub(crate) truncated: bool,
-    pub(crate) next: Option<i64>,
-    pub(crate) remaining: Option<u32>,
-    pub(crate) skipped: u32,
 }
 
 #[derive(Default)]

@@ -2,10 +2,13 @@
 
 use anyhow::Result;
 
-use crate::server::agent::tools::spec::{Args, Env, Kind, Param, Tool, ToolOutput, ToolProgress};
+use crate::server::agent::tools::contract::{Env, ToolOutput};
+use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 
 mod command;
+mod duration;
 mod service;
+mod text;
 
 pub(crate) const OP: usize = 0;
 pub(crate) const TYPE: usize = 1;
@@ -52,11 +55,13 @@ pub(crate) const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "kairos",
-    about: "Accept one background operation and return at once. `now` runs immediately, `after` waits\n\
-            for a delay, and `every` repeats on a five-field cron. A finished command wakes you; fetch its\n\
-            output with `kairos result`. Subagents cannot use this tool.",
+    about: "Hold one background task and return at once. `now` starts a command immediately, \
+            `after` waits for a delay, and `every` repeats on a five-field cron; a text task only \
+            takes `after` or `every`. The receipt names the task; a wake reports when it is done, \
+            and `result` hands back what it left. Subagents cannot use this tool.",
     params: PARAMS,
     run,
+    summary: None,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

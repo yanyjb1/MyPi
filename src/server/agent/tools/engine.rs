@@ -81,7 +81,7 @@ impl Batch for Engine {
         let mut env = self.env(&input)?;
         let child = self.source.child(input.session);
         let shape = Availability {
-            child: child.as_ref().is_some_and(|c| c.is_child()),
+            child: child.is_some(),
             jobs: self.source.jobs(input.session).is_some(),
             mcp: env.mcp.is_some(),
         };
@@ -138,7 +138,7 @@ impl Engine {
             );
         }
         let charged = tool.name != "final";
-        if charged && child.and_then(|c| c.left()) == Some(0) {
+        if charged && child.is_some_and(|c| c.left() == 0) {
             return failed(
                 call,
                 "tool-call budget exhausted; finish with `final submit`",

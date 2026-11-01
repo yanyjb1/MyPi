@@ -4,7 +4,6 @@
 mod bash;
 pub mod contract;
 pub mod engine;
-mod jobs;
 mod kairos;
 mod mcp;
 mod memo;
@@ -25,7 +24,6 @@ pub use contract::{
     MemoVersion, MemoView, Paths, Source, ToolOutput, ToolResult,
 };
 pub use engine::Engine;
-pub use jobs::JobService;
 pub use mcp::{McpBridge, McpContent, McpResult, ServerInfo, SyncMcpBridge, ToolInfo};
 pub(crate) use memo::todo::current as todo_current;
 pub use memo::todo::state::TodoItem;

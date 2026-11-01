@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 
-use crate::server::agent::tools::Env;
+use crate::server::agent::tools::contract::Env;
 
 #[derive(Deserialize)]
 struct Front {
@@ -16,6 +16,12 @@ struct Front {
 pub(crate) struct Template {
     pub(crate) body: String,
     pub(crate) tools: Vec<String>,
+}
+
+/// The name an answer file takes when the call gives none: the template's own file stem.
+pub(crate) fn stem(name: &str) -> String {
+    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    file.strip_suffix(".md").unwrap_or(file).to_string()
 }
 
 pub(crate) fn load(
@@ -53,18 +59,11 @@ fn find(env: &Env, name: &str) -> Result<PathBuf> {
     } else {
         format!("{name}.md")
     };
-    let project = env
-        .workspace
-        .root()
-        .join(".mypi")
-        .join("agents")
-        .join(&file);
+    let project = env.paths.agents.join(&file);
     if project.is_file() {
         return Ok(project);
     }
-    let global = crate::server::platform::env::config_dir()
-        .join("agents")
-        .join(&file);
+    let global = env.paths.global_agents.join(&file);
     if global.is_file() {
         return Ok(global);
     }
