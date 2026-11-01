@@ -97,7 +97,7 @@ fn numbers_of(call: &CallRecord) -> String {
     };
     ids.iter()
         .filter_map(|v| v.as_i64())
-        .map(|n| format!("#{n}"))
+        .map(|n| n.to_string())
         .collect::<Vec<_>>()
         .join(" ")
 }

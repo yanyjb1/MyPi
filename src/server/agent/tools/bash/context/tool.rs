@@ -122,13 +122,13 @@ fn show(env: &Env, args: &Args) -> Result<ToolOutput> {
     for id in &ids {
         match env.source.block(env.session, *id)? {
             Some(pair) => {
-                lines.push(format!("#{id} request: {}", one_line(&pair.request)));
+                lines.push(format!("{id} request: {}", one_line(&pair.request)));
                 let result = pair
                     .result
                     .map_or_else(|| "(none recorded)".to_string(), |v| one_line(&v));
-                lines.push(format!("#{id} result: {result}"));
+                lines.push(format!("{id} result: {result}"));
             }
-            None => lines.push(format!("#{id} (no such block in this session)")),
+            None => lines.push(format!("{id} (no such block in this session)")),
         }
     }
 
@@ -149,7 +149,7 @@ fn show(env: &Env, args: &Args) -> Result<ToolOutput> {
 fn render(record: &CallRecord) -> String {
     let at = record
         .block
-        .map_or_else(|| "current".to_string(), |b| format!("#{b}"));
+        .map_or_else(|| "current".to_string(), |b| b.to_string());
     format!(
         "{at} {} {}: {}",
         record.tool,
@@ -171,7 +171,7 @@ fn block_range(records: &[CallRecord]) -> String {
         records.iter().find_map(|r| r.block),
         records.iter().rev().find_map(|r| r.block),
     ) {
-        (Some(first), Some(last)) => format!("#{first}..{last}"),
+        (Some(first), Some(last)) => format!("{first}..{last}"),
         _ => "not yet in the store".to_string(),
     }
 }
@@ -254,7 +254,7 @@ fn block_list(call: &CallRecord) -> String {
     };
     ids.iter()
         .filter_map(|v| v.as_i64())
-        .map(|n| format!("#{n}"))
+        .map(|n| n.to_string())
         .collect::<Vec<_>>()
         .join(" ")
 }

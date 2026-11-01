@@ -127,7 +127,7 @@ fn render(memo: MemoView) -> String {
         MemoView::History(versions) if versions.is_empty() => "(no history)".to_string(),
         MemoView::History(versions) => versions
             .into_iter()
-            .map(|version| format!("#{} {}\n{}", version.id, version.ts, version.content))
+            .map(|version| format!("{} {}\n{}", version.id, version.ts, version.content))
             .collect::<Vec<_>>()
             .join("\n\n"),
     }
