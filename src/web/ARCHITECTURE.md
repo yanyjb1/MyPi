@@ -50,8 +50,8 @@ What is here, what each file holds, who talks to whom. Current state only.
   browser settings.
 - **`platform`**: `env::data_dir` for the default profile root.
 - **Crates**: `tungstenite` (WebSocket), `html-to-markdown-rs` (DOM to Markdown), `url`.
-- **Who calls it**: `server::agent::tools::web` — `run` for every operation, and
-  `tools::close_web_session` for a finished session.
+- **Who calls it**: `server::agent::tools::web` — `run` for every operation, and its own
+  `close_session` forward for a finished session, called by `api`'s delete door.
 - **Knows nothing about**: `Env`, tools, sessions' rows, the api doors, the front end.
 
 ## Inside
@@ -88,6 +88,5 @@ run (permit)
 
 ## Not wired yet
 
-1. `close_session` has no caller; the api layer closes a session's tabs when it ends.
-2. Provider selectors await live tuning.
-3. A headed launch needs a display server; the failure is reported, not retried.
+1. Provider selectors await live tuning.
+2. A headed launch needs a display server; the failure is reported, not retried.

@@ -132,7 +132,6 @@ entries, and `screenshot`, which names a file and its size.
 - Provider selectors are implemented but need live tuning against current result markup.
 - A headed browser needs `DISPLAY` or `WAYLAND_DISPLAY`; an attached browser cannot switch to headed.
 - CDP Network, HAR and response bodies are intentionally absent.
-- `close_session` has no caller until the api layer wires it.
 
 ## 4. Config fields
 

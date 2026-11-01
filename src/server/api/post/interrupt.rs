@@ -1,4 +1,4 @@
-//! `interrupt` — set the running turn's stop flag.
+//! `interrupt` — stop the running turn.
 
 use anyhow::Result;
 use serde_json::Value;
@@ -11,6 +11,6 @@ use super::emit;
 pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refuse> {
     let session = i64_of(ask, "session")?;
     emit::require_writer(api, viewer, session)?;
-    api.register().interrupt(session);
+    api.ledger().interrupt(session);
     Ok(serde_json::json!({}))
 }

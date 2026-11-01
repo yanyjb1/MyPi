@@ -26,7 +26,13 @@ pub enum Start {
 }
 
 /// Open one turn: its row, its first block, its list place, its working directory.
-pub fn open(w: &Writer, session: i64, start: Start, cwd: &Path) -> Result<i64> {
+pub fn open(
+    w: &Writer,
+    session: i64,
+    start: Start,
+    cwd: &Path,
+    model: Option<(String, String)>,
+) -> Result<i64> {
     let (block, compaction) = match start {
         Start::User {
             prefix,
@@ -66,6 +72,7 @@ pub fn open(w: &Writer, session: i64, start: Start, cwd: &Path) -> Result<i64> {
         Row::Turn {
             stop_reason: None,
             usage: None,
+            model,
         },
         Row::Block {
             turn: Ref::Batch(0),
@@ -166,6 +173,7 @@ pub fn borrow(
         rows.push(Row::Turn {
             stop_reason: Some("borrowed".to_string()),
             usage: None,
+            model: None,
         });
         rows.push(Row::Borrow {
             turn: Ref::Batch(turn),

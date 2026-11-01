@@ -89,6 +89,33 @@ impl Reader {
         )
     }
 
+    /// Every block id the session's list references, as closed intervals in list order.
+    pub fn ranges(&self, session: i64) -> Result<Vec<[i64; 2]>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {TURN_COLS} {TURN_FROM}
+              JOIN session_turns st ON st.turn_id = t.turn_id
+              WHERE st.session_id = ?1 ORDER BY st.idx"
+        ))?;
+        let found = stmt.query_map([session], turn_from_row)?;
+        let mut out = Vec::new();
+        for row in found {
+            out.extend(row?.blocks);
+        }
+        Ok(out)
+    }
+
+    /// One round's block intervals, in order.
+    pub fn turn_ranges(&self, turn_id: i64) -> Result<Vec<[i64; 2]>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {TURN_COLS} {TURN_FROM} WHERE t.turn_id = ?1"
+        ))?;
+        let mut found = stmt.query_map([turn_id], turn_from_row)?;
+        match found.next() {
+            Some(row) => Ok(row?.blocks),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// One request archive row.
     pub fn request(&self, request_id: i64) -> Result<Option<Value>> {
         let found = self
@@ -100,7 +127,7 @@ impl Reader {
             )
             .optional()?;
         found
-            .map(|(id, hash, meta)| request_json(id, &hash, meta))
+            .map(|(id, _, meta)| request_json(id, meta))
             .transpose()
     }
 
@@ -396,6 +423,8 @@ fn turn_json(row: TurnRow) -> Value {
         "turn_id": row.turn_id,
         "ranges": row.blocks,
         "stop_reason": row.stop_reason,
+        "provider": row.provider,
+        "model": row.model,
         "prompt_tokens": usage.map(|u| u.prompt_tokens),
         "completion_tokens": usage.map(|u| u.completion_tokens),
         "cached_tokens": usage.map(|u| u.cached_tokens),

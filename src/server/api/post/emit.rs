@@ -1,48 +1,32 @@
-//! What every write door shares: the writer gate and the change event.
+//! What every write door shares: the writer gate, the event, and the model pair.
 
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::server::api::call::store;
-use crate::server::api::convert;
 use crate::server::api::{Api, Refuse};
 use crate::server::storage::Reader;
 
-/// Only the session's writer may change it.
+/// Only the viewer that opened the running turn may change the session while it runs.
 pub(crate) fn require_writer(api: &Api, viewer: &str, session: i64) -> Result<(), Refuse> {
-    match api.relay().writer_of(session) {
-        Some(who) if who == viewer => Ok(()),
-        _ => Err(Refuse::Permission(
+    if api.relay().writes(session, viewer) {
+        Ok(())
+    } else {
+        Err(Refuse::Permission(
             "only the session's writer may write".into(),
-        )),
+        ))
     }
 }
 
 /// Announce a session-row change to everyone but the writer.
 pub(crate) fn changed(api: &Api, viewer: &str, session: i64, action: &str) -> Result<(), Refuse> {
-    let conn = Reader::open(api.db())?;
-    let row = store::session_row(&conn, session);
-    Reader::close(conn);
-    let meta = convert::session_meta(row?);
-    api.relay()
-        .post(session, action, viewer, json!({"meta": meta}));
+    let reader = Reader::open(api.db())?;
+    let row = reader.session(session)?;
+    drop(reader);
+    if let Some(row) = row {
+        api.relay()
+            .post(session, action, viewer, json!({"meta": row}));
+    }
     Ok(())
-}
-
-/// The newest round in the session's list.
-pub(crate) fn tip_turn(api: &Api, session: i64) -> Result<Option<i64>, Refuse> {
-    let conn = Reader::open(api.db())?;
-    let turn: Option<i64> = conn
-        .query_row(
-            "SELECT turn_id FROM session_turns WHERE session_id = ?1
-              ORDER BY idx DESC LIMIT 1",
-            [session],
-            |r| r.get(0),
-        )
-        .ok()
-        .flatten();
-    Reader::close(conn);
-    Ok(turn)
 }
 
 /// A model pair from `{"provider", "model"}`.

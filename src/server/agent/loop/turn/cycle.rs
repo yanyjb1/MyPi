@@ -16,10 +16,10 @@ use crate::server::agent::r#loop::session::history::Transcript;
 use crate::server::agent::r#loop::session::live::Live;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
 use crate::server::agent::tools::contract::call::BatchInput;
-use crate::server::agent::tools::contract::job::{JobHost, JobRunner, JobSpec, Schedule};
+use crate::server::agent::tools::contract::job::{JobRunner, JobSpec, Schedule};
 use crate::server::agent::tools::contract::output::Effect;
 use crate::server::agent::tools::contract::output::ToolResult;
-use crate::server::agent::tools::contract::view::{Child, Source};
+use crate::server::agent::tools::contract::view::Source;
 use crate::server::agent::tools::registry::roster;
 use crate::server::agent::tools::subagent::{FINAL, TASK};
 use crate::server::platform::time::now_stamp;
@@ -81,7 +81,7 @@ pub fn run(
 
     let mut usage = Usage::default();
     let mut fence = Fence::new(inner.settings.max_tool_rounds);
-    let mut stop = Stop::Model;
+    let stop;
     let mut first = true;
     let mut baseline = None;
 

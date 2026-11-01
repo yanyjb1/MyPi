@@ -15,7 +15,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
     let turn = i64_of(ask, "turn")?;
     let block = i64_of(ask, "block")?;
     emit::require_writer(api, viewer, session)?;
-    if api.relay().running(session) {
+    if api.relay().busy(session) {
         return Err(Refuse::Busy("the session is busy".into()));
     }
     let cut = convert::cut(api.writer().rewind(Target {
@@ -27,7 +27,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         session,
         "rewind",
         viewer,
-        json!({"turn": turn, "block": block, "cut": cut}),
+        json!({"turn": turn, "block": block, "cut": cut.clone()}),
     );
     Ok(json!({"cut": cut}))
 }

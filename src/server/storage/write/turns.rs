@@ -10,13 +10,18 @@ pub(crate) fn insert(
     tx: &rusqlite::Transaction<'_>,
     stop_reason: Option<&str>,
     usage: Option<RoundUsage>,
+    model: Option<&(String, String)>,
 ) -> Result<i64> {
     let (p, c, k, w) = usage_columns(usage);
+    let (provider, id) = match model {
+        Some((provider, id)) => (Some(provider.as_str()), Some(id.as_str())),
+        None => (None, None),
+    };
     tx.execute(
-        "INSERT INTO turns (stop_reason, prompt_tokens, completion_tokens,
+        "INSERT INTO turns (stop_reason, provider, model, prompt_tokens, completion_tokens,
                 cached_tokens, cache_write_tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![stop_reason, p, c, k, w],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![stop_reason, provider, id, p, c, k, w],
     )?;
     Ok(tx.last_insert_rowid())
 }

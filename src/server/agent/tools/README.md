@@ -301,11 +301,8 @@ not checked here; a bad argument is the server's error to report.
 
 ## 3. Unresolved
 
-1. The api doors are not updated: `api/call/todo.rs` replays by itself and `api/convert.rs` maps
-   phases and five states, while `Loop::todo` hands the replayed list over.
-2. MCP carries text content only; a server-initiated request is answered `-32601`.
-3. Template front matter reads `tools` only.
-4. `close_web_session` is exported for the api layer and has no caller yet.
+1. MCP carries text content only; a server-initiated request is answered `-32601`.
+2. Template front matter reads `tools` only.
 
 ## 4. Config fields
 

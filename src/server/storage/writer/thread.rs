@@ -3,7 +3,7 @@
 
 use std::sync::mpsc::Receiver;
 
-use super::super::write;
+use super::super::write::apply::apply;
 use super::Store;
 use super::job::{Answer, Job, What};
 
@@ -11,7 +11,7 @@ use super::job::{Answer, Job, What};
 pub(crate) fn run(work: Receiver<Job>, mut store: Store) {
     while let Ok(job) = work.recv() {
         let answer = match job.what {
-            What::Submit(submit) => match write::apply(&mut store.conn, submit) {
+            What::Submit(submit) => match apply(&mut store.conn, submit) {
                 Ok((landed, pieces)) => {
                     for piece in pieces {
                         store.relay_out(piece);

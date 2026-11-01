@@ -40,14 +40,10 @@ pub(crate) fn post(api: &Api, conn: u64, viewer: &str, frame: &Frame) -> Result<
         "name" => post::name::apply(api, viewer, ask),
         "cwd" => post::cwd::apply(api, viewer, ask),
         "switch" => post::switch::apply(api, viewer, ask),
-        "profile" => post::profile::apply(api, viewer, ask),
-        "todo_on" => post::todo_on::apply(api, viewer, ask),
-        "todo_off" => post::todo_off::apply(api, viewer, ask),
         "delete" => post::delete::apply(api, viewer, ask),
         "interrupt" => post::interrupt::apply(api, viewer, ask),
         "rewind" => post::rewind::apply(api, viewer, ask),
         "default_model" => post::default_model::apply(api, ask),
-        "reload" => post::reload::apply(api),
         other => Err(Refuse::Internal(format!("no such name: {other}"))),
     }
 }

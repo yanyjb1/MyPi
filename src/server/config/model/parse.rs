@@ -65,20 +65,18 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
                 continue;
             }
             Some(value) => match value.as_str() {
-                Some(raw) => {
-                    match crate::server::agent::request::protocols::ProtocolId::parse(raw) {
-                        Ok(id) => id.as_str().to_string(),
-                        Err(_) => {
-                            notices.push(warn(
-                                &key,
-                                file,
-                                &format!("unknown api `{raw}`"),
-                                "provider skipped",
-                            ));
-                            continue;
-                        }
+                Some(raw) => match crate::server::agent::request::ProtocolId::parse(raw) {
+                    Ok(id) => id.as_str().to_string(),
+                    Err(_) => {
+                        notices.push(warn(
+                            &key,
+                            file,
+                            &format!("unknown api `{raw}`"),
+                            "provider skipped",
+                        ));
+                        continue;
                     }
-                }
+                },
                 None => {
                     notices.push(warn(&key, file, "api must be text", "provider skipped"));
                     continue;

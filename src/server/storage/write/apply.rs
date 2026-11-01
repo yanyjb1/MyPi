@@ -73,7 +73,11 @@ fn one(
             sessions::move_cwd(tx, *session, cwd)?;
             0
         }
-        Row::Turn { stop_reason, usage } => turns::insert(tx, stop_reason.as_deref(), *usage)?,
+        Row::Turn {
+            stop_reason,
+            usage,
+            model,
+        } => turns::insert(tx, stop_reason.as_deref(), *usage, model.as_ref())?,
         Row::Settle {
             turn,
             stop_reason,
@@ -115,11 +119,7 @@ fn one(
             content,
             ts,
         } => {
-            let anchor = match anchor {
-                Some(a) => Some(id_of(ids, a)?),
-                None => None,
-            };
-            memos::insert(tx, anchor, name, content, ts)?;
+            memos::insert(tx, Some(id_of(ids, anchor)?), name, content, ts)?;
             0
         }
         Row::Alias {

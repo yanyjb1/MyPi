@@ -76,7 +76,6 @@ half's, and the loop only adds tool events to it.
 
 ## 3. Unresolved
 
-- The API does not construct the loop yet; `Loop::new` takes `&Config`.
 - Same-batch calls that have not landed are invisible to `Source`.
 
 ## 4. Config Fields

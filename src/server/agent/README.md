@@ -16,6 +16,5 @@ storage ──► loop ──► { request, tools }
 The dependency is one-way: `loop → request` and `loop → tools`. Request and tools do not know each
 other.
 
-The remaining cross-domain wiring is in `agent-剩余接线.md` and `api-loop-目标形态.md`. The open
-agent-level decisions are in `AGENT-DECISION.md`. Each subdomain keeps its own `README.md` and
-`ARCHITECTURE.md`.
+The cross-domain wiring lives in each domain's own `README.md` and `ARCHITECTURE.md`; the open
+decisions are in `AGENT-DECISION.md`. Each subdomain keeps its own pair of documents.

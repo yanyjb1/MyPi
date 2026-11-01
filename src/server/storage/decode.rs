@@ -100,6 +100,8 @@ pub(crate) fn turn_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> 
         turn_id: r.get(0)?,
         blocks,
         stop_reason: r.get(2)?,
+        provider: r.get(7)?,
+        model: r.get(8)?,
         usage,
     })
 }
@@ -138,7 +140,8 @@ pub(crate) fn request_from_row(
 
 /// A round row's columns, in [`turn_from_row`] read order.
 pub(crate) const TURN_COLS: &str = "t.turn_id, t.blocks, t.stop_reason,
-     t.prompt_tokens, t.completion_tokens, t.cached_tokens, t.cache_write_tokens";
+     t.prompt_tokens, t.completion_tokens, t.cached_tokens, t.cache_write_tokens,
+     t.provider, t.model";
 
 /// The round table, aliased `t`.
 pub(crate) const TURN_FROM: &str = "FROM turns t";

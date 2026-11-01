@@ -8,6 +8,5 @@ pub(crate) mod memo;
 pub(crate) mod meta;
 pub(crate) mod pools;
 pub(crate) mod sessions;
-pub(crate) mod store;
 pub(crate) mod todo;
 pub(crate) mod usage;

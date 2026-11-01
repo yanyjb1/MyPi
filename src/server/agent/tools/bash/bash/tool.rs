@@ -47,7 +47,12 @@ fn run(env: &mut Env, args: &Args, progress: &mut dyn FnMut(ToolProgress)) -> Re
 
     if !backend.guarded() {
         return Ok(ToolOutput::text(shell::run(
-            &backend, &cwd, &cmd, timeout, interrupt, progress,
+            &backend,
+            &cwd,
+            &cmd,
+            timeout,
+            Some(interrupt),
+            progress,
         )?));
     }
     let zone = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
@@ -59,10 +64,12 @@ fn run(env: &mut Env, args: &Args, progress: &mut dyn FnMut(ToolProgress)) -> Re
         guard::Verdict::Warn(hits) => {
             // A warning hit: run anyway, tagging the output so the model sees what it did.
             let tags: Vec<&str> = hits.iter().map(|h| h.rule_id).collect();
-            let text = shell::run(&backend, &cwd, &cmd, timeout, interrupt, progress)?;
+            let text = shell::run(&backend, &cwd, &cmd, timeout, Some(interrupt), progress)?;
             format!("[warn: {}]\n{text}", tags.join("+"))
         }
-        guard::Verdict::Allow => shell::run(&backend, &cwd, &cmd, timeout, interrupt, progress)?,
+        guard::Verdict::Allow => {
+            shell::run(&backend, &cwd, &cmd, timeout, Some(interrupt), progress)?
+        }
     };
 
     // The oversized tail is the front door's business (file it, append the ref); the tool hands up text.

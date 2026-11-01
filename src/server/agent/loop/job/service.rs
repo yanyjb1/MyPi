@@ -8,10 +8,10 @@ use anyhow::{Result, bail};
 use super::cron::Cron;
 use super::job::{Id, Job, ScheduleEntry, Spec, State, TaskState};
 use super::output::OutputDir;
-use super::{scheduler, wake};
+use super::scheduler;
+use super::wake::{self, WakeSink};
 use crate::server::agent::tools::contract::job as port;
 use crate::server::platform::time;
-
 
 /// The scheduler's own numbers, read from config by whoever builds the factory.
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +35,11 @@ impl Factory {
     }
 
     pub(crate) fn make(&self, session: i64) -> Arc<JobService> {
-        let dir = OutputDir::new(session, self.values.max_output_bytes, self.values.max_retained);
+        let dir = OutputDir::new(
+            session,
+            self.values.max_output_bytes,
+            self.values.max_retained,
+        );
         let state = Arc::new(Mutex::new(State::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let bell = Arc::new((Mutex::new(()), Condvar::new()));
@@ -264,11 +268,7 @@ impl JobService {
         }
         st.tasks.insert(id, task);
         drop(st);
-        scheduler::run_job(
-            self.inner.state.clone(),
-            self.inner.bell.clone(),
-            id,
-        );
+        scheduler::run_job(self.inner.state.clone(), self.inner.bell.clone(), id);
         Ok(port::Receipt {
             id: id.to_string(),
             text: format!("{id} created"),
@@ -294,13 +294,7 @@ impl JobService {
         })
     }
 
-    fn every(
-        &self,
-        spec: Spec,
-        cron: Cron,
-        count: Option<u32>,
-        now: i64,
-    ) -> Result<port::Receipt> {
+    fn every(&self, spec: Spec, cron: Cron, count: Option<u32>, now: i64) -> Result<port::Receipt> {
         anyhow::ensure!(count != Some(0), "`count` must be positive or -1");
         let mut st = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         let sid = st.schedule_id();

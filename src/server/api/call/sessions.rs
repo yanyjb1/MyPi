@@ -1,36 +1,50 @@
-//! `sessions` — the resume list, newest first.
+//! `sessions` — the resume list: main sessions only, newest first.
+
+use std::collections::HashSet;
 
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::server::api::call::store::SESSION_COLS;
-use crate::server::api::convert;
 use crate::server::api::{Api, Refuse};
 use crate::server::storage::Reader;
+use crate::server::storage::query::{Cond, Query, Sheet, Val};
 
 pub(crate) fn answer(api: &Api, under: Option<&str>) -> Result<Value, Refuse> {
-    let conn = Reader::open(api.db())?;
-    let out = build(&conn, under);
-    Reader::close(conn);
-    Ok(json!({"rows": out?}))
+    let reader = Reader::open(api.db())?;
+    let walked = match under {
+        Some(dir) => Some(dirs(&reader, dir)?),
+        None => None,
+    };
+    let mut rows = Vec::new();
+    for row in reader.sessions()? {
+        if row["anchor"].is_i64() {
+            continue;
+        }
+        if let Some(dir) = under {
+            let here = row["cwd"].as_str() == Some(dir);
+            let before = row
+                .get("id")
+                .and_then(Value::as_i64)
+                .is_some_and(|id| walked.as_ref().is_some_and(|set| set.contains(&id)));
+            if !here && !before {
+                continue;
+            }
+        }
+        rows.push(row);
+    }
+    rows.reverse();
+    Ok(json!({"rows": rows}))
 }
 
-fn build(conn: &rusqlite::Connection, under: Option<&str>) -> Result<Vec<Value>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {SESSION_COLS}
-           FROM sessions s
-          WHERE (?1 IS NULL
-                 OR s.id IN (SELECT DISTINCT session_id FROM cwd_history WHERE cwd = ?1))
-            AND s.id NOT IN (SELECT subsession_id FROM subsessions)
-          ORDER BY s.id DESC"
-    ))?;
-    let rows = stmt.query_map(
-        rusqlite::params![under],
-        crate::server::storage::decode::session_meta,
+/// The sessions that ever ran a turn in that directory.
+fn dirs(reader: &Reader, dir: &str) -> Result<HashSet<i64>> {
+    let rows = reader.query(
+        &Query::new(Sheet::Cwds)
+            .columns(&["session_id"])
+            .filter(vec![Cond::Eq("cwd", Val::Text(dir.to_string()))]),
     )?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(convert::session_meta(row?));
-    }
-    Ok(out)
+    Ok(rows
+        .iter()
+        .filter_map(|row| row["session_id"].as_i64())
+        .collect())
 }

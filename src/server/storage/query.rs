@@ -9,6 +9,7 @@ pub enum Sheet {
     Aliases,
     Sessions,
     Turns,
+    Cwds,
 }
 
 impl Sheet {
@@ -19,6 +20,7 @@ impl Sheet {
             Sheet::Aliases => "aliases",
             Sheet::Sessions => "sessions",
             Sheet::Turns => "turns",
+            Sheet::Cwds => "cwd_history",
         }
     }
 
@@ -81,6 +83,11 @@ impl Sheet {
                 ("completion_tokens", "completion_tokens"),
                 ("cached_tokens", "cached_tokens"),
                 ("cache_write_tokens", "cache_write_tokens"),
+            ],
+            Sheet::Cwds => &[
+                ("session_id", "session_id"),
+                ("turn_id", "turn_id"),
+                ("cwd", "cwd"),
             ],
         }
     }

@@ -72,8 +72,8 @@ half's types, re-exported from this domain's root.
   `Row::Baseline`.
 - `pen::turn::borrow` writes one borrowed turn per kept original turn, each with its ranges and the
   `borrowed` stop reason.
-- `session::change` writes `Row::Switch` or `Row::MoveCwd` and updates the handle; a model switch
-  also archives the expanded tool manuals.
+- `session::change` writes `Row::Switch` or `Row::MoveCwd` and updates the handle. A change never
+  touches the archive: a session keeps the one it was created with.
 - `Loop::new` reads the tool values out of `config`, builds `tools::Engine`, and keeps the same
   `Source` handle for the roster's availability gate.
 
@@ -87,5 +87,4 @@ half's types, re-exported from this domain's root.
 
 ## Not wired
 
-- The API does not construct the loop yet; `Loop::new` takes `&Config`.
 - Same-batch calls that have not landed are invisible to `Source`.

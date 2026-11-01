@@ -11,10 +11,10 @@ pub(crate) const USAGE_ALIGN: &[&str] = &["center", "left", "right"];
 keys! {
     KEY_CONFIG_SERVER_API_DEFAULT_MODEL = "config", "server.api", "defaultModel", Text, DefaultValue::Null, "Model requests use unless the session says otherwise.", true;
     KEY_CONFIG_SERVER_REQUEST_STREAMING = "config", "server.request", "streaming", Text, DefaultValue::Text("immediate"), "immediate = every chunk; buffered = one piece per block.", true;
-    KEY_CONFIG_SERVER_REQUEST_COMPACT_RETAIN_TAIL = "config", "server.request.compact", "retainTail", Int, DefaultValue::Int(20000), "Tokens of the tail a compaction keeps verbatim.", true;
+    KEY_CONFIG_SERVER_REQUEST_COMPACT_RETAIN_TAIL = "config", "server.request.compact", "retainTail", Int, DefaultValue::Int(20000), "Characters of the tail a compaction keeps verbatim; one character is one unit.", true;
     KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE = "config", "server.request.compact", "instructionFile", Text, DefaultValue::Null, "Compaction instruction file; a profile's compact.md wins.", true;
-    KEY_CONFIG_SERVER_AGENT_RELOAD_ON_COMPACTION = "config", "server.agent", "reloadOnCompaction", Bool, DefaultValue::Bool(false), "Re-read the profile's tool list after a compaction.", true;
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS = "config", "server.agent.loop", "maxToolCalls", BoolOrInt, DefaultValue::Int(20000), "Fence on tool-call rounds; false turns it off.", true;
+    KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE = "config", "server.agent.loop", "scrooge", Bool, DefaultValue::Bool(false), "Forbid a model change mid-session.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT = "config", "server.agent.tools", "bashTimeout", Int, DefaultValue::Int(600), "Cap on one bash command, in seconds.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES = "config", "server.agent.tools", "outputMaxLines", Int, DefaultValue::Int(512), "Lines of one tool result kept inline.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES = "config", "server.agent.tools", "outputMaxBytes", Int, DefaultValue::Int(262144), "Bytes of one tool result kept inline.", true;

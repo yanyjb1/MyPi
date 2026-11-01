@@ -48,3 +48,8 @@ pub fn roster(names: &[String]) -> Vec<ToolDef> {
         .map(Tool::definition)
         .collect()
 }
+
+/// Every tool name in the table, for a profile that names none.
+pub fn names() -> Vec<String> {
+    TOOLS.iter().map(|tool| tool.name.to_string()).collect()
+}

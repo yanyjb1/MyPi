@@ -206,6 +206,9 @@ pub struct TurnRow {
     /// How the round ended (`stop` / `interrupted` / `broken` / `killed`) or what the row is
     /// (`rewind` / `compaction` / `borrowed`); `None` = not finished yet.
     pub stop_reason: Option<String>,
+    /// The model this round ran on; `None` = the round never asked (borrowed, or died early).
+    pub provider: Option<String>,
+    pub model: Option<String>,
     /// Usage; `None` = never received (died mid-flight, the gateway does not
     /// report, or a borrowed row).
     pub usage: Option<RoundUsage>,
@@ -257,6 +260,8 @@ pub enum Row {
     Turn {
         stop_reason: Option<String>,
         usage: Option<RoundUsage>,
+        /// The model this round runs on.
+        model: Option<(String, String)>,
     },
     /// `turns.stop_reason` + the four usage columns.
     Settle {

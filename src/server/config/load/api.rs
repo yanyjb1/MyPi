@@ -1,12 +1,16 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use anyhow::anyhow;
+use serde_yaml::Mapping;
+
 use super::super::model::{self, ResolvedModel};
 use super::super::notice::ConfigNotice;
 use super::super::paths::{self, ConfigPaths};
 use super::super::profile::{self, ResolvedProfile};
-use super::super::registry::Value;
+use super::super::registry::{self, Value};
 use super::super::schema::{
+    KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE,
     KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_HEADLESS, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT,
@@ -14,6 +18,7 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_USER_AGENT,
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES, KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES,
     KEY_CONFIG_SERVER_API_DEFAULT_MODEL, KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE,
+    KEY_CONFIG_SERVER_REQUEST_COMPACT_RETAIN_TAIL, KEY_CONFIG_SERVER_REQUEST_STREAMING,
 };
 use super::super::write;
 use super::source::child;
@@ -164,6 +169,91 @@ impl Config {
             cache.clear();
         }
         Ok(target)
+    }
+
+    /// Every provider the request half can reach, credentials expanded.
+    pub fn providers(&self) -> Vec<crate::server::agent::request::Provider> {
+        self.inner
+            .models
+            .providers
+            .iter()
+            .filter_map(|provider| {
+                let protocol =
+                    crate::server::agent::request::ProtocolId::parse(&provider.api).ok()?;
+                Some(crate::server::agent::request::Provider {
+                    name: provider.name.clone(),
+                    base_url: provider.base_url.clone(),
+                    protocol,
+                    api_key: self.inner.models.resolve_key(provider),
+                    auth_header: provider.auth_header,
+                })
+            })
+            .collect()
+    }
+
+    /// The declared output cap of every configured model, keyed `provider:model`.
+    pub fn output_caps(&self) -> std::collections::BTreeMap<String, u32> {
+        let mut caps = std::collections::BTreeMap::new();
+        for (provider, entry) in self.models() {
+            let address = format!("{provider}:{}", entry.id);
+            let Some(cap) = entry
+                .max_output_tokens
+                .and_then(|cap| u32::try_from(cap).ok())
+            else {
+                panic!("models.yml: {address} has no maxOutputTokens")
+            };
+            caps.insert(address, cap);
+        }
+        caps
+    }
+
+    /// Tool-round fence; `None` turns it off.
+    pub fn tool_rounds(&self) -> Option<usize> {
+        match self
+            .effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS)
+        {
+            Some(Value::BoolOrInt(registry::BoolOrInt::Int(n))) => {
+                Some(usize::try_from(*n).unwrap_or(0))
+            }
+            Some(Value::Int(n)) => Some(usize::try_from(*n).unwrap_or(0)),
+            _ => None,
+        }
+    }
+
+    /// Forbid a model change mid-session.
+    pub fn scrooge(&self) -> bool {
+        self.effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// One piece per chunk rather than per block.
+    pub fn streaming_immediate(&self) -> bool {
+        self.effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_REQUEST_STREAMING)
+            .and_then(Value::as_text)
+            .map(|text| text == "immediate")
+            .unwrap_or(true)
+    }
+
+    /// Characters a compaction keeps when the caller names no budget.
+    pub fn retain_tail(&self) -> usize {
+        self.effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_REQUEST_COMPACT_RETAIN_TAIL)
+            .and_then(Value::as_int)
+            .unwrap_or(20000)
+            .max(0) as usize
+    }
+
+    /// Every profile name a session may name.
+    pub fn profiles(&self) -> Vec<String> {
+        profile::list(&self.inner.paths, &mut Vec::new())
     }
 
     fn write_target(&self) -> PathBuf {

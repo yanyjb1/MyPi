@@ -3,54 +3,55 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::server::api::call::store;
-use crate::server::api::convert;
 use crate::server::api::{Api, Refuse};
 use crate::server::storage::Reader;
-
-use super::todo;
 
 const LATEST: usize = 64;
 
 pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
-    let conn = Reader::open(api.db())?;
-    let out = build(&conn, session);
-    Reader::close(conn);
-    out
-}
-
-fn build(conn: &rusqlite::Connection, session: i64) -> Result<Value, Refuse> {
-    let from = store::read_start(conn, session)?.unwrap_or(0);
-    let ids = store::list_ids(conn, session, from)?;
+    let reader = Reader::open(api.db())?;
+    let list = reader.list(session)?;
+    let from = list
+        .iter()
+        .rev()
+        .find(|row| row["is_compaction"].as_bool() == Some(true))
+        .and_then(|row| row["idx"].as_i64())
+        .unwrap_or(0);
 
     let mut structure = Vec::new();
     let mut blocks = Vec::new();
-    for turn_id in ids.iter().rev() {
-        let Some(row) = store::turn(conn, *turn_id)? else {
-            continue;
-        };
-        structure.push(json!({"turn": *turn_id, "ranges": row.blocks}));
-        if store::borrowed(&row) || blocks.len() >= LATEST {
+    for row in list.iter().rev() {
+        if row["idx"].as_i64().unwrap_or(0) < from {
             continue;
         }
-        let mut list = store::blocks_of(conn, &row)?;
-        list.reverse();
-        for block in list {
+        let Some(turn_id) = row["turn_id"].as_i64() else {
+            continue;
+        };
+        let ranges = reader.turn_ranges(turn_id)?;
+        structure.push(json!({"turn": turn_id, "ranges": ranges}));
+        let borrowed = reader
+            .turn(turn_id)?
+            .map(|turn| turn["stop_reason"].as_str() == Some("borrowed"))
+            .unwrap_or(true);
+        if borrowed || blocks.len() >= LATEST {
+            continue;
+        }
+        for block in reader.blocks(&ranges)?.into_iter().rev() {
             if blocks.len() == LATEST {
                 break;
             }
-            blocks.push(convert::block(block));
+            blocks.push(block);
         }
     }
+    structure.reverse();
     blocks.reverse();
 
-    let phases = todo::list(conn, session)?;
-    let todo = if phases.is_empty() {
+    let todo = api.ledger().todo(session)?;
+    let todo = if todo.is_empty() {
         Value::Null
     } else {
-        Value::Array(phases.into_iter().map(convert::todo_phase).collect())
+        serde_json::to_value(&todo).map_err(|e| Refuse::Internal(e.to_string()))?
     };
-
     Ok(json!({
         "structure": structure,
         "blocks": blocks,

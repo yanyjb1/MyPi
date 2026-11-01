@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::super::notice::{ConfigNotice, warn};
-use super::super::paths::ConfigPaths;
+use super::super::paths::{self, ConfigPaths};
+use super::types::{DEFAULT_PROFILE, OMP_PROFILE};
 
 pub fn locate(paths: &ConfigPaths, name: &str, notices: &mut Vec<ConfigNotice>) -> Option<PathBuf> {
     let (found, unusable) = collect(paths, notices);

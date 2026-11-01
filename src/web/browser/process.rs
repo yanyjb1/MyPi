@@ -48,7 +48,7 @@ impl Browser {
             .or_else(|| {
                 cfg.bin
                     .as_deref()
-                    .filter(|b| !b.is_empty())
+                    .filter(|b| !b.as_os_str().is_empty())
                     .map(PathBuf::from)
             })
             .unwrap_or_else(|| PathBuf::from(DEFAULT_BROWSER_BIN));

@@ -1,10 +1,11 @@
-//! `config` — not wired: the config lives outside this region.
+//! `config` — one key's value, read through the domain that owns it.
 
 use anyhow::Result;
 use serde_json::Value;
 
 use crate::server::api::{Api, Refuse};
 
-pub(crate) fn answer(_api: &Api, _key: &str) -> Result<Value, Refuse> {
-    Err(Refuse::Internal("the config is not wired yet".into()))
+pub(crate) fn answer(api: &Api, key: &str) -> Result<Value, Refuse> {
+    let cfg = api.cfg();
+    cfg.get_json(key, None).map_err(Refuse::Bad)
 }

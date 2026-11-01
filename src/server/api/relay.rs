@@ -1,7 +1,7 @@
-//! The session stream: one buffer per session, one queue per connection.
+//! The session stream: one table of connections, one current turn per session, and the buffer a
+//! late watcher catches up from.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -9,50 +9,43 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::ipc::contract::Frame;
-use crate::server::storage::decode::parse_blocks;
-use crate::server::storage::{Reader, Relay as Piece, Writer};
+use crate::server::agent::r#loop::{Element, Event, NoticeLevel, Stream, ToolEvent};
+use crate::server::storage::{Structure, Writer};
 
-use super::convert;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Role {
-    Writer,
-    Watcher,
-}
-
+/// One connection's outbound end and what it currently follows.
 struct Entry {
     viewer: Option<String>,
     session: Option<i64>,
-    role: Role,
     tx: Sender<Frame>,
+}
+
+/// The turn a session is in, the door that opened it, and the viewer that did.
+struct Active {
+    turn: i64,
+    opened_by: &'static str,
+    viewer: String,
 }
 
 #[derive(Default)]
 struct State {
     conns: HashMap<u64, Entry>,
+    active: HashMap<i64, Active>,
     buffers: HashMap<i64, Vec<Frame>>,
-    running: HashSet<i64>,
 }
 
-/// The stream: who is on which session, what each session still holds.
+/// The stream: who follows which session, and what this turn has already said.
 #[derive(Clone)]
 pub(crate) struct Relay {
     state: Arc<Mutex<State>>,
-    db: Arc<PathBuf>,
 }
 
 impl Relay {
-    /// Take the writer's port; every piece becomes a stream event. The returned sender is the
-    /// loop's way in: live signals that never become blocks.
-    pub(crate) fn start(
-        db: PathBuf,
-        writer: &Writer,
-    ) -> Result<(Relay, Sender<crate::server::agent::r#loop::outlet::Event>)> {
+    /// Take storage's structure port, and hand back the event sender the loop writes to.
+    pub(crate) fn start(writer: &Writer) -> Result<(Relay, Sender<Event>)> {
         let relay = Relay {
             state: Arc::new(Mutex::new(State::default())),
-            db: Arc::new(db),
         };
-        let (port, pieces) = mpsc::channel::<Piece>();
+        let (port, pieces) = mpsc::channel::<Structure>();
         writer
             .relay(port)
             .context("cannot register the api's relay port")?;
@@ -61,12 +54,12 @@ impl Relay {
             .name("api-relay".to_string())
             .spawn(move || {
                 for piece in pieces {
-                    me.piece(piece);
+                    me.structure(piece);
                 }
             })
             .context("cannot start the relay thread")?;
 
-        let (events, live) = mpsc::channel();
+        let (events, live) = mpsc::channel::<Event>();
         let me = relay.clone();
         std::thread::Builder::new()
             .name("api-live".to_string())
@@ -85,7 +78,6 @@ impl Relay {
             Entry {
                 viewer: None,
                 session: None,
-                role: Role::Watcher,
                 tx,
             },
         );
@@ -99,12 +91,8 @@ impl Relay {
 
     pub(crate) fn detach(&self, conn: u64) {
         let mut state = self.state();
-        let Some(entry) = state.conns.remove(&conn) else {
-            return;
-        };
-        if let Some(session) = entry.session {
-            drop_buffer(&mut state, session);
-        }
+        state.conns.remove(&conn);
+        drop_unfollowed(&mut state);
     }
 
     pub(crate) fn viewer_of(&self, conn: u64) -> Option<String> {
@@ -118,53 +106,177 @@ impl Relay {
         self.state().conns.len()
     }
 
-    /// Declare this connection's session and role. A new writer takes the session.
-    pub(crate) fn declare(&self, conn: u64, session: i64, role: Role, turn: Option<i64>) {
+    /// This connection follows this session, and hears whatever this turn already said.
+    pub(crate) fn declare(&self, conn: u64, session: i64) {
         let mut state = self.state();
-        let old = state.conns.get(&conn).and_then(|entry| entry.session);
-        if role == Role::Writer {
-            for entry in state.conns.values_mut() {
-                if entry.session == Some(session) && entry.role == Role::Writer {
-                    entry.role = Role::Watcher;
-                }
-            }
-        }
         if let Some(entry) = state.conns.get_mut(&conn) {
             entry.session = Some(session);
-            entry.role = role;
         }
-        if let Some(old) = old
-            && old != session
-        {
-            drop_buffer(&mut state, old);
+        let replay = state.buffers.get(&session).cloned().unwrap_or_default();
+        if let Some(tx) = state.conns.get(&conn).map(|entry| entry.tx.clone()) {
+            for frame in replay {
+                let _ = tx.send(frame);
+            }
         }
     }
 
-    /// Claim the session's running slot; `false` = a turn is already running.
-    pub(crate) fn claim(&self, session: i64) -> bool {
-        self.state().running.insert(session)
+    /// Is a turn already running on this session?
+    pub(crate) fn busy(&self, session: i64) -> bool {
+        self.state().active.contains_key(&session)
     }
 
-    pub(crate) fn release(&self, session: i64) {
-        self.state().running.remove(&session);
-    }
-
-    pub(crate) fn running(&self, session: i64) -> bool {
-        self.state().running.contains(&session)
-    }
-
-    pub(crate) fn writer_of(&self, session: i64) -> Option<String> {
-        self.state()
-            .conns
-            .values()
-            .find(|entry| entry.session == Some(session) && entry.role == Role::Writer)
-            .and_then(|entry| entry.viewer.clone())
-    }
-
-    /// One event: record it for the session, then hand it to every subscriber.
-    pub(crate) fn deliver(&self, session: i64, frame: Frame, issuer: Option<&str>) {
+    /// Record the turn this viewer just opened on this session.
+    pub(crate) fn opened(
+        &self,
+        conn: u64,
+        session: i64,
+        viewer: &str,
+        turn: i64,
+        door: &'static str,
+    ) {
         let mut state = self.state();
-        let live: Vec<(u64, Sender<Frame>)> = state
+        if let Some(entry) = state.conns.get_mut(&conn) {
+            entry.session = Some(session);
+        }
+        state.active.insert(
+            session,
+            Active {
+                turn,
+                opened_by: door,
+                viewer: viewer.to_string(),
+            },
+        );
+    }
+
+    /// Only the viewer that opened the turn may change the session while it runs.
+    pub(crate) fn writes(&self, session: i64, viewer: &str) -> bool {
+        match self.state().active.get(&session) {
+            Some(active) => active.viewer == viewer,
+            None => true,
+        }
+    }
+
+    /// One write of the api's own: everybody but the issuer hears it.
+    pub(crate) fn post(&self, session: i64, action: &str, issuer: &str, extra: Value) {
+        let mut payload = json!({"session": session, "action": action, "by": issuer});
+        if let (Some(object), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+        self.deliver(session, Frame::new("post", action, payload), Some(issuer));
+    }
+
+    /// The session is gone: its buffer, its turn, and every watcher's claim on it.
+    pub(crate) fn forget(&self, session: i64) {
+        let mut state = self.state();
+        state.buffers.remove(&session);
+        state.active.remove(&session);
+        for entry in state.conns.values_mut() {
+            if entry.session == Some(session) {
+                entry.session = None;
+            }
+        }
+    }
+
+    /// One live moment from the loop.
+    fn event(&self, event: Event) {
+        let session = event.session;
+        let (turn, door) = self.turn_of(session);
+        match event.element {
+            Element::Stream(stream) => {
+                let (kind, extra) = match stream {
+                    Stream::Text(text) => ("text", json!({"text": text})),
+                    Stream::Thinking(text) => ("thinking", json!({"text": text})),
+                    Stream::Arguments { call_id, text } => {
+                        ("arguments", json!({"call_id": call_id, "text": text}))
+                    }
+                    Stream::Boundary => ("boundary", json!({})),
+                };
+                self.stream(session, turn, door, kind, extra);
+            }
+            Element::Tool(tool) => {
+                let (kind, extra) = match tool {
+                    ToolEvent::Start {
+                        call_id,
+                        name,
+                        args,
+                        intent,
+                    } => (
+                        "tool_start",
+                        json!({"call_id": call_id, "name": name, "args": args, "intent": intent}),
+                    ),
+                    ToolEvent::Progress { call_id, text } => {
+                        ("tool_progress", json!({"call_id": call_id, "text": text}))
+                    }
+                    ToolEvent::End {
+                        call_id,
+                        ok,
+                        result,
+                        memo,
+                        duration_ms,
+                    } => (
+                        "tool_end",
+                        json!({
+                            "call_id": call_id,
+                            "ok": ok,
+                            "result": result,
+                            "memo": memo,
+                            "duration_ms": duration_ms,
+                        }),
+                    ),
+                };
+                self.stream(session, turn, door, kind, extra);
+            }
+            Element::Notice(notice) => {
+                let level = match notice.level {
+                    NoticeLevel::Info => "info",
+                    NoticeLevel::Warn => "warn",
+                    NoticeLevel::Error => "error",
+                };
+                let payload = json!({"session": session, "level": level, "content": notice.text});
+                self.deliver(session, Frame::new("subscribe", "notice", payload), None);
+            }
+        }
+    }
+
+    /// One piece of live output, labelled with the turn and the door that opened it.
+    fn stream(&self, session: i64, turn: i64, door: &'static str, kind: &str, extra: Value) {
+        let mut payload = json!({"session": session, "turn": turn, "kind": kind});
+        if let (Some(object), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+        self.deliver(session, Frame::new("subscribe", door, payload), None);
+    }
+
+    /// A turn closed: its ranges go out last, then the buffer and the turn go.
+    fn structure(&self, piece: Structure) {
+        let (_, door) = self.turn_of(piece.session);
+        let payload = json!({
+            "session": piece.session,
+            "turn": piece.turn,
+            "ranges": piece.ranges,
+        });
+        self.deliver(piece.session, Frame::new("subscribe", door, payload), None);
+        let mut state = self.state();
+        state.buffers.remove(&piece.session);
+        state.active.remove(&piece.session);
+    }
+
+    fn turn_of(&self, session: i64) -> (i64, &'static str) {
+        self.state()
+            .active
+            .get(&session)
+            .map(|active| (active.turn, active.opened_by))
+            .unwrap_or((0, "wake"))
+    }
+
+    /// One frame for every connection following this session; the issuer never reads its own write.
+    fn deliver(&self, session: i64, frame: Frame, issuer: Option<&str>) {
+        let mut state = self.state();
+        let targets: Vec<(u64, Sender<Frame>)> = state
             .conns
             .iter()
             .filter(|(_, entry)| entry.session == Some(session))
@@ -174,7 +286,7 @@ impl Relay {
             })
             .map(|(id, entry)| (*id, entry.tx.clone()))
             .collect();
-        if live.is_empty() {
+        if targets.is_empty() {
             return;
         }
         state
@@ -183,7 +295,7 @@ impl Relay {
             .or_default()
             .push(frame.clone());
         let mut dead = Vec::new();
-        for (id, tx) in live {
+        for (id, tx) in targets {
             if tx.send(frame.clone()).is_err() {
                 dead.push(id);
             }
@@ -191,121 +303,7 @@ impl Relay {
         for id in dead {
             state.conns.remove(&id);
         }
-        drop_buffer(&mut state, session);
-    }
-
-    /// A post event: the issuer never reads its own write back.
-    pub(crate) fn post(&self, session: i64, action: &str, issuer: &str, extra: Value) {
-        let mut payload = json!({"session": session, "action": action});
-        if let (Some(object), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
-            for (key, value) in extra {
-                object.insert(key.clone(), value.clone());
-            }
-        }
-        self.deliver(session, frame("post", payload), Some(issuer));
-    }
-
-    /// The session is gone: its buffer, its slot, and every watcher's claim on it.
-    pub(crate) fn forget(&self, session: i64) {
-        let mut state = self.state();
-        state.buffers.remove(&session);
-        state.running.remove(&session);
-        for entry in state.conns.values_mut() {
-            if entry.session == Some(session) {
-                entry.session = None;
-                entry.role = Role::Watcher;
-            }
-        }
-    }
-
-    /// One live line from the loop.
-    fn event(&self, event: crate::server::agent::r#loop::outlet::Event) {
-        let payload = json!({
-            "session": event.session,
-            "level": event.level,
-            "content": event.content,
-        });
-        self.deliver(event.session, frame("notice", payload), None);
-    }
-
-    fn piece(&self, piece: Piece) {
-        match piece {
-            Piece::Tail {
-                session,
-                turn,
-                blocks,
-                done,
-            } => {
-                let payload = json!({
-                    "session": session,
-                    "turn": turn,
-                    "blocks": blocks.into_iter().map(convert::new_block).collect::<Vec<_>>(),
-                    "done": done,
-                });
-                self.deliver(session, frame("stream", payload), None);
-            }
-            Piece::Blocks {
-                session,
-                turn,
-                blocks,
-            } => {
-                let payload = json!({
-                    "session": session,
-                    "turn": turn,
-                    "blocks": blocks.into_iter().map(convert::block).collect::<Vec<_>>(),
-                });
-                self.deliver(session, frame("stream", payload), None);
-            }
-            Piece::Tool {
-                session,
-                turn,
-                call_id,
-                text,
-            } => {
-                let payload = json!({
-                    "session": session,
-                    "turn": turn,
-                    "call_id": call_id,
-                    "text": text,
-                });
-                self.deliver(session, frame("stream", payload), None);
-            }
-            Piece::Ended {
-                session,
-                turn,
-                stop_reason,
-                usage,
-            } => {
-                let ranges = self.ranges(turn);
-                let payload = json!({
-                    "session": session,
-                    "turn": turn,
-                    "ranges": ranges,
-                    "stop_reason": stop_reason,
-                    "usage": usage.map(convert::usage),
-                });
-                self.deliver(session, frame("structure", payload), None);
-                let mut state = self.state();
-                state.running.remove(&session);
-                state.buffers.remove(&session);
-            }
-        }
-    }
-
-    /// The block id ranges one round owns.
-    fn ranges(&self, turn: i64) -> Vec<[i64; 2]> {
-        let Ok(conn) = Reader::open(&self.db) else {
-            return Vec::new();
-        };
-        let raw: Option<String> = conn
-            .query_row("SELECT blocks FROM turns WHERE turn_id = ?1", [turn], |r| {
-                r.get(0)
-            })
-            .ok();
-        Reader::close(conn);
-        raw.as_deref()
-            .and_then(|raw| parse_blocks(raw).ok())
-            .unwrap_or_default()
+        drop_unfollowed(&mut state);
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -313,17 +311,14 @@ impl Relay {
     }
 }
 
-fn frame(name: &str, payload: Value) -> Frame {
-    Frame::new("subscribe", name, payload)
-}
-
-/// A session with no subscriber left keeps no buffer.
-fn drop_buffer(state: &mut State, session: i64) {
-    let watched = state
+/// A session with no watcher left keeps no buffer.
+fn drop_unfollowed(state: &mut State) {
+    let followed: HashSet<i64> = state
         .conns
         .values()
-        .any(|entry| entry.session == Some(session));
-    if !watched {
-        state.buffers.remove(&session);
-    }
+        .filter_map(|entry| entry.session)
+        .collect();
+    state
+        .buffers
+        .retain(|session, _| followed.contains(session));
 }

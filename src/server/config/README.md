@@ -83,7 +83,6 @@ the session carries which profile it uses.
 
 1. **Skills.** Deferred; the reader will mirror profiles (directory, name, description).
 2. **`mcp`.** Removed from this domain; not a configuration source here.
-3. **`config.server.agent.reloadOnCompaction`.** Declared, no semantics.
 
 ## 4. Config fields
 
@@ -93,7 +92,7 @@ This domain owns the keys below; consumers ask it for values.
 |---|---|
 | `config.server.api` | `defaultModel` |
 | `config.server.request` | `streaming`; `compact.retainTail`, `compact.instructionFile` |
-| `config.server.agent` | `reloadOnCompaction`; `loop.maxToolCalls`; `tools.*`; `subagent.maxToolCalls` |
+| `config.server.agent` | `loop.maxToolCalls`, `loop.scrooge`; `tools.*`; `subagent.maxToolCalls` |
 | `config.server.storage` | `batchTools` |
 | `config.server.platform` | `timezone`, `stamp.*`, `ipc` |
 | `config.server` | `pruneOnRewind` |

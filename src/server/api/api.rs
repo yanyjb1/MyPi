@@ -1,6 +1,7 @@
 //! The api's public face: one connection table, one entry point per frame.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
@@ -8,8 +9,10 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::ipc::contract::Frame;
-use crate::server::agent::r#loop::register::Register;
-use crate::server::storage::Writer;
+use crate::server::agent::r#loop::{Birth, Loop, Settings};
+use crate::server::agent::request::{Options, Request, RetryPolicy, Streaming};
+use crate::server::config::Config;
+use crate::server::storage::{Reader, Writer};
 
 use super::relay::Relay;
 use super::route;
@@ -61,32 +64,42 @@ impl Conn {
 pub struct Api {
     db: PathBuf,
     writer: Writer,
-    register: Register,
+    cfg: Config,
+    ledger: Loop,
     relay: Relay,
     next: AtomicU64,
 }
 
 impl Api {
-    /// Open the writer, the relay's ports, and the loop's register, in that order.
-    pub fn open(
-        db: PathBuf,
-        cfg: crate::server::config::Config,
-        batch: usize,
-    ) -> anyhow::Result<Api> {
-        let writer = Writer::open(&db, batch)?;
-        let (relay, events) = Relay::start(db.clone(), &writer)?;
-        let register = Register::new(writer.clone(), cfg, events);
-        Ok(Api::new(db, writer, register, relay))
-    }
-
-    pub fn new(db: PathBuf, writer: Writer, register: Register, relay: Relay) -> Api {
-        Api {
+    /// Open the writer, the relay, the request half and the loop, in that order.
+    pub fn open(db: PathBuf, cfg: Config) -> anyhow::Result<Api> {
+        let writer = Writer::open(&db)?;
+        let (relay, events) = Relay::start(&writer)?;
+        let settings = Settings {
+            max_tool_rounds: cfg.tool_rounds(),
+            scrooge: cfg.scrooge(),
+        };
+        let options = Options {
+            providers: cfg.providers(),
+            retry: RetryPolicy::default(),
+            output_caps: cfg.output_caps(),
+            streaming: if cfg.streaming_immediate() {
+                Streaming::Immediate
+            } else {
+                Streaming::Buffered
+            },
+            retain_tail: cfg.retain_tail(),
+        };
+        let ask = Arc::new(Request::new(options)?);
+        let ledger = Loop::new(writer.clone(), settings, ask, events, &cfg);
+        Ok(Api {
             db,
             writer,
-            register,
+            cfg,
+            ledger,
             relay,
             next: AtomicU64::new(1),
-        }
+        })
     }
 
     /// Take one connection: its handle, and the queue its writer thread drains.
@@ -142,6 +155,58 @@ impl Api {
         self.relay.live() == 0
     }
 
+    /// Put a session the loop does not know back on the table, out of its own rows.
+    pub(crate) fn ensure_booked(&self, session: i64) -> Result<(), Refuse> {
+        if self.ledger.booked(session) {
+            return Ok(());
+        }
+        let reader = Reader::open(&self.db)?;
+        let row = reader
+            .session(session)?
+            .ok_or_else(|| Refuse::Bad(format!("no session {session}")))?;
+        let meta = row["meta"].as_i64();
+        let Some(archive) = (match meta {
+            Some(id) => reader.request(id)?,
+            None => None,
+        }) else {
+            return Err(Refuse::Internal(
+                "the session has no request archive".into(),
+            ));
+        };
+        let system = archive["system"].as_str().unwrap_or_default().to_string();
+        let tools = names_of(&archive["tools"]);
+        let stated = match (row["provider"].as_str(), row["model"].as_str()) {
+            (Some(provider), Some(model)) => Some((provider.to_string(), model.to_string())),
+            _ => None,
+        };
+        let cwd = row["cwd"].as_str().map(PathBuf::from);
+        drop(reader);
+
+        let cfg = self.cfg();
+        let profile = cfg.resolve_profile(None)?;
+        let (provider, model) = match stated {
+            Some(pair) => pair,
+            None => {
+                let default = cfg
+                    .default_model(None)
+                    .ok_or_else(|| Refuse::Internal("no default model is configured".into()))?;
+                (default.provider_name, default.entry.id)
+            }
+        };
+
+        self.ledger.book(Birth {
+            session,
+            provider,
+            model,
+            system,
+            tools,
+            compact: profile.compact_instruction,
+            meta,
+            cwd,
+        })?;
+        Ok(())
+    }
+
     pub(crate) fn db(&self) -> &Path {
         &self.db
     }
@@ -150,8 +215,12 @@ impl Api {
         &self.writer
     }
 
-    pub(crate) fn register(&self) -> &Register {
-        &self.register
+    pub(crate) fn cfg(&self) -> &Config {
+        &self.cfg
+    }
+
+    pub(crate) fn ledger(&self) -> &Loop {
+        &self.ledger
     }
 
     pub(crate) fn relay(&self) -> &Relay {
@@ -184,6 +253,18 @@ impl Api {
             _ => None,
         }
     }
+}
+
+/// The tool names a request archive carries.
+fn names_of(manuals: &serde_json::Value) -> Vec<String> {
+    manuals
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn error(request: &Frame, refuse: &Refuse) -> Frame {

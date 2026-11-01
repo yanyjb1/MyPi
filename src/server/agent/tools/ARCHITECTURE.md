@@ -115,8 +115,5 @@ Engine::run
 
 ## Not wired yet
 
-1. The todo replay's front-end handoff is not built: the loop hands the replayed list over, the api
-   door that returns it is still to come.
-2. `close_web_session` is exported for the api layer and has no caller.
-3. A `kairos` call in a session without a job service fails at call time; the roster does not
+1. A `kairos` call in a session without a job service fails at call time; the roster does not
    screen for it.

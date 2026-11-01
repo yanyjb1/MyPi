@@ -88,6 +88,7 @@ impl Loop {
         let global_mcp = cfg
             .paths()
             .global_root()
+            .map(|root| root.to_path_buf())
             .unwrap_or_default()
             .join("mcp.json");
         let batch = crate::server::agent::tools::engine::Engine::new(
@@ -99,7 +100,12 @@ impl Loop {
             crate::server::agent::tools::contract::env::Paths {
                 agents: project.agents,
                 answers: project.answers,
-                global_agents: cfg.paths().global_root().unwrap_or_default().join("agents"),
+                global_agents: cfg
+                    .paths()
+                    .global_root()
+                    .map(|root| root.to_path_buf())
+                    .unwrap_or_default()
+                    .join("agents"),
             },
         );
         if let Ok(table) =
@@ -197,19 +203,21 @@ impl Loop {
 
     pub fn change(&self, session: i64, change: Change) -> Result<()> {
         let handle = self.handle(session)?;
-        let birth = handle.birth();
-        let tools_json = serde_json::to_string(&turn::cycle::manuals(&birth.tools))?;
         change::apply(
             &handle,
             change,
             &self.inner.writer,
             self.inner.settings.scrooge,
-            &tools_json,
         )
     }
 
     pub fn mailbox(&self, session: i64) -> Result<Arc<Mailbox>> {
         Ok(self.handle(session)?.mailbox.clone())
+    }
+
+    /// Is this session on the table?
+    pub fn booked(&self, session: i64) -> bool {
+        self.inner.slots.get(session).is_some()
     }
 
     fn handle(&self, session: i64) -> Result<Arc<Handle>> {
@@ -316,7 +324,8 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
     let mode = mode_of(&start);
     let live = handle.take_live(&inner.dir);
     let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
-    let turn = match pen::turn::open(&inner.writer, handle.id, start, &cwd) {
+    let model = Some((live.provider.clone(), live.model.clone()));
+    let turn = match pen::turn::open(&inner.writer, handle.id, start, &cwd, model) {
         Ok(turn) => turn,
         Err(e) => {
             handle.busy.store(false, Ordering::Release);
@@ -343,7 +352,8 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
                         thread_handle.stop.store(false, Ordering::Release);
                         mode = mode_of(&start);
                         let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
-                        match pen::turn::open(&inner.writer, thread_handle.id, start, &cwd) {
+                        let model = Some((live.provider.clone(), live.model.clone()));
+                        match pen::turn::open(&inner.writer, thread_handle.id, start, &cwd, model) {
                             Ok(next) => current = next,
                             Err(e) => {
                                 crate::server::platform::log::error(
