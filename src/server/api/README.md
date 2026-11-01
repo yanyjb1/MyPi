@@ -49,6 +49,39 @@ Subscribe: `watch`, `submit`, `compact`.
   on; there is no door that re-reads the files, because the loop, the tool layer and the limits are
   built once.
 
+### Door arguments
+
+| kind | door | payload | answer |
+|---|---|---|---|
+| `register` | `hello` | `viewer` | an empty `opened` frame |
+| `register` | `bye` | — | nothing |
+| `call` | `init` | `session` | `structure` (`turn` + `ranges` per round), `blocks` (newest 64, whole rows), `todo` (the list, or null) |
+| `call` | `blocks` | `session`, `ranges` | `blocks`, whole rows, in request order |
+| `call` | `meta` | `session` | the session row |
+| `call` | `usage` | `session` | session totals, `cache_hit_rate`, and `groups` by `provider:model` |
+| `call` | `todo` | `session` | the replayed list, `[{"text", "done"}]` |
+| `call` | `memo` | `session` (current only), `op`, `scope`, `name` | `names`, or `content`, or `history` |
+| `call` | `children` | `session` | `rows`, each a child session's `id` and `anchor` |
+| `call` | `config` | `key` | the value |
+| `call` | `pools` | — | `models`, `profiles` |
+| `call` | `sessions` | `under` (optional directory) | `rows`, main sessions only, newest first |
+| `post` | `init` | `cwd`, `name`, `model`, `profile` | `session` |
+| `post` | `name` | `session`, `name` | — |
+| `post` | `cwd` | `session`, `path` | — |
+| `post` | `switch` | `session`, `model` | — |
+| `post` | `delete` | `session` | — |
+| `post` | `interrupt` | `session` | — |
+| `post` | `rewind` | `session`, `turn`, `block` | `cut` |
+| `post` | `default_model` | `model` | `path` of the file written |
+| `subscribe` | `watch` | `session` | — |
+| `subscribe` | `submit` | `session`, `text`, `prefix`, `suffix` | `turn` |
+| `subscribe` | `compact` | `session`, `retention` (`{"chars"}` or `{"blocks"}`), `focus` | `turn` |
+
+`model` is `{"provider", "model"}` everywhere it appears. `usage`'s `groups` carry `address`,
+`provider`, `model`, `rounds`, four token counts, `share`, and `price` (`input`, `output`,
+`cache_read`, `cache_write`, `total`, `currency`, `cny`, `usd`); a model with no price answers
+`null`. A block row is the `blocks` table's columns under their logical names.
+
 ### The session stream
 
 Three sources feed one dispatcher:
