@@ -25,9 +25,9 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
 
     let mut groups: BTreeMap<String, Tally> = BTreeMap::new();
     for turn in &turns {
-        let (Some(provider), Some(model)) = (turn["provider"].as_str(), turn["model"].as_str())
-        else {
-            continue;
+        let (provider, model) = match (turn["provider"].as_str(), turn["model"].as_str()) {
+            (Some(provider), Some(model)) => (provider, model),
+            _ => continue,
         };
         let tally = groups.entry(format!("{provider}:{model}")).or_default();
         tally.rounds += 1;

@@ -122,8 +122,11 @@ impl Api {
         match frame.kind.as_str() {
             "register" => self.register(conn, &frame),
             "call" | "post" | "subscribe" => {
-                let Some(viewer) = self.relay.viewer_of(conn.id) else {
-                    return Some(error(&frame, &Refuse::Permission("say hello first".into())));
+                let viewer = match self.relay.viewer_of(conn.id) {
+                    Some(viewer) => viewer,
+                    None => {
+                        return Some(error(&frame, &Refuse::Permission("say hello first".into())));
+                    }
                 };
                 if frame.kind == "subscribe" {
                     return match route::subscribe(self, conn.id, &viewer, &frame) {
@@ -172,13 +175,17 @@ impl Api {
             .session(session)?
             .ok_or_else(|| Refuse::Bad(format!("no session {session}")))?;
         let meta = row["meta"].as_i64();
-        let Some(archive) = (match meta {
+        let archive = match meta {
             Some(id) => reader.request(id)?,
             None => None,
-        }) else {
-            return Err(Refuse::Internal(
-                "the session has no request archive".into(),
-            ));
+        };
+        let archive = match archive {
+            Some(archive) => archive,
+            None => {
+                return Err(Refuse::Internal(
+                    "the session has no request archive".into(),
+                ));
+            }
         };
         let system = archive["system"].as_str().unwrap_or_default().to_string();
         let tools = names_of(&archive["tools"]);
@@ -244,11 +251,14 @@ impl Api {
                         .and_then(|v| v.as_str())
                         .map(str::to_string)
                 });
-                let Some(viewer) = viewer else {
-                    return Some(error(
-                        frame,
-                        &Refuse::Bad("hello carries no viewer id".into()),
-                    ));
+                let viewer = match viewer {
+                    Some(viewer) => viewer,
+                    None => {
+                        return Some(error(
+                            frame,
+                            &Refuse::Bad("hello carries no viewer id".into()),
+                        ));
+                    }
                 };
                 self.relay.hello(conn.id, viewer);
                 Some(Frame::new("register", "opened", json!({})))

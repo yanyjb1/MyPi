@@ -22,10 +22,10 @@ pub(crate) fn answer(api: &Api, under: Option<&str>) -> Result<Value, Refuse> {
         }
         if let Some(dir) = under {
             let here = row["cwd"].as_str() == Some(dir);
-            let before = row
-                .get("id")
-                .and_then(Value::as_i64)
-                .is_some_and(|id| walked.as_ref().is_some_and(|set| set.contains(&id)));
+            let before = match row.get("id").and_then(Value::as_i64) {
+                Some(id) => walked.as_ref().is_some_and(|set| set.contains(&id)),
+                None => false,
+            };
             if !here && !before {
                 continue;
             }

@@ -20,11 +20,13 @@ pub(crate) fn apply(api: &Api, conn: u64, viewer: &str, ask: &Value) -> Result<V
 
 /// `{"chars": n}` or `{"blocks": n}`; absent keeps the configured tail.
 fn retention_of(ask: &Value) -> Result<Option<Retention>, Refuse> {
-    let Some(value) = ask.get("retention") else {
-        return Ok(None);
+    let value = match ask.get("retention") {
+        Some(value) => value,
+        None => return Ok(None),
     };
-    let Some(object) = value.as_object() else {
-        return Err(Refuse::Bad("bad `retention`".into()));
+    let object = match value.as_object() {
+        Some(object) => object,
+        None => return Err(Refuse::Bad("bad `retention`".into())),
     };
     if let Some(chars) = object.get("chars").and_then(Value::as_u64) {
         return Ok(Some(Retention::Chars(chars as usize)));

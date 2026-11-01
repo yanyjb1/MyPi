@@ -24,8 +24,9 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
         if row["idx"].as_i64().unwrap_or(0) < from {
             continue;
         }
-        let Some(turn_id) = row["turn_id"].as_i64() else {
-            continue;
+        let turn_id = match row["turn_id"].as_i64() {
+            Some(turn_id) => turn_id,
+            None => continue,
         };
         let ranges = reader.turn_ranges(turn_id)?;
         structure.push(json!({"turn": turn_id, "ranges": ranges}));
