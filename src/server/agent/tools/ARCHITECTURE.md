@@ -7,9 +7,10 @@ What is here, what each file holds, who talks to whom. Current state only.
 | file | holds |
 |---|---|
 | `mod.rs` | module declarations and re-exports |
-| `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `ToolOutput`, `Spill`, `ToolProgress`, `Tool`, `Run`, `Env`, `Inbox`, `BashEnv`, the `Artifacts` and `MemoRead` ports |
-| `registry.rs` | `TOOLS`, `spec`, `roster`, `available` |
-| `executor.rs` | `execute`: lookup, gates, decode, run, effect stamping, spill |
+| `contract.rs` | the outward shapes: `Batch`, `BatchInput`, `ToolResult`, `Effect`, `ToolOutput`, `Env`, `Cwd`, `Limits`, `BashEnv`, `Browser`, `Paths`, and the `Source`, `Furnish`, `Export`, `Child`, `Draft`, `MemoRead` ports |
+| `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure, events |
+| `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `Tool`, `Run`, `Summary`, `ToolProgress` |
+| `registry.rs` | `TOOLS`, `spec`, `roster`, `available`, `Availability` |
 | `workspace.rs` | `Workspace`, the licensed zones, the per-path write lock, `write_atomic`, `canonicalize_lenient` |
 | `bash/mod.rs` | declares the bash family |
 | `bash/bash/mod.rs` | the `bash` tool, `expand_alias`, `rewrite_refs` |
@@ -20,7 +21,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `bash/edit/mod.rs` | `edit` with `exact` and `mass`; `exact_text`, `mass_text` |
 | `bash/cd/mod.rs` | `cd` |
 | `bash/alias/mod.rs` | `alias` add/list/remove |
-| `bash/context/mod.rs` | `context`, and the `Window` an `Inbox` carries |
+| `bash/context/mod.rs` | `context`; its body still reads the old `Window` input |
 | `jobs/mod.rs` | `JobFactory`, `JobService`, re-exports |
 | `jobs/job.rs` | `Id`, `JobSpec`, `Schedule`, `TaskState`, `Job`, `Receipt`, `Row`, `Status` |
 | `jobs/scheduler.rs` | the per-session scheduler thread, workers, pruning, wake merging |
@@ -54,22 +55,19 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 ## What it talks to
 
-- **`storage`**: `Effect`, `EffectKind`, `AliasOp`, `MemoScope`, `Submit`, `Writer`, base36 ids.
-  Only through values a tool returns or a port the API hands in.
-- **`config`**: `ToolsConfig`, `OutputLimits`, `BrowserConfig`, `KairosConfig`, `McpConfig`,
-  `SubagentConfig`. Read by the caller, never by a tool.
+- **`storage`**: not imported by the wrapper; only the tool bodies still do, until they migrate.
+- **`config`**: not imported by the wrapper; the loop reads the keys and hands values in.
 - **`platform`**: `time::now_stamp`, `log::warn`, `env::temp_dir`, `env::config_dir`.
 - **`request`**: `ToolCall`, `ToolDef`, `Message` for definitions and the context window.
 - **`web`**: `WebArgs`, `run`, `close_session`, only from the `web` tool.
-- **Who calls it**: `loop/driver.rs` (one call at a time, `execute`), `loop/env.rs` (builds `Env`),
-  `api/driver` (builds the job, MCP and subagent services), `api/call/tool/todo.rs` (replays calls
-  on a fresh `Env`), `api/post/session/delete.rs` (`close_web_session`).
+- **Who calls it**: `loop/turn` (one batch at a time, `Batch::run`), `loop/session/book` (builds
+  `Engine` from config), `apps`/`api` for `roster` and `close_web_session`.
 - **Knows nothing about**: the api doors, the database connection, the front end, rounds, streams.
 
 ## Inside
 
 ```text
-executor::execute
+Engine::run
   → registry::{spec, available}   and env.allows
   → Args::fill
   → Tool::run
@@ -78,24 +76,24 @@ executor::execute
       task/final      ── subagent ── jobs, storage::Writer
       mcp             ── mcp::sync ── mcp::stdio
       web             ── crate::web
-      memo/todo       ── Inbox ports
+      memo/todo       ── Source, and the pure todo replay
   → effect stamping → spill → ToolOutput
 ```
 
-- `Env` is built once per round (`loop/env.rs::build`) and lent to calls in order.
-- `JobService` and `Subagent` are built per session by `api/driver` and reach a tool through
-  `Inbox`.
+- `Env` is built once per batch by `engine`, from the `BatchInput` the loop passes.
+- `JobService` and a sub-session's `Child` reach a tool through `Source`; the loop attaches both
+  when it builds them.
 - The guard is used in two places — the `bash` tool and `alias add` — and judges the expanded
   command in both.
 
 ## Must stay in step
 
 1. `registry::TOOLS` and `available`: a gate that hides a row must match the runtime check inside
-   the tool, and `executor::unknown` must not name tools that are not rows.
+   the tool.
 2. `spec::Param` order and each tool's index constants: `Args` reads positionally.
 3. `schema_of` and `Args::fill`: one `Param` table feeds both.
-4. `ToolOutput.effects` and `storage::Effect`: the front door stamps `call_id` and `ts`, so a tool
-   must never fill them.
+4. `ToolOutput.effects` and `contract::Effect`: the front door stamps `ts`, so a tool must never
+   fill it.
 5. `bash` and `kairos/command.rs`: both run alias → `#ref` → guard → shell, in that order.
 6. `Workspace::zones` and `guard::escapes_zone`: two independent zone laws; changing one does not
    change the other.
@@ -106,8 +104,8 @@ executor::execute
 
 ## Not wired yet
 
-1. Stored aliases never reach a new round: nothing builds `Env.aliases` from `storage::aliases`.
-2. `Inbox.todo` is written by the `todo` tool but never read back into `Live.todo`; only
-   `Sessions::build` and a rewind assign it.
-3. `ChildSpec.parent` is set and never read.
-4. `JobService::session`, `JobService::sink` and `SubagentFactory::drafts` have no caller.
+1. The tool bodies still bind `spec::Env`, `Inbox` and `storage::EffectKind`; they migrate next.
+2. `Source::jobs` is an empty table: the job wave attaches a `JobService` per session.
+3. `Furnish::mcp` answers `None` until the MCP bridge moves onto the new contract.
+4. The todo replay's front-end handoff is not built: the loop side reads the switch and the last
+   off block, the api door that returns the list is still to come.

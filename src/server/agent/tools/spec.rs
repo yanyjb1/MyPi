@@ -1,10 +1,9 @@
-//! What a tool is: its parameter table, one run, what it hands back, and what it holds while running.
+//! What a tool is: its parameter table, one run, its summary, and what it hands back.
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use super::workspace::Workspace;
-use crate::server::storage::{Effect, EffectKind};
+use super::contract::{CallRecord, Env, ToolOutput};
 
 // ---- parameters ----
 
@@ -162,8 +161,6 @@ pub fn schema_of(params: &[Param]) -> Value {
 pub struct Args {
     params: &'static [Param],
     values: Vec<Value>,
-    /// The model's own `intent`: not a parameter, but `Args` is the only place the raw object was seen.
-    intent: String,
 }
 
 impl Args {
@@ -200,21 +197,7 @@ impl Args {
         if !missing.is_empty() {
             bail!("missing required argument(s): {}", missing.join(", "));
         }
-        let intent = map
-            .get("intent")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        Ok(Self {
-            params,
-            values,
-            intent,
-        })
-    }
-
-    /// The model's own "what am I about to do"; empty when it wrote none.
-    pub fn intent(&self) -> &str {
-        &self.intent
+        Ok(Self { params, values })
     }
 
     /// An array of strings; empty when absent (required ones were caught in `fill`).
@@ -356,226 +339,20 @@ impl Args {
     }
 }
 
-// ---- what a tool hands back ----
+// ---- one tool ----
 
-/// What one tool call hands back: model text, a front-end memo, the overflow, side effects, and
-/// whether this result ends the round.
-#[derive(Debug)]
-pub struct ToolOutput {
-    pub text: String,
-    pub memo: Option<Value>,
-    pub spill: Option<Spill>,
-    pub effects: Vec<Effect>,
-    pub stop: bool,
-}
-
-impl ToolOutput {
-    pub fn text(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            memo: None,
-            spill: None,
-            effects: Vec::new(),
-            stop: false,
-        }
-    }
-
-    pub fn with_memo(text: impl Into<String>, memo: Value) -> Self {
-        Self {
-            text: text.into(),
-            memo: Some(memo),
-            spill: None,
-            effects: Vec::new(),
-            stop: false,
-        }
-    }
-
-    /// Add a side effect; the front door fills `call_id` and `ts`.
-    pub fn effect(mut self, kind: EffectKind) -> Self {
-        self.effects.push(Effect {
-            call_id: String::new(),
-            ts: String::new(),
-            kind,
-        });
-        self
-    }
-
-    /// Mark this result as ending the round.
-    pub fn stop(mut self) -> Self {
-        self.stop = true;
-        self
-    }
-}
-
-/// The part of a tool result that exceeds the output budget: the full text. Tools ignore the budget;
-/// the front door measures and moves the overflow here.
-#[derive(Debug)]
-pub struct Spill {
-    /// The name (the tool's), for people only.
-    pub name: String,
-    /// The full text.
-    pub content: String,
-}
-
-/// A tool's own progress event, beyond the start and finish every call has. The loop forwards it as is.
+/// One call's live moments, beyond the start and the end the front door adds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolProgress {
     /// More output. An increment; a front end appends it to a bounded buffer.
     Output(String),
 }
 
-// ---- what a tool holds while running ----
-
-/// Artifact fetch: a block id in, a temp file path out. Implemented by the session's own state.
-pub trait Artifacts: Send + Sync {
-    fn path_for(&self, id: i64) -> Result<std::path::PathBuf>;
-}
-
-/// What a memo read asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemoReadOp {
-    List,
-    Show,
-    History,
-}
-
-/// One stored memo version.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoVersion {
-    pub id: i64,
-    pub content: String,
-    pub ts: String,
-}
-
-/// What a memo read answers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MemoView {
-    Names(Vec<String>),
-    Content(String),
-    History(Vec<MemoVersion>),
-}
-
-/// Memo reads for the `memo` tool; implemented by the caller, never by the tool.
-pub trait MemoRead: Send + Sync {
-    fn read(
-        &self,
-        session: i64,
-        scope: crate::server::storage::MemoScope,
-        op: MemoReadOp,
-        name: Option<&str>,
-    ) -> Result<MemoView>;
-}
-
-/// What the caller hands in: tools never touch the database.
-pub struct Inbox {
-    /// For `todo`: this session's list.
-    pub todo: Vec<super::memo::todo::state::TodoPhase>,
-    /// For `context`: the window to look at.
-    pub window: super::bash::context::Window,
-    /// For `bash`: artifact fetch. `None` = no channel, so `#<ref>` stays as written.
-    pub artifacts: Option<std::sync::Arc<dyn Artifacts>>,
-    /// For `memo`: the session's id and its read port.
-    pub session: i64,
-    pub memo: Option<std::sync::Arc<dyn MemoRead>>,
-    /// For `kairos`: the session's background job service.
-    pub jobs: Option<std::sync::Arc<crate::server::agent::tools::jobs::JobService>>,
-    /// For `task` and `final`: the session's subagent service.
-    pub subagent: Option<std::sync::Arc<crate::server::agent::tools::subagent::Subagent>>,
-}
-
-impl Default for Inbox {
-    fn default() -> Self {
-        Self {
-            todo: Vec::new(),
-            window: Default::default(),
-            artifacts: None,
-            session: 0,
-            memo: None,
-            jobs: None,
-            subagent: None,
-        }
-    }
-}
-
-/// The two things `bash` needs.
-pub struct BashEnv {
-    /// A command's wall-clock limit (config `tools.bashTimeoutSecs`, default 600).
-    pub timeout: std::time::Duration,
-    /// The session's stop flag; `None` = the deadline only.
-    pub interrupt: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-}
-
-impl Default for BashEnv {
-    fn default() -> Self {
-        Self {
-            timeout: std::time::Duration::from_secs(
-                crate::server::config::ToolsConfig::default().bash_timeout,
-            ),
-            interrupt: None,
-        }
-    }
-}
-
-/// What a tool holds during one execution. Built by the loop; a tool never goes looking.
-pub struct Env {
-    /// The working directory and its permitted area.
-    pub workspace: Workspace,
-    /// The output budget (`read` and `bash`).
-    pub limits: crate::server::config::OutputLimits,
-    /// What the caller handed in.
-    pub inbox: Inbox,
-    /// `bash`'s timeout and stop flag.
-    pub bash: BashEnv,
-    /// The web tool's browser config.
-    pub browser: crate::server::config::BrowserConfig,
-    /// The profile gate: `None` = every tool; `Some(list)` = only those. The roster and the front door
-    /// read the same list.
-    pub enabled: Option<std::collections::BTreeSet<String>>,
-    /// The aliases visible to `bash` this round.
-    pub aliases: std::collections::BTreeMap<String, String>,
-    /// The MCP bridge, if any server is configured.
-    pub mcp: Option<std::sync::Arc<dyn super::McpBridge>>,
-}
-
-impl Env {
-    pub fn new(cwd: impl Into<std::path::PathBuf>) -> Self {
-        Self {
-            workspace: Workspace::new(cwd),
-            limits: crate::server::config::OutputLimits::default(),
-            inbox: Inbox::default(),
-            bash: BashEnv::default(),
-            browser: Default::default(),
-            enabled: None,
-            aliases: Default::default(),
-            mcp: None,
-        }
-    }
-
-    /// Is this tool allowed? The built-in layer is the table's business; this is the profile.
-    pub fn allows(&self, name: &str) -> bool {
-        match &self.enabled {
-            None => true,
-            Some(set) => set.contains(name),
-        }
-    }
-
-    /// Install the profile's list; `None` allows everything.
-    pub fn with_enabled(mut self, names: Option<Vec<String>>) -> Self {
-        self.enabled = names.map(|v| v.into_iter().collect());
-        self
-    }
-
-    /// Install the aliases visible to `bash`.
-    pub fn with_aliases(mut self, aliases: std::collections::BTreeMap<String, String>) -> Self {
-        self.aliases = aliases;
-        self
-    }
-}
-
-// ---- one tool ----
-
 /// The signature of one run: the environment, the arguments, the progress line.
 pub type Run = fn(&mut Env, &Args, &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput>;
+
+/// How one call reads in a history listing.
+pub type Summary = fn(&CallRecord) -> String;
 
 /// One tool.
 #[derive(Clone, Copy)]
@@ -588,6 +365,8 @@ pub struct Tool {
     pub params: &'static [Param],
     /// The one entry point.
     pub run: Run,
+    /// The history summary; absent means the front door's default.
+    pub summary: Option<Summary>,
 }
 
 impl Tool {

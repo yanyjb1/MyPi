@@ -1,11 +1,13 @@
 //! The table: fourteen tools, one line each. The roster and the front door both derive from it, so
 //! the two readers cannot disagree.
 
+use std::collections::BTreeSet;
+
 use super::bash::{alias, bash as bash_tool, cd, context, edit, read, write};
 use super::kairos;
 use super::mcp;
 use super::memo::{memo as memo_tool, todo};
-use super::spec::{Env, Tool};
+use super::spec::Tool;
 use super::subagent;
 use crate::server::agent::request::message::ToolDef;
 
@@ -32,30 +34,38 @@ pub const TOOLS: &[Tool] = &[
     context::TOOL,
 ];
 
+/// What the session looks like, for the two gates that depend on it.
+#[derive(Debug, Clone, Copy)]
+pub struct Availability {
+    pub child: bool,
+    pub jobs: bool,
+    pub mcp: bool,
+}
+
 /// Look one up by name.
-pub(super) fn spec(name: &str) -> Option<&'static Tool> {
+pub(crate) fn spec(name: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|t| t.name == name)
 }
 
-/// Table → profile gate → the model's manual; request puts it in the request body.
-pub fn roster(env: &Env) -> Vec<ToolDef> {
+/// The session's list → the model's manuals, in table order.
+pub fn roster(names: &[String], shape: Availability) -> Vec<ToolDef> {
+    let wanted: BTreeSet<&str> = names.iter().map(String::as_str).collect();
     TOOLS
         .iter()
-        .filter(|t| env.allows(t.name))
-        .filter(|t| available(env, t.name))
+        .filter(|t| wanted.contains(t.name))
+        .filter(|t| available(t.name, &shape))
         .map(Tool::definition)
         .collect()
 }
 
-/// The session-shaped gate: `task` is parent-only, `final` child-only, `kairos` parent-only.
-pub(crate) fn available(env: &Env, name: &str) -> bool {
+/// The session-shaped gate: `task` is main-only, `final` is sub-only, `kairos` is main-only and
+/// needs the job service, `mcp` needs a bridge.
+pub(crate) fn available(name: &str, shape: &Availability) -> bool {
     match name {
-        "kairos" => {
-            env.inbox.jobs.is_some() && !env.inbox.subagent.as_ref().is_some_and(|s| s.is_child())
-        }
-        "task" => env.inbox.subagent.as_ref().is_some_and(|s| s.is_parent()),
-        "final" => env.inbox.subagent.as_ref().is_some_and(|s| s.is_child()),
-        "mcp" => env.mcp.is_some(),
+        "kairos" => shape.jobs && !shape.child,
+        "task" => !shape.child,
+        "final" => shape.child,
+        "mcp" => shape.mcp,
         _ => true,
     }
 }

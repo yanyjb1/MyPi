@@ -27,22 +27,23 @@ opens the database, the config file, or the loop.
 | 13 | `todo` | `memo/todo/mod.rs` | always |
 | 14 | `context` | `bash/context/mod.rs` | always |
 
-`roster(env)` shows the model only the rows that pass `env.allows(name)` and
-`registry::available(env, name)`; `executor::execute` repeats both gates, so a hidden tool cannot
+`roster(names, shape)` expands a session's tool names into manuals, keeping only the rows the
+session's shape allows; `engine` repeats the name gate and the shape gate, so a hidden tool cannot
 be called by naming it.
 
 ### One call
 
 ```text
-ToolCall { name, arguments }
+ToolCall { name, args, intent }
   → registry::spec(name)
-  → env.allows(name)                       profile / child-template set
-  → registry::available(env, name)          session gate
-  → Args::fill(tool.params, arguments)      JSON object → positional values
-  → (tool.run)(env, &args, progress)
-  → every out.effects gets call_id and one ts
-  → spill: over the inline budget, the tail moves to out.spill
-  → ToolOutput
+  → env.allows(name)                       the session's list
+  → registry::available(name, shape)        session shape gate
+  → budget gate (every call but `final`)
+  → Args::fill(tool.params, args)          JSON object → positional values
+  → (tool.run)(env, &args, progress)       Start, Progress and End events around it
+  → every out.effects gets one ts
+  → spill: over the inline budget, the full text moves to out.spill
+  → ToolResult
 ```
 
 Unknown names error. With the `web` feature off, the three historical names `fetch`, `browser`
@@ -81,27 +82,33 @@ Spill      { name: String, content: String }
 
 - `text` is what the model reads; `memo` is the structured payload the front end renders.
 - `spill` is filled by the front door, never by a tool.
-- `effects` are side effects that must land with this tool result. A tool appends a kind; the front
-  door writes `call_id` and one `ts` onto every effect before returning.
+- `effects` are side effects that must land with this tool result. A tool appends one; the front
+  door stamps its `ts` before returning.
 - `stop` asks the loop to end the round.
 
 ### Env
 
 ```text
 Env {
-  workspace: Workspace,
-  limits: OutputLimits,      // max_lines, max_bytes
-  inbox: Inbox,              // todo, window, artifacts, session, memo, jobs, subagent
+  workspace: Workspace,      // root + this batch's cwd snapshot
+  limits: Limits,            // lines, bytes
   bash: BashEnv,             // timeout, interrupt
-  browser: BrowserConfig,
-  enabled: Option<BTreeSet<String>>,
+  browser: Browser,
+  session: i64,
+  batch_len: usize,
+  tools: BTreeSet<String>,   // the session's list; the one gate
   aliases: BTreeMap<String, String>,
+  default_budget: u32,
   mcp: Option<Arc<dyn McpBridge>>,
+  export: Arc<dyn Export>,   // a full text out of the database as a file
+  paths: Paths,              // project, agents, answers
+  source: Arc<dyn Source>,   // reads the loop owns
 }
 ```
 
-`Inbox` carries the ports a tool may call — `Artifacts`, `MemoRead`, `JobService`, `Subagent` —
-and the session's id. A tool that needs a port fails when it is `None`; it never reaches for one.
+Ports are traits in `contract`: `Source` (memos, aliases, history, calls, todo state, jobs, child),
+`Export`, `Furnish` and `Child`. A tool that needs a port fails when it is `None`; it never reaches
+for a database or a config file.
 
 ### Workspace
 
@@ -120,9 +127,9 @@ Workspace { cwd, root }
 
 - `memo` writes (`add`, `mod`, `del`) are `current` only; a `global` write is refused. Reads
   (`show`, `history`, `list`) take both scopes.
-- A memo write returns placeholder text and one `EffectKind::Memo`; the writer applies it in the
-  same transaction as the tool result, so the tool itself never stores a note.
-- `memo` reads need `Inbox.memo`; without the port the tool says reads are unavailable.
+- A memo write returns placeholder text and one `Memo` effect; the loop lands it in the same
+  commit as the result block, so the tool itself never stores a note.
+- `memo` reads go through `Source::memo`; the tool never opens the database.
 - `todo`'s `view` is read-only. Every other operation rewrites `env.inbox.todo` once, after the
   whole batch validates; a failed batch leaves the list as it was.
 
@@ -184,18 +191,14 @@ never starts. `alias add` runs the same classifier on the command it stores.
 
 ## 3. Unresolved
 
-1. Alias effects are stored, but no path reads them back: `Env::with_aliases` has no caller, so a
-   new round starts with an empty alias map.
-2. The `todo` tool mutates `Inbox.todo`; nothing copies it back into `Live.todo`.
-3. Jobs live in memory only; a restart drops them, and the output directory is wiped when the
-   factory is built.
+1. The tool bodies still bind the old `Inbox`-based `Env`; they migrate next.
+2. `Source::jobs` and `Source::child` are empty tables until the job and subagent waves attach
+   their services.
+3. `Furnish::mcp` answers `None` until the bridge moves onto the new contract.
 4. `shell` documents TERM then KILL; only TERM is sent.
-5. With `web` off, the unknown-tool error names `fetch`, `browser` and `search`, which are not
-   table rows.
-6. MCP carries text content only; a server-initiated request is answered `-32601`.
-7. Template front matter reads `tools` only, and `ChildSpec.parent` is set but never read.
-8. `JobService::session`, `JobService::sink`, `SubagentFactory::drafts` and
-   `licensed_zones` have no callers.
+5. MCP carries text content only; a server-initiated request is answered `-32601`.
+6. Template front matter reads `tools` only.
+7. `licensed_zones` has no caller inside the wrapper.
 
 ## 4. Config fields
 

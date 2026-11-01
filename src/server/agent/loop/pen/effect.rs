@@ -1,81 +1,78 @@
-//! Tool effects, turned into rows.
+//! Tool effects, turned into rows anchored on the result block that produced them.
 
 use anyhow::Result;
 
-use crate::server::agent::r#loop::session::Birth;
-use crate::server::agent::r#loop::turn::batch::Effect;
-use crate::server::storage::{Ref, Row, Submit, Writer};
+use crate::server::agent::tools::contract::{Effect, MemoOp};
+use crate::server::storage::{Ref, Row, Table, Writer};
 
-/// A child session the loop still has to book.
-pub struct Born {
-    pub birth: Birth,
-    pub start: String,
+/// A row that must be resolved by name before it can be deleted.
+pub enum Delete {
+    Memo(String),
+    Alias(String),
 }
 
-/// Write every effect. Returns the child sessions created.
-pub fn write(w: &Writer, effects: &[Effect]) -> Result<Vec<Born>> {
-    let mut rows = Vec::new();
-    let mut children = Vec::new();
-    for effect in effects {
-        match effect {
-            Effect::Memo {
-                anchor,
-                name,
-                content,
-                ts,
-            } => rows.push(Row::Memo {
-                anchor: Ref::Known(*anchor),
-                name: name.clone(),
-                content: content.clone(),
-                ts: ts.clone(),
-            }),
-            Effect::Alias {
-                anchor,
-                name,
-                command,
-                ts,
-            } => rows.push(Row::Alias {
-                anchor: Ref::Known(*anchor),
-                name: name.clone(),
-                command: command.clone(),
-                ts: ts.clone(),
-            }),
-            Effect::Subagent {
-                anchor,
-                provider,
-                model,
-                system,
-                tools,
-                cwd,
-                start,
-            } => {
-                let id = super::birth::child(
-                    w,
-                    &crate::server::platform::time::now_stamp(),
-                    &cwd.to_string_lossy(),
-                    provider,
-                    model,
-                    Ref::Known(*anchor),
-                    None,
-                )?;
-                children.push(Born {
-                    birth: Birth {
-                        session: id,
-                        provider: provider.clone(),
-                        model: model.clone(),
-                        system: system.clone(),
-                        tools: tools.clone(),
-                        compact: String::new(),
-                        meta: None,
-                        cwd: Some(cwd.clone()),
-                    },
-                    start: start.clone(),
-                });
+/// One effect → its rows, plus the deletion it asks for, if any.
+pub fn rows(anchor: Ref, effect: &Effect) -> (Vec<Row>, Option<Delete>) {
+    match effect {
+        Effect::Memo {
+            op,
+            name,
+            content,
+            ts,
+        } => match op {
+            MemoOp::Set => (
+                vec![Row::Memo {
+                    anchor,
+                    name: name.clone(),
+                    content: content.clone().unwrap_or_default(),
+                    ts: ts.clone(),
+                }],
+                None,
+            ),
+            MemoOp::Delete => (Vec::new(), Some(Delete::Memo(name.clone()))),
+        },
+        Effect::Alias {
+            op,
+            name,
+            command,
+            ts,
+        } => match op {
+            crate::server::agent::tools::contract::AliasOp::Add => (
+                vec![Row::Alias {
+                    anchor,
+                    name: name.clone(),
+                    command: command.clone().unwrap_or_default(),
+                    ts: ts.clone(),
+                }],
+                None,
+            ),
+            crate::server::agent::tools::contract::AliasOp::Remove => {
+                (Vec::new(), Some(Delete::Alias(name.clone())))
             }
+        },
+        Effect::Child { .. } => (Vec::new(), None),
+    }
+}
+
+/// Resolve the names to ids inside the session's visible blocks, then delete them.
+pub fn apply(writer: &Writer, session: i64, deletes: &[Delete]) -> Result<()> {
+    use crate::server::storage::query::{Cond, Query, Sheet, Val};
+
+    let reader = crate::server::storage::Reader::open(&writer.path())?;
+    let ranges = super::super::session::source::ranges(&reader, session)?;
+    for delete in deletes {
+        let (sheet, table, name) = match delete {
+            Delete::Memo(name) => (Sheet::Memos, Table::Memos, name),
+            Delete::Alias(name) => (Sheet::Aliases, Table::Aliases, name),
+        };
+        let rows = reader.query(&Query::new(sheet).columns(&["id"]).filter(vec![
+            Cond::Within("anchor", ranges.clone()),
+            Cond::Eq("name", Val::Text(name.clone())),
+        ]))?;
+        let ids: Vec<i64> = rows.iter().filter_map(|row| row["id"].as_i64()).collect();
+        if !ids.is_empty() {
+            writer.delete_rows(table, &ids)?;
         }
     }
-    if !rows.is_empty() {
-        w.push(Submit { rows })?;
-    }
-    Ok(children)
+    Ok(())
 }

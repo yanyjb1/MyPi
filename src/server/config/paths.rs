@@ -9,6 +9,34 @@ pub const PROFILE_CONFIG: &str = "config.yaml";
 pub const SYSTEM_FILE: &str = "system.md";
 pub const COMPACT_FILE: &str = "compact.md";
 pub const TOOLS_FILE: &str = "tools.yaml";
+/// The folder that marks a startup directory as a project.
+pub const PROJECT_DIR: &str = ".mypi";
+
+/// The startup directory as a project root: only when it carries `.mypi`.
+pub fn project_root() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    cwd.join(PROJECT_DIR).is_dir().then_some(cwd)
+}
+
+/// Where the project's two folders are. Without `.mypi` the startup directory is the project,
+/// and the folders are created when something writes there.
+pub struct ProjectDirs {
+    pub project: PathBuf,
+    pub agents: PathBuf,
+    pub answers: PathBuf,
+}
+
+pub fn project_dirs() -> ProjectDirs {
+    let project = project_root()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    let base = project.join(PROJECT_DIR);
+    ProjectDirs {
+        project,
+        agents: base.join("agents"),
+        answers: base.join("answers"),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
@@ -39,7 +67,7 @@ impl ConfigPaths {
             return Self::new(vec![(Origin::Global, dir)]);
         }
         let mut roots = Vec::new();
-        if let Ok(cwd) = std::env::current_dir() {
+        if let Some(cwd) = project_root() {
             roots.push((Origin::Project, cwd));
         }
         roots.push((Origin::Global, crate::server::platform::env::config_dir()));

@@ -134,7 +134,6 @@ impl Ask for Request {
                 Some(spill) => {
                     let (hash, reference) =
                         artifact::resolve(&spill.content, &mut known, input.history.as_ref())?;
-                    artifact::materialize(&input.artifacts, &reference, &spill.content)?;
                     let mut text = run.result.clone();
                     text.push_str(&artifact::citation(&reference, &spill.content));
                     (

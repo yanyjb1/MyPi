@@ -128,6 +128,28 @@ impl Value {
         }
     }
 
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Value::Int(i) => Some(*i),
+            Value::BoolOrInt(BoolOrInt::Int(i)) => Some(*i),
+            _ => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn as_list(&self) -> Option<&[String]> {
+        match self {
+            Value::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
     pub fn to_json(&self) -> Json {
         match self {
             Value::Bool(b) => json!(b),

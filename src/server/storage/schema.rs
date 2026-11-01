@@ -129,7 +129,9 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
             command TEXT NOT NULL,
             ts      TEXT NOT NULL
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS aliases_by_anchor ON aliases(anchor, name);",
+        CREATE UNIQUE INDEX IF NOT EXISTS aliases_by_anchor ON aliases(anchor, name);
+        CREATE INDEX IF NOT EXISTS blocks_by_call ON blocks(call_id);
+        CREATE INDEX IF NOT EXISTS blocks_by_kind ON blocks(type, name, block_id);",
     )?;
     Ok(conn)
 }

@@ -3,18 +3,22 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use super::ask::{CompactInput, LapInput, ResultsInput, Stop, Usage};
 use super::env;
 use super::fence::Fence;
 use crate::server::agent::r#loop::pen::{self, Pen};
-use crate::server::agent::r#loop::session::book::{Inner, Retention};
+use crate::server::agent::r#loop::session::book::{Birth, Inner, Retention, book_child};
 use crate::server::agent::r#loop::session::handle::Handle;
 use crate::server::agent::r#loop::session::history::Transcript;
 use crate::server::agent::r#loop::session::live::Live;
 use crate::server::agent::r#loop::turn::batch::ToolResult;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
+use crate::server::agent::tools::contract::{Effect, Source};
+use crate::server::agent::tools::{Availability, roster};
+use crate::server::platform::time::now_stamp;
+use crate::server::storage::Row;
 
 /// Which machine a turn runs.
 #[derive(Clone)]
@@ -33,13 +37,14 @@ pub fn run(
     live: &mut Live,
     mode: Mode,
 ) -> Result<Stop> {
+    let shape = shape(inner, handle.id);
     if let Mode::Compact { retention, focus } = mode {
         let reply = match inner.ask.compact(CompactInput {
             session: handle.id,
             history: Arc::new(Transcript::open(&inner.writer.path())?),
             transport: live.transport(),
             system: live.system.clone(),
-            tools: live.tools.clone(),
+            tools: manuals(&live.tools, shape),
             retention,
             focus,
             instruction: live.compact.clone(),
@@ -94,7 +99,7 @@ pub fn run(
             blocks: blocks.clone(),
             transport: live.transport(),
             system: live.system.clone(),
-            tools: live.tools.clone(),
+            tools: manuals(&live.tools, shape),
             stop: handle.stop.clone(),
             live: inner.out.clone(),
         }) {
@@ -111,6 +116,7 @@ pub fn run(
         usage += lap.usage;
 
         if lap.calls.is_empty() {
+            blocks.flush()?;
             if handle.mailbox.is_empty() {
                 stop = lap.stop;
                 break;
@@ -121,11 +127,12 @@ pub fn run(
         let input = env::build(
             handle.id,
             turn,
+            live.root.clone(),
             live.cwd.clone(),
+            live.tools.clone(),
             lap.calls.clone(),
             handle.stop.clone(),
             inner.out.clone(),
-            live.artifacts.clone(),
         );
         let results = match inner.batch.run(input) {
             Ok(results) => results,
@@ -137,7 +144,6 @@ pub fn run(
         let reported = ResultsInput {
             session: handle.id,
             history: history.clone(),
-            artifacts: live.artifacts.dir().to_path_buf(),
             calls: lap.calls.clone(),
             results: results.iter().map(report).collect(),
         };
@@ -145,18 +151,36 @@ pub fn run(
             broken(inner, handle, turn, usage, baseline);
             return Err(e);
         }
-        let effects: Vec<_> = results
-            .iter()
-            .flat_map(|result| result.effects.iter().cloned())
-            .collect();
-        if !effects.is_empty() {
-            for mut born in pen::effect::write(&inner.writer, &effects)? {
-                born.birth.meta = handle.meta();
-                born.birth.compact = live.compact.clone();
-                crate::server::agent::r#loop::session::book::book_child(
-                    inner, born.birth, born.start,
-                )?;
+        let (children, deletes) = effects(&blocks, &results, live)?;
+        let landed = blocks.flush()?;
+        for (at, spec) in children {
+            let id = landed.ids.get(at).copied().unwrap_or(0);
+            if id <= 0 {
+                return Err(anyhow!("a sub-session row was not created"));
             }
+            inner.source.attach_child(
+                id,
+                Arc::new(crate::server::agent::r#loop::session::child::State::child(
+                    spec.budget,
+                )),
+            );
+            book_child(
+                inner,
+                Birth {
+                    session: id,
+                    provider: live.provider.clone(),
+                    model: live.model.clone(),
+                    system: live.system.clone(),
+                    tools: spec.tools,
+                    compact: live.compact.clone(),
+                    meta: handle.meta(),
+                    cwd: Some(spec.cwd),
+                },
+                spec.start,
+            )?;
+        }
+        if !deletes.is_empty() {
+            pen::effect::apply(&inner.writer, handle.id, &deletes)?;
         }
         if results.iter().any(|result| result.stop) {
             stop = Stop::User;
@@ -167,6 +191,86 @@ pub fn run(
 
     pen::turn::settle(&inner.writer, turn, stop, usage, baseline, handle.meta())?;
     Ok(stop)
+}
+
+/// One sub-session a batch asked for.
+struct Spawn {
+    tools: Vec<String>,
+    cwd: std::path::PathBuf,
+    start: String,
+    budget: u32,
+}
+
+/// Put every effect into the lap's commit; return what still needs acting after it lands.
+fn effects(
+    blocks: &Pen,
+    results: &[ToolResult],
+    live: &Live,
+) -> Result<(Vec<(usize, Spawn)>, Vec<pen::effect::Delete>)> {
+    let mut children = Vec::new();
+    let mut deletes = Vec::new();
+    for result in results {
+        if result.effects.is_empty() {
+            continue;
+        }
+        let anchor = blocks
+            .anchor(&result.call_id)
+            .ok_or_else(|| anyhow!("no result block for call {}", result.call_id))?;
+        for effect in &result.effects {
+            match effect {
+                Effect::Child {
+                    tools,
+                    cwd,
+                    start,
+                    max_tool_calls,
+                } => {
+                    let at = blocks.len();
+                    blocks.push(vec![Row::Session {
+                        started_at: now_stamp(),
+                        cwd: cwd.to_string_lossy().into_owned(),
+                        model: Some((live.provider.clone(), live.model.clone())),
+                        name: None,
+                        anchor: Some(anchor),
+                        meta: None,
+                    }]);
+                    children.push((
+                        at,
+                        Spawn {
+                            tools: tools.clone(),
+                            cwd: cwd.clone(),
+                            start: start.clone(),
+                            budget: *max_tool_calls,
+                        },
+                    ));
+                }
+                other => {
+                    let (rows, delete) = pen::effect::rows(anchor, other);
+                    blocks.push(rows);
+                    if let Some(delete) = delete {
+                        deletes.push(delete);
+                    }
+                }
+            }
+        }
+    }
+    Ok((children, deletes))
+}
+
+/// One session's shape, read once per turn.
+pub(crate) fn shape(inner: &Arc<Inner>, session: i64) -> Availability {
+    Availability {
+        child: inner.source.child(session).is_some_and(|c| c.is_child()),
+        jobs: inner.source.jobs(session).is_some(),
+        mcp: crate::server::agent::tools::contract::Furnish::mcp(&*inner.source).is_some(),
+    }
+}
+
+/// The session's names → the request's manuals, in table order.
+pub(crate) fn manuals(names: &[String], shape: Availability) -> Vec<serde_json::Value> {
+    roster(names, shape)
+        .iter()
+        .filter_map(|tool| serde_json::to_value(tool).ok())
+        .collect()
 }
 
 /// One finished call, as the request half takes it.

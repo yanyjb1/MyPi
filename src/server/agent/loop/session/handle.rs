@@ -34,12 +34,12 @@ impl Handle {
         self.birth.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    pub(crate) fn take_live(&self) -> Live {
+    pub(crate) fn take_live(&self, dir: &std::path::Path) -> Live {
         if let Some(live) = self.live.lock().unwrap_or_else(|e| e.into_inner()).take() {
             return live;
         }
         let birth = self.birth();
-        Live::new(&birth)
+        Live::new(&birth, dir)
     }
 
     pub(crate) fn put_live(&self, live: Live) {

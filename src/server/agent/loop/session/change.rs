@@ -14,7 +14,13 @@ pub enum Change {
     Cwd(PathBuf),
 }
 
-pub(crate) fn apply(handle: &Handle, change: Change, writer: &Writer, scrooge: bool) -> Result<()> {
+pub(crate) fn apply(
+    handle: &Handle,
+    change: Change,
+    writer: &Writer,
+    scrooge: bool,
+    tools_json: &str,
+) -> Result<()> {
     match change {
         Change::Model { provider, model } => {
             if scrooge {
@@ -35,8 +41,7 @@ pub(crate) fn apply(handle: &Handle, change: Change, writer: &Writer, scrooge: b
                 live.provider = provider.clone();
                 live.model = model.clone();
             }
-            let tools_json =
-                serde_json::to_string(&birth.tools).unwrap_or_else(|_| "[]".to_string());
+            let tools_json = tools_json.to_string();
             let landed = writer.push(Submit {
                 rows: vec![
                     Row::Request {
@@ -74,7 +79,10 @@ pub(crate) fn apply(handle: &Handle, change: Change, writer: &Writer, scrooge: b
                 .unwrap_or_else(|e| e.into_inner())
                 .as_mut()
             {
-                live.cwd = path.clone();
+                live.cwd
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone_from(&path);
             }
             writer.push(Submit {
                 rows: vec![Row::MoveCwd {

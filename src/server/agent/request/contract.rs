@@ -1,6 +1,5 @@
 //! Every shape that crosses into the loop. The loop fills what it owns; request reads it.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
@@ -222,8 +221,6 @@ pub struct ResultsInput {
     pub session: i64,
     /// For the citations already in use: same content keeps its reference.
     pub history: Arc<dyn History>,
-    /// Where an oversized output's full text is written.
-    pub artifacts: PathBuf,
     pub calls: Vec<ToolCall>,
     pub results: Vec<ToolResult>,
 }

@@ -28,7 +28,8 @@ pub struct Birth {
     pub provider: String,
     pub model: String,
     pub system: String,
-    pub tools: Vec<serde_json::Value>,
+    /// The session's tool names; manuals are expanded per request.
+    pub tools: Vec<String>,
     /// The compaction instruction template; `{{focus}}` marks where the focus goes.
     pub compact: String,
     pub meta: Option<i64>,
@@ -62,6 +63,8 @@ pub(crate) struct Inner {
     pub(crate) out: Sender<Event>,
     pub(crate) ask: Arc<dyn Ask>,
     pub(crate) batch: Arc<dyn Batch>,
+    pub(crate) source: Arc<super::source::Db>,
+    pub(crate) dir: PathBuf,
     pub(crate) slots: Mutex<HashMap<i64, Arc<Handle>>>,
 }
 
@@ -70,16 +73,46 @@ impl Loop {
         writer: Writer,
         settings: Settings,
         ask: Arc<dyn Ask>,
-        batch: Arc<dyn Batch>,
         out: Sender<Event>,
+        cfg: &crate::server::config::Config,
     ) -> Self {
+        let path = writer.path();
+        let source = super::source::Db::new(path.clone());
+        let dir = cfg.export_dir();
+        let export = Arc::new(super::export::Files::new(path, dir.clone()));
+        let (lines, bytes) = cfg.limits();
+        let browser = cfg.browser();
+        let project = cfg.project_paths();
+        let batch = crate::server::agent::tools::Engine::new(
+            crate::server::agent::tools::Limits { lines, bytes },
+            cfg.bash_timeout(),
+            crate::server::agent::tools::Browser {
+                bin: browser.bin,
+                port: browser.port,
+                profile_dir: browser.profile_dir,
+                headless: browser.headless,
+                user_agent: browser.user_agent,
+                extra_args: browser.extra_args,
+            },
+            cfg.subagent_budget(),
+            source.clone(),
+            source.clone(),
+            export,
+            crate::server::agent::tools::Paths {
+                project: project.project,
+                agents: project.agents,
+                answers: project.answers,
+            },
+        );
         Self {
             inner: Arc::new(Inner {
                 writer,
                 settings,
                 out,
                 ask,
-                batch,
+                batch: Arc::new(batch),
+                source,
+                dir,
                 slots: Mutex::new(HashMap::new()),
             }),
         }
@@ -153,11 +186,15 @@ impl Loop {
 
     pub fn change(&self, session: i64, change: Change) -> Result<()> {
         let handle = self.handle(session)?;
+        let birth = handle.birth();
+        let shape = turn::cycle::shape(&self.inner, session);
+        let tools_json = serde_json::to_string(&turn::cycle::manuals(&birth.tools, shape))?;
         change::apply(
             &handle,
             change,
             &self.inner.writer,
             self.inner.settings.scrooge,
+            &tools_json,
         )
     }
 
@@ -268,8 +305,9 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
     }
     handle.stop.store(false, Ordering::Release);
     let mode = mode_of(&start);
-    let live = handle.take_live();
-    let turn = match pen::turn::open(&inner.writer, handle.id, start, &live.cwd) {
+    let live = handle.take_live(&inner.dir);
+    let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let turn = match pen::turn::open(&inner.writer, handle.id, start, &cwd) {
         Ok(turn) => turn,
         Err(e) => {
             handle.busy.store(false, Ordering::Release);
@@ -295,7 +333,8 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
                         };
                         thread_handle.stop.store(false, Ordering::Release);
                         mode = mode_of(&start);
-                        match pen::turn::open(&inner.writer, thread_handle.id, start, &live.cwd) {
+                        let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
+                        match pen::turn::open(&inner.writer, thread_handle.id, start, &cwd) {
                             Ok(next) => current = next,
                             Err(e) => {
                                 crate::server::platform::log::error(

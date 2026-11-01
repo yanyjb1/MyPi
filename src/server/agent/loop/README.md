@@ -8,7 +8,7 @@ its rows, runs laps, takes the mailboxes and settles.
 Public surface:
 
 ```text
-Loop::new(writer, settings, ask, batch, out) -> Loop
+Loop::new(writer, settings, ask, out, config) -> Loop
 Loop::book(Birth) -> Result<SessionId>
 Loop::deliver(session, Message) -> Result<Option<TurnId>>
 Loop::interrupt(session)
@@ -16,17 +16,19 @@ Loop::drop(session)
 Loop::change(session, Change) -> Result<()>
 Loop::mailbox(session) -> Result<Arc<Mailbox>>
 
-Birth = { session, provider, model, system, tools, compact, meta, cwd }
+Birth = { session, provider, model, system, tools, compact, meta, cwd }   // tools = names
 Message = Submit { prefix, text, suffix } | Compact { retention, focus }
 Change = Model { provider, model } | Cwd(path)
 ```
 
-`ask` is `Arc<dyn request::Ask>`; `batch` is `Arc<dyn Batch>`; `out` carries the live line. The
-boundary shapes are declared by the request half (`request::contract`) and re-exported here, so a
-caller names one vocabulary. `Retention` is `Chars(n)` or `Blocks(n)`.
+`ask` is `Arc<dyn request::Ask>`; `out` carries the live line. The loop builds the tool layer from
+`config` and keeps the read ports it also implements: `Source` (database reads), `Export` (a full
+text out of the database as a file) and `Furnish` (the process-wide MCP bridge). Request shapes come
+from `request::contract`; tool shapes come from `agent::tools::contract`; both are re-exported here,
+so a caller names one vocabulary. `Retention` is `Chars(n)` or `Blocks(n)`.
 
 `book` only opens the session; the caller has already written the `sessions` row and resolved the
-system prompt, the tool manuals and the compaction instruction. `deliver` opens a turn and returns
+system prompt, the tool names and the compaction instruction. `deliver` opens a turn and returns
 its id, or queues the message when the session is busy. `book` starts one scheduler thread per
 session; that thread turns a wake into a turn.
 
@@ -43,10 +45,11 @@ half's, and the loop only adds tool events to it.
 
 - **One session owns its state.** No process-global current session; every lock is per session, and
   a batch runs with the live state taken out of the slot.
-- **One write point.** `pen` turns request blocks, effects, artifacts, turn openings and settlements
-  into `Row`s; no other module builds a `Ref`.
-- **The boundary is the request half's.** Types the loop hands over and gets back are declared with
-  the request half, so neither side has to import the other's private shapes.
+- **One write point.** `pen` turns request blocks, tool effects, artifacts, turn openings and
+  settlements into `Row`s; no other module builds a `Ref`. A lap's blocks and the effects their
+  results produced land in one submission, so an effect's anchor is a row index in that same commit.
+- **Each boundary is the other side's.** Request types are declared with the request half, tool
+  types with the tool half; the loop re-exports both and imports neither private shape.
 - **One scheduler per session.** Wake has to start a turn while the API is idle; the scheduler waits
   on the mailbox and starts only when the slot is free.
 - **The user's turns and the tool's wake share one mechanism but not one queue.** User text is

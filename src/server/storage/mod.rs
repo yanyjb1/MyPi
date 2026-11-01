@@ -4,6 +4,7 @@
 pub(crate) mod decode;
 pub(crate) mod delete;
 mod path;
+pub mod query;
 pub mod reader;
 pub mod schema;
 pub mod shape;

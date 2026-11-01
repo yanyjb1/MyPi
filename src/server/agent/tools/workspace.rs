@@ -6,19 +6,18 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-/// Where the session stands, plus the directory it started in. `cwd` moves, `root` does not.
+/// Where the session stands, plus the directory it started in. `cwd` is this batch's snapshot;
+/// `root` never moves; `chdir` writes the session's shared handle.
 pub struct Workspace {
     cwd: std::path::PathBuf,
     root: std::path::PathBuf,
+    shared: super::contract::Cwd,
 }
 
 impl Workspace {
-    pub fn new(cwd: impl Into<std::path::PathBuf>) -> Self {
-        let cwd = cwd.into();
-        Self {
-            root: cwd.clone(),
-            cwd,
-        }
+    pub fn new(root: std::path::PathBuf, shared: super::contract::Cwd) -> Self {
+        let cwd = shared.read().unwrap_or_else(|e| e.into_inner()).clone();
+        Self { cwd, root, shared }
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -43,6 +42,7 @@ impl Workspace {
 
     /// Land on a new working directory. The caller checks where it may land (see `cd`).
     pub fn chdir(&mut self, real: std::path::PathBuf) {
+        *self.shared.write().unwrap_or_else(|e| e.into_inner()) = real.clone();
         self.cwd = real;
     }
 

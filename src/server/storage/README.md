@@ -52,6 +52,12 @@ gets JSON rows under the schema's field names. Stored shapes never leave: interv
 array, `0`/`1` becomes a boolean, JSON in a TEXT column becomes JSON. The path and the column lists
 never leave storage either.
 
+Besides the named accessors, `Reader::query` takes a plan: a sheet, the logical columns, a
+conjunction of conditions (equality, membership, containment, interval membership, null), an order
+and a limit. Filtering, ordering and the limit run in SQLite; the caller names columns and values,
+never SQL. Column names are checked against the sheet and every value is bound. A plan returns the
+raw column values; only the named accessors decode stored shapes.
+
 ### What lives in memory
 
 The structure port, and nothing else.

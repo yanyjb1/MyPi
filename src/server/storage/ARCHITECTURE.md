@@ -11,10 +11,11 @@ describes the code as it stands.
 |---|---|
 | `mod.rs` | declarations and exports |
 | `path.rs` | the database's file name and its default location |
-| `schema.rs` | `prepare(path)`, the tables, `SCHEMA_VERSION`; a mismatch rebuilds |
+| `schema.rs` | `prepare(path)`, the tables, the block indexes, `SCHEMA_VERSION`; a mismatch rebuilds |
 | `shape.rs` | every value crossing the boundary: blocks, rows, session anchors, submissions, references, the round structure |
 | `decode.rs` | column lists (`SESSION_COLS`, `TURN_COLS`, `REQUEST_COLS`, `BLOCK_COLS`) and row decoders, private to the reader |
-| `reader.rs` | `Reader`: one connection, one accessor per table, rows out as JSON |
+| `query.rs` | `Sheet`, `Cond`, `Val`, `Order`, `Query`: a read plan; logical column names, no SQL |
+| `reader.rs` | `Reader`: one connection, one accessor per table, rows out as JSON; `query(plan)` |
 | `writer/mod.rs` | declarations and exports |
 | `writer/handle.rs` | the `Writer` handle and what the thread owns |
 | `writer/job.rs` | one queue job and its answer |
@@ -44,7 +45,8 @@ describes the code as it stands.
 | `Writer::delete_rows(table, ids)` | removes those rows and whatever only they held; returns how many |
 | `Writer::export_memos(session)` | writes this session's memos into the download folder |
 | `Reader::open(path)` | opens the read connection; every query lives behind it |
-| `Reader::sessions / session / list / turns / turn / request / blocks / block / artifact / artifacts_by_ref / memos / aliases / cwd_trail` | the reads, decoded: rows out as JSON |
+| `Reader::query(plan)` | one read plan: sheet, columns, conditions, order, limit; rows out as JSON |
+| `Reader::sessions / session / list / turns / turn / request / blocks / block / artifact / artifacts_by_ref / memos / aliases / cwd_trail` | the named reads, decoded: rows out as JSON |
 | `Submit`, `Row`, `Ref`, `Table` | one submission, its rows, how a row names another row's id, and what `delete_rows` may remove |
 | `Target`, `Cut` | rewind input and result |
 | `shape::*`, `decode::*` | values and the row decoders, internal to the reader |

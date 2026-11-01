@@ -1,8 +1,6 @@
-//! Oversized tool output: its citation, its temp file, and the line the model reads.
+//! Oversized tool output: its citation, and the line the model reads.
 
-use std::path::Path;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::contract::{History, Reference};
 
@@ -44,13 +42,6 @@ pub fn resolve(
         }
     }
     Ok((hash.clone(), hash))
-}
-
-/// Write the full text under its citation. Same content, same file: a rewrite is harmless.
-pub fn materialize(dir: &Path, reference: &str, content: &str) -> Result<()> {
-    std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    let path = dir.join(reference);
-    std::fs::write(&path, content).with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// The line appended to the visible part, so the model can fetch the rest.

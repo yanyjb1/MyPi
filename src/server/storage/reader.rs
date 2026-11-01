@@ -1,5 +1,5 @@
-//! The read side: one connection, one accessor per table. A row leaves as JSON under the
-//! schema's field names, its stored shapes decoded — `0`/`1` as booleans, JSON columns as JSON.
+//! The read side: one connection, one accessor per table. A named accessor decodes stored shapes
+//! (`0`/`1` as booleans, JSON columns as JSON); a read plan returns the raw column values.
 
 use std::path::Path;
 
@@ -223,6 +223,106 @@ impl Reader {
         )
     }
 
+    // ---- the generic plan ----
+
+    /// Run one read plan. Columns are validated against the sheet; values are bound.
+    pub fn query(&self, plan: &super::query::Query) -> Result<Vec<Value>> {
+        use super::query::{Cond, Order};
+        use rusqlite::types::Value as Sql;
+
+        let columns: Vec<(&'static str, &'static str)> = if plan.columns.is_empty() {
+            plan.sheet.columns().to_vec()
+        } else {
+            let mut out = Vec::with_capacity(plan.columns.len());
+            for name in &plan.columns {
+                match plan.sheet.column(name) {
+                    Some(sql) => out.push((*name, sql)),
+                    None => bail!("no column `{name}` in {}", plan.sheet.name()),
+                }
+            }
+            out
+        };
+        let select = columns
+            .iter()
+            .map(|(logical, sql)| format!("{sql} AS \"{logical}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut sql = format!("SELECT {select} FROM {}", plan.sheet.name());
+        let mut params: Vec<Sql> = Vec::new();
+        let mut parts: Vec<String> = Vec::new();
+        for cond in &plan.filter {
+            match cond {
+                Cond::Eq(column, value) => {
+                    let column = column_of(plan, column)?;
+                    parts.push(format!("{column} = ?"));
+                    params.push(bind(value));
+                }
+                Cond::In(column, values) => {
+                    let column = column_of(plan, column)?;
+                    if values.is_empty() {
+                        parts.push("0".to_string());
+                        continue;
+                    }
+                    let marks = vec!["?"; values.len()].join(", ");
+                    parts.push(format!("{column} IN ({marks})"));
+                    params.extend(values.iter().map(bind));
+                }
+                Cond::Contains(column, text) => {
+                    let column = column_of(plan, column)?;
+                    parts.push(format!("{column} LIKE '%' || ? || '%'"));
+                    params.push(Sql::Text(text.clone()));
+                }
+                Cond::Within(column, ranges) => {
+                    let column = column_of(plan, column)?;
+                    if ranges.is_empty() {
+                        parts.push("0".to_string());
+                        continue;
+                    }
+                    let each: Vec<String> = ranges
+                        .iter()
+                        .map(|_| format!("{column} BETWEEN ? AND ?"))
+                        .collect();
+                    parts.push(format!("({})", each.join(" OR ")));
+                    for [lo, hi] in ranges {
+                        params.push(Sql::Integer(*lo));
+                        params.push(Sql::Integer(*hi));
+                    }
+                }
+                Cond::Null(column) => {
+                    parts.push(format!("{} IS NULL", column_of(plan, column)?));
+                }
+            }
+        }
+        if !parts.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&parts.join(" AND "));
+        }
+        if let Some((column, order)) = plan.order {
+            let direction = match order {
+                Order::Asc => "ASC",
+                Order::Desc => "DESC",
+            };
+            sql.push_str(&format!(
+                " ORDER BY {} {direction}",
+                column_of(plan, column)?
+            ));
+        }
+        if let Some(limit) = plan.limit {
+            sql.push_str(" LIMIT ?");
+            params.push(Sql::Integer(i64::try_from(limit).unwrap_or(i64::MAX)));
+        }
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let found = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            let mut object = serde_json::Map::new();
+            for (index, (logical, _)) in columns.iter().enumerate() {
+                object.insert((*logical).to_string(), cell(row.get_ref(index)?));
+            }
+            Ok(Value::Object(object))
+        })?;
+        Ok(found.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     // ---- the two shapes of a query ----
 
     fn rows(
@@ -243,6 +343,35 @@ impl Reader {
         row: impl FnOnce(&rusqlite::Row<'_>) -> rusqlite::Result<Value>,
     ) -> Result<Option<Value>> {
         Ok(self.conn.query_row(sql, params, row).optional()?)
+    }
+}
+
+// ---- the read plan's helpers ----
+
+fn column_of(plan: &super::query::Query, name: &str) -> Result<&'static str> {
+    match plan.sheet.column(name) {
+        Some(column) => Ok(column),
+        None => bail!("no column `{name}` in {}", plan.sheet.name()),
+    }
+}
+
+fn bind(value: &super::query::Val) -> rusqlite::types::Value {
+    use super::query::Val;
+    use rusqlite::types::Value as Sql;
+    match value {
+        Val::Int(number) => Sql::Integer(*number),
+        Val::Text(text) => Sql::Text(text.clone()),
+    }
+}
+
+fn cell(value: rusqlite::types::ValueRef<'_>) -> Value {
+    use rusqlite::types::ValueRef;
+    match value {
+        ValueRef::Null => Value::Null,
+        ValueRef::Integer(number) => Value::from(number),
+        ValueRef::Real(number) => Value::from(number),
+        ValueRef::Text(text) => Value::String(String::from_utf8_lossy(text).into_owned()),
+        ValueRef::Blob(_) => Value::Null,
     }
 }
 
