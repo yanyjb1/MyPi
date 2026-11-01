@@ -2,16 +2,18 @@
 
 use std::collections::VecDeque;
 
-use super::client::Arrival;
+use super::event::Event;
 
-/// The session's own state, plus the queue of upstream objects waiting for the front end.
+/// The session's own state, plus the queue of events waiting for the front end.
 #[derive(Default)]
 pub struct State {
     attached: Option<i64>,
     busy: bool,
     new_born: bool,
     refused: bool,
-    outbox: VecDeque<Arrival>,
+    init: Option<i64>,
+    watching: Option<i64>,
+    outbox: VecDeque<Event>,
 }
 
 impl State {
@@ -29,6 +31,9 @@ impl State {
         self.busy = false;
         self.new_born = false;
         self.refused = false;
+        self.init = None;
+        self.watching = None;
+        self.outbox.clear();
     }
 
     pub fn detach(&mut self) {
@@ -36,6 +41,9 @@ impl State {
         self.busy = false;
         self.new_born = false;
         self.refused = false;
+        self.init = None;
+        self.watching = None;
+        self.outbox.clear();
     }
 
     pub fn busy(&self) -> bool {
@@ -64,13 +72,31 @@ impl State {
         self.refused = refused;
     }
 
-    /// Queue one upstream object for the front end, in arrival order.
-    pub fn push(&mut self, arrival: Arrival) {
-        self.outbox.push_back(arrival);
+    /// The session whose first frame is in flight.
+    pub fn init(&self) -> Option<i64> {
+        self.init
+    }
+
+    pub fn set_init(&mut self, session: Option<i64>) {
+        self.init = session;
+    }
+
+    /// The session this connection already watches.
+    pub fn watching(&self) -> Option<i64> {
+        self.watching
+    }
+
+    pub fn set_watching(&mut self, session: Option<i64>) {
+        self.watching = session;
+    }
+
+    /// Queue one event for the front end, in arrival order.
+    pub fn push(&mut self, event: Event) {
+        self.outbox.push_back(event);
     }
 
     /// Take everything queued; the order is the arrival order.
-    pub fn drain(&mut self) -> Vec<Arrival> {
+    pub fn drain(&mut self) -> Vec<Event> {
         self.outbox.drain(..).collect()
     }
 }

@@ -10,7 +10,7 @@ A frame is a JSON object with three fields, always present:
 {"kind":"call","name":"init","payload":{"session":7}}
 ```
 
-- `kind`: `register` | `call` | `post` | `subscribe`.
+- `kind`: `register` | `call` | `post` | `subscribe` | `stream`.
 - `name`: snake_case operation name. `kind` + `name` together are the route key.
 - `payload`: always an object, possibly empty.
 
@@ -20,8 +20,8 @@ A reply repeats the request's `kind` and `name`. An error is a payload, not a ki
 {"kind":"call","name":"init","payload":{"error":{"code":"bad_payload","message":"..."}}}
 ```
 
-Push frames use `kind = subscribe` with their own names; a request never uses those names, so
-`kind` + `name` tells a reply from a push without an id.
+Push frames use `kind = stream`. A reply repeats the request's `kind`, so `kind` alone tells a
+reply from a push without an id, and a push may reuse a door's name.
 
 The name table and the error codes belong to api; this module knows neither.
 
@@ -32,7 +32,8 @@ The name table and the error codes belong to api; this module knows neither.
 - One connection per front end, two directions: one thread reads, one thread writes. Replies
   and pushes share the writing side, so the socket is written in one place only.
 - No id, no version: requests on a connection are serial, so the reply that matches the
-  request's `kind` and `name` is its answer. Pushes that arrive meanwhile are kept aside.
+  request's `kind` and `name` is its answer. Stream frames carry another kind and are never
+  mistaken for one.
 - ipc does not know names or payloads: the transport stays stable while the operation table
   evolves in api.
 

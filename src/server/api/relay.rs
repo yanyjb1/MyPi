@@ -156,15 +156,19 @@ impl Relay {
         }
     }
 
-    /// One write of the api's own: everybody but the issuer hears it.
-    pub(crate) fn post(&self, session: i64, action: &str, issuer: &str, extra: Value) {
+    /// One change of the api's own: everybody but the issuer hears it.
+    pub(crate) fn change(&self, session: i64, action: &str, issuer: &str, extra: Value) {
         let mut payload = json!({"session": session, "action": action, "by": issuer});
         if let (Some(object), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
             for (key, value) in extra {
                 object.insert(key.clone(), value.clone());
             }
         }
-        self.deliver(session, Frame::new("post", action, payload), Some(issuer));
+        self.deliver(
+            session,
+            Frame::new("stream", "change", payload),
+            Some(issuer),
+        );
     }
 
     /// The session is gone: its buffer, its turn, and every watcher's claim on it.
@@ -235,7 +239,7 @@ impl Relay {
                     NoticeLevel::Error => "error",
                 };
                 let payload = json!({"session": session, "level": level, "content": notice.text});
-                self.deliver(session, Frame::new("subscribe", "notice", payload), None);
+                self.deliver(session, Frame::new("stream", "notice", payload), None);
             }
         }
     }
@@ -248,7 +252,7 @@ impl Relay {
                 object.insert(key.clone(), value.clone());
             }
         }
-        self.deliver(session, Frame::new("subscribe", door, payload), None);
+        self.deliver(session, Frame::new("stream", door, payload), None);
     }
 
     /// A turn closed: its ranges go out last, then the buffer and the turn go.
@@ -259,7 +263,7 @@ impl Relay {
             "turn": piece.turn,
             "ranges": piece.ranges,
         });
-        self.deliver(piece.session, Frame::new("subscribe", door, payload), None);
+        self.deliver(piece.session, Frame::new("stream", door, payload), None);
         let mut state = self.state();
         state.buffers.remove(&piece.session);
         state.active.remove(&piece.session);

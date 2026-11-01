@@ -65,5 +65,6 @@ Relay::start
 
 ## Not wired
 
-1. The front end still imports the retired `ipc::contract` shapes; the `ui` tree does not compile.
+1. `ui::tui` still imports the retired `ipc::contract` shapes and the old session surface; the `ui`
+   tree does not compile. `ui::session` speaks the frames.
 2. `usage` quotes only what `models.yml` declares; a model with no price answers `null`.

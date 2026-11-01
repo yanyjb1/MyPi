@@ -4,65 +4,59 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 ## Files
 
-| file | holds | to the outside |
+| path | holds | outside |
 |---|---|---|
-| `mod.rs` | module declarations; re-exports `Arrival`, `Content`, `Direction`, `Packet`, `Session`, `Switches`, `Structure`, `Turn` | public |
-| `session.rs` | `Session` (the entry point), `Switches`, `Draft`, the lifecycle, every public call | `Session`, `Switches` public |
-| `client.rs` | `Client` (connection, queue, watch), `Request`, `Arrival`, `Round`, `Kind` | `Arrival` public; the rest private |
-| `ingest.rs` | `apply` — one arrival into structure, content, flags, outbox | private |
-| `state.rs` | `State` (attachment, `busy`, `new_born`, `refused`, `outbox`) | private |
-| `structure.rs` | `Structure` (rounds), `Turn` (a round's intervals) | public, reached through `Session::local_struct_snap` |
-| `content.rs` | `ContentCache` (the archive), `Content`, `Packet`, `Boundary`, `ToolOutput`, `Direction` | `Content`, `Packet`, `Direction` public; the cache itself private |
+| `mod.rs` | module declarations and the type re-exports | public |
+| `session.rs` | `Session`, `Draft`, the lifecycle, every public call, `forward` | `Session` public |
+| `client.rs` | `Client`, `Request`/`Call`/`Post`/`Subscribe`, `Arrival`, `Push`, frame building, frame classification | private |
+| `ingest.rs` | `apply` — one arrival into the caches, the flags, the outbox | private |
+| `state.rs` | `State`: attachment, `busy`, `new_born`, `refused`, the in-flight init, the watch, the outbox | private |
+| `structure.rs` | `Turn`, `Structure`: the round index and its rewind trim | public |
+| `content.rs` | `ContentCache`: landed rows, the budget, the eviction, `Direction` | `Direction` public |
+| `event.rs` | the exit vocabulary and the payload decoders | public |
 
 ## What it talks to
 
-- **`ipc::client`**: connect, one call and its reply, one post and its outcome, one subscription
-  (`Watch`, `Submit`, `Compact`), bye. The watch arrives on a channel of its own.
-- **`ipc::contract`**: `Call`, `Post`, `Subscribe`, `Reply`, `PostDone`, `Opened`, `Event`,
-  `Block`, `NewBlock`, `BlockKind`, `TurnShape`, the ask and write groups, `Viewer`, `Retention`.
+- **`ipc::client`**: one connection, `send` and `drain`. The session builds every frame itself.
+- **`ipc::contract`**: `Frame` and `ErrorCode` only.
 - **`ipc::endpoint`**: where the server listens; the session does not start it.
-- **Knows nothing about**: terminals, drawing, themes, layout, keys, scrolling, notice lifetimes,
-  rendered rows, the picker's page, the tree's page.
+- **Knows nothing about**: terminals, drawing, themes, layout, keys, scrolling, rendered rows.
 
 ## Inside
 
 ```text
 Session
- ├── client::Client      ── one command connection, one watch stream, one queue
- ├── state::State        ── attachment, flags, outbox
+ ├── client::Client      ── one connection, the sent queue, the answers still owed
+ ├── state::State        ── attachment, flags, the in-flight init, the watch, the outbox
  ├── structure::Structure── the rounds of the attached session
- ├── content::ContentCache── landed blocks by id, streamed blocks by boundary
+ ├── content::ContentCache── the landed rows under a budget
  └── Draft               ── the makings of a session whose row does not exist yet
 ```
 
-- `Session::forward` is the only exit. It pumps the connection, hands every queued `Arrival` over,
-  and empties the queue. It is also the only place the upstream loop runs.
-- `ingest::apply` is the only writer of `State`, `Structure` and `ContentCache` from outside. It
-  drops arrivals that do not belong to the attachment, then queues the rest.
-- `Session::local_struct_snap` is the only reader path into the structure.
-- `Session::call_*`, `post_*`, `subscribe_*` are the only places a front end intent becomes a door
-  call; `client::Client::send` is the only place the wire is touched.
+- `Session::forward` is the only exit. It pumps the connection and hands the queue over.
+- `client::Client::receive` classifies a frame by `kind`: `stream` frames become `Push` values,
+  every other frame is the answer to the oldest request still owed. `watch` and `bye` expect no
+  answer; the queue drops them as later replies pass them by.
+- `ingest::apply` is the only writer of `State`, `Structure` and `ContentCache` from outside.
+- `Session::call_*`, `post_*`, `subscribe_*` are the only places a front end intent becomes a
+  door call; `client::Request::frame` is the only place a frame is built.
 
 ## Must stay in step
 
-1. `client::Request` and the doors: one variant per door shape (`Call`, `Post`, `Subscribe`,
-   unwatch, bye). A new door has to be added here and in `Session`.
-2. `ingest::apply` and the contract: a new `Event`, `ContentEvent`, `SessionEvent` or `Reply`
-   variant has to be routed here.
-3. `ingest::belongs` and the session id: every door call that names a session has to answer with
-   it, or its reply is dropped as somebody else's.
-4. `content::Boundary` and the stream: the identity used to merge pieces must be the identity the
-   server sends, block kind plus tool call id.
-5. `content::merge_landed` and the landed order: the n-th streamed block binds the n-th new id, so
-   both sides must keep arrival order.
-6. `structure::Turn` and the landed blocks: a landed batch opens or extends an interval; a round
-   that never landed has no interval and cannot be read.
-7. `Session::attach`/`detach` and the caches: both caches live exactly as long as one attachment.
+1. `client::Call`/`Post`/`Subscribe` and the api's door table: one variant per door.
+2. `client::decode_push` and api's stream payloads: a new piece kind needs an arm here and in
+   `event::Piece`.
+3. `ingest::apply` and the exit: a new event needs a landing site and a re-export.
+4. `ingest` and the session id: every request that names a session is filtered against the
+   attachment, or its answer is dropped as somebody else's.
+5. `structure::Turn` and the wire's `ranges`: pairwise, closed intervals, id order.
+6. `content::ContentCache` and `config.ui.session.preloadCache`: the budget is asked once at
+   connect.
+7. `Session::attach`/`detach` and both caches: both live exactly as long as one attachment.
 
 ## Not wired yet
 
-1. `ui::tui` still reads `Session::view`, `init`, `jump`, `fetch`, `settled`, `tree_range`,
-   `notice`, `text_of`, `set_draft`, and the old `Switches` fields.
-2. `main::front_end_with` still passes a `Viewer` to `Session::connect`, which now generates one.
-3. `src/lib.rs` still allows `ui::tui` to reach `ipc::contract` and `ipc::client`; the session owns
-   the connection, so that allowance has to shrink.
+1. `ui::tui` still reads `Session::view`, `Switches`, and the older call names.
+2. `main` still calls the four-argument `Session::connect` and names `ipc::contract::Viewer`.
+3. `src/lib.rs` still allows `ui::tui` to reach `ipc::client`; the session owns the connection, so
+   that allowance shrinks once the TUI moves.

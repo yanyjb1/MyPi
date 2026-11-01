@@ -21,6 +21,7 @@ One frame is `kind`, `name`, `payload`.
 | `call` | front end | a read door | the door's arguments |
 | `post` | front end | a write door | the door's arguments |
 | `subscribe` | front end | `watch` / `submit` / `compact` | the door's arguments |
+| `stream` | back end | `change` / `notice` / the door that opened the turn | the pushed row |
 
 A reply carries the request's `kind` and `name`, so a front end matches an answer to its own
 request without a counter. A failure is a reply whose payload is `{"error": {"code", "message"}}`.
@@ -94,14 +95,17 @@ api's own write doors ------------->  relay
 
 | event | `kind` | `name` | payload |
 |---|---|---|---|
-| `post` | `post` | the door that wrote | `session`, `action`, the changed row |
-| live output | `subscribe` | the door that opened the turn | `session`, `turn`, `kind`, the piece |
-| notice | `subscribe` | `notice` | `session`, `level`, `content` |
-| round structure | `subscribe` | the door that opened the turn | `session`, `turn`, `ranges` |
+| write change | `stream` | `change` | `session`, `action`, `by`, the changed row |
+| live output | `stream` | the door that opened the turn | `session`, `turn`, `kind`, the piece |
+| notice | `stream` | `notice` | `session`, `level`, `content` |
+| round structure | `stream` | the door that opened the turn | `session`, `turn`, `ranges` |
 
 - `kind` in a live payload is one of `text`, `thinking`, `arguments`, `boundary`, `tool_start`,
   `tool_progress`, `tool_end`.
-- `post` skips the viewer that issued it. `stream` and `notice` go to everyone watching.
+- `action` in a change payload is `name`, `cwd`, `switch`, `rewind` or `delete`; the rest of the
+  payload is that door's changed row.
+- A change frame skips the viewer that issued it; live output, notices and structure go to
+  everyone watching.
 - The turn a live frame carries is recorded when `submit` or `compact` opens it, so the loop's
   events need no turn of their own. A turn a job woke names `wake`.
 - The buffer belongs to the session, holds everything this turn said, and is handed to a connection
@@ -136,7 +140,8 @@ goes away.
 
 ## 3. Unresolved
 
-None inside this domain. The front end has to be brought onto these frames; that is its own work.
+None inside this domain. `ui::session` speaks these frames; the terminal front end still has to be
+brought onto its own exit.
 
 ## 4. Config fields
 

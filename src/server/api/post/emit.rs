@@ -24,7 +24,7 @@ pub(crate) fn changed(api: &Api, viewer: &str, session: i64, action: &str) -> Re
     drop(reader);
     if let Some(row) = row {
         api.relay()
-            .post(session, action, viewer, json!({"meta": row}));
+            .change(session, action, viewer, json!({"meta": row}));
     }
     Ok(())
 }

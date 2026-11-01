@@ -21,14 +21,13 @@
   queue through `Conn::send`; nothing else writes the socket. On exit it calls
   `Api::disconnect` and drops the handle, which closes the queue.
 - `serve` stops when `Api::idle_for` reports no connection for a whole grace period.
-- `client.rs` is used by `ui::session`; `ask` writes a request and takes the first frame whose
-  kind and name match, keeping the rest for `drain`.
+- `client.rs` is used by `ui::session`, which sends frames and drains the connection. `ask`
+  remains for a caller that waits on one answer; stream frames carry another kind and never
+  match it.
 - `contract` imports no server, ui, or transport code.
 - `line.rs` knows bytes, not frames; `Frame` knows fields, not meanings.
 
 ## Not yet wired
 
-- `ui::session` still calls the old client methods (`call`, `post`, `watch`, `submit`,
-  `open_stream`); it must move to `ask` / `send` / `drain`.
 - `main.rs` still builds `Api::new(cfg)`; it must open the writer first and hand `Api::new` the
   database path, the writer, the loop's register, and the relay.

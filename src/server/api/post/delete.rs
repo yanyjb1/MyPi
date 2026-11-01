@@ -41,7 +41,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         .collect();
     ids.push(session);
     api.relay()
-        .post(session, "delete", viewer, json!({"session": session}));
+        .change(session, "delete", viewer, json!({"session": session}));
     api.writer().delete_rows(Table::Sessions, &ids)?;
     for id in &ids {
         api.ledger().drop(*id);
