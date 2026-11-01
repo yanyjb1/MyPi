@@ -62,12 +62,19 @@ half's, and the loop only adds tool events to it.
 
 ## 3. Unresolved
 
-- The tool half does not implement `Batch` yet, so nothing runs a call.
-- The API does not construct the loop yet.
+- `Source::jobs` and `Furnish::mcp` are empty: the job and MCP waves attach their services.
+- The API does not construct the loop yet; `Loop::new` takes `&Config`.
+- Same-batch calls that have not landed are invisible to `Source`.
 
 ## 4. Config Fields
 
 - `config.server.agent.loop.maxToolCalls` — tool-round fence; false turns it off.
 - `config.server.agent.loop.scrooge` — true forbids a mid-session model change.
+- `config.server.agent.tools.outputMaxLines` / `outputMaxBytes` — the inline budget handed to the tool layer.
+- `config.server.agent.tools.bashTimeout` — one command's wall-clock cap.
+- `config.server.agent.tools.browser.{bin,port,profileDir,headless,userAgent,extraArgs}` — the web tool's launch values.
+- `config.server.agent.subagent.maxToolCalls` — the default budget for a sub-session.
 
-The output cap is not here: it belongs to the request half's startup options.
+The output cap of a request body is not here: it belongs to the request half's startup options. The
+export folder is the platform's downloads directory, and the project root is the startup directory
+when it carries `.mypi`.

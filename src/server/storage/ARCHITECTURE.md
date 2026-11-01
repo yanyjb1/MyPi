@@ -93,6 +93,7 @@ Everything else is `pub(crate)` or private.
 9. `shape::Row` and `write/apply.rs`'s dispatch; a new row is one arm on each side.
 10. `delete/rows.rs`'s per-table removals and `delete/mod.rs::sweep`; both use the same survival
     rule.
+11. `query::Sheet`'s column map and the schema's columns; a renamed column is one line in both.
 
 ## Not wired yet
 

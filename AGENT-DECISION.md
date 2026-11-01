@@ -21,19 +21,23 @@ storage ──► loop ──► { request, tools }
 - 历史通过 loop 注入的读口读，不 `import storage`。
 - 解码后直接往 loop 给的 channel 写增量与块边界；正文和思考带来源说明，工具参数不带。
 - 块级写库经 loop 给的写块口；块类型由 request 唯一决定；工具结果整批切，缺一个调用整体失败。
+- 溢出全文只交引用与全文，二者随块交给 loop 落库；request 不写任何文件。
 - 压缩读回合视图、求计划、发一次无工具请求，交回摘要与保留区区间。
 
 ## 3. tools
 
-- 结果只交文本、memo、溢出全文、中性 effect、是否终止回合、进度增量。
+- 结果只交文本、memo、中性 effect、是否终止回合、进度增量；溢出由前门量、由 loop 落库。
 - 不自己量输出；`cd` 只改自己看到的目录，批内看批开始快照。
-- 子代理只回意图：模板、变量、工具子集、预算、`provider:model`、cwd、启动消息；未指定 `p:m` 继承主代理。
+- 子代理只回意图：模板、变量、工具子集、预算、cwd、启动消息；system 与模型继承本会话，不走 effect，不建会话行。
 - `final` 只给子会话，`task` 只给主会话，`kairos` 不给子会话。
+- 摘要按工具各一份，挂在工具声明旁；`context` 与 todo 的规则见 `tools-目标形态.md`。
 
 ## 4. config / api
 
 - config 提供 provider 出口、`config.server.agent.loop.scrooge`、browser 两个字段；删除
   `config.server.agent.reloadOnCompaction`；agent 自读 `mcp.json`。
+- loop 从 config 取值构造工具层：`Loop::new(writer, settings, ask, out, &cfg)`。
 - api 持有 `Loop` 句柄；主会话先写 `sessions` 行再 `book`，子会话由 loop 写行并 `book`。
+- `Birth.tools` 是名单；system 与名单分开解析。
 - 实时输出走 `Sender<Event>`；busy 看订阅表，不问 loop。
 - 子会话列表从 `sessions.anchor` 读；不再有 `subsessions` 表。

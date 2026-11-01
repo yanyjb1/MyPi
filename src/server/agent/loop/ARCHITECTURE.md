@@ -70,5 +70,6 @@ half's types, re-exported from this domain's root.
 
 ## Not wired
 
-- The tool half has no `Batch` implementation.
-- The API does not construct the loop yet.
+- `Source::jobs` and `Furnish::mcp` are empty: the job and MCP waves attach their services.
+- The API does not construct the loop yet; `Loop::new` takes `&Config`.
+- Same-batch calls that have not landed are invisible to `Source`.

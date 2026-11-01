@@ -10,16 +10,17 @@
   request 暴露 `Block`；loop 在 `pen` 里实现到 `storage::NewBlock` 的映射。
 - 交回：`Stop`、`Usage`、`call_id / name / args / intent`；压缩时交回摘要文本。
 - 不派工具、不开回合、不碰会话状态、不认识工具名。
-- artifact 引用：全文 FNV-1a 64，取 4/6/8/10/12/14/16 位十六进制前缀；同内容同引用；不同内容前缀冲突时加长。引用随块交给 loop。
+- artifact 引用：全文 FNV-1a 64，取 4/6/8/10/12/14/16 位十六进制前缀；同内容同引用；不同内容前缀冲突时加长。引用与全文随块交给 loop 落库；request 不写文件。
 - 压缩：读回合视图、求计划、发一次无工具请求、交回摘要和保留区区间；区间按原回合分组，切点落在回合内时取 `[z, y]`。不建第二套请求栈。
 
 ## tools
 
 - 一切外部条件从 `Env` 拿；不开数据库、不读配置文件、不碰环境变量、不持 `Writer`。
-- 结果：文本、memo、溢出全文、agent 自己的中性 effect、是否终止回合、进度增量。
+- 结果：文本、memo、agent 自己的中性 effect、是否终止回合、进度增量；溢出由前门量、由 loop 落库。
 - 不自己量输出；输出上限由前门量。
 - `cd` 只改自己看到的目录；批内看到批开始的快照。
-- 子代理只回意图：模板、变量、工具子集、预算、`provider:model`、cwd；不建会话行。未指定 `p:m` 时继承主代理。
+- 子代理只回意图：模板、变量、工具子集、预算、cwd、启动消息；system 与模型继承本会话，不建会话行。
+- 摘要按工具各一份，挂在工具声明旁。
 - `final` 只给子会话；`task` 只给主会话；`kairos` 不给子会话。
 
 ## config
@@ -27,17 +28,19 @@
 - 提供 provider 出口：`base_url`、`api`、`auth_header`、key 解析。
 - 新增 `config.server.agent.loop.scrooge`；真 = 不许中途换模型。
 - 删除 `config.server.agent.reloadOnCompaction`。
-- 提供 browser 的 `bin` 与 `profileDir` 两个字段。
+- 提供 browser 的启动值：`bin`、`port`、`profileDir`、`headless`、`userAgent`、`extraArgs`。
+- 提供工具侧的输出上限（行、字节）、bash 超时、子代理默认额度、导出目录。
+- `.mypi`：启动目录含它才算项目根；给出 `project`、`agents`、`answers` 三个路径。
 - agent 自读 `mcp.json`；配置里不再提供 mcp 段。
 
 ## api / 调用方
 
 - 主会话：先写 `sessions` 行（`provider`、`model`、`meta`、`anchor = NULL`），拿 `sessionid`，再 `Loop::book`，再 `deliver`。
 - 子会话：先写工具结果块，再写 `sessions` 行（`anchor = 块 id`），拿 `sessionid`，再 `book`，再 `deliver` 启动消息。
-- `Birth`：`session`、`provider`、`model`、`system`、`tools`、`meta`、`cwd`。系统提示词和 tools 由调用方从 `meta` 或外部 profile 取好，loop 不读 profile。
+- `Birth`：`session`、`provider`、`model`、`system`、`tools`、`meta`、`cwd`。`tools` 是名单；system 与名单分开解析，loop 不读 profile。
 - 投递：`deliver(session, Message)`；忙时 loop 自己排队。打断用 `interrupt(session)`。丢弃用 `drop(id)`。
 - 状态变化：`Change::Model { provider, model }`、`Change::Cwd(path)`；profile 没有切换入口。
-- 活线：`Loop::new` 时传 `Sender<Event>`；事件自带会话号，api 按订阅表分发。
+- 活线：`Loop::new(writer, settings, ask, out, &cfg)` 时传 `Sender<Event>`；事件自带会话号，api 按订阅表分发。
 - busy 判断看订阅表，不问 loop。
 - 子会话列表从 `sessions.anchor` 读；不再有 `subsessions` 表。
 
