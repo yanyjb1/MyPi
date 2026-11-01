@@ -216,7 +216,6 @@ impl Engine {
                 name: call.name.clone(),
                 args: call.args.clone(),
                 intent: call.intent.clone(),
-                text: None,
             }),
         });
     }

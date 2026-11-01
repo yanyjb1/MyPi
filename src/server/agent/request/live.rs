@@ -53,7 +53,6 @@ pub enum ToolEvent {
         name: String,
         args: String,
         intent: Option<String>,
-        text: Option<String>,
     },
     Progress {
         call_id: String,
