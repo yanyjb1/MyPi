@@ -7,7 +7,36 @@ layer; this layer asks nobody.
 
 One file per question, and no question handled twice: what this system is (`os.rs`), what time it is
 (`time.rs`), how a stamp renders into a message (`stamp.rs`), where the process's directories are
-(`env.rs`), and what happened to us (`log.rs`).
+(`env.rs`), which shell runs a command line (`shell.rs`), how one command's process tree is started
+and stopped (`proc.rs`), and what happened to us (`log.rs`).
+
+### The shell
+
+```text
+Shell { kind: Bash | Zsh | Pwsh | Niu, program }
+
+Shell::default()                     this platform's default: bash on unix, pwsh on windows
+Shell::resolve(name)                 a configured name → the backend; a foreign shell is refused
+Shell::command(line)                 the program plus its one-shot shape: `-c`, or `-NoProfile -NonInteractive -Command`
+Shell::read_file(path)               the token that prints one stored text: `cat …`, or `Get-Content -Raw -LiteralPath …`
+Shell::guarded()                     unix shells only
+```
+
+The backend is a value, not a trait: the tool receives a resolved `Shell` and never asks which
+system it is on. `names()` lists what this build runs, and it is the only list configuration may
+name.
+
+### The process tree
+
+```text
+spawn_grouped(cmd)         start the command so it leads a group of its own
+signal_group(pgid, sig)    Term or Kill, whole group
+terminate_tree(pid)        Term, then Kill once `grace()` has run out
+```
+
+On unix the child becomes its own session (`setsid`) before `exec`, and a group is signalled through
+the `kill` syscall declared in that file; on windows the child gets no console window and the tree is
+taken down with `taskkill /T`. Nothing here spawns `setsid`, `kill` or `timeout` as a program.
 
 ### The stamp
 
@@ -52,12 +81,16 @@ run time. The environment is read on demand, through this layer's one mouth.
 5. **A moment is taken where it happens.** Injection reads the clock before the message is written,
    because there is no row to read it back from yet; a block's own time is taken when that block
    lands, by whoever lands it.
-6. **Tests are not a concern of this layer.** Timing, zone tables and the environment are checked by
-   running the program; this folder carries no unit tests.
+6. **A shell is a value.** No caller asks this layer which system it is on; the resolved `Shell`
+   carries every difference a command line has.
+7. **A command is stopped by its group.** One spawn makes one group; stopping signals the group.
+8. **Tests are not a concern of this layer.** Timing, zone tables, the environment and the process
+   tree are checked by running the program; this folder carries no unit tests.
 
 ### What lives in memory
 
-Two things, and only these: the process's zone, and the log ring.
+Two things, and only these: the process's zone, and the log ring. A shell is resolved on demand
+and handed to its caller; this layer keeps no default shell of its own.
 
 ## 2. Design intent
 
@@ -95,9 +128,9 @@ current directory.
 ## 3. Open questions
 
 1. **Windows.** The crate has never been compiled there and no dependency has been checked for it, so
-   the promises above hold on unix only: the zone table's paths, the XDG directories, the shell tool
-   (`setsid`, `kill`, `/bin/sh`), the transport's process teardown and the browser paths are all
-   unix-shaped (第 16 条). `os.rs` exists so the day it matters, the question has one place to ask.
+   the promises above hold on unix only: the zone table's paths, the XDG directories, the transport's
+   process teardown and the browser paths are all unix-shaped (第 16 条). The shell and the process
+   tree carry both families, so the day windows matters the question has one place to ask.
 2. **Instant messaging has no caller.** The switch, the templates and the rendering exist;
    `stamp::inject` is public with no production call site, and the feature's shape is still open — the
    switch may end up named something other than "instant message".
@@ -105,9 +138,9 @@ current directory.
    call the clock and hand the stamp over with the block, and nothing in this layer reads it back.
 4. **The templates are not read at the moment they are used.** Configuration hands the template text
    and the switch in; who reads them, and when, is that layer's business.
-5. **Three callers read the environment themselves.** The workspace, the bash guard and the `cd` tool
-   call the standard library's temp directory and `HOME` directly instead of asking this layer, so
-   "one mouth for the environment" is a rule the code does not keep everywhere yet.
+5. **Two callers read the environment themselves.** The workspace and the bash guard call the
+   standard library's temp directory and `HOME` directly instead of asking this layer, so "one mouth
+   for the environment" is a rule the code does not keep everywhere yet.
 
 ## 4. Config
 

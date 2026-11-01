@@ -72,7 +72,6 @@ impl Sheet {
                 ("model", "model"),
                 ("anchor", "anchor"),
                 ("meta", "meta"),
-                ("todo_on", "todo_on"),
             ],
             Sheet::Turns => &[
                 ("turn_id", "turn_id"),

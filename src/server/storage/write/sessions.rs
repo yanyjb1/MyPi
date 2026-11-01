@@ -63,15 +63,6 @@ pub(crate) fn move_cwd(tx: &rusqlite::Transaction<'_>, session: i64, cwd: &str) 
     Ok(())
 }
 
-/// `sessions.todo_on`.
-pub(crate) fn todo_on(tx: &rusqlite::Transaction<'_>, session: i64, on: bool) -> Result<()> {
-    tx.execute(
-        "UPDATE sessions SET todo_on = ?1 WHERE id = ?2",
-        rusqlite::params![on as i64, session],
-    )?;
-    Ok(())
-}
-
 /// One `cwd_history` row: this round's working directory.
 pub(crate) fn cwd_row(
     tx: &rusqlite::Transaction<'_>,

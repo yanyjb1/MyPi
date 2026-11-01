@@ -63,8 +63,11 @@ fn start(
     let spec = match args.choice(TYPE)?.as_str() {
         "command" => {
             let command = Command::prepare(env, &content)?;
-            let runner: Arc<dyn JobRunner> =
-                Arc::new(CommandRunner::new(command, env.inbox.artifacts.clone()));
+            let runner: Arc<dyn JobRunner> = Arc::new(CommandRunner::new(
+                command,
+                env.bash.shell.clone(),
+                Some(env.export.clone()),
+            ));
             JobSpec {
                 runner,
                 schedule,

@@ -15,6 +15,8 @@ keeps — is in `README.md`.
 | `time.rs` | the process's time zone, and the program's one stamp shape: `init`, `now_stamp`, `age_seconds`, `days_from_stamp` |
 | `stamp.rs` | the timestamp templates: `parse` and `render` turn two instants into the prefix and suffix of one user message |
 | `log.rs` | the in-process ring of what happened to us: a level, a scope, a message and a millisecond |
+| `shell.rs` | which shell runs a command line: `Kind`, `Shell`, `default`, `resolve`, `names`, the one-shot argument shape, and the read form a stored text takes |
+| `proc.rs` | one command's process tree: `spawn_grouped`, `signal_group`, `terminate_tree`, `grace`; the per-family pieces are compile-time `cfg` modules |
 
 ## The public surface
 
@@ -29,6 +31,8 @@ keeps — is in `README.md`.
 | `time::days_from_stamp(stamp)` | a stamp's day count since 1970-01-01 (for weekdays) |
 | `stamp::{Parts, parse, weekday, render, inject}` | the injection templates: render a template against two instants, or both halves of one message at once |
 | `log::{Level, Record, push, info, warn, error, recent, by_scope, len}` | the ring |
+| `shell::{Kind, Shell, names}` | the session's shell; `resolve` refuses a shell the platform does not run |
+| `proc::{spawn_grouped, signal_group, terminate_tree, grace, Signal}` | start a command as its own group, signal the group, take the tree down |
 
 Everything else in this folder is private.
 
@@ -37,7 +41,8 @@ Everything else in this folder is private.
 - **Who asks platform**: config (the directory roots, the environment, the family, for its
   bootstrap), the api (the clock when it opens a session or lands a message, the log, the data
   directory the database file sits in), the agent (the clock when a block lands, the log, and the
-  temp directory the artifact files are materialized under). Storage asks it **nothing**: every
+  temp directory the artifact files are materialized under, plus the shell and the process tree
+  the `bash` tool runs on). Storage asks it **nothing**: every
   instant arrives as a value, and the caller reads the clock.
 - **Who platform asks**: nobody of ours — the standard library and the operating system only. The
   guard table in `src/lib.rs` keeps it that way (the entry forbids this folder from naming any other
@@ -69,6 +74,12 @@ Everything else in this folder is private.
 2. **`stamp::inject` has no caller.** The timestamp injection happens when a user message is written,
    and where exactly that is stays undecided until the instant-messaging mode gets its own design
    (`memo.md`); `config.server.platform.stamp.*` has no reader for the same reason.
-3. **Windows.** `env.rs` answers every directory with the current directory on a non-unix family, and
-   the rest of the program is unix-shaped: zoneinfo paths, `setsid`/`kill` in the bash tool, the
-   transport worker's `kill -KILL`, and the browser paths. 第 16 条 lists the sites.
+3. **Windows.** `env.rs` answers every directory with the current directory on a non-unix family.
+   `shell.rs` and `proc.rs` carry both families, but three places still assume unix: the zoneinfo
+   paths in `time.rs`, the transport worker's `kill -KILL`, and the browser paths
+   (`src/web/browser/process.rs`). 第 16 条 lists the sites.
+4. **The shell backend is not selectable yet.** `Shell::resolve` exists; nothing reads a configured
+   name, so every session takes the platform default. `Shell::default` is `bash` on unix and `pwsh`
+   on windows, and the `niu` backend is reachable only through `resolve`.
+5. **`proc::terminate_tree` has one caller to come.** The browser process still calls `Child::kill`,
+   which leaves the engine's own children behind; its wave moves it onto `terminate_tree`.

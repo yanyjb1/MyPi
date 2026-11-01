@@ -387,7 +387,6 @@ fn session_json(row: SessionMeta) -> Value {
         "model": row.model,
         "anchor": row.anchor,
         "meta": row.meta,
-        "todo_on": row.todo_on,
     })
 }
 

@@ -30,7 +30,11 @@ storage ──► loop ──► { request, tools }
 - 不自己量输出；`cd` 只改自己看到的目录，批内看批开始快照。
 - 子代理只回意图：模板、变量、工具子集、预算、cwd、启动消息；system 与模型继承本会话，不走 effect，不建会话行。
 - `final` 只给子会话，`task` 只给主会话，`kairos` 不给子会话。
-- 摘要按工具各一份，挂在工具声明旁；`context` 与 todo 的规则见 `tools-目标形态.md`。
+- 摘要按工具各一份，挂在工具声明旁；没有摘要的工具在 `context` 里退回它的参数文本。
+- `todo` 只有三条操作：`set`（整表替换，空表即清空）、`tick`（按序号打勾，`done:false` 取消）、
+  `view`（只读）。扁平表、布尔状态、无阶段、无开关、无 blocker；序号越界整批拒绝。
+- `todo` 不存状态：`set` 的结果 memo 带 `"todo_reset":true`，最新的那条是重放锚点，用它的 memo
+  作种子，再折叠其后的调用。
 
 ## 4. config / api
 

@@ -10,18 +10,21 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `contract.rs` | the outward shapes: `Batch`, `BatchInput`, `ToolResult`, `Effect`, `ToolOutput`, `Env`, `Cwd`, `Limits`, `BashEnv`, `Browser`, `Paths`, and the `Source`, `Furnish`, `Export`, `Child`, `Draft`, `MemoRead` ports |
 | `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure, events |
 | `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `Tool`, `Run`, `Summary`, `ToolProgress` |
+| `summary.rs` | one recorded call's arguments, and the clip every tool's history summary reuses |
 | `registry.rs` | `TOOLS`, `spec`, `roster`, `available`, `Availability` |
 | `workspace.rs` | `Workspace`, the licensed zones, the per-path write lock, `write_atomic`, `canonicalize_lenient` |
 | `bash/mod.rs` | declares the bash family |
-| `bash/bash/mod.rs` | the `bash` tool, `expand_alias`, `rewrite_refs` |
+| `bash/summary.rs` | one recorded call's arguments, and the summary clip every bash-family tool reuses |
+| `bash/bash/mod.rs` | declares the command tool, its guard, its runner and the shared ref rewriting |
+| `bash/bash/tool.rs` | the `bash` tool, `expand_alias`, `rewrite_refs` |
 | `bash/bash/guard.rs` | the command classifier: `normalize`, `classify`, `Verdict`, `RuleHit` |
-| `bash/bash/shell.rs` | one command: `run`, `run_to`, `OutputSink`, `Exit`, `StopFlag`, process-group signal |
-| `bash/read/mod.rs` | `read` |
-| `bash/write/mod.rs` | `write` |
-| `bash/edit/mod.rs` | `edit` with `exact` and `mass`; `exact_text`, `mass_text` |
-| `bash/cd/mod.rs` | `cd` |
-| `bash/alias/mod.rs` | `alias` add/list/remove |
-| `bash/context/mod.rs` | `context`; its body still reads the old `Window` input |
+| `bash/bash/shell.rs` | one command: `run`, `run_to`, `OutputSink`, `Exit`, `StopFlag`; spawn and stop through `platform::proc` |
+| `bash/read/{mod,tool}.rs` | `read` |
+| `bash/write/{mod,tool}.rs` | `write` |
+| `bash/edit/{mod,tool}.rs` | `edit` with `exact` and `mass`; `exact_text`, `mass_text` |
+| `bash/cd/{mod,tool}.rs` | `cd` |
+| `bash/alias/{mod,tool}.rs` | `alias` add/list/remove |
+| `bash/context/{mod,tool}.rs` | `context`: `query` through `Source::history`, `show` through `Source::block`, long listings to `Export::dir` |
 | `jobs/mod.rs` | `JobFactory`, `JobService`, re-exports |
 | `jobs/job.rs` | `Id`, `JobSpec`, `Schedule`, `TaskState`, `Job`, `Receipt`, `Row`, `Status` |
 | `jobs/scheduler.rs` | the per-session scheduler thread, workers, pruning, wake merging |
@@ -38,10 +41,11 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `mcp/sync.rs` | `SyncMcpBridge`: one lazy stdio server per name |
 | `mcp/stdio.rs` | one stdio server process: spawn, JSON-RPC, pending map, stderr tail, shutdown |
 | `memo/mod.rs` | declares the memo family |
-| `memo/memo/mod.rs` | the `memo` tool: writes as effects, reads through `MemoRead` |
-| `memo/todo/mod.rs` | the `todo` tool |
-| `memo/todo/ops.rs` | the nine todo operations and their batch apply |
-| `memo/todo/state.rs` | `TodoTask`, `TodoStatus`, `TodoPhase`, `counts` |
+| `memo/memo/{mod,tool}.rs` | the `memo` tool: writes as effects, reads through `MemoRead` |
+| `memo/todo/{mod,tool}.rs` | the `todo` tool: reads the switch, replays, applies, writes the memo |
+| `memo/todo/replay.rs` | the pure replay: a call sequence → the list, plus the switch-aware read |
+| `memo/todo/ops.rs` | the three todo operations (`set`, `tick`, `view`) and their batch apply |
+| `memo/todo/state.rs` | `TodoItem`, `counts` |
 | `subagent/mod.rs` | declarations and re-exports (`TASK`, `FINAL`, `Subagent`, `SubagentFactory`, `ChildSpec`, `Spawn`, `START`) |
 | `subagent/task.rs` | the `task` tool |
 | `subagent/final.rs` | the `final` tool |
@@ -57,7 +61,9 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 - **`storage`**: not imported by the wrapper; only the tool bodies still do, until they migrate.
 - **`config`**: not imported by the wrapper; the loop reads the keys and hands values in.
-- **`platform`**: `time::now_stamp`, `log::warn`, `env::temp_dir`, `env::config_dir`.
+- **`platform`**: `time::now_stamp`, `log::warn`, `env::temp_dir`, `env::config_dir`,
+  `shell::Shell` (the session's shell: program, one-shot argument shape, stored-text read form),
+  `proc` (process group spawn, group signal, tree teardown).
 - **`request`**: `ToolCall`, `ToolDef`, `Message` for definitions and the context window.
 - **`web`**: `WebArgs`, `run`, `close_session`, only from the `web` tool.
 - **Who calls it**: `loop/turn` (one batch at a time, `Batch::run`), `loop/session/book` (builds

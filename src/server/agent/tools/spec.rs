@@ -24,6 +24,8 @@ pub enum Kind {
     Choice(&'static [&'static str]),
     /// An array of strings.
     TextList,
+    /// An array of integers.
+    Numbers,
     /// An array of objects, fields per the given table (`edit`'s `edits`, `todo`'s `list`).
     Table(&'static [Param]),
 }
@@ -95,6 +97,11 @@ impl Param {
             Kind::TextList => json!({
                 "type": "array",
                 "items": {"type": "string"},
+                "description": about,
+            }),
+            Kind::Numbers => json!({
+                "type": "array",
+                "items": {"type": "integer"},
                 "description": about,
             }),
             Kind::Table(fields) => json!({

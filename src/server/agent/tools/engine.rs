@@ -60,6 +60,7 @@ impl Engine {
             bash: BashEnv {
                 timeout: self.bash_timeout,
                 interrupt: input.stop.clone(),
+                shell: crate::server::platform::shell::Shell::default(),
             },
             browser: self.browser.clone(),
             session: input.session,

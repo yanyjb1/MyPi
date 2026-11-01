@@ -1,9 +1,11 @@
-//! How one shell command runs, stops and reports. Process-group ownership lives here, not in
-//! coreutils `timeout`: `setsid --wait bash -c`, one kill for the whole group, TERM then KILL.
+//! How one shell command runs, stops and reports. The group it leads is the unit of stopping:
+//! the backend supplies the program, `platform::proc` starts and signals the tree.
 
 use anyhow::{Context as _, Result};
 
 use crate::server::agent::tools::spec::ToolProgress;
+use crate::server::platform::proc::{self, Signal};
+use crate::server::platform::shell::Shell;
 
 /// Where one command's output goes while it runs.
 pub(crate) trait OutputSink {
@@ -20,9 +22,10 @@ pub(crate) struct Exit {
     pub timeout_secs: u64,
 }
 
-/// `bash -c` one command and collect its output. The caller checked there are no newlines. Exit code
-/// and interrupt both live in the text (`[exit N]`, `[interrupted/timeout: …]`).
+/// One command through the backend, collecting its output. The caller checked there are no
+/// newlines. Exit code and interrupt both live in the text (`[exit N]`, `[interrupted/timeout: …]`).
 pub(crate) fn run(
+    shell: &Shell,
     cwd: &std::path::Path,
     cmd: &str,
     timeout: std::time::Duration,
@@ -30,12 +33,13 @@ pub(crate) fn run(
     progress: &mut dyn FnMut(ToolProgress),
 ) -> Result<String> {
     let mut sink = StringSink::default();
-    run_to(cwd, cmd, timeout, external, progress, &mut sink)?;
+    run_to(shell, cwd, cmd, timeout, external, progress, &mut sink)?;
     Ok(sink.text)
 }
 
 /// Run one command, feeding its two streams to `sink` as they arrive.
 pub(crate) fn run_to(
+    shell: &Shell,
     cwd: &std::path::Path,
     cmd: &str,
     timeout: std::time::Duration,
@@ -61,16 +65,13 @@ pub(crate) fn run_to(
             }
         });
     }
-    let mut child = std::process::Command::new("setsid")
-        .arg("--wait")
-        .arg("bash")
-        .arg("-c")
-        .arg(cmd)
+    let mut command = shell.command(cmd);
+    command
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| "spawn bash failed (util-linux setsid missing?)")?;
+        .stderr(std::process::Stdio::piped());
+    let mut child = proc::spawn_grouped(&mut command)
+        .with_context(|| format!("spawning `{}` failed", shell.name()))?;
     let pgid = child.id();
 
     // Everything about this command travels on one channel: both output streams and the exit status.
@@ -154,6 +155,8 @@ pub(crate) fn run_to(
     let mut unflushed = String::new();
     let mut last_report = std::time::Instant::now();
     let mut killed = false;
+    let mut forced = false;
+    let mut term_at: Option<std::time::Instant> = None;
     let mut sink_error: Option<anyhow::Error> = None;
 
     while readers_left > 0 || status.is_none() {
@@ -180,12 +183,20 @@ pub(crate) fn run_to(
             Ok(Msg::Exited(r)) => status = Some(r),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                anyhow::bail!("bash waiter died unexpectedly")
+                anyhow::bail!("the shell waiter died unexpectedly")
             }
         }
         if stop.is_armed() && !killed {
             killed = true;
-            group_signal(pgid, "TERM");
+            term_at = Some(std::time::Instant::now());
+            proc::signal_group(pgid, Signal::Term);
+        }
+        if let Some(at) = term_at
+            && !forced
+            && at.elapsed() >= proc::grace()
+        {
+            forced = true;
+            proc::signal_group(pgid, Signal::Kill);
         }
         if !unflushed.is_empty() && last_report.elapsed() >= REPORT_EVERY {
             last_report = std::time::Instant::now();
@@ -309,12 +320,4 @@ impl StopFlag {
             .wait_timeout_while(guard, timeout, |_| !self.is_armed() && !self.is_done())
             .unwrap_or_else(|e| e.into_inner());
     }
-}
-
-/// Signal a whole process group via coreutils `kill` (negative pid = group); when `kill` is missing,
-/// the SIGKILL fallback on the direct child still lands via the waiter.
-fn group_signal(pgid: u32, sig: &str) {
-    let _ = std::process::Command::new("kill")
-        .args([format!("-{sig}"), format!("-{pgid}")])
-        .status();
 }

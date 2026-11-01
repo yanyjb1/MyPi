@@ -141,36 +141,23 @@ impl Source for Db {
         Ok(records(&reader, requests)?)
     }
 
-    fn todo_on(&self, session: i64) -> Result<bool> {
-        let reader = self.reader()?;
-        let rows = reader.query(
-            &Query::new(Sheet::Sessions)
-                .columns(&["todo_on"])
-                .filter(vec![Cond::Eq("id", Val::Int(session))])
-                .limit(1),
-        )?;
-        Ok(rows
-            .first()
-            .and_then(|row| row["todo_on"].as_i64())
-            .unwrap_or(0)
-            != 0)
-    }
-
-    fn todo_off(&self, session: i64) -> Result<Option<i64>> {
+    fn last_reset(&self, session: i64, marker: &str) -> Result<Option<(i64, String)>> {
         let reader = self.reader()?;
         let ranges = ranges(&reader, session)?;
         let rows = reader.query(
             &Query::new(Sheet::Blocks)
-                .columns(&["id"])
+                .columns(&["id", "memo"])
                 .filter(vec![
                     Cond::Eq("kind", Val::Text("tool_result".to_string())),
-                    Cond::Contains("memo", "\"todo_on\":false".to_string()),
+                    Cond::Contains("memo", marker.to_string()),
                     Cond::Within("id", ranges),
                 ])
                 .order("id", Order::Desc)
                 .limit(1),
         )?;
-        Ok(rows.first().and_then(|row| row["id"].as_i64()))
+        Ok(rows
+            .first()
+            .and_then(|row| Some((row["id"].as_i64()?, row["memo"].as_str()?.to_string()))))
     }
 
     fn block(&self, session: i64, id: i64) -> Result<Option<BlockPair>> {

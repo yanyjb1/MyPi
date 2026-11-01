@@ -73,10 +73,6 @@ fn one(
             sessions::move_cwd(tx, *session, cwd)?;
             0
         }
-        Row::TodoOn { session, on } => {
-            sessions::todo_on(tx, *session, *on)?;
-            0
-        }
         Row::Turn { stop_reason, usage } => turns::insert(tx, stop_reason.as_deref(), *usage)?,
         Row::Settle {
             turn,

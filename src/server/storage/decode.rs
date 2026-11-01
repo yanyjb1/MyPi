@@ -27,7 +27,6 @@ pub(crate) fn session_meta(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMet
         model: r.get(5)?,
         anchor: r.get(6)?,
         meta: r.get(7)?,
-        todo_on: r.get::<_, i64>(8)? != 0,
     })
 }
 
@@ -114,8 +113,7 @@ pub(crate) const BLOCK_COLS: &str = "block_id, type, content, prefix, suffix,
      duration_ms, ts";
 
 /// A session row's columns, in [`session_meta`] read order.
-pub(crate) const SESSION_COLS: &str =
-    "id, name, started_at, cwd, provider, model, anchor, meta, todo_on";
+pub(crate) const SESSION_COLS: &str = "id, name, started_at, cwd, provider, model, anchor, meta";
 
 /// A request archive row's columns, in [`request_from_row`] read order.
 pub(crate) const REQUEST_COLS: &str =

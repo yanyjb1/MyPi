@@ -11,6 +11,7 @@ mod memo;
 mod registry;
 mod spec;
 pub(crate) mod subagent;
+mod summary;
 mod workspace;
 
 #[cfg(feature = "web")]
@@ -26,7 +27,8 @@ pub use contract::{
 pub use engine::Engine;
 pub use jobs::JobService;
 pub use mcp::{McpBridge, McpContent, McpResult, ServerInfo, SyncMcpBridge, ToolInfo};
-pub use memo::todo::state::{TodoPhase, TodoStatus, TodoTask};
+pub(crate) use memo::todo::current as todo_current;
+pub use memo::todo::state::TodoItem;
 pub use registry::{Availability, TOOLS, roster};
 pub use spec::{Args, Kind, Param, Run, Summary, Tool, ToolProgress};
 pub use workspace::Workspace;

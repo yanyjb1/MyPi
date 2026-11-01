@@ -118,6 +118,12 @@ impl Loop {
         }
     }
 
+    /// The list a session's `todo` calls add up to: the switch, then a replay. The api door hands
+    /// this over as a front end's starting point.
+    pub fn todo(&self, session: i64) -> Result<Vec<crate::server::agent::tools::TodoItem>> {
+        crate::server::agent::tools::todo_current(self.inner.source.as_ref(), session)
+    }
+
     /// Open a session. It stays lazy until the first message arrives.
     pub fn book(&self, birth: Birth) -> Result<i64> {
         let id = birth.session;

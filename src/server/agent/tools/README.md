@@ -12,20 +12,20 @@ opens the database, the config file, or the loop.
 
 | # | tool | file | reachable when |
 |---|---|---|---|
-| 1 | `read` | `bash/read/mod.rs` | always |
-| 2 | `edit` | `bash/edit/mod.rs` | always |
-| 3 | `write` | `bash/write/mod.rs` | always |
-| 4 | `cd` | `bash/cd/mod.rs` | always |
-| 5 | `bash` | `bash/bash/mod.rs` | always |
-| 6 | `alias` | `bash/alias/mod.rs` | always |
+| 1 | `read` | `bash/read/tool.rs` | always |
+| 2 | `edit` | `bash/edit/tool.rs` | always |
+| 3 | `write` | `bash/write/tool.rs` | always |
+| 4 | `cd` | `bash/cd/tool.rs` | always |
+| 5 | `bash` | `bash/bash/tool.rs` | always |
+| 6 | `alias` | `bash/alias/tool.rs` | always |
 | 7 | `kairos` | `kairos/mod.rs` | a parent session with a job service |
 | 8 | `task` | `subagent/task.rs` | a parent session |
 | 9 | `final` | `subagent/final.rs` | a child session |
 | 10 | `mcp` | `mcp/mod.rs` | an MCP bridge is configured |
 | 11 | `web` | `web/mod.rs` | the build has the `web` feature |
 | 12 | `memo` | `memo/memo/mod.rs` | always |
-| 13 | `todo` | `memo/todo/mod.rs` | always |
-| 14 | `context` | `bash/context/mod.rs` | always |
+| 13 | `todo` | `memo/todo/tool.rs` | always |
+| 14 | `context` | `bash/context/tool.rs` | always |
 
 `roster(names, shape)` expands a session's tool names into manuals, keeping only the rows the
 session's shape allows; `engine` repeats the name gate and the shape gate, so a hidden tool cannot
@@ -52,7 +52,7 @@ and `search` say so explicitly instead of "unknown tool".
 ### Schema
 
 A tool declares `params: &[Param]`; `Param { name, kind, required, default, about }` and
-`Kind = Text | Number | Line | Flag | Any | Choice(&[str]) | TextList | Table(&[Param])`.
+`Kind = Text | Number | Line | Flag | Any | Choice(&[str]) | TextList | Numbers | Table(&[Param])`.
 `schema_of` renders the JSON schema and injects one required string property, `intent`, into every
 tool; no tool declares it.
 
@@ -70,8 +70,8 @@ tool; no tool declares it.
 | `mcp` | `op` req (`list`/`call`), `server`, `tool`, `args` |
 | `web` | `op` req (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`net`/`screenshot`), `url`, `raw`, `query`, `provider`, `page`, `selector`, `value`, `filter`, `max`, `full_page`, `reserve` |
 | `memo` | `op` req (`add`/`mod`/`del`/`show`/`history`/`list`), `scope` (`current`/`global`, default `current`), `name`, `content` |
-| `todo` | `op` req (`init`/`append`/`start`/`done`/`drop`/`block`/`unblock`/`rm`/`view`), `list` table of `{phase, items}`, `items`, `phase`, `task`, `reason` |
-| `context` | `anchor` req, `before`, `after`, `include_user`, `include_results` |
+| `todo` | `op` req (`set`/`tick`/`view`), `items` (the whole list), `ids` (item numbers, 1-based), `done` (default true) |
+| `context` | `op` req (`query`/`show`), `anchor`, `direction` (`back`/`forward`), `limit` (default 3), `tool` (a name or `all`, default `bash`), `ids` |
 
 ### ToolOutput
 
@@ -92,7 +92,7 @@ Spill      { name: String, content: String }
 Env {
   workspace: Workspace,      // root + this batch's cwd snapshot
   limits: Limits,            // lines, bytes
-  bash: BashEnv,             // timeout, interrupt
+  bash: BashEnv,             // timeout, interrupt, shell
   browser: Browser,
   session: i64,
   batch_len: usize,
@@ -106,7 +106,7 @@ Env {
 }
 ```
 
-Ports are traits in `contract`: `Source` (memos, aliases, history, calls, todo state, jobs, child),
+Ports are traits in `contract`: `Source` (memos, aliases, history, calls, jobs, child),
 `Export`, `Furnish` and `Child`. A tool that needs a port fails when it is `None`; it never reaches
 for a database or a config file.
 
@@ -130,17 +130,38 @@ Workspace { cwd, root }
 - A memo write returns placeholder text and one `Memo` effect; the loop lands it in the same
   commit as the result block, so the tool itself never stores a note.
 - `memo` reads go through `Source::memo`; the tool never opens the database.
-- `todo`'s `view` is read-only. Every other operation rewrites `env.inbox.todo` once, after the
-  whole batch validates; a failed batch leaves the list as it was.
+- `todo` keeps no state at all: no table, no column, no session flag. A `set` result's memo carries
+  the list and the marker `"todo_reset":true`; the newest such block is the anchor, and everything after it
+  is folded in. With no anchor the replay starts at the session's first call. `set` itself reads
+  nothing: the call is the whole list.
+- Three operations: `set` replaces the list (`items: []` clears it), `tick` marks item numbers done
+  or, with `done: false`, clears the tick, and `view` prints the list with those numbers. Numbers are
+  positions; an out-of-range number drops the whole call and nothing changes. Ticking an item that is
+  already in that state is a plain success, not an error.
+- A todo result's memo carries the whole list, so a front end maintains it by replacement. A
+  fully-ticked list stays until the next `set`; nothing clears itself.
 
 ### Bash order
 
 ```text
-expand_alias  →  rewrite #<ref> to a path  →  guard::classify  →  shell::run
+expand_alias  →  rewrite #<ref>  →  guard::classify  →  shell::run
 ```
 
 `guard` sees the final command. It returns `Allow`, `Warn(ids)` or `Block(ids)`; a blocked command
 never starts. `alias add` runs the same classifier on the command it stores.
+
+The command itself runs in the session's shell (`Env.bash.shell`): `bash` or `zsh` on unix, `pwsh`
+or `niu` on windows. `platform::shell` builds the command line and the `#<ref>` read form;
+`platform::proc` starts it as its own process group and stops it group-wide, TERM then KILL. The
+guard belongs to the unix shells only; `pwsh` and `niu` run the line as written.
+
+### context
+
+- `query` needs `anchor` and `direction`; `tool` is one name or `all`. Every line is the block, the
+  tool, ok or failed, and that tool's own summary.
+- `show` returns the request row and the result row whole, one JSON line each.
+- Past ten listing lines, or past three shown blocks, the text lands in `Export::dir()` and the reply
+  names the file; the name is built from the parameters, so the same query overwrites its own file.
 
 ### Jobs and children
 
@@ -191,14 +212,17 @@ never starts. `alias add` runs the same classifier on the command it stores.
 
 ## 3. Unresolved
 
-1. The tool bodies still bind the old `Inbox`-based `Env`; they migrate next.
+1. The bash family, `memo` and `todo` are on the new `Env`; `kairos`, `task`, `final`, `mcp` and
+   `web` still bind the old `Inbox`-based one and migrate with their own waves.
+2. The api doors still speak the old shapes: `api/call/todo.rs` replays by itself and
+   `api/convert.rs` maps phases and five states. `Loop::todo` hands the replayed list over, and the
+   front end's contract keeps its own shape, so both move in the api wave.
 2. `Source::jobs` and `Source::child` are empty tables until the job and subagent waves attach
    their services.
 3. `Furnish::mcp` answers `None` until the bridge moves onto the new contract.
-4. `shell` documents TERM then KILL; only TERM is sent.
-5. MCP carries text content only; a server-initiated request is answered `-32601`.
-6. Template front matter reads `tools` only.
-7. `licensed_zones` has no caller inside the wrapper.
+4. MCP carries text content only; a server-initiated request is answered `-32601`.
+5. Template front matter reads `tools` only.
+6. `licensed_zones` has no caller inside the wrapper.
 
 ## 4. Config fields
 

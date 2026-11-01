@@ -17,7 +17,7 @@ truth for every column.
 
 | table | holds |
 |---|---|
-| `sessions` | one row per session: `id`, `name`, `started_at`, `cwd`, `provider`, `model`, `anchor`, `meta`, `todo_on`. `anchor` is the spawning block for a child, `NULL` for a main session; `meta` points at the archive |
+| `sessions` | one row per session: `id`, `name`, `started_at`, `cwd`, `provider`, `model`, `anchor`, `meta`. `anchor` is the spawning block for a child, `NULL` for a main session; `meta` points at the archive |
 | `session_turns` | the session's round list: `session_id`, `idx`, `turn_id`, `is_compaction`. The newest `is_compaction` row is where reading starts |
 | `turns` | one row per round: `turn_id`, `blocks` (one `[start, end]` per landed batch), `stop_reason`, four usage columns |
 | `request_meta` | one row per distinct archive, deduplicated by hash: `provider`, `model`, `system`, `tools_json`, `baseline_prompt` |

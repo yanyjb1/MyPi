@@ -166,8 +166,6 @@ pub struct SessionMeta {
     pub anchor: Option<i64>,
     /// The request archive this session reads its system prompt and tools from.
     pub meta: Option<i64>,
-    /// Whether the todo tool is on for this session.
-    pub todo_on: bool,
 }
 
 /// One round's usage, stored per round. Only tokens are stored: whoever draws the bill turns them
@@ -255,8 +253,6 @@ pub enum Row {
     Meta { session: i64, meta: Option<Ref> },
     /// `sessions.cwd`.
     MoveCwd { session: i64, cwd: String },
-    /// `sessions.todo_on`.
-    TodoOn { session: i64, on: bool },
     /// A new round row.
     Turn {
         stop_reason: Option<String>,

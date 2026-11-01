@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 /// Layout version. A mismatch wipes the database and rebuilds it.
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 /// Open (or create) the database and make sure its layout is current.
 pub fn prepare(path: &std::path::Path) -> Result<Connection> {
@@ -45,8 +45,7 @@ pub fn prepare(path: &std::path::Path) -> Result<Connection> {
             provider       TEXT,
             model          TEXT,
             anchor         INTEGER,
-            meta           INTEGER,
-            todo_on        INTEGER NOT NULL DEFAULT 0
+            meta           INTEGER
         );
         CREATE TABLE IF NOT EXISTS session_turns (
             session_id    INTEGER NOT NULL REFERENCES sessions(id),
