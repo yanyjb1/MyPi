@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::Value;
 
-use super::env::{BlockPair, CallRecord, Direction};
 use super::job;
-use crate::server::agent::tools::mcp::McpBridge;
+use crate::server::agent::tools::mcp::bridge::McpBridge;
 
 /// Reads the loop owns; tools never open the database.
 pub trait Source: Send + Sync {
@@ -28,6 +28,8 @@ pub trait Source: Send + Sync {
     fn block(&self, session: i64, id: i64) -> Result<Option<BlockPair>>;
     fn jobs(&self, session: i64) -> Option<Arc<dyn job::JobHost>>;
     fn child(&self, session: i64) -> Option<Arc<dyn Child>>;
+    /// The process-wide MCP bridge, when `mcp.json` named at least one server.
+    fn mcp(&self) -> Option<Arc<dyn McpBridge>>;
 }
 
 /// One sub-session's live state: its draft, its budget and its answer file.
@@ -55,11 +57,6 @@ pub trait Draft: Send + Sync {
 pub trait Export: Send + Sync {
     fn dir(&self) -> &Path;
     fn path(&self, reference: &str) -> Result<PathBuf>;
-}
-
-/// What the assembly offers that is the same for every session.
-pub trait Furnish: Send + Sync {
-    fn mcp(&self) -> Option<Arc<dyn McpBridge>>;
 }
 
 /// Memo reads for the `memo` tool; implemented by the caller, never by the tool.
@@ -100,4 +97,28 @@ pub enum MemoView {
     Names(Vec<String>),
     Content(String),
     History(Vec<MemoVersion>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Back,
+    Forward,
+}
+
+/// One call, as history queries hand it over.
+#[derive(Debug, Clone)]
+pub struct CallRecord {
+    /// The request block's id: what `context show` and an anchor take as a number.
+    pub block: i64,
+    pub tool: String,
+    pub args: String,
+    pub result: Option<String>,
+    pub ok: bool,
+}
+
+/// A call's two rows, whole, for `context show`.
+#[derive(Debug, Clone)]
+pub struct BlockPair {
+    pub request: Value,
+    pub result: Option<Value>,
 }

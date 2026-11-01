@@ -2,11 +2,12 @@
 
 use anyhow::{Result, anyhow};
 
-use crate::server::agent::tools::contract::env::{CallRecord, Env};
+use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::{Effect, MemoOp, ToolOutput};
+use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::contract::view::{MemoReadOp, MemoScope, MemoView};
+use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
-use crate::server::agent::tools::{Args, Kind, Param, Tool, ToolProgress};
 
 const OP: usize = 0;
 const SCOPE: usize = 1;

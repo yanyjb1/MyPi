@@ -3,10 +3,11 @@
 use anyhow::{Result, anyhow};
 
 use super::super::bash::guard;
-use crate::server::agent::tools::contract::env::{CallRecord, Env};
+use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::{AliasOp, Effect, ToolOutput};
+use crate::server::agent::tools::contract::view::CallRecord;
+use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
-use crate::server::agent::tools::{Args, Kind, Param, Tool, ToolProgress};
 
 const OP: usize = 0;
 const NAME: usize = 1;

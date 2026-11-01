@@ -1,27 +1,16 @@
-//! Tools. The root holds the shared pieces: `contract`, `engine`, `spec`, `registry`, `workspace`;
-//! tools are grouped by use domain.
+//! Tools. The root declares modules; everything is reached by its own path.
 
 mod bash;
 pub mod contract;
-pub mod engine;
+pub(crate) mod engine;
 mod kairos;
-pub mod mcp;
-mod memo;
-mod registry;
-mod spec;
+pub(crate) mod mcp;
+pub(crate) mod memo;
+pub(crate) mod registry;
+pub(crate) mod spec;
 pub(crate) mod subagent;
 mod summary;
-mod workspace;
+pub(crate) mod workspace;
 
 #[cfg(feature = "web")]
-mod web;
-#[cfg(feature = "web")]
-pub(crate) use web::close_session as close_web_session;
-
-pub use engine::Engine;
-pub use mcp::{McpBridge, McpContent, McpResult, ServerInfo, SyncMcpBridge, ToolInfo};
-pub(crate) use memo::todo::current as todo_current;
-pub use memo::todo::state::TodoItem;
-pub use registry::{TOOLS, roster};
-pub use spec::{Args, Kind, Param, Run, Summary, Tool, ToolProgress};
-pub use workspace::Workspace;
+pub(crate) mod web;

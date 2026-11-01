@@ -213,11 +213,10 @@ pub(crate) fn with_search<T>(
 
 pub(crate) fn with_work<T>(
     session: i64,
-    reserve: bool,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let port = ensure_browser()?;
-    with_tab(port, session, TabKind::Work, reserve, f)
+    with_tab(port, session, TabKind::Work, true, f)
 }
 
 pub fn close_session(session: i64) {

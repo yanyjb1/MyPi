@@ -32,7 +32,7 @@ fn permit() -> Permit {
 pub fn run(args: &WebArgs, session: i64) -> Result<String> {
     let _permit = permit();
     match args.op.as_str() {
-        "read" => browser::read(args, session),
+        "read" => browser::read::run(args, session),
         "search" => {
             let query = args
                 .query
@@ -44,12 +44,12 @@ pub fn run(args: &WebArgs, session: i64) -> Result<String> {
                 .ok_or_else(|| anyhow::anyhow!("`search` requires `provider`"))?;
             search::run(session, query, provider, args.page)
         }
-        "open" => browser::open(args, session),
+        "open" => browser::open::run(args, session),
         "click" | "fill" | "press" | "select" | "scroll" | "eval" => {
-            browser::actions(args, session)
+            browser::actions::run(args, session)
         }
-        "net" => browser::net(args, session),
-        "screenshot" => browser::screenshot(args, session),
+        "net" => browser::net::run(args, session),
+        "screenshot" => browser::screenshot::run(args, session),
         other => bail!(
             "unknown op {other:?}; read|search|open|click|fill|press|select|scroll|eval|net|screenshot"
         ),

@@ -6,7 +6,6 @@ use std::sync::atomic::Ordering;
 use anyhow::{Result, anyhow};
 
 use super::ask::{CompactInput, LapInput, ResultsInput, Stop, Usage};
-use super::env;
 use super::fence::Fence;
 use crate::server::agent::r#loop::pen::{self, Pen};
 use crate::server::agent::r#loop::session::agent::AgentRunner;
@@ -15,12 +14,14 @@ use crate::server::agent::r#loop::session::child::State as ChildState;
 use crate::server::agent::r#loop::session::handle::Handle;
 use crate::server::agent::r#loop::session::history::Transcript;
 use crate::server::agent::r#loop::session::live::Live;
-use crate::server::agent::r#loop::turn::batch::ToolResult;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
+use crate::server::agent::tools::contract::call::BatchInput;
 use crate::server::agent::tools::contract::job::{JobHost, JobRunner, JobSpec, Schedule};
 use crate::server::agent::tools::contract::output::Effect;
+use crate::server::agent::tools::contract::output::ToolResult;
 use crate::server::agent::tools::contract::view::{Child, Source};
-use crate::server::agent::tools::roster;
+use crate::server::agent::tools::registry::roster;
+use crate::server::agent::tools::subagent::{FINAL, TASK};
 use crate::server::platform::time::now_stamp;
 use crate::server::storage::Row;
 
@@ -140,16 +141,15 @@ pub fn run(
             continue;
         }
 
-        let input = env::build(
-            handle.id,
-            turn,
-            live.root.clone(),
-            live.cwd.clone(),
-            live.tools.clone(),
-            lap.calls.clone(),
-            handle.stop.clone(),
-            inner.out.clone(),
-        );
+        let input = BatchInput {
+            session: handle.id,
+            root: live.root.clone(),
+            cwd: live.cwd.clone(),
+            tools: live.tools.clone(),
+            calls: lap.calls.clone(),
+            stop: handle.stop.clone(),
+            out: inner.out.clone(),
+        };
         let results = match inner.batch.run(input) {
             Ok(results) => results,
             Err(e) => {
@@ -226,11 +226,10 @@ pub fn run(
 fn child_tools(tools: &[String]) -> Vec<String> {
     let mut out: Vec<String> = tools
         .iter()
-        .filter(|tool| tool.as_str() != "task")
-        .filter(|tool| tool.as_str() != "final")
+        .filter(|tool| tool.as_str() != TASK.name && tool.as_str() != FINAL.name)
         .cloned()
         .collect();
-    out.push("final".to_string());
+    out.push(FINAL.name.to_string());
     out
 }
 

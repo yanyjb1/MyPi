@@ -1,6 +1,6 @@
 //! Reading a recorded call's arguments, and clipping a summary to one line.
 
-use crate::server::agent::tools::contract::env::CallRecord;
+use crate::server::agent::tools::contract::view::CallRecord;
 
 /// One string field of a call's JSON arguments.
 pub(crate) fn field(call: &CallRecord, name: &str) -> Option<String> {

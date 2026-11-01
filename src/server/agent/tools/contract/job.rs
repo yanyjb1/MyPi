@@ -6,8 +6,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-pub(crate) use crate::server::agent::tools::bash::bash::shell::{Exit, OutputSink};
-
 /// One task, as the caller describes it.
 pub struct JobSpec {
     pub runner: Arc<dyn JobRunner>,
@@ -96,4 +94,19 @@ pub trait JobHost: Send + Sync {
     fn status(&self, id: &str) -> Result<Status>;
     fn result(&self, id: &str) -> Result<String>;
     fn cancel(&self, id: &str, notify: bool) -> Result<String>;
+}
+
+/// Where one command's output goes while it runs.
+pub trait OutputSink {
+    fn out(&mut self, chunk: &str) -> Result<()>;
+    fn err(&mut self, chunk: &str) -> Result<()>;
+    fn done(&mut self, exit: &Exit) -> Result<()>;
+}
+
+/// Why a command stopped. `canceled` means an external stop armed the flag before the deadline.
+pub struct Exit {
+    pub code: Option<i32>,
+    pub killed: bool,
+    pub canceled: bool,
+    pub timeout_secs: u64,
 }

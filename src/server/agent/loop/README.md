@@ -22,8 +22,9 @@ Change = Model { provider, model } | Cwd(path)
 ```
 
 `ask` is `Arc<dyn request::Ask>`; `out` carries the live line. The loop builds the tool layer from
-`config` and keeps the read ports it also implements: `Source` (database reads), `Export` (a full
-text out of the database as a file) and `Furnish` (the process-wide MCP bridge). Request shapes come
+`config` and keeps the read ports it also implements: `Source` (database reads, with the
+process-wide MCP bridge among its handles) and `Export` (a full text out of the database as a
+file). Request shapes come
 from `request::contract`; tool shapes come from `agent::tools::contract`; both are re-exported here,
 so a caller names one vocabulary. `Retention` is `Chars(n)` or `Blocks(n)`.
 
@@ -75,7 +76,6 @@ half's, and the loop only adds tool events to it.
 
 ## 3. Unresolved
 
-- `Furnish::mcp` answers `None`: no one reads `mcp.json` or builds the bridge yet.
 - The API does not construct the loop yet; `Loop::new` takes `&Config`.
 - Same-batch calls that have not landed are invisible to `Source`.
 

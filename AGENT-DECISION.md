@@ -1,10 +1,10 @@
 # AGENT-DECISION
 
-本文件只保留仍然有效、且会影响下一步改造的决策。已完成的 loop 与 storage 不再重复：
+本文件只保留仍然有效、且会影响下一步改造的决策。已完成的 loop、storage 与 tools 不再重复：
 现状与设计见 `src/server/agent/loop/README.md`、`src/server/agent/loop/ARCHITECTURE.md`、
-`src/server/storage/README.md`、`src/server/storage/ARCHITECTURE.md`。
-request 与 tools 的接口形状见两域 README；api、ui、config、mcp、web 的剩余接线见
-`api-loop-目标形态.md` 与 `agent-剩余接线.md`。
+`src/server/storage/README.md`、`src/server/storage/ARCHITECTURE.md`、
+`src/server/agent/tools/README.md`、`src/server/agent/tools/ARCHITECTURE.md`。
+request 的接口形状见该域 README；api、ui 与 config 的剩余接线见 `api-loop-目标形态.md`。
 
 ## 1. 三方职责
 
@@ -31,7 +31,9 @@ storage ──► loop ──► { request, tools }
 - 不自己量输出；`cd` 只改自己看到的目录，批内看批开始快照。
 - 子代理只回意图：模板、变量、工具子集、预算、cwd、启动消息、答案名；system 与模型继承本会话；
   会话行由 loop 在 effect 落地时写。
-- `final` 只给子会话，`task` 只给主会话，`kairos` 不给子会话。
+- 工具是否可用只由名单决定：主会话看 profile 的工具名单，子会话看模板的名单。
+  `task` 在派发时从子会话名单里静默剔除；`final` 自动补进子会话名单，主代理不写也不知道。
+  工具层不设第二道门，`kairos`、`mcp`、`web` 一律看名单。
 - 摘要按工具各一份，挂在工具声明旁；没有摘要的工具在 `context` 里退回它的参数文本。
 - `todo` 只有三条操作：`set`（整表替换，空表即清空）、`tick`（按序号打勾，`done:false` 取消）、
   `view`（只读）。扁平表、布尔状态、无阶段、无开关、无 blocker；序号越界整批拒绝。
@@ -40,8 +42,9 @@ storage ──► loop ──► { request, tools }
 
 ## 4. config / api
 
-- config 提供 provider 出口、`config.server.agent.loop.scrooge`、browser 两个字段；删除
-  `config.server.agent.reloadOnCompaction`；agent 自读 `mcp.json`。
+- config 提供 provider 出口、`config.server.agent.loop.scrooge`；删除
+  `config.server.agent.reloadOnCompaction`；agent 自读 `mcp.json`；browser 字段由 web 域自读，
+  不经工具层传递。
 - loop 从 config 取值构造工具层：`Loop::new(writer, settings, ask, out, &cfg)`。
 - api 持有 `Loop` 句柄；主会话先写 `sessions` 行再 `book`，子会话由 loop 写行并 `book`。
 - `Birth.tools` 是名单；system 与名单分开解析。

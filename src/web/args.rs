@@ -11,5 +11,4 @@ pub struct WebArgs {
     pub filter: Option<String>,
     pub max: Option<usize>,
     pub full_page: bool,
-    pub reserve: bool,
 }

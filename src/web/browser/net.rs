@@ -9,9 +9,7 @@ use crate::web::WebArgs;
 pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
     let filter = args.filter.clone().unwrap_or_default();
     let max = args.max.unwrap_or(20).clamp(1, 100);
-    session::with_work(session, args.reserve, |page: &Page| {
-        capture_network(page, &filter, max)
-    })
+    session::with_work(session, |page: &Page| capture_network(page, &filter, max))
 }
 
 fn capture_network(page: &Page, filter: &str, max: usize) -> Result<String> {

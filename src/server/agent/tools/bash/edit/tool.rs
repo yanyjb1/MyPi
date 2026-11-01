@@ -3,11 +3,12 @@
 use anyhow::{Context as _, Result, anyhow};
 use serde_json::{Value, json};
 
-use crate::server::agent::tools::contract::env::{CallRecord, Env};
+use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::ToolOutput;
+use crate::server::agent::tools::contract::view::CallRecord;
+use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
 use crate::server::agent::tools::workspace::write_atomic;
-use crate::server::agent::tools::{Args, Kind, Param, Tool, ToolProgress};
 
 const TYPE: usize = 0;
 const PATH: usize = 1;

@@ -8,7 +8,7 @@ use anyhow::Result;
 use super::contract::call::{Batch, BatchInput};
 use super::contract::env::{BashEnv, Env, Limits, Paths};
 use super::contract::output::{ToolOutput, ToolResult};
-use super::contract::view::{Child, Export, Furnish, Source};
+use super::contract::view::{Child, Export, Source};
 use super::registry;
 use super::spec::{Args, ToolProgress};
 use super::workspace::Workspace;
@@ -23,7 +23,6 @@ pub struct Engine {
     bash_timeout: Duration,
     default_budget: u32,
     source: std::sync::Arc<dyn Source>,
-    furnish: std::sync::Arc<dyn Furnish>,
     export: std::sync::Arc<dyn Export>,
     paths: Paths,
 }
@@ -34,7 +33,6 @@ impl Engine {
         bash_timeout: Duration,
         default_budget: u32,
         source: std::sync::Arc<dyn Source>,
-        furnish: std::sync::Arc<dyn Furnish>,
         export: std::sync::Arc<dyn Export>,
         paths: Paths,
     ) -> Self {
@@ -43,7 +41,6 @@ impl Engine {
             bash_timeout,
             default_budget,
             source,
-            furnish,
             export,
             paths,
         }
@@ -63,7 +60,7 @@ impl Engine {
             tools: input.tools.iter().cloned().collect(),
             aliases: self.source.aliases(input.session)?,
             default_budget: self.default_budget,
-            mcp: self.furnish.mcp(),
+            mcp: self.source.mcp(),
             export: self.export.clone(),
             paths: self.paths.clone(),
             source: self.source.clone(),

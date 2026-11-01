@@ -10,7 +10,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
         Some(url) => url::normalize(url)?,
         None => "about:blank".to_string(),
     };
-    session::with_work(session, args.reserve, |page: &Page| {
+    session::with_work(session, |page: &Page| {
         page.navigate(&target)?;
         Ok(format!("opened: {target}"))
     })

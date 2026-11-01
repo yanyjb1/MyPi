@@ -15,9 +15,9 @@ use crate::server::agent::r#loop::job;
 use crate::server::agent::r#loop::pen;
 use crate::server::agent::r#loop::turn;
 use crate::server::agent::r#loop::turn::ask::Ask;
-use crate::server::agent::r#loop::turn::batch::Batch;
 use crate::server::agent::r#loop::turn::cycle::Mode;
 use crate::server::agent::request::live::Event;
+use crate::server::agent::tools::contract::call::Batch;
 use crate::server::agent::tools::contract::view::Source;
 use crate::server::storage::Writer;
 
@@ -90,29 +90,25 @@ impl Loop {
             .global_root()
             .unwrap_or_default()
             .join("mcp.json");
-        let batch = crate::server::agent::tools::Engine::new(
+        let batch = crate::server::agent::tools::engine::Engine::new(
             crate::server::agent::tools::contract::env::Limits { lines, bytes },
             cfg.bash_timeout(),
             cfg.subagent_budget(),
             source.clone(),
-            source.clone(),
             export,
             crate::server::agent::tools::contract::env::Paths {
-                project: project.project,
                 agents: project.agents,
                 answers: project.answers,
                 global_agents: cfg.paths().global_root().unwrap_or_default().join("agents"),
-                mcp: project_mcp.clone(),
-                global_mcp: global_mcp.clone(),
             },
         );
         if let Ok(table) =
             crate::server::agent::tools::mcp::setup::servers(&project_mcp, &global_mcp)
             && !table.is_empty()
         {
-            source.attach_mcp(Arc::new(crate::server::agent::tools::SyncMcpBridge::new(
-                table,
-            )));
+            source.attach_mcp(Arc::new(
+                crate::server::agent::tools::mcp::sync::SyncMcpBridge::new(table),
+            ));
         }
         let slots = super::jobs::Slots::new();
         let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
@@ -133,8 +129,14 @@ impl Loop {
 
     /// The list a session's `todo` calls add up to: the switch, then a replay. The api door hands
     /// this over as a front end's starting point.
-    pub fn todo(&self, session: i64) -> Result<Vec<crate::server::agent::tools::TodoItem>> {
-        crate::server::agent::tools::todo_current(self.inner.source.as_ref(), session)
+    pub fn todo(
+        &self,
+        session: i64,
+    ) -> Result<Vec<crate::server::agent::tools::memo::todo::state::TodoItem>> {
+        crate::server::agent::tools::memo::todo::replay::current(
+            self.inner.source.as_ref(),
+            session,
+        )
     }
 
     /// Open a session. It stays lazy until the first message arrives.

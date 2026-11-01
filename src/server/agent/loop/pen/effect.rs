@@ -46,9 +46,7 @@ pub fn rows(anchor: Ref, effect: &Effect) -> (Vec<Row>, Option<Delete>) {
                 }],
                 None,
             ),
-            AliasOp::Remove => {
-                (Vec::new(), Some(Delete::Alias(name.clone())))
-            }
+            AliasOp::Remove => (Vec::new(), Some(Delete::Alias(name.clone()))),
         },
         Effect::Child { .. } => (Vec::new(), None),
     }

@@ -3,24 +3,10 @@
 
 use anyhow::{Context as _, Result};
 
+use crate::server::agent::tools::contract::job::{Exit, OutputSink};
 use crate::server::agent::tools::spec::ToolProgress;
 use crate::server::platform::proc::{self, Signal};
 use crate::server::platform::shell::Shell;
-
-/// Where one command's output goes while it runs.
-pub(crate) trait OutputSink {
-    fn out(&mut self, chunk: &str) -> Result<()>;
-    fn err(&mut self, chunk: &str) -> Result<()>;
-    fn done(&mut self, exit: &Exit) -> Result<()>;
-}
-
-/// Why a command stopped. `canceled` means an external stop armed the flag before the deadline.
-pub(crate) struct Exit {
-    pub code: Option<i32>,
-    pub killed: bool,
-    pub canceled: bool,
-    pub timeout_secs: u64,
-}
 
 /// One command through the backend, collecting its output. The caller checked there are no
 /// newlines. Exit code and interrupt both live in the text (`[exit N]`, `[interrupted/timeout: …]`).

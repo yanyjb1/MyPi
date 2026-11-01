@@ -1,10 +1,9 @@
 //! The static `mcp` tool: list configured servers/tools or call one tool.
 
-pub mod setup;
-
-mod bridge;
+pub(crate) mod bridge;
+pub(crate) mod setup;
 mod stdio;
-mod sync;
+pub(crate) mod sync;
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::json;
@@ -12,8 +11,8 @@ use serde_json::json;
 use super::contract::env::Env;
 use super::contract::output::ToolOutput;
 use super::spec::{Args, Kind, Param, Tool, ToolProgress};
-pub use bridge::{McpBridge, McpContent, McpResult, ServerInfo, ToolInfo};
-pub use sync::SyncMcpBridge;
+
+use bridge::{McpBridge, McpContent, McpResult, ToolInfo};
 
 const PARAMS: &[Param] = &[
     Param::req(

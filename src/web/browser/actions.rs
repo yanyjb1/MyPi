@@ -53,7 +53,7 @@ fn selector(args: &WebArgs, what: &str) -> Result<String> {
 
 pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
     let op = args.op.as_str();
-    session::with_work(session, args.reserve, |page: &Page| match op {
+    session::with_work(session, |page: &Page| match op {
         "click" => {
             let sel = selector(args, "click")?;
             let r = page.evaluate(

@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
-use crate::server::agent::tools::contract::env::{BlockPair, CallRecord, Direction};
 use crate::server::agent::tools::contract::job::JobHost;
+use crate::server::agent::tools::contract::view::{BlockPair, CallRecord, Direction};
 use crate::server::agent::tools::contract::view::{
-    Child, Furnish, MemoRead, MemoReadOp, MemoScope, MemoVersion, MemoView, Source,
+    Child, MemoRead, MemoReadOp, MemoScope, MemoVersion, MemoView, Source,
 };
-use crate::server::agent::tools::McpBridge;
+use crate::server::agent::tools::mcp::bridge::McpBridge;
 use crate::server::storage::Reader;
 use crate::server::storage::query::{Cond, Order, Query, Sheet, Val};
 
@@ -68,12 +68,6 @@ impl Db {
 
     pub fn attach_mcp(&self, bridge: Arc<dyn McpBridge>) {
         *self.mcp.lock().unwrap_or_else(|e| e.into_inner()) = Some(bridge);
-    }
-}
-
-impl Furnish for Db {
-    fn mcp(&self) -> Option<Arc<dyn McpBridge>> {
-        self.mcp.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -219,6 +213,10 @@ impl Source for Db {
             .unwrap_or_else(|e| e.into_inner())
             .get(&session)
             .cloned()
+    }
+
+    fn mcp(&self) -> Option<Arc<dyn McpBridge>> {
+        self.mcp.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 

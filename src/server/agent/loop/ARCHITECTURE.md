@@ -20,10 +20,10 @@ session/settings.rs     fence and scrooge
 session/mailbox.rs      two queues and the wake wait
 session/change.rs       Model and Cwd
 session/child.rs        a sub-session's draft, budget, answer path, submit flag, nudges
-session/source.rs       Source and Furnish over storage's reader, plus the attached handles
+session/source.rs       Source over storage's reader, plus the attached handles
 session/export.rs       Export: a full text out of the database as a file
 session/history.rs      Transcript: the request half's read port over storage's reader
-turn/mod.rs             turn types
+turn/mod.rs             turn types (ask, cycle, fence)
 turn/cycle.rs           lap loop, mailbox drain, child nudge, settle
 turn/ask.rs             the request boundary, as re-exports
 turn/batch.rs           tool-boundary re-exports
@@ -87,6 +87,5 @@ half's types, re-exported from this domain's root.
 
 ## Not wired
 
-- `Furnish::mcp` answers `None`: no `mcp.json` reader, no bridge.
 - The API does not construct the loop yet; `Loop::new` takes `&Config`.
 - Same-batch calls that have not landed are invisible to `Source`.

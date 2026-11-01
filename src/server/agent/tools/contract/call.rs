@@ -18,7 +18,6 @@ pub type Cwd = Arc<RwLock<PathBuf>>;
 /// One batch's input.
 pub struct BatchInput {
     pub session: i64,
-    pub turn: i64,
     /// The session's start directory; it never moves.
     pub root: PathBuf,
     pub cwd: Cwd,

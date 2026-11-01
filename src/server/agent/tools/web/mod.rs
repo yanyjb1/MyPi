@@ -18,24 +18,23 @@ const FILTER: usize = 8;
 const MAX: usize = 9;
 const FULL_PAGE: usize = 10;
 
+/// Every operation; the schema and the dispatch read this one list.
+const OPS: &[&str] = &[
+    "read",
+    "search",
+    "open",
+    "click",
+    "fill",
+    "press",
+    "select",
+    "scroll",
+    "eval",
+    "net",
+    "screenshot",
+];
+
 const PARAMS: &[Param] = &[
-    Param::req(
-        "op",
-        Kind::Choice(&[
-            "read",
-            "search",
-            "open",
-            "click",
-            "fill",
-            "press",
-            "select",
-            "scroll",
-            "eval",
-            "net",
-            "screenshot",
-        ]),
-        "Operation to perform.",
-    ),
+    Param::req("op", Kind::Choice(OPS), "Operation to perform."),
     Param::opt("url", Kind::Text, "read/open: URL."),
     Param::df(
         "raw",
@@ -120,7 +119,6 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         filter: args.opt_str(FILTER)?,
         max,
         full_page: args.flag(FULL_PAGE)?,
-        reserve: true,
     };
     let text = crate::web::run(&a, env.session)?;
     Ok(ToolOutput::text(text))

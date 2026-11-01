@@ -27,7 +27,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
             if args.raw {
                 bail!("raw requires url");
             }
-            session::with_work(session, args.reserve, |page: &Page| {
+            session::with_work(session, |page: &Page| {
                 let html = page.dom_html()?;
                 html_to_markdown(&html)
             })

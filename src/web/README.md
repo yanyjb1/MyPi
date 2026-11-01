@@ -1,8 +1,15 @@
 # web
 
-One tool-facing domain for reading pages, searching, and driving a browser. The tool layer maps arguments; this domain owns Chromium, CDP, tabs, providers, and HTML conversion.
+A self-contained domain for reading pages, searching, and driving a browser. The tool layer maps a
+call's arguments into `WebArgs` and hands it over; everything below that line — Chromium, CDP, tabs,
+providers, HTML conversion — belongs here and nowhere else.
 
-## Schema
+It is not part of the tool layer. It decides for itself how the browser starts, which is why it
+reads its own configuration instead of receiving it through `Env`.
+
+## 1. Design / Schema
+
+### One operation
 
 `WebArgs` is the only input. `op` selects the operation; all other fields are shared.
 
@@ -20,48 +27,114 @@ One tool-facing domain for reading pages, searching, and driving a browser. The 
 | `net` | `filter`, `max` | work | resource entries |
 | `screenshot` | `full_page` | work | temp path and byte count |
 
-Invariants:
+`run(args, session)` is the whole entry. It takes one of two permits, dispatches on `op`, and
+returns the text the model reads.
 
-- One process-wide Chromium; each session has one search tab and one work tab.
-- The search tab is serial per session. The work tab is independent.
-- A tab closes after 30 minutes without an active call. `reserve` protects the current work call.
-- A search call uses exactly one provider and fetches pages `1..page` in order.
-- Results are deduplicated by URL; an empty page stops the page loop.
-- Search never falls back to plain HTTP. Every provider is read through the browser.
-- CAPTCHA handling is a two-step handoff: first detection returns a retry hint; retrying the same provider opens a headed browser.
-- Screenshots always go under the system temp directory.
-- `net` reads `performance` resource entries only; it does not use CDP Network.
-- At most two `web` operations run at once; the third waits.
+### Tabs
 
-## Design intent
+`session::STATE` is the process's only browser state: the handle, the tabs, the challenge marks,
+and one search lock per session.
 
-The flat `op` schema keeps one verb per call. There is no nested action field, so the model never has to combine two operation names.
+```text
+(session, TabKind::Search)  → search, and a read that carries a url
+(session, TabKind::Work)    → open, the actions, net, screenshot, a read without a url
+```
 
-`src/web` owns everything that talks to Chromium. The tool entry only copies fields into `WebArgs`; it does not know URLs, selectors, providers, or files. This keeps browser failures and provider quirks out of the tool layer.
+- Tabs are created on demand and keyed by session and kind.
+- A tab that vanished from the browser is recreated on the next call; its challenge mark is dropped
+  with it.
+- The search tab is serial per session through a lock held for the whole call, so two searches in
+  one session queue rather than interleave.
+- A tab closes after 30 minutes without an active call. The work tab is marked reserved for the
+  duration of a call, so the call in flight is never reclaimed underneath itself.
+- `close_session` closes both of a session's tabs.
 
-Each session has two named tabs because search and interactive work have different lifetimes. Search can be replaced freely; the work tab must survive between `open`, `click`, `fill`, and `read`. A 30-minute idle timer keeps tabs from accumulating without adding a freeze/unload state machine.
+### The permit
 
-Search is single-provider because aggregation hides which index failed and makes retries ambiguous. The caller chooses the provider, and a CAPTCHA mark is scoped to that provider. Page fetching is sequential so a challenge on page N never returns a partial merged list.
+At most two operations run at once across the process. The third waits on a condition variable.
+The permit is taken once in `run`, so no operation can forget it.
 
-The profile is always persistent. Logins, cookies, and user-installed extensions are the reason the browser exists; an ephemeral profile would make the tool less useful and add cleanup code. uBlock Origin is user-managed, not installed by this domain.
+### Browser lifecycle
 
-Screenshots use a fixed temp location so the model cannot write arbitrary files. The result carries the path for the user.
+One Chromium per process, either spawned by this domain or attached to a port that already exists.
 
-`net` is deliberately small: page performance entries answer "which endpoint did this page call" without a second event stream. Full request/response inspection belongs to a later network tool.
+```text
+ensure_browser
+  → a live, attached or headless handle in STATE?  → reuse it
+  → MYPI_BROWSER_PORT, config port, DevToolsActivePort → attach
+  → otherwise                                        → launch
+```
 
-## 尚未解决
+The profile is persistent: logins, cookies and user-installed extensions live there, and that is
+the reason the browser exists at all.
 
+Headless is the starting point. When a provider or a page answers with a challenge, the caller asks
+`ensure_headed`: if the handle is attached it refuses, if it is already headed it does nothing, and
+otherwise it replaces the handle with a headed launch. A launched browser stays headed for the
+process; there is no switch back.
+
+### Configuration
+
+Read once, in `ensure_browser`, at the moment a browser has to start. A live handle short-circuits
+before the read, so a long-lived session reads the file once and never again.
+
+`BrowserOptions` comes from `server::config`; this domain never parses `config.yaml` itself.
+
+| key | use |
+|---|---|
+| `config.server.agent.tools.browser.bin` | the executable to launch |
+| `config.server.agent.tools.browser.profileDir` | the persistent profile |
+| `config.server.agent.tools.browser.port` | attach instead of launching |
+| `config.server.agent.tools.browser.headless` | launch without a window; default true |
+| `config.server.agent.tools.browser.user_agent` | override the launched browser's User-Agent |
+| `config.server.agent.tools.browser.extra_args` | extra argv |
+
+`bin` and `profile_dir` have no usable default: a machine that names neither cannot start a
+browser, and the failure is reported rather than papered over with a guessed path.
+
+### Search
+
+- One provider per call. `provider` is required; there is no aggregation across engines.
+- Pages `1..=page` are fetched in order through the search tab; an empty page stops the loop.
+- Hits are deduplicated by URL, first sighting wins.
+- A challenge is a two-step handoff: detection returns a retry hint, the retry asks for a headed
+  browser and the same provider is tried once more.
+- Every provider reads through the browser. There is no plain-HTTP fallback.
+
+### Output
+
+`read` answers Markdown, or the DOM HTML with `raw`. `search` answers the provider, the page range,
+the count and a numbered list. The rest answer a status line, except `net`, which lists resource
+entries, and `screenshot`, which names a file and its size.
+
+## 2. Design intent
+
+- **A domain, not a tool.** The browser's behaviour is its own: when to start, headed or not, how
+  many tabs, when to reclaim them. The tool layer gives the model a convenient verb; it does not
+  steer the browser.
+- **Flat `op`.** One verb per call, no nested action field, so the model never has to compose two
+  operation names.
+- **Two tabs per session.** Search and interactive work have different lifetimes: a search tab may
+  be replaced freely, a work tab must survive between `open`, `click`, `fill` and `read`.
+- **A serial search tab.** One provider, one tab, one call at a time keeps a challenge attributable
+  to the engine that raised it.
+- **A persistent profile.** An ephemeral profile would make the tool less useful and add cleanup
+  work for no gain.
+- **A permit of two.** Chromium serializes most CDP work anyway; two in flight keeps a batch moving
+  without letting a fan-out of calls pile onto one browser.
+- **Config read late and once.** Reading at launch keeps a long-lived session from re-parsing the
+  file on every call, and keeps the domain from holding state it does not act on.
+
+## 3. Unresolved
+
+- `BrowserOptions` still carries six fields; only `bin` and `profileDir` are decisions a user has to
+  make, and the rest are the domain's own defaults. The config rewrite settles this.
 - Provider selectors are implemented but need live tuning against current result markup.
-- A headed browser needs `DISPLAY` or `WAYLAND_DISPLAY`; attached browsers cannot switch to headed.
-- CDP Network, HAR, and response bodies are intentionally absent.
+- A headed browser needs `DISPLAY` or `WAYLAND_DISPLAY`; an attached browser cannot switch to headed.
+- CDP Network, HAR and response bodies are intentionally absent.
+- `close_session` has no caller until the api layer wires it.
 
-## Config 字段
+## 4. Config fields
 
-All keys live under `config.server.agent.tools.browser`:
-
-- `bin` — Chromium-family executable.
-- `port` — attach to an existing debugging port instead of launching.
-- `profileDir` — persistent profile directory; defaults to `<data_dir>/browser/profile`.
-- `headless` — launch headless. A headed browser stays headed for the process.
-- `userAgent` — override the launched browser User-Agent.
-- `extraArgs` — extra browser argv.
+All keys live under `config.server.agent.tools.browser`; see the table above. `bin` and
+`profileDir` are required in practice — without them no browser starts.

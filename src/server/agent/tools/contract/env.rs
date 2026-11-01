@@ -6,10 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use serde_json::Value;
-
-use super::view::{Export, Furnish, Source};
-use crate::server::agent::tools::mcp::McpBridge;
+use super::view::{Export, Source};
+use crate::server::agent::tools::mcp::bridge::McpBridge;
 use crate::server::agent::tools::workspace::Workspace;
 
 /// What a tool reads: one session's conditions for one batch.
@@ -60,42 +58,13 @@ pub struct BashEnv {
     pub shell: crate::server::platform::shell::Shell,
 }
 
-/// Where the project sits and where its folders are.
+/// The folders a sub-session reads from.
 #[derive(Debug, Clone)]
 pub struct Paths {
-    pub project: PathBuf,
     /// The project's templates.
     pub agents: PathBuf,
     /// The answers a sub-session's final text lands in.
     pub answers: PathBuf,
     /// The templates that belong to the user, not to this project.
     pub global_agents: PathBuf,
-    /// The project's MCP server table; when it exists it replaces the global one.
-    pub mcp: PathBuf,
-    /// The user-wide MCP server table, read only when the project has none.
-    pub global_mcp: PathBuf,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    Back,
-    Forward,
-}
-
-/// One call, as history queries hand it over.
-#[derive(Debug, Clone)]
-pub struct CallRecord {
-    /// The request block's id: what `context show` and an anchor take as a number.
-    pub block: i64,
-    pub tool: String,
-    pub args: String,
-    pub result: Option<String>,
-    pub ok: bool,
-}
-
-/// A call's two rows, whole, for `context show`.
-#[derive(Debug, Clone)]
-pub struct BlockPair {
-    pub request: Value,
-    pub result: Option<Value>,
 }

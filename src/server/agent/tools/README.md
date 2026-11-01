@@ -10,34 +10,44 @@ opens the database, the config file, or the loop.
 
 `registry::TOOLS`, in order:
 
-| # | tool | file | reachable when |
-|---|---|---|---|
-| 1 | `read` | `bash/read/tool.rs` | always |
-| 2 | `edit` | `bash/edit/tool.rs` | always |
-| 3 | `write` | `bash/write/tool.rs` | always |
-| 4 | `cd` | `bash/cd/tool.rs` | always |
-| 5 | `bash` | `bash/bash/tool.rs` | always |
-| 6 | `alias` | `bash/alias/tool.rs` | always |
-| 7 | `kairos` | `kairos/mod.rs` | a parent session with a job service |
-| 8 | `task` | `subagent/task.rs` | a parent session |
-| 9 | `final` | `subagent/final.rs` | a child session |
-| 10 | `mcp` | `mcp/mod.rs` | an MCP bridge is configured |
-| 11 | `web` | `web/mod.rs` | the build has the `web` feature |
-| 12 | `memo` | `memo/memo/mod.rs` | always |
-| 13 | `todo` | `memo/todo/tool.rs` | always |
-| 14 | `context` | `bash/context/tool.rs` | always |
+| # | tool | file |
+|---|---|---|
+| 1 | `read` | `bash/read/tool.rs` |
+| 2 | `edit` | `bash/edit/tool.rs` |
+| 3 | `write` | `bash/write/tool.rs` |
+| 4 | `cd` | `bash/cd/tool.rs` |
+| 5 | `bash` | `bash/bash/tool.rs` |
+| 6 | `alias` | `bash/alias/tool.rs` |
+| 7 | `kairos` | `kairos/mod.rs` |
+| 8 | `task` | `subagent/task.rs` |
+| 9 | `final` | `subagent/final.rs` |
+| 10 | `mcp` | `mcp/mod.rs` |
+| 11 | `web` | `web/mod.rs` |
+| 12 | `memo` | `memo/memo/tool.rs` |
+| 13 | `todo` | `memo/todo/tool.rs` |
+| 14 | `context` | `bash/context/tool.rs` |
 
-`roster(names, shape)` expands a session's tool names into manuals, keeping only the rows the
-session's shape allows; `engine` repeats the name gate and the shape gate, so a hidden tool cannot
-be called by naming it.
+**The session's list is the only gate.** `roster(names)` expands a list into manuals, keeping the
+rows whose names appear in it and nothing else. `engine` reads the same list through
+`env.allows(name)`, so a tool absent from the list cannot be called by naming it. No tool has a
+second condition of its own: whether a session gets `mcp` depends on the profile naming it, not on
+a server being configured locally.
+
+Two names are settled when a child is spawned, in `loop/turn/cycle.rs`:
+
+- `task` is dropped from every child's list. A child never spawns a child.
+- `final` is appended to every child's list. The parent does not name it and does not know it
+  exists.
+
+`web` is absent from a build without the `web` feature: the row is gone from the table itself, so
+no list can reach it.
 
 ### One call
 
 ```text
 ToolCall { name, args, intent }
   → registry::spec(name)
-  → env.allows(name)                       the session's list
-  → registry::available(name, shape)        session shape gate
+  → env.allows(name)                       the session's list; the only gate
   → budget gate (every call but `final`)
   → Args::fill(tool.params, args)          JSON object → positional values
   → (tool.run)(env, &args, progress)       Start, Progress and End events around it
@@ -67,15 +77,19 @@ tool; no tool declares it.
 | `task` | `template` req, `vars`, `cwd`, `maxToolCalls`, `name` |
 | `final` | `op` req (`write`/`edit`/`mass_edit`/`read`/`submit`), `content`, `old`, `new`, `edits` |
 | `mcp` | `op` req (`list`/`call`), `server`, `tool`, `args` |
-| `web` | `op` req (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`net`/`screenshot`), `url`, `raw`, `query`, `provider`, `page`, `selector`, `value`, `filter`, `max`, `full_page`, `reserve` |
+| `web` | `op` req (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`net`/`screenshot`), `url`, `raw`, `query`, `provider` req, `page`, `selector`, `value`, `filter`, `max`, `full_page` |
 | `memo` | `op` req (`add`/`mod`/`del`/`show`/`history`/`list`), `scope` (`current`/`global`, default `current`), `name`, `content` |
 | `todo` | `op` req (`set`/`tick`/`view`), `items` (the whole list), `ids` (item numbers, 1-based), `done` (default true) |
 | `context` | `op` req (`query`/`show`), `anchor`, `direction` (`back`/`forward`), `limit` (default 3), `tool` (a name or `all`, default `bash`), `ids` |
 
+`provider` is required on `web`: one search runs against exactly one provider, so a call that
+names none is refused rather than spread across several tabs.
+
 ### ToolOutput
 
 ```text
-ToolOutput { text: String, memo: Option<Value>, spill: Option<Spill>, effects: Vec<Effect>, stop: bool }
+ToolOutput { text: String, memo: Option<Value>, effects: Vec<Effect>, stop: bool }
+ToolResult { call_id, ok, result, memo, spill, duration_ms, effects, stop }
 Spill      { name: String, content: String }
 ```
 
@@ -85,6 +99,19 @@ Spill      { name: String, content: String }
   door stamps its `ts` before returning.
 - `stop` asks the loop to end the round.
 
+### Contract
+
+`contract/` groups the tool layer's outward shape by what a caller reaches for. No name is
+re-exported at the `tools` root; callers write the group they mean.
+
+| module | holds |
+|---|---|
+| `contract::call` | `Batch`, `BatchInput`, `Cwd` |
+| `contract::output` | `ToolResult`, `ToolOutput`, `Effect`, `MemoOp`, `AliasOp` |
+| `contract::env` | `Env`, `Limits`, `BashEnv`, `Paths` |
+| `contract::view` | `Source`, `Export`, `Child`, `Draft`, `MemoRead`, `MemoScope`, `MemoReadOp`, `MemoVersion`, `MemoView`, and the history shapes `CallRecord`, `BlockPair`, `Direction` |
+| `contract::job` | `JobSpec`, `Schedule`, `JobHost`, `JobRunner`, `JobCtx`, `JobOutcome`, `Receipt`, `Row`, `Status`, `Exit`, `OutputSink` |
+
 ### Env
 
 ```text
@@ -92,7 +119,6 @@ Env {
   workspace: Workspace,      // root + this batch's cwd snapshot
   limits: Limits,            // lines, bytes
   bash: BashEnv,             // timeout, interrupt, shell
-  browser: Browser,
   session: i64,
   batch_len: usize,
   tools: BTreeSet<String>,   // the session's list; the one gate
@@ -100,14 +126,16 @@ Env {
   default_budget: u32,
   mcp: Option<Arc<dyn McpBridge>>,
   export: Arc<dyn Export>,   // a full text out of the database as a file
-  paths: Paths,              // project, agents, answers, globalAgents
+  paths: Paths,              // agents, answers, globalAgents
   source: Arc<dyn Source>,   // reads the loop owns
 }
 ```
 
-Ports are traits in `contract`: `Source` (memos, aliases, history, calls, jobs, child),
-`Export`, `Furnish` and `Child`. A tool that needs a port fails when it is `None`; it never reaches
-for a database or a config file.
+Ports are traits in `contract::view`: `Source` (memos, aliases, history, calls, jobs, child, and
+the MCP bridge), `Export` and `Child`. A tool that needs a port fails when it is `None`; it never
+reaches for a database or a config file.
+
+`Env` carries no browser settings. The browser decides how it starts; see `src/web/README.md`.
 
 ### Workspace
 
@@ -130,13 +158,11 @@ Workspace { cwd, root }
   commit as the result block, so the tool itself never stores a note.
 - `memo` reads go through `Source::memo`; the tool never opens the database.
 - `todo` keeps no state at all: no table, no column, no session flag. A `set` result's memo carries
-  the list and the marker `"todo_reset":true`; the newest such block is the anchor, and everything after it
-  is folded in. With no anchor the replay starts at the session's first call. `set` itself reads
-  nothing: the call is the whole list.
+  the list and the marker `"todo_reset":true`; the newest such block is the anchor, and everything
+  after it is folded in. With no anchor the replay starts at the session's first call.
 - Three operations: `set` replaces the list (`items: []` clears it), `tick` marks item numbers done
-  or, with `done: false`, clears the tick, and `view` prints the list with those numbers. Numbers are
-  positions; an out-of-range number drops the whole call and nothing changes. Ticking an item that is
-  already in that state is a plain success, not an error.
+  or, with `done: false`, clears the tick, and `view` prints the list with those numbers. Numbers
+  are positions; an out-of-range number drops the whole call and nothing changes.
 - A todo result's memo carries the whole list, so a front end maintains it by replacement. A
   fully-ticked list stays until the next `set`; nothing clears itself.
 
@@ -159,8 +185,9 @@ guard belongs to the unix shells only; `pwsh` and `niu` run the line as written.
 - `query` needs `anchor` and `direction`; `tool` is one name or `all`. Every line is the block, the
   tool, ok or failed, and that tool's own summary.
 - `show` returns the request row and the result row whole, one JSON line each.
-- Past ten listing lines, or past three shown blocks, the text lands in `Export::dir()` and the reply
-  names the file; the name is built from the parameters, so the same query overwrites its own file.
+- Past ten listing lines, or past three shown blocks, the text lands in `Export::dir()` and the
+  reply names the file; the name is built from the parameters, so the same query overwrites its
+  own file.
 
 ### edit's memo
 
@@ -173,10 +200,48 @@ guard belongs to the unix shells only; `pwsh` and `niu` run the line as written.
 Both `exact` and `mass` answer this shape. The old text is kept because the file may be gone by the
 time a front end renders the call; `line` is where each fragment sat, `atLine` the first of them.
 
+### MCP
+
+`mcp` is one static tool with a fixed schema. Which servers exist and which tools each exposes is
+decided at runtime, so a new server needs no Rust change — only a line in `mcp.json`.
+
+`mcp/setup.rs` reads the table. Two paths arrive in `Paths`:
+
+- `mcp` — `<project>/.mypi/mcp.json`.
+- `global_mcp` — `<global root>/mcp.json`.
+
+**The project's file wins whole.** If it exists the global one is not read at all; the two are
+never merged. Neither existing means an empty table.
+
+```json
+{
+  "servers": {
+    "local": {
+      "command": "uv",
+      "args": ["run", "python", "service.py"],
+      "env": {},
+      "cwd": "/path/to/service",
+      "timeout_secs": 120
+    }
+  }
+}
+```
+
+`McpBridge` is the seam: `servers()`, `tools(server)`, `call(server, tool, args)`, `shutdown()`.
+Nothing above it knows JSON-RPC. `SyncMcpBridge` is the built-in implementation: one child process
+per name, started lazily and kept for the process; stdout is one JSON-RPC object per line, a reader
+thread dispatches by id, stderr is drained into a 20-line tail that only surfaces in errors; every
+call carries a deadline; a dead process fails every waiting call and is started again on the next
+one. It uses threads and channels only — no async runtime enters this tree.
+
+An answer is text content, concatenated in order. `isError` makes the call failed. Images, audio
+and structured content are reported as unsupported. MCP's own schema is not passed to the model and
+not checked here; a bad argument is the server's error to report.
+
 ### Jobs and children
 
-- A job is created by the loop, never by a tool. The tool writes a `contract::job::JobSpec` and holds
-  the session's `JobHost`; the scheduler, the pool, the per-run files and the wakes live in
+- A job is created by the loop, never by a tool. The tool writes a `contract::job::JobSpec` and
+  holds the session's `JobHost`; the scheduler, the pool, the per-run files and the wakes live in
   `loop/job`.
 - One job, one completion: a command finishes, a child submits, or the clock arrives. The receipt
   names the job; the wake reports it done under the same id.
@@ -186,7 +251,8 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
   submit, then drops it.
 - The answer file is `<answers>/<name>.md`; the name is fixed at spawn, from `name` or the template's
   stem, with `-1`, `-2` when taken. `final submit` writes it and is the only thing that ends a child.
-- A child takes no user messages; `task` is parent-only, `final` child-only.
+- A child takes no user messages. `task` is the only tool a child cannot hold; `final` is the only
+  one it never has to ask for.
 
 ### Invariants
 
@@ -199,19 +265,25 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
 7. `alias` expands once, the first token only, and adds no variables, functions or multi-line forms.
 8. One call runs at a time inside a session; different sessions run concurrently.
 9. A tool starts no job and writes no session row; it describes both and the loop acts.
+10. The session's list is the whole gate; a tool adds no condition of its own.
 
 ## 2. Design intent
 
 - **One table, one front door.** Gates, argument decoding, effect stamping and output measurement
   happen once, so a new tool cannot forget one of them and cannot report output straight into the
   conversation.
+- **Grouped contract.** The outward shape sits in five modules by caller intent, so a reader looking
+  for "what a tool returns" does not scroll past the ports the loop implements.
+- **The list decides.** A profile names what a session may call; the tool layer does not second-guess
+  it. The one exception is settled at spawn, not at call time: a child's list is corrected once, so
+  no check has to be repeated on every call.
 - **Positional parameters.** The schema and the parser come from one `&[Param]`, so the JSON schema
   the model sees cannot drift from what the tool reads.
 - **`intent` everywhere.** Every call carries one line of user-facing intention; the front end can
   show it without parsing arguments.
 - **Ports, not dependencies.** Reads the tool layer must not own — memos, artifacts, jobs,
   children — arrive inside `Env` as traits, so the tools keep no database handle.
-- **Effects land with their block.** A memo, alias or subsession cannot exist without the tool
+- **Effects land with their block.** A memo, alias or sub-session cannot exist without the tool
   result that caused it; one transaction owns both.
 - **A guard, not a sandbox.** The model runs real shell commands; the classifier blocks the
   machine-destroying shapes and warns on the rest, and it always judges the expanded command.
@@ -220,23 +292,20 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
   never queue behind each other.
 - **Long work leaves the round.** `kairos` starts a job and returns; a finished job wakes the
   session, so a slow command does not hold a round open.
-- **A child is a session.** Subagents reuse the loop, storage and stream; separate roots and the
-  parent/child tool split keep a child from spawning children of its own.
+- **A child is a session.** Subagents reuse the loop, storage and stream; corrected lists keep a
+  child from spawning children of its own.
 - **One stdio server per name.** MCP servers start lazily and stay up for the process; the tool
-  only knows names.
+  only knows names, so a new server is a line of JSON.
 - **The browser is optional at build time.** `web` is a feature, not a runtime switch, because the
   browser stack is the largest dependency in the crate.
 
 ## 3. Unresolved
 
-1. `web` does not build: it still binds the removed `Inbox`-based `Env`.
-2. `mcp` does not build: `mod.rs` binds the same removed `Env`, and `sync.rs` and `stdio.rs` name
-   `config::McpConfig` and `config::McpServerConfig`, which no longer exist. The bridge must take
-   its servers from `mcp.json`, which no one reads yet; `Furnish::mcp` answers `None`.
-3. The api doors are not updated: `api/call/todo.rs` replays by itself and `api/convert.rs` maps
+1. The api doors are not updated: `api/call/todo.rs` replays by itself and `api/convert.rs` maps
    phases and five states, while `Loop::todo` hands the replayed list over.
-4. MCP carries text content only; a server-initiated request is answered `-32601`.
-5. Template front matter reads `tools` only.
+2. MCP carries text content only; a server-initiated request is answered `-32601`.
+3. Template front matter reads `tools` only.
+4. `close_web_session` is exported for the api layer and has no caller yet.
 
 ## 4. Config fields
 
@@ -245,6 +314,13 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
 | `config.server.agent.tools.bashTimeout` | one shell command's deadline; default 600 s |
 | `config.server.agent.tools.outputMaxLines` | inline line budget; also caps `read`'s `limit` |
 | `config.server.agent.tools.outputMaxBytes` | inline byte budget |
-| `config.server.agent.tools.browser.*` | `bin`, `port`, `profileDir`, `headless`, `userAgent`, `extraArgs`, handed to `Env.browser` |
+| `config.server.agent.tools.browser.bin` | the browser executable; no default, the web domain refuses to start without it |
+| `config.server.agent.tools.browser.profileDir` | the persistent profile; no default, the web domain refuses to start without it |
+| `config.server.agent.tools.browser.port` | attach to a running debugging port instead of launching |
+| `config.server.agent.tools.browser.headless` | launch without a window; default true |
+| `config.server.agent.tools.browser.userAgent` | override the launched browser's User-Agent |
+| `config.server.agent.tools.browser.extraArgs` | extra browser argv |
 | `config.server.agent.tools.kairos.*` | `maxConcurrent`, `timeoutSecs`, `maxOutputBytes`, `maxRetained`; the job scheduler's numbers, read by the loop |
 | `config.server.agent.subagent.maxToolCalls` | one child's tool-call budget; read by the loop |
+
+The browser keys are read by the web domain itself, not by the tool layer.
