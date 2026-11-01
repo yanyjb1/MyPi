@@ -249,11 +249,7 @@ fn prune(st: &mut State, dir: &OutputDir) {
     }
 }
 
-pub(crate) fn run_job(
-    state: Arc<Mutex<State>>,
-    bell: Arc<(Mutex<()>, Condvar)>,
-    id: Id,
-) {
+pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Arc<(Mutex<()>, Condvar)>, id: Id) {
     let worker_state = state.clone();
     let worker_bell = bell.clone();
     let _ = std::thread::Builder::new()
