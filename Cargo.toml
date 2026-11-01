@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-# 联网工具（fetch / search / browser）默认开启，`--no-default-features` 可整体剔除：
+# web 工具默认开启，`--no-default-features` 可整体剔除：
 # 那个构建不含 CDP 客户端、HTML→Markdown、URL 解析，也不会启动任何浏览器。
 # 会话本身（模型 API、bash、编辑、持久化）不需要它。
 default = ["web"]
@@ -26,6 +26,8 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 pulldown-cmark = "0.13"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 parking_lot = "0.12"
+# TUI：终端渲染与键盘/鼠标事件
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 # ---- web 特性专属（见 [features]）----
 # WebSocket（CDP 用）：同步、无 tokio，与 ureq 的风格一致。只做帧协议，
 # CDP 的会话/配对逻辑在 src/web/utils/cdp.rs 里手写
