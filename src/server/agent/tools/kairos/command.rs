@@ -8,8 +8,9 @@ use anyhow::{Result, bail};
 
 use crate::server::agent::tools::bash::bash::shell::{self, OutputSink};
 use crate::server::agent::tools::bash::bash::{expand_alias, guard, rewrite_refs};
+use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::job::{JobCtx, JobOutcome, JobRunner};
-use crate::server::agent::tools::contract::{Env, Export};
+use crate::server::agent::tools::contract::view::Export;
 use crate::server::platform::shell::Shell;
 
 #[derive(Debug, Clone)]

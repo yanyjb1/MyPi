@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use super::page::Page;
 use super::session;
-use crate::server::config::BrowserConfig;
 use crate::web::WebArgs;
 
 pub(crate) const ACTION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,9 +51,9 @@ fn selector(args: &WebArgs, what: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("{what} requires selector"))
 }
 
-pub(crate) fn run(args: &WebArgs, cfg: &BrowserConfig, session: i64) -> Result<String> {
+pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
     let op = args.op.as_str();
-    session::with_work(session, cfg, args.reserve, |page: &Page| match op {
+    session::with_work(session, args.reserve, |page: &Page| match op {
         "click" => {
             let sel = selector(args, "click")?;
             let r = page.evaluate(

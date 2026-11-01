@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
-use crate::server::agent::tools::McpBridge;
+use crate::server::agent::tools::contract::env::{BlockPair, CallRecord, Direction};
 use crate::server::agent::tools::contract::job::JobHost;
-use crate::server::agent::tools::contract::{
-    BlockPair, CallRecord, Child, Direction, Furnish, MemoRead, MemoReadOp, MemoScope, MemoVersion,
-    MemoView, Source,
+use crate::server::agent::tools::contract::view::{
+    Child, Furnish, MemoRead, MemoReadOp, MemoScope, MemoVersion, MemoView, Source,
 };
+use crate::server::agent::tools::McpBridge;
 use crate::server::storage::Reader;
 use crate::server::storage::query::{Cond, Order, Query, Sheet, Val};
 

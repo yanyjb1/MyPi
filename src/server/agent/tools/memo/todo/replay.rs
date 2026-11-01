@@ -5,7 +5,9 @@ use anyhow::Result;
 use super::ops::{self, Call};
 use super::state::TodoItem;
 use super::tool::{PARAMS, RESET};
-use crate::server::agent::tools::{Args, CallRecord, Source};
+use crate::server::agent::tools::Args;
+use crate::server::agent::tools::contract::env::CallRecord;
+use crate::server::agent::tools::contract::view::Source;
 
 /// The list a sequence of calls adds up to, starting from `seed`; failed, unreadable and read-only
 /// calls are skipped.

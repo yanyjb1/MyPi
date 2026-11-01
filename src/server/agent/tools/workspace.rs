@@ -11,11 +11,11 @@ use std::sync::{Arc, LazyLock, Mutex, RwLock};
 pub struct Workspace {
     cwd: std::path::PathBuf,
     root: std::path::PathBuf,
-    shared: super::contract::Cwd,
+    shared: super::contract::call::Cwd,
 }
 
 impl Workspace {
-    pub fn new(root: std::path::PathBuf, shared: super::contract::Cwd) -> Self {
+    pub fn new(root: std::path::PathBuf, shared: super::contract::call::Cwd) -> Self {
         let cwd = shared.read().unwrap_or_else(|e| e.into_inner()).clone();
         Self { cwd, root, shared }
     }

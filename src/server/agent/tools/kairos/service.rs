@@ -4,11 +4,9 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 
-use crate::server::agent::tools::contract::Env;
-use crate::server::agent::tools::contract::ToolOutput;
-use crate::server::agent::tools::contract::job::{
-    JobHost, JobRunner, JobSpec, Schedule, Status,
-};
+use crate::server::agent::tools::contract::env::Env;
+use crate::server::agent::tools::contract::job::{JobHost, JobRunner, JobSpec, Schedule, Status};
+use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::spec::Args;
 
 use super::command::{Command, CommandRunner};
@@ -39,7 +37,13 @@ pub(crate) fn run(env: &mut Env, args: &Args) -> Result<ToolOutput> {
             let expr = args.str(EXPR)?;
             let count = count(args)?;
             let kind = args.choice(TYPE)?;
-            start(env, jobs.as_ref(), args, &kind, Schedule::Every { expr, count })?
+            start(
+                env,
+                jobs.as_ref(),
+                args,
+                &kind,
+                Schedule::Every { expr, count },
+            )?
         }
         "list" => list(jobs.as_ref()),
         "status" => render_status(&jobs.status(&args.str(ID)?)?),

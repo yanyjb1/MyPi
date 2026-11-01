@@ -28,7 +28,10 @@ pub(crate) fn file(dir: &Path, name: &str) -> PathBuf {
 
 /// Write the answer, stamped: a draft that carries an older stamp loses it.
 pub(crate) fn write(path: &Path, text: &str) -> Result<()> {
-    write_atomic(path, &format!("{}\n\n{}", generated(), strip_generated(text)))
+    write_atomic(
+        path,
+        &format!("{}\n\n{}", generated(), strip_generated(text)),
+    )
 }
 
 /// One plain stem: no separators, no hidden file.

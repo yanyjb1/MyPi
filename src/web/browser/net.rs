@@ -4,13 +4,12 @@ use serde_json::Value;
 use super::actions::ACTION_TIMEOUT;
 use super::page::Page;
 use super::session;
-use crate::server::config::BrowserConfig;
 use crate::web::WebArgs;
 
-pub(crate) fn run(args: &WebArgs, cfg: &BrowserConfig, session: i64) -> Result<String> {
+pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
     let filter = args.filter.clone().unwrap_or_default();
     let max = args.max.unwrap_or(20).clamp(1, 100);
-    session::with_work(session, cfg, args.reserve, |page: &Page| {
+    session::with_work(session, args.reserve, |page: &Page| {
         capture_network(page, &filter, max)
     })
 }

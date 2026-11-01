@@ -2,7 +2,8 @@
 
 use anyhow::Result;
 
-use crate::server::agent::tools::contract::{Env, ToolOutput};
+use crate::server::agent::tools::contract::env::Env;
+use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 
 mod command;

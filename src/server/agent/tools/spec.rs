@@ -3,7 +3,8 @@
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use super::contract::{CallRecord, Env, ToolOutput};
+use super::contract::env::{CallRecord, Env};
+use super::contract::output::ToolOutput;
 
 // ---- parameters ----
 

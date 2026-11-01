@@ -1,22 +1,22 @@
 //! The default MCP backend: one lazy stdio server per configured name.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
 use super::bridge::{McpBridge, McpContent, McpResult, ServerInfo, ToolInfo};
+use super::setup::ServerConfig;
 use super::stdio::{self, Server};
-use crate::server::config::McpConfig;
 
 pub struct SyncMcpBridge {
-    config: McpConfig,
+    config: BTreeMap<String, ServerConfig>,
     servers: Mutex<HashMap<String, Arc<Mutex<Server>>>>,
 }
 
 impl SyncMcpBridge {
-    pub fn new(config: McpConfig) -> Self {
+    pub fn new(config: BTreeMap<String, ServerConfig>) -> Self {
         Self {
             config,
             servers: Mutex::new(HashMap::new()),
@@ -47,7 +47,6 @@ impl SyncMcpBridge {
         }
         let config = self
             .config
-            .servers
             .get(name)
             .cloned()
             .ok_or_else(|| anyhow!("unknown MCP server `{name}`"))?;
@@ -194,7 +193,6 @@ fn content_of(server: &str, value: &Value) -> Result<McpContent> {
 impl McpBridge for SyncMcpBridge {
     fn servers(&self) -> Vec<ServerInfo> {
         self.config
-            .servers
             .keys()
             .map(|name| ServerInfo { name: name.clone() })
             .collect()

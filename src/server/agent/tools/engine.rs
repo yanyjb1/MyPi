@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use super::contract::{
-    BashEnv, Batch, BatchInput, Browser, Child, Env, Export, Furnish, Limits, Paths, Source,
-    ToolOutput, ToolResult,
-};
-use super::registry::{self, Availability};
+use super::contract::call::{Batch, BatchInput};
+use super::contract::env::{BashEnv, Env, Limits, Paths};
+use super::contract::output::{ToolOutput, ToolResult};
+use super::contract::view::{Child, Export, Furnish, Source};
+use super::registry;
 use super::spec::{Args, ToolProgress};
 use super::workspace::Workspace;
 use crate::server::agent::request::contract::{Spill, ToolCall};
@@ -21,7 +21,6 @@ use crate::server::platform::time::now_stamp;
 pub struct Engine {
     limits: Limits,
     bash_timeout: Duration,
-    browser: Browser,
     default_budget: u32,
     source: std::sync::Arc<dyn Source>,
     furnish: std::sync::Arc<dyn Furnish>,
@@ -30,11 +29,9 @@ pub struct Engine {
 }
 
 impl Engine {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         limits: Limits,
         bash_timeout: Duration,
-        browser: Browser,
         default_budget: u32,
         source: std::sync::Arc<dyn Source>,
         furnish: std::sync::Arc<dyn Furnish>,
@@ -44,7 +41,6 @@ impl Engine {
         Self {
             limits,
             bash_timeout,
-            browser,
             default_budget,
             source,
             furnish,
@@ -62,7 +58,6 @@ impl Engine {
                 interrupt: input.stop.clone(),
                 shell: crate::server::platform::shell::Shell::default(),
             },
-            browser: self.browser.clone(),
             session: input.session,
             batch_len: input.calls.len(),
             tools: input.tools.iter().cloned().collect(),
@@ -80,11 +75,6 @@ impl Batch for Engine {
     fn run(&self, input: BatchInput) -> Result<Vec<ToolResult>> {
         let mut env = self.env(&input)?;
         let child = self.source.child(input.session);
-        let shape = Availability {
-            child: child.is_some(),
-            jobs: self.source.jobs(input.session).is_some(),
-            mcp: env.mcp.is_some(),
-        };
         let mut halted = false;
         let mut results = Vec::with_capacity(input.calls.len());
         for call in &input.calls {
@@ -97,7 +87,6 @@ impl Batch for Engine {
                     &mut env,
                     call,
                     &input,
-                    &shape,
                     child.as_deref(),
                     started,
                     &mut halted,
@@ -115,7 +104,6 @@ impl Engine {
         env: &mut Env,
         call: &ToolCall,
         input: &BatchInput,
-        shape: &Availability,
         child: Option<&dyn Child>,
         started: Instant,
         halted: &mut bool,
@@ -127,13 +115,6 @@ impl Engine {
             return failed(
                 call,
                 format!("tool `{}` is disabled by the active profile", tool.name),
-                started,
-            );
-        }
-        if !registry::available(tool.name, shape) {
-            return failed(
-                call,
-                format!("`{}` is unavailable in this session", tool.name),
                 started,
             );
         }

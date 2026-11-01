@@ -1,13 +1,17 @@
 //! The static `mcp` tool: list configured servers/tools or call one tool.
 
+pub mod setup;
+
 mod bridge;
 mod stdio;
 mod sync;
 
 use anyhow::{Result, anyhow, bail};
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::spec::{Args, Env, Kind, Param, Tool, ToolOutput, ToolProgress};
+use super::contract::env::Env;
+use super::contract::output::ToolOutput;
+use super::spec::{Args, Kind, Param, Tool, ToolProgress};
 pub use bridge::{McpBridge, McpContent, McpResult, ServerInfo, ToolInfo};
 pub use sync::SyncMcpBridge;
 
@@ -27,6 +31,7 @@ pub const TOOL: Tool = Tool {
     about: "MCP: list configured servers and tools, or call one tool.",
     params: PARAMS,
     run,
+    summary: None,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

@@ -18,7 +18,7 @@ use crate::server::agent::r#loop::turn::ask::Ask;
 use crate::server::agent::r#loop::turn::batch::Batch;
 use crate::server::agent::r#loop::turn::cycle::Mode;
 use crate::server::agent::request::live::Event;
-use crate::server::agent::tools::contract::Source;
+use crate::server::agent::tools::contract::view::Source;
 use crate::server::storage::Writer;
 
 /// What a caller needs to open one session. The caller resolves the profile
@@ -83,34 +83,37 @@ impl Loop {
         let dir = cfg.export_dir();
         let export = Arc::new(super::export::Files::new(path, dir.clone()));
         let (lines, bytes) = cfg.limits();
-        let browser = cfg.browser();
         let project = cfg.project_paths();
+        let project_mcp = project.mcp.clone();
+        let global_mcp = cfg
+            .paths()
+            .global_root()
+            .unwrap_or_default()
+            .join("mcp.json");
         let batch = crate::server::agent::tools::Engine::new(
-            crate::server::agent::tools::Limits { lines, bytes },
+            crate::server::agent::tools::contract::env::Limits { lines, bytes },
             cfg.bash_timeout(),
-            crate::server::agent::tools::Browser {
-                bin: browser.bin,
-                port: browser.port,
-                profile_dir: browser.profile_dir,
-                headless: browser.headless,
-                user_agent: browser.user_agent,
-                extra_args: browser.extra_args,
-            },
             cfg.subagent_budget(),
             source.clone(),
             source.clone(),
             export,
-            crate::server::agent::tools::Paths {
+            crate::server::agent::tools::contract::env::Paths {
                 project: project.project,
                 agents: project.agents,
                 answers: project.answers,
-                global_agents: cfg
-                    .paths()
-                    .global_root()
-                    .unwrap_or_default()
-                    .join("agents"),
+                global_agents: cfg.paths().global_root().unwrap_or_default().join("agents"),
+                mcp: project_mcp.clone(),
+                global_mcp: global_mcp.clone(),
             },
         );
+        if let Ok(table) =
+            crate::server::agent::tools::mcp::setup::servers(&project_mcp, &global_mcp)
+            && !table.is_empty()
+        {
+            source.attach_mcp(Arc::new(crate::server::agent::tools::SyncMcpBridge::new(
+                table,
+            )));
+        }
         let slots = super::jobs::Slots::new();
         let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
         Self {
@@ -193,8 +196,7 @@ impl Loop {
     pub fn change(&self, session: i64, change: Change) -> Result<()> {
         let handle = self.handle(session)?;
         let birth = handle.birth();
-        let shape = turn::cycle::shape(&self.inner, session);
-        let tools_json = serde_json::to_string(&turn::cycle::manuals(&birth.tools, shape))?;
+        let tools_json = serde_json::to_string(&turn::cycle::manuals(&birth.tools))?;
         change::apply(
             &handle,
             change,
@@ -216,11 +218,7 @@ impl Loop {
     }
 }
 
-pub(crate) fn book_child(
-    inner: &Arc<Inner>,
-    birth: Birth,
-    start: String,
-) -> Result<Arc<Handle>> {
+pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Result<Arc<Handle>> {
     if let Some(meta) = birth.meta {
         inner.writer.push(crate::server::storage::Submit {
             rows: vec![crate::server::storage::Row::Meta {

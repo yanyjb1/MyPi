@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use super::page::{self, Page};
 use super::process::{self, Browser};
 use super::reaper;
-use crate::server::config::BrowserConfig;
+use crate::server::config::BrowserOptions;
 
 const IDLE: Duration = Duration::from_secs(30 * 60);
 
@@ -40,20 +40,21 @@ fn carry(mut state: Option<State>) -> (HashSet<(i64, String)>, HashMap<i64, Arc<
     }
 }
 
-fn ensure_browser(cfg: &BrowserConfig, headless: bool) -> anyhow::Result<u16> {
+fn options() -> anyhow::Result<BrowserOptions> {
+    Ok(crate::server::config::Config::load()?.browser())
+}
+
+fn ensure_browser() -> anyhow::Result<u16> {
     let mut guard = STATE.lock();
-    if let Some(state) = guard.as_ref() {
-        if Browser::port_alive(state.browser.port) {
-            if state.browser.attached() {
-                return Ok(state.browser.port);
-            }
-            if headless || !state.browser.headless() {
-                return Ok(state.browser.port);
-            }
-        }
+    if let Some(state) = guard.as_ref()
+        && Browser::port_alive(state.browser.port)
+        && (state.browser.attached() || state.browser.headless())
+    {
+        return Ok(state.browser.port);
     }
+    let cfg = options()?;
     let (challenges, search_locks) = carry(guard.take());
-    let profile = process::profile_dir(cfg);
+    let profile = process::profile_dir(&cfg);
     let browser = match std::env::var("MYPI_BROWSER_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
@@ -61,7 +62,7 @@ fn ensure_browser(cfg: &BrowserConfig, headless: bool) -> anyhow::Result<u16> {
         .or_else(|| process::discover_live_browser(&profile))
     {
         Some(port) => Browser::attach(&profile, port)?,
-        None => Browser::launch(cfg, &profile, headless)?,
+        None => Browser::launch(&cfg, &profile, cfg.headless)?,
     };
     let port = browser.port;
     *guard = Some(State {
@@ -75,7 +76,7 @@ fn ensure_browser(cfg: &BrowserConfig, headless: bool) -> anyhow::Result<u16> {
     Ok(port)
 }
 
-pub(crate) fn ensure_headed(cfg: &BrowserConfig) -> anyhow::Result<()> {
+pub(crate) fn ensure_headed() -> anyhow::Result<()> {
     if !has_display() {
         bail!("no display is available for a headed browser");
     }
@@ -89,8 +90,9 @@ pub(crate) fn ensure_headed(cfg: &BrowserConfig) -> anyhow::Result<()> {
         }
     }
     let (challenges, search_locks) = carry(guard.take());
-    let profile = process::profile_dir(cfg);
-    let browser = Browser::launch(cfg, &profile, false)?;
+    let cfg = options()?;
+    let profile = process::profile_dir(&cfg);
+    let browser = Browser::launch(&cfg, &profile, false)?;
     *guard = Some(State {
         browser,
         tabs: HashMap::new(),
@@ -134,7 +136,6 @@ fn with_tab<T>(
     port: u16,
     session: i64,
     kind: TabKind,
-    cfg: &BrowserConfig,
     reserve: bool,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
@@ -143,7 +144,8 @@ fn with_tab<T>(
         let state = guard
             .as_mut()
             .ok_or_else(|| anyhow!("browser state vanished"))?;
-        let browser = Browser::attach(&process::profile_dir(cfg), port)?;
+        let profile = state.browser.profile().to_path_buf();
+        let browser = Browser::attach(&profile, port)?;
         let live = browser.targets()?;
         let key = (session, kind);
         let target = match state
@@ -191,10 +193,9 @@ fn with_tab<T>(
 
 pub(crate) fn with_search<T>(
     session: i64,
-    cfg: &BrowserConfig,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let port = ensure_browser(cfg, cfg.headless)?;
+    let port = ensure_browser()?;
     let lock = {
         let mut guard = STATE.lock();
         let state = guard
@@ -207,17 +208,16 @@ pub(crate) fn with_search<T>(
             .clone()
     };
     let _serial = lock.lock();
-    with_tab(port, session, TabKind::Search, cfg, false, f)
+    with_tab(port, session, TabKind::Search, false, f)
 }
 
 pub(crate) fn with_work<T>(
     session: i64,
-    cfg: &BrowserConfig,
     reserve: bool,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let port = ensure_browser(cfg, cfg.headless)?;
-    with_tab(port, session, TabKind::Work, cfg, reserve, f)
+    let port = ensure_browser()?;
+    with_tab(port, session, TabKind::Work, reserve, f)
 }
 
 pub fn close_session(session: i64) {

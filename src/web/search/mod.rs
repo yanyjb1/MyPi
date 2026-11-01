@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use self::hit::{Hit, dedup_key};
 use self::provider::SearchProvider;
 use super::browser;
-use crate::server::config::BrowserConfig;
 
 mod hit;
 mod provider;
@@ -14,13 +13,7 @@ mod providers;
 const VERIFY_INTERVAL: Duration = Duration::from_secs(60);
 const VERIFY_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub(crate) fn run(
-    session: i64,
-    cfg: &BrowserConfig,
-    query: &str,
-    provider_name: &str,
-    page: u32,
-) -> Result<String> {
+pub(crate) fn run(session: i64, query: &str, provider_name: &str, page: u32) -> Result<String> {
     if page == 0 {
         bail!("page must be >= 1");
     }
@@ -32,8 +25,8 @@ pub(crate) fn run(
     let name = provider.name();
     let mut verified = false;
     if browser::is_challenged(session, name) {
-        browser::ensure_headed(cfg).map_err(|e| anyhow!("{name}: {e}"))?;
-        verify(session, cfg, provider, query)?;
+        browser::ensure_headed().map_err(|e| anyhow!("{name}: {e}"))?;
+        verify(session, provider, query)?;
         browser::clear_challenged(session, name);
         verified = true;
     }
@@ -43,7 +36,7 @@ pub(crate) fn run(
     let mut current = 1u32;
     while current <= page {
         let url = provider.page_url(query, current);
-        let html = browser::with_search(session, cfg, |page| {
+        let html = browser::with_search(session, |page| {
             page.navigate(&url)?;
             page.wait(browser::RENDER_WAIT, |html| {
                 if provider.challenge(&url, html).is_some() {
@@ -71,8 +64,8 @@ pub(crate) fn run(
             if verified {
                 bail!("{name}: verification did not clear; retry or switch provider.");
             }
-            browser::ensure_headed(cfg).map_err(|e| anyhow!("{name}: {e}"))?;
-            verify(session, cfg, provider, query)?;
+            browser::ensure_headed().map_err(|e| anyhow!("{name}: {e}"))?;
+            verify(session, provider, query)?;
             browser::clear_challenged(session, name);
             verified = true;
             hits.clear();
@@ -96,17 +89,12 @@ pub(crate) fn run(
     Ok(render(name, page, &hits))
 }
 
-fn verify(
-    session: i64,
-    cfg: &BrowserConfig,
-    provider: &'static dyn SearchProvider,
-    query: &str,
-) -> Result<()> {
+fn verify(session: i64, provider: &'static dyn SearchProvider, query: &str) -> Result<()> {
     let url = provider.page_url(query, 1);
-    browser::with_search(session, cfg, |page| page.navigate(&url))?;
+    browser::with_search(session, |page| page.navigate(&url))?;
     let deadline = Instant::now() + VERIFY_TIMEOUT;
     loop {
-        let html = browser::with_search(session, cfg, |page| page.dom_html())?;
+        let html = browser::with_search(session, |page| page.dom_html())?;
         if provider.challenge(&url, &html).is_none() {
             return Ok(());
         }

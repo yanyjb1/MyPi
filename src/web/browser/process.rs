@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::cdp::Target;
-use crate::server::config::BrowserConfig;
+use crate::server::config::BrowserOptions;
 
 /// Fallback executable when neither `$MYPI_BROWSER_BIN` nor
 /// `config.yaml → browser.bin` names one.
@@ -16,7 +16,7 @@ pub const DEFAULT_BROWSER_BIN: &str = "/opt/helium/helium";
 /// automation tell; keeping the engine segment truthful is the point.
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
-pub(crate) fn profile_dir(cfg: &BrowserConfig) -> PathBuf {
+pub(crate) fn profile_dir(cfg: &BrowserOptions) -> PathBuf {
     cfg.profile_dir.clone().unwrap_or_else(|| {
         crate::server::platform::env::data_dir()
             .join("browser")
@@ -41,7 +41,7 @@ pub(crate) struct Browser {
 }
 
 impl Browser {
-    pub fn launch(cfg: &BrowserConfig, profile: &Path, headless: bool) -> anyhow::Result<Browser> {
+    pub fn launch(cfg: &BrowserOptions, profile: &Path, headless: bool) -> anyhow::Result<Browser> {
         let exe = std::env::var_os("MYPI_BROWSER_BIN")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
@@ -72,6 +72,10 @@ impl Browser {
         self.headless
     }
 
+    pub fn profile(&self) -> &Path {
+        &self.profile
+    }
+
     pub fn attached(&self) -> bool {
         self.attached
     }
@@ -79,7 +83,7 @@ impl Browser {
     pub fn launch_with(
         exe: &Path,
         profile: &Path,
-        cfg: &BrowserConfig,
+        cfg: &BrowserOptions,
         headless: bool,
     ) -> anyhow::Result<Browser> {
         std::fs::create_dir_all(profile)

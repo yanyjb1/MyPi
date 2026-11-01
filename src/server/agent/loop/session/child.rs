@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use anyhow::{Result, bail};
 
-use crate::server::agent::tools::contract::{Child, Draft};
+use crate::server::agent::tools::contract::view::{Child, Draft};
 
 /// How many times a child is told to finish before its task counts as failed.
 const NAGS: u32 = 3;

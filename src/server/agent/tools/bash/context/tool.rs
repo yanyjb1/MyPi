@@ -2,17 +2,17 @@
 
 use anyhow::{Context as _, Result, anyhow};
 
+use crate::server::agent::tools::contract::env::{CallRecord, Direction, Env};
+use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::registry;
 use crate::server::agent::tools::summary;
-use crate::server::agent::tools::{
-    Args, CallRecord, Direction, Env, Kind, Param, Tool, ToolOutput, ToolProgress,
-};
+use crate::server::agent::tools::{Args, Kind, Param, Tool, ToolProgress};
 
 const OP: usize = 0;
 const ANCHOR: usize = 1;
 const DIRECTION: usize = 2;
 const LIMIT: usize = 3;
-const TOOL: usize = 4;
+const TOOL_PARAM: usize = 4;
 const IDS: usize = 5;
 
 /// A listing longer than this goes to a file instead of the conversation.
@@ -79,7 +79,7 @@ fn query(env: &Env, args: &Args) -> Result<ToolOutput> {
         _ => Direction::Forward,
     };
     let limit = args.int(LIMIT)?.max(1) as usize;
-    let tool = args.str(TOOL)?;
+    let tool = args.str(TOOL_PARAM)?;
     let scope = (tool != "all").then(|| tool.as_str());
 
     let records = env

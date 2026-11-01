@@ -18,8 +18,9 @@ use crate::server::agent::r#loop::session::live::Live;
 use crate::server::agent::r#loop::turn::batch::ToolResult;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
 use crate::server::agent::tools::contract::job::{JobHost, JobRunner, JobSpec, Schedule};
-use crate::server::agent::tools::contract::{Child, Effect, Source};
-use crate::server::agent::tools::{Availability, roster};
+use crate::server::agent::tools::contract::output::Effect;
+use crate::server::agent::tools::contract::view::{Child, Source};
+use crate::server::agent::tools::roster;
 use crate::server::platform::time::now_stamp;
 use crate::server::storage::Row;
 
@@ -40,7 +41,6 @@ pub fn run(
     live: &mut Live,
     mode: Mode,
 ) -> Result<Stop> {
-    let shape = shape(inner, handle.id);
     let child = inner.source.child(handle.id);
     if let Mode::Compact { retention, focus } = mode {
         let reply = match inner.ask.compact(CompactInput {
@@ -48,7 +48,7 @@ pub fn run(
             history: Arc::new(Transcript::open(&inner.writer.path())?),
             transport: live.transport(),
             system: live.system.clone(),
-            tools: manuals(&live.tools, shape),
+            tools: manuals(&live.tools),
             retention,
             focus,
             instruction: live.compact.clone(),
@@ -103,7 +103,7 @@ pub fn run(
             blocks: blocks.clone(),
             transport: live.transport(),
             system: live.system.clone(),
-            tools: manuals(&live.tools, shape),
+            tools: manuals(&live.tools),
             stop: handle.stop.clone(),
             live: inner.out.clone(),
         }) {
@@ -222,6 +222,18 @@ pub fn run(
     Ok(stop)
 }
 
+/// A child's list: `task` is dropped silently, `final` is added because the parent never names it.
+fn child_tools(tools: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = tools
+        .iter()
+        .filter(|tool| tool.as_str() != "task")
+        .filter(|tool| tool.as_str() != "final")
+        .cloned()
+        .collect();
+    out.push("final".to_string());
+    out
+}
+
 /// One sub-session a batch asked for.
 struct Spawn {
     tools: Vec<String>,
@@ -267,7 +279,7 @@ fn effects(
                     children.push((
                         at,
                         Spawn {
-                            tools: tools.clone(),
+                            tools: child_tools(tools),
                             cwd: cwd.clone(),
                             start: start.clone(),
                             budget: *max_tool_calls,
@@ -288,18 +300,9 @@ fn effects(
     Ok((children, deletes))
 }
 
-/// One session's shape, read once per turn.
-pub(crate) fn shape(inner: &Arc<Inner>, session: i64) -> Availability {
-    Availability {
-        child: inner.source.child(session).is_some(),
-        jobs: inner.source.jobs(session).is_some(),
-        mcp: crate::server::agent::tools::contract::Furnish::mcp(&*inner.source).is_some(),
-    }
-}
-
 /// The session's names → the request's manuals, in table order.
-pub(crate) fn manuals(names: &[String], shape: Availability) -> Vec<serde_json::Value> {
-    roster(names, shape)
+pub(crate) fn manuals(names: &[String]) -> Vec<serde_json::Value> {
+    roster(names)
         .iter()
         .filter_map(|tool| serde_json::to_value(tool).ok())
         .collect()

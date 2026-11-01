@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::server::agent::tools::contract::Export;
+use crate::server::agent::tools::contract::view::Export;
 use crate::server::storage::Reader;
 
 /// One process's export folder, plus the database to read the text from.

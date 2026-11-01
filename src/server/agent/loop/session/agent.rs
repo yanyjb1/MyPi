@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use super::book::{Birth, Inner, book_child, unbook};
-use crate::server::agent::tools::contract::Source;
+use crate::server::agent::tools::contract::view::Source;
 use crate::server::agent::tools::contract::job::{JobCtx, JobOutcome, JobRunner};
 
 /// One child session, held open until `final submit` or until the nags run out.

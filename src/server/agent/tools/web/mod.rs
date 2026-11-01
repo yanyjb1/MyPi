@@ -1,6 +1,10 @@
-use anyhow::{Result, anyhow};
+//! The `web` tool: map a call's arguments into the domain's input, and hand the result back.
 
-use super::spec::{Args, Env, Kind, Param, Tool, ToolOutput, ToolProgress};
+use anyhow::Result;
+
+use super::contract::env::Env;
+use super::contract::output::ToolOutput;
+use super::spec::{Args, Kind, Param, Tool, ToolProgress};
 
 const OP: usize = 0;
 const URL: usize = 1;
@@ -13,9 +17,8 @@ const VALUE: usize = 7;
 const FILTER: usize = 8;
 const MAX: usize = 9;
 const FULL_PAGE: usize = 10;
-const RESERVE: usize = 11;
 
-pub(super) const PARAMS: &[Param] = &[
+const PARAMS: &[Param] = &[
     Param::req(
         "op",
         Kind::Choice(&[
@@ -45,7 +48,7 @@ pub(super) const PARAMS: &[Param] = &[
         Kind::Text,
         "search: query, passed through verbatim.",
     ),
-    Param::opt(
+    Param::req(
         "provider",
         Kind::Choice(&[
             "google",
@@ -55,7 +58,7 @@ pub(super) const PARAMS: &[Param] = &[
             "startpage",
             "mojeek",
         ]),
-        "search: one provider.",
+        "search: the one provider this query runs against.",
     ),
     Param::df(
         "page",
@@ -81,33 +84,28 @@ pub(super) const PARAMS: &[Param] = &[
         "screenshot: capture the whole page.",
         "false",
     ),
-    Param::df(
-        "reserve",
-        Kind::Flag,
-        "Protect the work tab from idle close during this call.",
-        "false",
-    ),
 ];
 
 pub(crate) fn close_session(session: i64) {
     crate::web::close_session(session);
 }
 
-pub(super) const TOOL: Tool = Tool {
+pub(crate) const TOOL: Tool = Tool {
     name: "web",
-    about: "Read, search, and drive a real browser. `read` returns Markdown or DOM HTML; `search` uses one\n\
-            provider and merges pages 1..N; `open`/`click`/`fill`/`press`/`select`/`scroll`/`eval` operate the\n\
-            work tab; `net` lists performance resource entries; `screenshot` writes a PNG under the system temp\n\
-            directory and returns the file location.",
+    about: "Read, search, and drive a real browser. `read` returns Markdown or DOM HTML; `search` \
+            runs one provider and merges pages 1..N; `open`/`click`/`fill`/`press`/`select`/\
+            `scroll`/`eval` operate the work tab; `net` lists performance resource entries; \
+            `screenshot` writes a PNG under the system temp directory.",
     params: PARAMS,
     run,
+    summary: None,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
     let page = args.opt_int(PAGE)?.unwrap_or(1);
-    let page = u32::try_from(page).map_err(|_| anyhow!("page must be >= 1"))?;
+    let page = u32::try_from(page).map_err(|_| anyhow::anyhow!("`page` must be >= 1"))?;
     let max = match args.opt_int(MAX)? {
-        Some(n) => Some(usize::try_from(n).map_err(|_| anyhow!("max must be >= 0"))?),
+        Some(n) => Some(usize::try_from(n).map_err(|_| anyhow::anyhow!("`max` must be >= 0"))?),
         None => None,
     };
     let a = crate::web::WebArgs {
@@ -122,8 +120,8 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         filter: args.opt_str(FILTER)?,
         max,
         full_page: args.flag(FULL_PAGE)?,
-        reserve: args.flag(RESERVE)?,
+        reserve: true,
     };
-    let text = crate::web::run(&a, &env.browser, env.inbox.session)?;
+    let text = crate::web::run(&a, env.session)?;
     Ok(ToolOutput::text(text))
 }

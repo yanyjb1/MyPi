@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use crate::server::agent::tools::contract::{Effect, MemoOp};
+use crate::server::agent::tools::contract::output::{AliasOp, Effect, MemoOp};
 use crate::server::storage::{Ref, Row, Table, Writer};
 
 /// A row that must be resolved by name before it can be deleted.
@@ -37,7 +37,7 @@ pub fn rows(anchor: Ref, effect: &Effect) -> (Vec<Row>, Option<Delete>) {
             command,
             ts,
         } => match op {
-            crate::server::agent::tools::contract::AliasOp::Add => (
+            AliasOp::Add => (
                 vec![Row::Alias {
                     anchor,
                     name: name.clone(),
@@ -46,7 +46,7 @@ pub fn rows(anchor: Ref, effect: &Effect) -> (Vec<Row>, Option<Delete>) {
                 }],
                 None,
             ),
-            crate::server::agent::tools::contract::AliasOp::Remove => {
+            AliasOp::Remove => {
                 (Vec::new(), Some(Delete::Alias(name.clone())))
             }
         },

@@ -3,7 +3,9 @@
 use anyhow::Result;
 
 use crate::server::agent::tools::bash::edit;
-use crate::server::agent::tools::contract::{Env, Source, ToolOutput};
+use crate::server::agent::tools::contract::env::Env;
+use crate::server::agent::tools::contract::output::ToolOutput;
+use crate::server::agent::tools::contract::view::Source;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 
 use super::answer;
@@ -56,7 +58,8 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
             Ok(ToolOutput::text("draft written"))
         }
         "edit" => {
-            let (text, _, message) = edit::exact_text(&draft.read()?, &args.str(OLD)?, &args.str(NEW)?)?;
+            let (text, _, message) =
+                edit::exact_text(&draft.read()?, &args.str(OLD)?, &args.str(NEW)?)?;
             draft.write(&text)?;
             Ok(ToolOutput::text(message))
         }

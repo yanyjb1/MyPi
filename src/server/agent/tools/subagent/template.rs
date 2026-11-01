@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 
-use crate::server::agent::tools::contract::Env;
+use crate::server::agent::tools::contract::env::Env;
 
 #[derive(Deserialize)]
 struct Front {

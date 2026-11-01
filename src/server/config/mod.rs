@@ -19,7 +19,7 @@ pub use profile::{DEFAULT_PROFILE, OMP_PROFILE, ResolvedProfile};
 pub use registry::{BoolOrInt, DefaultValue, Key, Kind, Value, model_key, provider_key, template};
 pub use schema::*;
 
-/// The browser's launch values, as the tool layer takes them.
+/// The browser's launch values; the web domain reads them when it starts one.
 #[derive(Debug, Clone, Default)]
 pub struct BrowserOptions {
     pub bin: Option<std::path::PathBuf>,

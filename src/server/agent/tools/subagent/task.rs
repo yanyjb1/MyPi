@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use crate::server::agent::tools::contract::{Effect, Env, ToolOutput};
+use crate::server::agent::tools::contract::env::Env;
+use crate::server::agent::tools::contract::output::{Effect, ToolOutput};
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 
 use super::answer;
@@ -48,7 +49,8 @@ pub(crate) const PARAMS: &[Param] = &[
 pub(crate) const TOOL: Tool = Tool {
     name: "task",
     about: "Spawn one subagent from a template and return at once. The child works in its own \
-            session and writes an answer file; a wake reports when it ends.",
+            session and writes an answer file; a wake reports when it ends. A child never gets \
+            `task`: the tool cannot be handed down, so a template's tool list must not name it.",
     params: PARAMS,
     run,
     summary: None,

@@ -34,38 +34,17 @@ pub const TOOLS: &[Tool] = &[
     context::TOOL,
 ];
 
-/// What the session looks like, for the two gates that depend on it.
-#[derive(Debug, Clone, Copy)]
-pub struct Availability {
-    pub child: bool,
-    pub jobs: bool,
-    pub mcp: bool,
-}
-
 /// Look one up by name.
 pub(crate) fn spec(name: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|t| t.name == name)
 }
 
-/// The session's list → the model's manuals, in table order.
-pub fn roster(names: &[String], shape: Availability) -> Vec<ToolDef> {
+/// The session's list → the model's manuals, in table order. The list is the only gate.
+pub fn roster(names: &[String]) -> Vec<ToolDef> {
     let wanted: BTreeSet<&str> = names.iter().map(String::as_str).collect();
     TOOLS
         .iter()
         .filter(|t| wanted.contains(t.name))
-        .filter(|t| available(t.name, &shape))
         .map(Tool::definition)
         .collect()
-}
-
-/// The session-shaped gate: `task` is main-only, `final` is sub-only, `kairos` is main-only and
-/// needs the job service, `mcp` needs a bridge.
-pub(crate) fn available(name: &str, shape: &Availability) -> bool {
-    match name {
-        "kairos" => shape.jobs && !shape.child,
-        "task" => !shape.child,
-        "final" => shape.child,
-        "mcp" => shape.mcp,
-        _ => true,
-    }
 }

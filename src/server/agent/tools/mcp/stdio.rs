@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::server::config::McpServerConfig;
+use super::setup::ServerConfig;
 
 pub(crate) struct Server {
     name: String,
@@ -25,7 +25,7 @@ pub(crate) struct Server {
     initialized: bool,
 }
 
-pub(crate) fn spawn(name: &str, cfg: &McpServerConfig) -> Result<Server> {
+pub(crate) fn spawn(name: &str, cfg: &ServerConfig) -> Result<Server> {
     let mut command = Command::new(cfg.command.as_str());
     command
         .args(cfg.args.iter().map(String::as_str))
@@ -74,7 +74,7 @@ pub(crate) fn spawn(name: &str, cfg: &McpServerConfig) -> Result<Server> {
         pending,
         stderr: tail,
         next_id: 1,
-        timeout: Duration::from_secs(cfg.timeout_secs),
+        timeout: Duration::from_secs(cfg.timeout_secs.max(1)),
         closed,
         initialized: false,
     })

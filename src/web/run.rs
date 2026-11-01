@@ -1,7 +1,7 @@
+//! Op dispatch under the process-wide permit: at most two operations run at once.
+
 use anyhow::{Result, bail};
 use std::sync::{Condvar, Mutex};
-
-use crate::server::config::BrowserConfig;
 
 use super::WebArgs;
 use super::{browser, search};
@@ -28,27 +28,28 @@ fn permit() -> Permit {
     Permit
 }
 
-pub fn run(args: &WebArgs, cfg: &BrowserConfig, session: i64) -> Result<String> {
+/// One operation under the permit; the op names which.
+pub fn run(args: &WebArgs, session: i64) -> Result<String> {
     let _permit = permit();
     match args.op.as_str() {
-        "read" => browser::read(args, cfg, session),
+        "read" => browser::read(args, session),
         "search" => {
             let query = args
                 .query
                 .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("search requires query"))?;
+                .ok_or_else(|| anyhow::anyhow!("`search` requires `query`"))?;
             let provider = args
                 .provider
                 .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("search requires provider"))?;
-            search::run(session, cfg, query, provider, args.page)
+                .ok_or_else(|| anyhow::anyhow!("`search` requires `provider`"))?;
+            search::run(session, query, provider, args.page)
         }
-        "open" => browser::open(args, cfg, session),
+        "open" => browser::open(args, session),
         "click" | "fill" | "press" | "select" | "scroll" | "eval" => {
-            browser::actions(args, cfg, session)
+            browser::actions(args, session)
         }
-        "net" => browser::net(args, cfg, session),
-        "screenshot" => browser::screenshot(args, cfg, session),
+        "net" => browser::net(args, session),
+        "screenshot" => browser::screenshot(args, session),
         other => bail!(
             "unknown op {other:?}; read|search|open|click|fill|press|select|scroll|eval|net|screenshot"
         ),
