@@ -3,7 +3,10 @@
 pub(in crate::ui::tui::zone::main::history) mod block;
 pub(in crate::ui::tui::zone::main::history) mod cards;
 pub(in crate::ui::tui::zone::main::history) mod notice;
+pub(in crate::ui::tui::zone::main::history) mod row;
 pub(in crate::ui::tui::zone::main::history) mod text;
+
+pub(in crate::ui::tui::zone::main::history) use row::Laid;
 
 use ratatui::style::Modifier;
 use ratatui::text::Line;
@@ -24,8 +27,8 @@ pub(in crate::ui::tui::zone::main::history) struct Opts<'a> {
     pub placeholder: &'a str,
     /// Where the tools ran, for shortening paths.
     pub cwd: &'a str,
-    /// Rows the history zone has this frame; a running tool's tail window takes these.
-    pub rows: usize,
+    /// Rows a card head or a card tail may take before it folds.
+    pub fold: usize,
 }
 
 /// One block's rows at this width.

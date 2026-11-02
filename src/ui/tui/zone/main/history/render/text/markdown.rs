@@ -4,6 +4,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::super::row::{Laid, Piece};
 use super::highlight;
 use crate::ui::tui::text::{char_width, display_width};
 use crate::ui::tui::theme::{HistoryTheme, Token};
@@ -17,20 +18,20 @@ struct TableBuf {
 }
 
 struct Row {
-    spans: Vec<Span<'static>>,
+    pieces: Vec<Piece>,
 }
 
 impl Row {
-    fn push(&mut self, sp: Span<'static>) {
-        self.spans.push(sp);
+    fn push(&mut self, piece: Piece) {
+        self.pieces.push(piece);
     }
-    fn take(&mut self) -> Line<'static> {
-        Line::from(std::mem::take(&mut self.spans))
+    fn take(&mut self) -> Laid {
+        Laid::Pieces(std::mem::take(&mut self.pieces))
     }
 }
 
-pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'static>> {
-    let mut out: Vec<Line<'static>> = Vec::new();
+pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Laid> {
+    let mut out: Vec<Laid> = Vec::new();
     let mut row: Option<Row> = None;
     let mut bold = false;
     let mut italic = false;
@@ -41,18 +42,7 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
     let mut lists: Vec<(bool, u64)> = Vec::new();
     let mut table: Option<TableBuf> = None;
 
-    let inline_style = |bold: bool, italic: bool| {
-        let mut s = Style::new();
-        if bold {
-            s = s.add_modifier(Modifier::BOLD);
-        }
-        if italic {
-            s = s.add_modifier(Modifier::ITALIC);
-        }
-        s
-    };
-
-    let flush = |row: &mut Option<Row>, out: &mut Vec<Line<'static>>| {
+    let flush = |row: &mut Option<Row>, out: &mut Vec<Laid>| {
         if let Some(mut r) = row.take() {
             out.push(r.take());
         }
@@ -61,7 +51,7 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
     macro_rules! ensure_row {
         ($row:expr) => {
             if $row.is_none() {
-                $row = Some(Row { spans: Vec::new() });
+                $row = Some(Row { pieces: Vec::new() });
             }
         };
     }
@@ -72,7 +62,7 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
             Event::Start(Tag::Paragraph) => {}
             Event::End(TagEnd::Paragraph) => {
                 flush(&mut row, &mut out);
-                out.push(Line::from(""));
+                out.push(Laid::empty());
             }
             Event::Start(Tag::Heading { level, .. }) => {
                 flush(&mut row, &mut out);
@@ -86,16 +76,18 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
                 bold = true;
                 if depth > 2 {
                     ensure_row!(row);
-                    row.as_mut()
-                        .unwrap()
-                        .push(t.fg_mod(prefix, Token::MdHeading, Modifier::BOLD));
+                    row.as_mut().unwrap().push(Piece::with(
+                        prefix,
+                        Some(Token::MdHeading),
+                        Modifier::BOLD,
+                    ));
                 }
             }
             Event::End(TagEnd::Heading(_)) => {
                 bold = false;
                 in_heading = false;
                 flush(&mut row, &mut out);
-                out.push(Line::from(""));
+                out.push(Laid::empty());
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 flush(&mut row, &mut out);
@@ -105,9 +97,10 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
                     }
                     _ => String::new(),
                 };
-                out.push(Line::from(
-                    t.fg("```".to_string(), Token::MdCodeBlockBorder),
-                ));
+                out.push(Laid::Pieces(vec![Piece::token(
+                    "```",
+                    Token::MdCodeBlockBorder,
+                )]));
                 in_code_block = Some(lang);
                 code_buf.clear();
             }
@@ -118,14 +111,13 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
                 } else {
                     Some(lang.as_str())
                 };
-                for line in highlight::highlight(&code_buf, hint, t) {
-                    out.push(line);
-                }
+                out.extend(highlight::highlight(&code_buf, hint));
                 code_buf.clear();
-                out.push(Line::from(
-                    t.fg("```".to_string(), Token::MdCodeBlockBorder),
-                ));
-                out.push(Line::from(""));
+                out.push(Laid::Pieces(vec![Piece::token(
+                    "```",
+                    Token::MdCodeBlockBorder,
+                )]));
+                out.push(Laid::empty());
             }
             Event::Text(txt) => {
                 let s = txt.to_string();
@@ -140,22 +132,23 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
                         }
                         ensure_row!(row);
                         let r = row.as_mut().unwrap();
-                        if r.spans.is_empty() {
-                            r.push(t.fg("▏ ".to_string(), Token::MdQuoteBorder));
+                        if r.pieces.is_empty() {
+                            r.push(Piece::token("▏ ", Token::MdQuoteBorder));
                         }
-                        r.push(Span::styled(
-                            part.to_string(),
-                            t.fg_style(Token::MdQuote).add_modifier(Modifier::ITALIC),
-                        ));
+                        r.push(Piece::with(part, Some(Token::MdQuote), Modifier::ITALIC));
                     }
                 } else {
                     ensure_row!(row);
                     let r = row.as_mut().unwrap();
-                    let mut st = inline_style(bold, italic);
-                    if in_heading {
-                        st = st.fg(t.get(Token::MdHeading));
+                    let mut attrs = Modifier::empty();
+                    if bold {
+                        attrs |= Modifier::BOLD;
                     }
-                    r.push(Span::styled(s, st));
+                    if italic {
+                        attrs |= Modifier::ITALIC;
+                    }
+                    let token = in_heading.then_some(Token::MdHeading);
+                    r.push(Piece::with(s, token, attrs));
                 }
             }
             Event::Code(t2) => {
@@ -164,7 +157,7 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
                 } else {
                     ensure_row!(row);
                     let r = row.as_mut().unwrap();
-                    r.push(t.fg(t2.to_string(), Token::MdCode));
+                    r.push(Piece::token(t2.to_string(), Token::MdCode));
                 }
             }
             Event::Start(Tag::List(start)) => {
@@ -191,8 +184,11 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
                 } else {
                     "- ".to_string()
                 };
-                let mut r = Row { spans: Vec::new() };
-                r.push(t.fg(format!("{indent}{bullet}"), Token::MdListBullet));
+                let mut r = Row { pieces: Vec::new() };
+                r.push(Piece::token(
+                    format!("{indent}{bullet}"),
+                    Token::MdListBullet,
+                ));
                 row = Some(r);
             }
             Event::End(TagEnd::Item) => {
@@ -220,11 +216,11 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
                     let lines = render_table(&tb.header, &tb.rows, width, t);
                     if lines.is_empty() {
                         for raw in raw_table_lines(&tb) {
-                            out.push(Line::from(Span::styled(raw, t.fg_style(Token::MdCode))));
+                            out.push(Laid::Pieces(vec![Piece::token(raw, Token::MdCode)]));
                         }
                     } else {
-                        out.extend(lines);
-                        out.push(Line::from(""));
+                        out.extend(lines.into_iter().map(Laid::Done));
+                        out.push(Laid::empty());
                     }
                 }
             }
@@ -262,11 +258,11 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
             }
             Event::Rule => {
                 flush(&mut row, &mut out);
-                out.push(Line::from(Span::styled(
+                out.push(Laid::Pieces(vec![Piece::token(
                     "─".repeat(20),
-                    t.fg_style(Token::MdHr),
-                )));
-                out.push(Line::from(""));
+                    Token::MdHr,
+                )]));
+                out.push(Laid::empty());
             }
             Event::SoftBreak => {
                 flush(&mut row, &mut out);
@@ -282,7 +278,7 @@ pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'
         }
     }
     flush(&mut row, &mut out);
-    if out.last().is_some_and(|l| l.spans.is_empty()) {
+    if out.last().is_some_and(Laid::is_empty) {
         out.pop();
     }
     out
@@ -473,7 +469,7 @@ fn render_table(
     };
 
     let border = |s: String| Line::from(Span::styled(s, t.fg_style(Token::MdTableBorder)));
-    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut out: Vec<Laid> = Vec::new();
 
     let mut top = String::from("┌─");
     for (i, w) in widths.iter().enumerate() {

@@ -3,11 +3,11 @@
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
 
-use ratatui::text::{Line, Span};
 use syntect::parsing::ScopeStack;
 use syntect::parsing::{ParseState, Scope, ScopeStackOp, SyntaxSet};
 
-use crate::ui::tui::theme::{HistoryTheme, Token};
+use super::super::row::{Laid, Piece};
+use crate::ui::tui::theme::Token;
 
 const COMMENT: usize = 0;
 const KEYWORD: usize = 1;
@@ -216,7 +216,7 @@ pub fn warm(lang: &str) {
     {
         let mut warming = WARMING.lock().expect("warm-up table lock poisoned");
         if !warming.insert(name.clone()) {
-            return; // 已经在编译了
+            return; // already compiling
         }
     }
     std::thread::spawn(move || {
@@ -305,7 +305,7 @@ fn find_syntax(lang: &str) -> Option<&'static syntect::parsing::SyntaxReference>
         .or_else(|| ss.find_syntax_by_token(target))
 }
 
-pub fn highlight(code: &str, language: Option<&str>, t: &HistoryTheme) -> Vec<Line<'static>> {
+pub fn highlight(code: &str, language: Option<&str>) -> Vec<Laid> {
     let Some(lang) = language else {
         return plain(code);
     };
@@ -319,21 +319,23 @@ pub fn highlight(code: &str, language: Option<&str>, t: &HistoryTheme) -> Vec<Li
 
     let mut parse_state = ParseState::new(syntax);
     let mut stack = ScopeStack::new();
-    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut out: Vec<Laid> = Vec::new();
 
     for line in syntect::util::LinesWithEndings::from(code) {
         let Ok(ops) = parse_state.parse_line(line, &SYNTAXES) else {
-            out.push(Line::from(line.trim_end_matches('\n').to_string()));
+            out.push(Laid::Pieces(vec![Piece::raw(
+                line.trim_end_matches('\n').to_string(),
+            )]));
             continue;
         };
-        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut spans: Vec<Piece> = Vec::new();
         let mut prev_end = 0usize;
         for (offset, op) in ops {
             let offset = offset.min(line.len());
             if offset > prev_end {
                 let text = &line[prev_end..offset];
                 let cat = scope_to_category(&stack);
-                spans.push(spans_for(t, cat, text));
+                spans.push(piece_for(cat, text));
                 prev_end = offset;
             }
             match op {
@@ -349,32 +351,32 @@ pub fn highlight(code: &str, language: Option<&str>, t: &HistoryTheme) -> Vec<Li
         if prev_end < line.len() {
             let text = &line[prev_end..];
             let cat = scope_to_category(&stack);
-            spans.push(spans_for(t, cat, text));
+            spans.push(piece_for(cat, text));
         }
         if let Some(last) = spans.last_mut() {
-            let mut s = last.content.to_string();
-            while s.ends_with('\n') || s.ends_with('\r') {
-                s.pop();
+            while last.text.ends_with('\n') || last.text.ends_with('\r') {
+                last.text.pop();
             }
-            last.content = s.into();
-            if last.content.is_empty() {
+            if last.text.is_empty() {
                 spans.pop();
             }
         }
-        out.push(Line::from(spans));
+        out.push(Laid::Pieces(spans));
     }
     out
 }
 
-fn spans_for(t: &HistoryTheme, cat: usize, text: &str) -> Span<'static> {
+fn piece_for(cat: usize, text: &str) -> Piece {
     if cat == NOMATCH {
-        return Span::raw(text.to_string());
+        return Piece::raw(text);
     }
-    t.fg(text.to_string(), category_token(cat))
+    Piece::token(text, category_token(cat))
 }
 
-pub(crate) fn plain(code: &str) -> Vec<Line<'static>> {
-    code.lines().map(|l| Line::from(l.to_string())).collect()
+pub(crate) fn plain(code: &str) -> Vec<Laid> {
+    code.lines()
+        .map(|line| Laid::Pieces(vec![Piece::raw(line)]))
+        .collect()
 }
 
 pub fn language_for_path(path: &str) -> Option<&'static str> {
