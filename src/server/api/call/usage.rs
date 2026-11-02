@@ -39,7 +39,7 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
 
     let cfg = api.cfg();
     let fx = cfg
-        .get_json("config.tui.fx.usdCny", None)
+        .get_json("config.ui.tui.fx.usdCny", None)
         .ok()
         .and_then(|value| value.as_f64())
         .filter(|rate| *rate > 0.0)

@@ -35,12 +35,3 @@ impl Default for TodoFold {
         TodoFold::On(false)
     }
 }
-
-/// Horizontal position of the usage panel.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum UsageAlign {
-    #[default]
-    Center,
-    Left,
-    Right,
-}

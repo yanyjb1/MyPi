@@ -99,11 +99,6 @@ pub(super) fn format_duration(ms: u64) -> String {
     }
 }
 
-const DEFAULT_FOLD: usize = 5;
-const DIFF_FOLD: usize = 14;
-const WEB_FOLD: usize = 3;
-const WEB_OPEN: usize = 12;
-
 pub(super) struct Section {
     pub label: Option<&'static str>,
     pub lines: Vec<Line<'static>>,
@@ -151,14 +146,6 @@ impl State {
 }
 
 pub(super) trait ToolRenderer {
-    fn fold_limit(&self) -> usize {
-        DEFAULT_FOLD
-    }
-
-    fn fold_takes_head(&self) -> bool {
-        false
-    }
-
     fn meta(&self, _b: &ToolBlock<'_>) -> Vec<String> {
         Vec::new()
     }
@@ -181,20 +168,7 @@ pub(super) trait ToolRenderer {
         let lines = if b.name == "read" {
             read_body(o, t)
         } else {
-            // A running tool shows the newest rows it has, up to the space it was given;
-            // a finished one folds from the head.
-            let limit = if b.tail {
-                b.limit.max(1)
-            } else {
-                self.fold_limit()
-            };
-            output_lines(
-                o.text,
-                limit,
-                b.expanded,
-                self.fold_takes_head() && !b.tail,
-                t,
-            )
+            output_lines(o.text, t)
         };
         vec![Section { label: None, lines }]
     }
@@ -203,10 +177,10 @@ pub(super) trait ToolRenderer {
 pub(super) fn renderer_for(name: &str) -> &'static dyn ToolRenderer {
     match name {
         "bash" => &Bash,
-        "edit" | "mass_edit" => &Edit,
+        "edit" => &Edit,
         "read" | "write" | "cd" => &FileTools,
         "todo" => &Todo,
-        "fetch" | "search" | "browser" => &Web,
+        "web" => &Web,
         _ => &Fallback,
     }
 }
@@ -222,10 +196,6 @@ impl ToolRenderer for Bash {
 struct Edit;
 
 impl ToolRenderer for Edit {
-    fn fold_limit(&self) -> usize {
-        DIFF_FOLD
-    }
-
     fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
         path_meta(b)
     }
@@ -242,7 +212,7 @@ impl ToolRenderer for Edit {
     ) -> Vec<Section> {
         vec![Section {
             label: None,
-            lines: edit_result(o, b.expanded, t),
+            lines: edit_result(o, t),
         }]
     }
 }
@@ -250,10 +220,6 @@ impl ToolRenderer for Edit {
 struct FileTools;
 
 impl ToolRenderer for FileTools {
-    fn fold_takes_head(&self) -> bool {
-        true
-    }
-
     fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
         let mut out = path_meta(b);
         if b.name == "read"
@@ -273,8 +239,7 @@ impl ToolRenderer for FileTools {
     }
 
     fn result_measure(&self, o: ToolOutcome<'_>) -> Option<String> {
-        (self.fold_takes_head() && non_empty_lines(o.text) > 1)
-            .then(|| format!("{} lines", non_empty_lines(o.text)))
+        (non_empty_lines(o.text) > 1).then(|| format!("{} lines", non_empty_lines(o.text)))
     }
 
     fn call_body(&self, b: &ToolBlock<'_>, t: &HistoryTheme) -> Vec<Line<'static>> {
@@ -289,18 +254,10 @@ impl ToolRenderer for FileTools {
 struct Web;
 
 impl ToolRenderer for Web {
-    fn fold_limit(&self) -> usize {
-        WEB_FOLD
-    }
-
-    fn fold_takes_head(&self) -> bool {
-        true
-    }
-
     fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
         let mut out = Vec::new();
-        match b.name {
-            "fetch" => {
+        match arg_str(b.args, "op").as_deref().unwrap_or_default() {
+            "read" => {
                 if let Some(u) = arg_str(b.args, "url").filter(|u| !u.trim().is_empty()) {
                     out.push(short_url(&u));
                 }
@@ -313,11 +270,8 @@ impl ToolRenderer for Web {
                     out.push(truncate(&one_line(&q), 60));
                 }
             }
-            "browser" => {
-                if let Some(c) = arg_str(b.args, "command").filter(|c| !c.trim().is_empty()) {
-                    out.push(one_line(&c));
-                }
-                for key in ["op", "url", "path", "selector"] {
+            op if !op.is_empty() => {
+                for key in ["url", "path", "selector"] {
                     if let Some(v) = arg_str(b.args, key).filter(|v| !v.trim().is_empty()) {
                         out.push(truncate(&one_line(&v), 50));
                         break;
@@ -347,18 +301,12 @@ impl ToolRenderer for Web {
         o: ToolOutcome<'_>,
         t: &HistoryTheme,
     ) -> Vec<Section> {
-        match b.name {
-            "fetch" => fetch_sections(b, o.text, t),
+        match arg_str(b.args, "op").as_deref().unwrap_or_default() {
+            "read" => fetch_sections(b, o.text, t),
             "search" => search_sections(b, o.text, t),
             _ => vec![Section {
                 label: None,
-                lines: head_preview(
-                    &non_empty_text_lines(o.text),
-                    WEB_FOLD,
-                    WEB_OPEN,
-                    b.expanded,
-                    t,
-                ),
+                lines: head_preview(&non_empty_text_lines(o.text), t),
             }],
         }
     }
@@ -367,10 +315,6 @@ impl ToolRenderer for Web {
 struct Todo;
 
 impl ToolRenderer for Todo {
-    fn fold_limit(&self) -> usize {
-        DIFF_FOLD
-    }
-
     fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
         let op = arg_str(b.args, "op").unwrap_or_default();
         (!op.is_empty()).then_some(op).into_iter().collect()
@@ -473,14 +417,9 @@ fn write_preview(b: &ToolBlock<'_>, t: &HistoryTheme) -> Vec<Line<'static>> {
     let lang = highlight::language_for_path(&arg_str(b.args, "path").unwrap_or_default());
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
-    let shown = if b.expanded {
-        total
-    } else {
-        total.min(WRITE_PREVIEW_LINES)
-    };
     let gutter = total.to_string().len().max(WRITE_GUTTER_MIN_WIDTH);
     let mut out = Vec::new();
-    for (i, line) in lines.iter().take(shown).enumerate() {
+    for (i, line) in lines.iter().enumerate() {
         let mut spans = vec![t.fg(format!("{:>gutter$} ", i + 1), Token::Dim)];
         let hl = highlight::highlight(line, lang, t);
         match hl.into_iter().next() {
@@ -489,15 +428,8 @@ fn write_preview(b: &ToolBlock<'_>, t: &HistoryTheme) -> Vec<Line<'static>> {
         }
         out.push(Line::from(spans));
     }
-    if total > shown {
-        out.push(Line::from(
-            t.fg(format!("… {} more lines", total - shown), Token::Dim),
-        ));
-    }
     out
 }
-
-const WRITE_PREVIEW_LINES: usize = 8;
 
 const WRITE_GUTTER_MIN_WIDTH: usize = 3;
 
@@ -656,10 +588,6 @@ pub(super) struct ToolBlock<'a> {
     pub args: &'a str,
     pub result: Option<ToolOutcome<'a>>,
     pub expanded: bool,
-    /// The tool is still running: the tail is what shows, up to `limit` rows.
-    pub tail: bool,
-    /// How many rows a tail window may take.
-    pub limit: usize,
 }
 
 impl<'a> ToolBlock<'a> {
@@ -906,7 +834,7 @@ fn push_diff(
     }
 }
 
-fn edit_result(o: ToolOutcome<'_>, expanded: bool, t: &HistoryTheme) -> Vec<Line<'static>> {
+fn edit_result(o: ToolOutcome<'_>, t: &HistoryTheme) -> Vec<Line<'static>> {
     match ToolView::from_details(o.details, o.text) {
         ToolView::Diff {
             deletions,
@@ -979,75 +907,55 @@ fn edit_result(o: ToolOutcome<'_>, expanded: bool, t: &HistoryTheme) -> Vec<Line
             }
             out
         }
-        ToolView::Plain { text } => output_lines(&text, DIFF_FOLD, expanded, false, t),
+        ToolView::Plain { text } => output_lines(&text, t),
     }
 }
 
-pub(super) fn output_lines(
-    text: &str,
-    limit: usize,
-    expanded: bool,
-    takes_head: bool,
-    t: &HistoryTheme,
-) -> Vec<Line<'static>> {
+pub(super) fn output_lines(text: &str, t: &HistoryTheme) -> Vec<Line<'static>> {
     if text.trim().is_empty() {
         return vec![Line::from(t.fg("(no output)", Token::Muted))];
     }
-    let lines: Vec<&str> = text.lines().collect();
-    let fold = !expanded && lines.len() > limit;
-    let hidden = lines.len().saturating_sub(limit);
-    let marker = if takes_head {
-        format!("… {hidden} more lines {}", g::EXPAND_HINT)
-    } else {
-        format!("… {hidden} earlier lines {}", g::EXPAND_HINT)
-    };
-    let kept: &[&str] = if !fold {
-        &lines[..]
-    } else if takes_head {
-        &lines[..limit]
-    } else {
-        &lines[hidden..]
-    };
-    let mut out = Vec::new();
-    if fold && takes_head {
-        for l in kept {
-            out.push(Line::from(t.fg(*l, Token::ToolOutput)));
-        }
-        out.push(Line::from(t.fg(marker, Token::Dim)));
-        return out;
+    text.lines()
+        .map(|line| Line::from(t.fg(line, Token::ToolOutput)))
+        .collect()
+}
+
+/// Fold one run of rows: the first row, a placeholder, then the last `budget - 2`.
+/// A running tool keeps its newest rows instead, because its marker would move on each piece.
+pub(super) fn fold(
+    rows: Vec<Line<'static>>,
+    budget: usize,
+    expanded: bool,
+    running: bool,
+    t: &HistoryTheme,
+) -> Vec<Line<'static>> {
+    let budget = budget.max(3);
+    if expanded || rows.len() <= budget {
+        return rows;
     }
-    if fold {
-        out.push(Line::from(t.fg(marker, Token::Dim)));
+    if running {
+        return rows[rows.len() - budget..].to_vec();
     }
-    for l in kept {
-        out.push(Line::from(t.fg(*l, Token::ToolOutput)));
-    }
+    let keep = budget - 2;
+    let hidden = rows.len() - 1 - keep;
+    let mut out = Vec::with_capacity(budget);
+    out.push(rows[0].clone());
+    out.push(Line::from(t.fg(
+        format!("{hidden} lines earlier, Ctrl + O to expand"),
+        Token::Dim,
+    )));
+    out.extend(rows.into_iter().skip(1 + hidden));
     out
 }
 
-fn head_preview(
-    lines: &[String],
-    collapsed: usize,
-    cap: usize,
-    expanded: bool,
-    t: &HistoryTheme,
-) -> Vec<Line<'static>> {
-    let limit = if expanded { cap } else { collapsed };
+fn head_preview(lines: &[String], t: &HistoryTheme) -> Vec<Line<'static>> {
     if lines.is_empty() {
         return vec![Line::from(t.fg("(no content)", Token::Muted))];
     }
-    let mut out: Vec<Line<'static>> = lines
+    lines
         .iter()
-        .take(limit)
-        .map(|l| Line::from(t.fg(l.clone(), Token::ToolOutput)))
-        .collect();
-    if lines.len() > limit {
-        out.push(Line::from(t.fg(
-            format!("… {} more lines {}", lines.len() - limit, g::EXPAND_HINT),
-            Token::Dim,
-        )));
-    }
-    out
+        .map(|line| Line::from(t.fg(line.clone(), Token::ToolOutput)))
+        .collect()
 }
 
 fn fetch_sections(b: &ToolBlock<'_>, text: &str, t: &HistoryTheme) -> Vec<Section> {
@@ -1071,7 +979,7 @@ fn fetch_sections(b: &ToolBlock<'_>, text: &str, t: &HistoryTheme) -> Vec<Sectio
         },
         Section {
             label: Some("content"),
-            lines: head_preview(&lines, WEB_FOLD, WEB_OPEN, b.expanded, t),
+            lines: head_preview(&lines, t),
         },
     ]
 }
@@ -1088,7 +996,7 @@ fn search_sections(b: &ToolBlock<'_>, text: &str, t: &HistoryTheme) -> Vec<Secti
     }
     out.push(Section {
         label: Some("results"),
-        lines: head_preview(&lines, WEB_FOLD, WEB_OPEN, b.expanded, t),
+        lines: head_preview(&lines, t),
     });
     out
 }

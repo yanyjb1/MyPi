@@ -23,7 +23,6 @@ finish itself.
 | `cursor_col`, `cursor_row` | the cursor inside the container, recomputed on render |
 | `statusline: StatusLine` | the deco table and the row engine |
 | `data: Data` | model, name, directory, context size and window, money, busy |
-| `pending_keys` | config keys owed an answer, in order |
 | `shouts` | events this zone put out |
 
 ### Claims
@@ -110,5 +109,5 @@ One row, exactly the terminal width. The deco table is `activity`, `model`, `cwd
 
 | key | use |
 |---|---|
-| `config.tui.theme` | statusline, editor, and border colors |
+| `config.ui.tui.theme` | statusline, editor, and border colors |
 | `models.model.<address>.contextWindow` | the gauge's denominator |

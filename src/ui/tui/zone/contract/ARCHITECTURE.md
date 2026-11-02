@@ -6,20 +6,21 @@ What each file holds and who names it. Current state only.
 
 | file | holds | outside |
 |---|---|---|
-| `mod.rs` | the module list and the re-exports, including `Packet` and `Structure` | public |
+| `mod.rs` | the module list and the re-exports | public |
+| `frame.rs` | `Frame`: one inbound frame | public |
+| `turns.rs` | `Turns`, `Round`: the structural window a zone reads | public |
 | `zone.rs` | `Zone`, `SubZone` | public |
 | `kind.rs` | `Kind`, `Kind::of` | public |
-| `claim.rs` | `Claim`, `Claim::of` | public |
+| `claim.rs` | `Claim`, `Claim::of`, `matches` | public |
 | `request.rs` | `Request`, `ModelId` | public |
 | `outcome.rs` | `ZoneId`, `Outcome` | public |
 | `size.rs` | `TermSize` | public |
 | `memo.rs` | `Memo` | public |
-| `shout.rs` | `Shout`, `Origin`, `name` | public |
+| `shout.rs` | `Shout`, `name` | public |
 
 ## What it talks to
 
 - `action::{Action, Key}` for the claim projection.
-- `ui::session` for `Packet` and `Structure` — re-exported, so no zone imports session.
 - `ratatui::text::Line` for `Zone::render`.
 - `serde_json::Value` for what a shout carries and what `hear` reads.
 

@@ -24,7 +24,7 @@ To `Main`: `take_hire`, `take_exits`, `draft`, `knows_cwd`, `apply_reply`, `clea
 
 ## What it calls
 
-- `ui::tui::zone::{Packet, Request, TermSize, Claim, Kind, name}` and `text` for wrapping.
+- `ui::tui::zone::{Frame, Request, TermSize, Claim, Kind, name}` and `text` for wrapping.
 - `ui::tui::action`, `ui::tui::theme::Palette`.
 - `commands` for the command table and completion candidates.
 - `super::desk::{Hire, Reply}` for what it asks the desk and what the desk hands back.
@@ -46,7 +46,7 @@ InputZone
  ├── history  ── the 20-entry submission ring
  ├── statusline ── table + decos
  ├── data     ── model, name, directory, context, money, busy
- └── pending_keys / pending_exits / pending_hire / shouts
+ └── pending_exits / pending_hire / shouts
 ```
 
 - `deliver_action` applies the intent, then re-reads `hang`; a fresh hang hires completion.

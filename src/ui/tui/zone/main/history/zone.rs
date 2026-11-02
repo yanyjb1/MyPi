@@ -18,7 +18,7 @@ use super::view::{Dir, Viewport};
 use crate::ui::tui::TodoFold;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
 use crate::ui::tui::theme::{HistoryTheme, Token};
-use crate::ui::tui::zone::{Claim, Kind, Request, Shout, Structure, SubZone, TermSize, name};
+use crate::ui::tui::zone::{Claim, Frame, Kind, Request, Shout, SubZone, TermSize, Turns, name};
 
 /// The keys history consumes. The input zone yields Ctrl+arrows to it.
 pub const CLAIMS: &[Claim] = &[
@@ -109,11 +109,21 @@ pub const CLAIMS: &[Claim] = &[
 /// The classes the zone reads.
 const KINDS: &[Kind] = &[Kind::Call, Kind::Stream, Kind::Notice];
 
-/// Rows between the sight line and the top of the zone.
-const FOCUS_LINE: u16 = 3;
+/// The sight line until the config answers.
+const DEFAULT_FOCUS_LINE: u16 = 3;
 
-/// Blocks on each side of the sight line that keep their rows.
-const MARGIN: i64 = 32;
+/// Rendered slots kept in the cache until the config answers.
+const DEFAULT_MARGIN: usize = 64;
+
+/// Rows a card head or tail may take until the config answers.
+const DEFAULT_FOLD: usize = 10;
+
+/// The config keys this zone asks for once per attachment.
+const CONFIG_KEYS: &[&str] = &[
+    "config.ui.tui.history.focusLine",
+    "config.ui.tui.history.cardFoldBudget",
+    "config.ui.tui.renderMargin",
+];
 
 /// The chat history: what the reader sees of the conversation.
 pub struct HistoryZone {
@@ -122,7 +132,7 @@ pub struct HistoryZone {
     /// Ranges already asked for, so one turn is not asked twice.
     asking: HashSet<[i64; 2]>,
     /// The structural window, as last handed down.
-    structure: Structure,
+    structure: Turns,
     /// The latest block id that has taken a slot.
     landed: i64,
     /// What the conversation is made of, in order.
@@ -139,6 +149,10 @@ pub struct HistoryZone {
     /// Tool exchanges' own copy.
     tool: bool,
     placeholder: String,
+    /// Rows between the sight line and the top of the zone.
+    focus_line: u16,
+    /// Rows a card head or a card tail may take before it folds.
+    fold: usize,
     /// Where the tools ran, for shortening paths.
     cwd: String,
     /// Rows the main zone handed down.
@@ -149,8 +163,6 @@ pub struct HistoryZone {
     needs_layout: bool,
     /// A spot to put the sight line on, once its block has a slot.
     pending_focus: Option<(i64, i64)>,
-    /// The next attach is spared the destroy: a new conversation owns what is there.
-    reprieve: bool,
     /// What this frame owes the session.
     outbox: Vec<Request>,
     /// What this frame owes the other zones.
@@ -162,7 +174,7 @@ impl Default for HistoryZone {
         let mut zone = Self {
             blocks: BTreeMap::new(),
             asking: HashSet::new(),
-            structure: Structure::default(),
+            structure: Turns::default(),
             landed: 0,
             local: Local::default(),
             live: Live::default(),
@@ -173,17 +185,18 @@ impl Default for HistoryZone {
             thinking: false,
             tool: false,
             placeholder: "thinking…".to_string(),
+            focus_line: DEFAULT_FOCUS_LINE,
+            fold: DEFAULT_FOLD,
             cwd: String::new(),
             rows: 0,
             usage: 0,
             needs_layout: false,
             pending_focus: None,
-            reprieve: true,
             outbox: Vec::new(),
             shouts: Vec::new(),
         };
-        zone.view.set_line(FOCUS_LINE);
-        zone.cache.set_budget(MARGIN.max(1) as usize * 2 + 1);
+        zone.view.set_line(DEFAULT_FOCUS_LINE);
+        zone.cache.set_budget(DEFAULT_MARGIN);
         zone
     }
 }
@@ -209,7 +222,6 @@ impl HistoryZone {
 
     /// `/new`: drop this conversation's section; the next attach asks for the new one.
     pub fn reset(&mut self) {
-        self.reprieve = true;
         self.destroy();
     }
 
@@ -237,7 +249,7 @@ impl HistoryZone {
             tool: self.tool,
             placeholder: &self.placeholder,
             cwd: &self.cwd,
-            rows: usize::from(self.rows),
+            fold: self.fold,
         };
 
         let pinned = todo_rows::rows(
@@ -256,7 +268,7 @@ impl HistoryZone {
         let local = &self.local;
         let blocks = &self.blocks;
         let cache = &mut self.cache;
-        let view = &mut self.view;
+        let view = &self.view;
         view.compose(
             local,
             |num| {
@@ -282,6 +294,38 @@ impl HistoryZone {
         )
     }
 
+    /// One config answer: the three keys this zone reads.
+    fn read_config(&mut self, content: &Value) {
+        let Some(key) = content.get("key").and_then(Value::as_str) else {
+            return;
+        };
+        let number = content.get("value").and_then(Value::as_u64);
+        match key {
+            "config.ui.tui.history.focusLine" => {
+                if let Some(n) = number {
+                    self.focus_line = u16::try_from(n).unwrap_or(u16::MAX);
+                    self.view.set_line(self.focus_line);
+                }
+            }
+            "config.ui.tui.history.cardFoldBudget" => {
+                if let Some(n) = number {
+                    self.fold = (n as usize).max(3);
+                }
+            }
+            "config.ui.tui.renderMargin" => {
+                if let Some(n) = number {
+                    self.cache.set_budget((n as usize).max(1));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Frames this zone asked for, taken by the host.
+    pub(in crate::ui::tui::zone::main) fn take_requests(&mut self) -> Vec<Request> {
+        self.take_out()
+    }
+
     /// Take what this frame owes the session.
     fn take_out(&mut self) -> Vec<Request> {
         std::mem::take(&mut self.outbox)
@@ -289,7 +333,7 @@ impl HistoryZone {
 
     /// Ask for one turn's blocks, unless they are here or already asked for.
     fn ask_turn(&mut self, turn: i64) {
-        let Some(held) = self.structure.turns().iter().find(|t| t.id == turn) else {
+        let Some(held) = self.structure.rounds().iter().find(|t| t.id == turn) else {
             return;
         };
         for range in &held.ranges {
@@ -310,7 +354,7 @@ impl HistoryZone {
     /// The turn a block belongs to.
     fn turn_of(&self, block: i64) -> Option<i64> {
         self.structure
-            .turns()
+            .rounds()
             .iter()
             .find(|turn| turn.owns(block))
             .map(|turn| turn.id)
@@ -318,7 +362,7 @@ impl HistoryZone {
 
     /// Keep the anchor's own turn and its neighbours in hand.
     fn ensure_around(&mut self) {
-        let anchor = self.view.anchor();
+        let anchor = self.view.anchor(&self.local);
         let Some(block) = self.local.at(anchor).and_then(|slot| match slot.kind {
             SlotKind::Block(id) => Some(id),
             _ => None,
@@ -326,7 +370,7 @@ impl HistoryZone {
             return;
         };
         let wanted: Vec<i64> = {
-            let turns = self.structure.turns();
+            let turns = self.structure.rounds();
             let Some(at) = turns.iter().position(|turn| turn.owns(block)) else {
                 return;
             };
@@ -353,8 +397,11 @@ impl HistoryZone {
                 continue;
             };
             let id = block.id;
-            if block.usage.prompt > 0 {
-                self.usage = block.usage.context();
+            let used = block.usage.context();
+            if block.usage.prompt > 0 && used != self.usage {
+                self.usage = used;
+                self.shouts
+                    .push(Shout::new(name::USAGE, json!({"used": used})));
             }
             let fresh = id > self.landed;
             self.blocks.insert(id, block);
@@ -366,6 +413,7 @@ impl HistoryZone {
                 // The attach's own blocks belong to the past; the layout pass numbers them.
                 continue;
             }
+            self.local.kill_short_lived();
             let num = self.local.push_now(SlotKind::Block(id));
             self.cache.drop_num(num);
         }
@@ -373,7 +421,7 @@ impl HistoryZone {
 
     /// Lay the whole structure out as the past, newest block at -1.
     fn lay_out(&mut self) {
-        let turns = self.structure.turns();
+        let turns = self.structure.rounds();
         if turns.is_empty() {
             return;
         }
@@ -391,9 +439,9 @@ impl HistoryZone {
     }
 
     /// Read one frame's content: a live piece, a closed round, a notice, a change.
-    fn read_stream(&mut self, packet: &crate::ui::tui::zone::Packet) {
-        let content = &packet.content;
-        match packet.name.as_str() {
+    fn read_stream(&mut self, frame: &Frame) {
+        let content = &frame.content;
+        match frame.name.as_str() {
             "notice" => {
                 let level = match content.get("level").and_then(Value::as_str) {
                     Some("error") => Level::Error,
@@ -586,30 +634,27 @@ impl SubZone for HistoryZone {
         KINDS
     }
 
-    fn deliver_event(
-        &mut self,
-        packet: &crate::ui::tui::zone::Packet,
-        _size: TermSize,
-    ) -> Vec<Request> {
-        match (packet.kind.as_str(), packet.name.as_str()) {
-            ("stream", _) => self.read_stream(packet),
+    fn deliver_event(&mut self, frame: &Frame, _size: TermSize) -> Vec<Request> {
+        match (frame.class.as_str(), frame.name.as_str()) {
+            ("stream", _) => self.read_stream(frame),
             ("call", "init") => {
-                if let Some(rows) = packet.content.get("blocks") {
+                if let Some(rows) = frame.content.get("blocks") {
                     self.take_blocks(rows);
                 }
-                if let Some(todo) = packet.content.get("todo") {
+                if let Some(todo) = frame.content.get("todo") {
                     self.take_todo(todo);
                 }
                 self.outbox.push(Request::Structure);
             }
             ("call", "blocks") => {
                 self.asking.clear();
-                if let Some(rows) = packet.content.get("blocks") {
+                if let Some(rows) = frame.content.get("blocks") {
                     self.take_blocks(rows);
                 }
             }
+            ("call", "config") => self.read_config(&frame.content),
             ("call", "todo") => {
-                if let Some(todo) = packet.content.get("todo") {
+                if let Some(todo) = frame.content.get("todo") {
                     self.take_todo(todo);
                 }
             }
@@ -679,22 +724,22 @@ impl SubZone for HistoryZone {
     }
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
-        if self.reprieve {
-            self.reprieve = false;
-        } else {
-            self.destroy();
-        }
+        self.destroy();
         self.needs_layout = true;
         self.view.follow();
+        for key in CONFIG_KEYS {
+            self.outbox
+                .push(Request::call("config", json!({"key": key})));
+        }
     }
 
     fn detach(&mut self) {
         self.destroy();
     }
 
-    fn structure(&mut self, snapshot: &Structure) {
+    fn structure(&mut self, snapshot: &Turns) {
         self.structure = snapshot.clone();
-        if self.needs_layout && !self.structure.turns().is_empty() {
+        if self.needs_layout && !self.structure.rounds().is_empty() {
             self.needs_layout = false;
             self.lay_out();
         } else {
@@ -749,7 +794,7 @@ impl HistoryZone {
 
     /// Align the sight line's round's first or last block.
     fn align(&mut self, last: bool) {
-        let anchor = self.view.anchor();
+        let anchor = self.view.anchor(&self.local);
         let Some(id) = self.local.at(anchor).and_then(|slot| match slot.kind {
             SlotKind::Block(id) => Some(id),
             _ => None,

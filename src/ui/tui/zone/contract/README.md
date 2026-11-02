@@ -16,8 +16,8 @@ The only vocabulary the app and the three major zones share.
 | `TermSize` | columns and rows |
 | `Memo` | string-to-string, owned by the app, open to the zone it starts |
 | `Shout` | one `(name, content)` event on the chat zone's bus |
-| `Origin` | who put a shout out; the shouter never hears it back |
-| `Packet`, `Structure` | re-exported from `ui::session`; zones never import that module |
+| `Frame` | one inbound frame: class, name, content; the app builds it |
+| `Turns`, `Round` | the structural window a zone reads; the app builds it |
 
 ### `Zone`
 
@@ -36,7 +36,7 @@ The only vocabulary the app and the three major zones share.
 
 ### `SubZone`
 
-`claims`, `kinds`, `deliver_event(packet, size)`, `deliver_action(action)`, `attach(session,
+`claims`, `kinds`, `deliver_event(frame, size)`, `deliver_action(action)`, `attach(session,
 size)`, `detach`, `borrowed`, `request_height`, `assign`, `on_height_changed`, `structure`,
 `take_shouts`, `hear`. `Main` is the only host.
 
@@ -56,7 +56,7 @@ lifts `stream / notice` out of `Stream`. `local` returns `None`: it is delivered
 | `Send { kind, name, content, answer }` | one session frame; the app fills in the session |
 | `Attach(i64)` | `session.attach` + `subscribe watch` + the broadcast |
 | `Detach` | `session.detach` + the broadcast |
-| `Structure` | `session.structure()`, handed to every zone |
+| `Turns` | `session.structure()`, translated by the app, handed to the zone that shows |
 | `Quit` | the app ends the loop |
 
 ### `Shout`

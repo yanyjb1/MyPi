@@ -157,7 +157,7 @@ brought onto its own exit.
 | `config.server.agent.loop.maxToolCalls` | the turn's tool-round fence; `false` turns it off |
 | `config.server.agent.loop.scrooge` | true refuses a mid-session model change |
 | `config.server.storage.batchTools` | unused: the writer commits one submission at a time |
-| `config.tui.fx.usdCny` | the display rate `usage` quotes in |
+| `config.ui.tui.fx.usdCny` | the display rate `usage` quotes in |
 | `models.*` | the model table: caps, prices, the default model |
 
 Every model must declare `maxOutputTokens`; a table without it is not a legal configuration and the

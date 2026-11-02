@@ -14,7 +14,8 @@ The front end's centre: the registry, the display ledger, and the only exit to t
 | `memo: Memo` | what one zone leaves for the next |
 | `size: TermSize` | the last size handed down |
 | `attached: Option<i64>` | the session the zones were last told about |
-| `theme: ThemeConfig`, `pending` | the palette being assembled from `call config` answers |
+| `theme: ThemeConfig`, `palette_seen` | the palette being assembled from `call config` answers |
+| `told: Vec<Option<i64>>` | the session each zone has last been told about |
 | `cwd`, `model` | what a new session is created with |
 | `waiting` | a message sent before the session row existed |
 | `finished: bool` | nobody shows |
@@ -23,7 +24,7 @@ The front end's centre: the registry, the display ledger, and the only exit to t
 
 1. Ask the five palette keys (see `THEME_KEYS` in `app.rs`) through `call config`.
 2. If the startup names a session, attach it: `session.attach`, `subscribe watch`, broadcast
-   `session(Some(id))` to every zone, land what they ask for.
+   `session(Some(id))` to the zone that shows, land what it asks for.
 3. Start the first zone: `start(size, &memo)`, land its requests.
 
 The memo carries the launch directory (`cwd`) for the picker; `attach` and `detach` reset the
@@ -44,13 +45,13 @@ Every delivery returns requests; they are landed at once, in order.
 `Request::Send` gets the attached session filled in (unless the zone named one) and goes to the
 session. A `subscribe / submit` with no session attached first creates the row (`post init` with
 `cwd` and `model`), parks the message, and sends it after the id lands. `Attach` / `Detach` are
-the lifecycle. `Structure` asks the session for the structural window and hands the same snapshot
-to every zone; a nested `Structure` request is dropped.
+the lifecycle. `Structure` asks the session for the structural window and hands one `Turns`
+snapshot to the zone that shows; a nested `Structure` request is dropped.
 
 ### Lifecycle
 
-- `attach(id)`: follow, watch, clear the memo, tell every zone, land.
-- `detach()`: stop following, clear the memo, tell every zone, land.
+- `attach(id)`: follow, watch, clear the memo, tell the zone that shows, land.
+- `detach()`: stop following, clear the memo, tell the zone that shows, land.
 - `pump()` reconciles: if the session attached somewhere else (a delete landed upstream), the app
   detaches; a session the app attached itself is already consistent.
 
@@ -79,5 +80,5 @@ starts it. `Outcome::Quit` empties the owner and marks the app finished.
 
 | key | use |
 |---|---|
-| `config.tui.theme.name` | the JSON theme to load |
-| `config.tui.theme.accent` / `.gold` / `.black` / `.muted` | colour overrides |
+| `config.ui.tui.theme.name` | the JSON theme to load |
+| `config.ui.tui.theme.accent` / `.gold` / `.black` / `.muted` | colour overrides |

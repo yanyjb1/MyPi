@@ -1,25 +1,26 @@
 //! The app: the registry, the display ledger, and the only exit to the session.
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use ratatui::text::Line;
 use serde_json::{Value, json};
 
 use super::startup::Startup;
-use crate::ui::session::{Packet, Session};
+use crate::ui::session::Session;
 use crate::ui::tui::ThemeConfig;
 use crate::ui::tui::action::Action;
 use crate::ui::tui::theme;
-use crate::ui::tui::zone::{Claim, Kind, Memo, ModelId, Outcome, Request, TermSize, Zone, ZoneId};
+use crate::ui::tui::zone::{
+    Frame, Kind, Memo, ModelId, Outcome, Request, Round, TermSize, Turns, Zone, ZoneId, matches,
+};
 
 /// The configuration keys the terminal's palette is built from.
 const THEME_KEYS: &[&str] = &[
-    "config.tui.theme.name",
-    "config.tui.theme.accent",
-    "config.tui.theme.gold",
-    "config.tui.theme.black",
-    "config.tui.theme.muted",
+    "config.ui.tui.theme.name",
+    "config.ui.tui.theme.accent",
+    "config.ui.tui.theme.gold",
+    "config.ui.tui.theme.black",
+    "config.ui.tui.theme.muted",
 ];
 
 /// One thing the loop hands the app.
@@ -27,26 +28,28 @@ pub enum Input {
     /// The user did something.
     Action(Action),
     /// The terminal or the session said something.
-    Local(Packet),
+    Local(Frame),
 }
 
 /// The whole front end's state: the session, the zones, and who shows.
 pub struct App {
     pub(super) session: Session,
     pub(super) zones: Vec<Box<dyn Zone>>,
-    owner: Option<ZoneId>,
+    pub(super) owner: Option<ZoneId>,
     pub(super) memo: Memo,
     size: TermSize,
     pub(super) attached: Option<i64>,
     theme: ThemeConfig,
-    /// Theme keys still owed an answer, in the order they were asked.
-    pending: VecDeque<&'static str>,
+    /// How many palette answers have landed.
+    palette_seen: usize,
     /// The directory a new session is created in.
     cwd: PathBuf,
     /// `--model`: the model a new session is created with; `None` = the configured default.
     model: Option<ModelId>,
     /// A message sent with no session yet: it goes out once the row exists.
     waiting: Option<Value>,
+    /// The session each zone has last been told about; a zone hears it once.
+    pub(super) told: Vec<Option<i64>>,
     finished: bool,
 }
 
@@ -58,6 +61,7 @@ impl App {
         startup: Startup,
         zones: Vec<Box<dyn Zone>>,
     ) -> App {
+        let told = vec![None; zones.len()];
         let mut app = App {
             session,
             zones,
@@ -66,10 +70,11 @@ impl App {
             size,
             attached: None,
             theme: ThemeConfig::default(),
-            pending: THEME_KEYS.iter().copied().collect(),
+            palette_seen: 0,
             cwd: startup.cwd,
             model: startup.model,
             waiting: None,
+            told,
             finished: false,
         };
         app.reset_memo();
@@ -92,13 +97,14 @@ impl App {
     /// Take everything the connection produced and hand it to the zone that declared it.
     pub fn pump(&mut self) {
         for packet in self.session.forward() {
-            if packet.kind == "call" && packet.name == "config" {
-                self.palette(&packet);
+            let frame = Frame::new(packet.kind, packet.name, packet.content);
+            if frame.class == "call" && frame.name == "config" {
+                self.palette(&frame);
             }
-            if packet.kind == "post" && packet.name == "init" {
-                self.created(&packet);
+            if frame.class == "post" && frame.name == "init" {
+                self.created(&frame);
             }
-            self.deliver(&packet);
+            self.deliver(&frame);
         }
         let live = self.session.attached();
         if live != self.attached {
@@ -113,13 +119,13 @@ impl App {
     pub fn input(&mut self, input: Input) {
         match input {
             Input::Action(action) => self.action(&action),
-            Input::Local(packet) => {
-                if packet.name == "resized"
-                    && let Some(size) = TermSize::of(&packet.content)
+            Input::Local(frame) => {
+                if frame.name == "resized"
+                    && let Some(size) = TermSize::of(&frame.content)
                 {
                     self.size = size;
                 }
-                self.deliver(&packet);
+                self.deliver(&frame);
             }
         }
     }
@@ -145,18 +151,18 @@ impl App {
         self.session.bye();
     }
 
-    fn deliver(&mut self, packet: &Packet) {
+    fn deliver(&mut self, frame: &Frame) {
         let Some(owner) = self.owner else {
             return;
         };
         let index = owner.index();
-        let declared = packet.kind == "local"
-            || Kind::of(&packet.kind, &packet.name)
+        let declared = frame.is_local()
+            || Kind::of(&frame.class, &frame.name)
                 .is_some_and(|kind| self.zones[index].kinds().contains(&kind));
         if !declared {
             return;
         }
-        let requests = self.zones[index].event(packet);
+        let requests = self.zones[index].event(frame);
         self.land_all(requests);
     }
 
@@ -164,8 +170,11 @@ impl App {
         let Some(owner) = self.owner else {
             return;
         };
-        let claim = Claim::of(action);
-        if !self.zones[owner.index()].keys().contains(&claim) {
+        if !self.zones[owner.index()]
+            .keys()
+            .iter()
+            .any(|held| matches(held, action))
+        {
             return;
         }
         let (outcome, requests) = self.zones[owner.index()].action(action);
@@ -186,6 +195,7 @@ impl App {
                     self.memo.write(&alias, &content);
                 }
                 self.owner = Some(to);
+                self.tell();
                 let requests = self.zones[to.index()].start(self.size, &self.memo);
                 self.land_all(requests);
             }
@@ -202,13 +212,18 @@ impl App {
     }
 
     fn structure(&mut self) {
+        let Some(owner) = self.owner else {
+            return;
+        };
         let snapshot = self.session.structure();
-        let mut requests = Vec::new();
-        for zone in &mut self.zones {
-            requests.extend(zone.structure(&snapshot));
-        }
-        // One snapshot answers every ask; a nested ask would only loop.
-        let requests: Vec<Request> = requests
+        let rounds: Vec<Round> = snapshot
+            .turns()
+            .iter()
+            .map(|turn| Round::new(turn.id, turn.ranges.clone()))
+            .collect();
+        // One snapshot answers the ask; a nested ask would only loop.
+        let requests: Vec<Request> = self.zones[owner.index()]
+            .structure(&Turns::of(rounds))
             .into_iter()
             .filter(|request| !matches!(request, Request::Structure))
             .collect();
@@ -271,15 +286,15 @@ impl App {
     }
 
     /// The row exists: enter it, then send the message that was waiting for it.
-    fn created(&mut self, packet: &Packet) {
+    fn created(&mut self, frame: &Frame) {
         if self.attached.is_some() {
             return;
         }
-        if packet.content.get("error").is_some() {
+        if frame.content.get("error").is_some() {
             self.waiting = None;
             return;
         }
-        let Some(id) = packet.content.get("session").and_then(Value::as_i64) else {
+        let Some(id) = frame.content.get("session").and_then(Value::as_i64) else {
             return;
         };
         self.attach(id);
@@ -294,19 +309,21 @@ impl App {
     }
 
     /// Read one palette answer; the five together rebuild the theme.
-    fn palette(&mut self, packet: &Packet) {
-        let Some(key) = self.pending.pop_front() else {
+    fn palette(&mut self, frame: &Frame) {
+        let Some(key) = frame.content.get("key").and_then(Value::as_str) else {
             return;
         };
+        let value = frame.content.get("value").unwrap_or(&Value::Null);
         match key {
-            "config.tui.theme.name" => self.theme.name = text_of(&packet.content),
-            "config.tui.theme.accent" => self.theme.accent = color_of(&packet.content),
-            "config.tui.theme.gold" => self.theme.gold = color_of(&packet.content),
-            "config.tui.theme.black" => self.theme.black = color_of(&packet.content),
-            "config.tui.theme.muted" => self.theme.muted = color_of(&packet.content),
-            _ => {}
+            "config.ui.tui.theme.name" => self.theme.name = text_of(value),
+            "config.ui.tui.theme.accent" => self.theme.accent = color_of(value),
+            "config.ui.tui.theme.gold" => self.theme.gold = color_of(value),
+            "config.ui.tui.theme.black" => self.theme.black = color_of(value),
+            "config.ui.tui.theme.muted" => self.theme.muted = color_of(value),
+            _ => return,
         }
-        if self.pending.is_empty() {
+        self.palette_seen += 1;
+        if self.palette_seen >= THEME_KEYS.len() {
             theme::init_from_config(self.theme.name.as_deref(), Some(&self.theme));
         }
     }

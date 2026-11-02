@@ -87,7 +87,7 @@ Each domain's own list (its README's §3) carries the rest.
 
 ## 4. Config
 
-The server side reads `config.server.*`; `config.tui.*` belongs to the front end. This layer opens no
+The server side reads `config.server.*`; `config.ui.tui.*` belongs to the front end. This layer opens no
 file; the sources and the naming rules are in `config/README.md`.
 
 | area | what the server side takes from it |

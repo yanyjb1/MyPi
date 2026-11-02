@@ -4,13 +4,14 @@ use ratatui::text::Line;
 use serde_json::Value;
 
 use super::claim::Claim;
+use super::frame::Frame;
 use super::kind::Kind;
 use super::memo::Memo;
 use super::outcome::Outcome;
 use super::request::Request;
 use super::shout::Shout;
 use super::size::TermSize;
-use crate::ui::session::{Packet, Structure};
+use super::turns::Turns;
 use crate::ui::tui::action::Action;
 
 /// A major zone. The app only ever sees this.
@@ -28,13 +29,13 @@ pub trait Zone {
     fn session(&mut self, id: Option<i64>) -> Vec<Request>;
 
     /// One frame the zone declared (or any `local` one).
-    fn event(&mut self, packet: &Packet) -> Vec<Request>;
+    fn event(&mut self, frame: &Frame) -> Vec<Request>;
 
     /// One input, already resolved to this zone.
     fn action(&mut self, action: &Action) -> (Outcome, Vec<Request>);
 
     /// The structural window, after a `Request::Structure`.
-    fn structure(&mut self, snapshot: &Structure) -> Vec<Request>;
+    fn structure(&mut self, snapshot: &Turns) -> Vec<Request>;
 
     /// This zone's rows for the frame.
     fn render(&mut self) -> Vec<Line<'static>>;
@@ -52,7 +53,7 @@ pub trait SubZone {
     fn kinds(&self) -> &'static [Kind];
 
     /// One frame this sub-zone declared.
-    fn deliver_event(&mut self, packet: &Packet, size: TermSize) -> Vec<Request>;
+    fn deliver_event(&mut self, frame: &Frame, size: TermSize) -> Vec<Request>;
 
     /// An action claimed by this sub-zone. `true` = consumed.
     fn deliver_action(&mut self, action: &Action) -> bool;
@@ -62,7 +63,7 @@ pub trait SubZone {
     fn detach(&mut self);
 
     /// The structural window, after a `Request::Structure`.
-    fn structure(&mut self, _snapshot: &Structure) {}
+    fn structure(&mut self, _snapshot: &Turns) {}
 
     /// The keys this sub-zone borrows right now.
     fn borrowed(&self) -> &'static [Claim] {

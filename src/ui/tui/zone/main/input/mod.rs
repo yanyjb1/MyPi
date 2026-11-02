@@ -13,7 +13,7 @@ pub use ctx::{Ctx, Data};
 use super::desk::{Hire, Reply};
 use super::geometry;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
-use crate::ui::tui::zone::{Claim, Packet, Request, Shout, SubZone, TermSize, name};
+use crate::ui::tui::zone::{Claim, Frame, Request, Shout, SubZone, TermSize, name};
 use serde_json::Value;
 
 use editor::{Editor, Effect, History};
@@ -83,8 +83,6 @@ pub struct InputZone {
     term: TermSize,
     /// What the parts read.
     data: Data,
-    /// Config keys owed an answer, in the order they were asked.
-    pending_keys: std::collections::VecDeque<String>,
     /// Events this zone puts out.
     shouts: Vec<Shout>,
     /// Frames this zone owes the session.
@@ -110,7 +108,6 @@ impl Default for InputZone {
             statusline: StatusLine::new(&Setup::default()),
             term: TermSize { cols: 80, rows: 24 },
             data: Data::default(),
-            pending_keys: std::collections::VecDeque::new(),
             shouts: Vec::new(),
             outbox: Vec::new(),
         }
@@ -501,26 +498,29 @@ impl InputZone {
     }
 
     /// One frame answer the zone reads for itself.
-    fn read_frame(&mut self, packet: &Packet) -> Vec<Request> {
+    fn read_frame(&mut self, frame: &Frame) -> Vec<Request> {
         let mut out = Vec::new();
-        match (packet.kind.as_str(), packet.name.as_str()) {
+        match (frame.class.as_str(), frame.name.as_str()) {
             ("call", "meta") => {
-                self.read_meta(&packet.content, &mut out);
+                self.read_meta(&frame.content, &mut out);
             }
             ("stream", "change") => {
-                if let Some(row) = packet.content.get("meta") {
+                if let Some(row) = frame.content.get("meta") {
                     self.read_meta(row, &mut out);
                 }
             }
             ("call", "config") => {
-                if let Some(key) = self.pending_keys.pop_front()
-                    && key.ends_with(".contextWindow")
-                {
-                    self.data.limit = packet.content.as_u64().unwrap_or(0);
+                let key = frame.content.get("key").and_then(Value::as_str);
+                if key.is_some_and(|key| key.ends_with(".contextWindow")) {
+                    self.data.limit = frame
+                        .content
+                        .get("value")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
                 }
             }
             ("call", "usage") => {
-                self.read_usage(&packet.content);
+                self.read_usage(&frame.content);
             }
             _ => {}
         }
@@ -544,7 +544,6 @@ impl InputZone {
         }
         self.data.model = Some(address.clone());
         let key = format!("models.model.{address}.contextWindow");
-        self.pending_keys.push_back(key.clone());
         out.push(Request::call("config", serde_json::json!({"key": key})));
     }
 
@@ -603,9 +602,9 @@ impl SubZone for InputZone {
         ]
     }
 
-    fn deliver_event(&mut self, packet: &Packet, size: TermSize) -> Vec<Request> {
+    fn deliver_event(&mut self, frame: &Frame, size: TermSize) -> Vec<Request> {
         self.term = size;
-        self.read_frame(packet)
+        self.read_frame(frame)
     }
 
     /// Esc first (a lent-away Esc never arrives here), then the intent table.
@@ -639,7 +638,6 @@ impl SubZone for InputZone {
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
         self.data = Data::default();
-        self.pending_keys.clear();
         self.outbox
             .push(Request::call("usage", serde_json::json!({})));
     }
@@ -655,7 +653,6 @@ impl SubZone for InputZone {
         self.finished = true;
         self.scroll = 0;
         self.data = Data::default();
-        self.pending_keys.clear();
     }
 
     fn request_height(&self, term: TermSize) -> u16 {

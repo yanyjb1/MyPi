@@ -28,3 +28,23 @@
 - 常驻圈之外的成品不按距离裁，只按缓存预算淘汰。
 - 思考链不再钉在底部，随块就地渲染。
 - `/usage` 的横向对齐没有读者；补全的 pools 拿到一次就不再刷新。
+
+## 工具渲染的缺口
+
+后端名册十四个。已有专属：`read`、`cd`（单行，不进卡片）、`write`、`edit`、`bash`、`todo`。
+
+缺少专属、一律走兜底卡片的：
+
+- `web`：`Web` 渲染器（fetch/search 两套布局）已经写好，但 `renderer_for` 匹配的是 `fetch`/`search`/`browser`，`"web"` 落兜底。接法：匹配 `"web"`，分节按 args 里的 `op`。
+- `context`：`query` 输出天然是表（block/tool/ok/summary），现有渲染能力没有表段。
+- `memo`：只有块行的 `memo` 列被当 `details` 解析，工具本身没有视图。
+- `kairos`：回执与 `result` 两段，兜底是纯文本。
+- `mcp`：调用的是哪个 server、哪个 tool 只在 args 里，兜底看不出来。
+- `alias`：一句确认语，可继续兜底。
+
+不做：`final` 不渲染；`task` 随子会话面板一并定。
+
+死匹配：`mass_edit`（`edit` 的 `type` 取值）、`fetch`/`search`/`browser`（`web` 的 `op` 取值），都不是工具名。
+
+
+没有确定下一帧的条件，或者说重绘的条件，这是非常大的性能浪费。

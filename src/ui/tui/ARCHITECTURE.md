@@ -9,7 +9,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | `mod.rs` | the module list and the re-exports | public |
 | `run.rs` | `run`: the terminal, the loop, the exit path | public |
 | `signal.rs` | `Stop`: the four stop signals, polled once a frame | public |
-| `config.rs` | `ThemeConfig`, `TodoFold`, `UsageAlign` | public |
+| `config.rs` | `ThemeConfig`, `TodoFold` | public |
 | `action.rs` | `Action`, `Key`, `KeyCode`, `Mods`, crossterm projections | public |
 | `term.rs` | `Term`, `Input`: alternate screen, flags, size, one frame, one poll | public |
 | `app/` | `App`: registry, display ledger, delivery, landing, lifecycle, memo | public |
@@ -48,10 +48,10 @@ MainZone
 
 ## Must stay in sync
 
-1. `zone::Kind` and `ui::session::Packet`: one upstream class, one declaration.
+1. `zone::Kind` and the app's frame translation: one upstream class, one declaration.
 2. `Action` and `Claim`: a new action kind has to be claimable.
 3. `Zone` and every implementation: one method added is four edits.
-4. `App::boot` order and every zone's expectations: attach first, start second.
+4. `App::boot` order and the zone that shows: attach first, start second.
 5. `Memo` aliases with the zones that write and read them (`tree.focus` is the only one).
 6. `theme_epoch()` and every cache keyed by it.
 

@@ -1,11 +1,11 @@
 //! The chat zone's key table: which seat consumes which input.
 //!
 //! Rows come from the sub-zones: each hands over its own claims, so nobody else names
-//! another seat's keys. Borrowed rows (the reserved zone lending keys while the input zone
-//! is hung) sit in front of the static ones and are checked first.
+//! another seat's keys. Borrowed rows (the reserved zone's hand) sit in front of the static
+//! ones and are checked first.
 
-use crate::ui::tui::action::{Action, Key, KeyCode};
-use crate::ui::tui::zone::Claim;
+use crate::ui::tui::action::Action;
+use crate::ui::tui::zone::{Claim, matches};
 
 /// Which sub-zone consumes an input. `Main` owns this: no other level needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,29 +13,6 @@ pub enum Seat {
     History,
     Input,
     Reserved,
-}
-
-/// Whether one claim covers this action.
-pub fn matches(claim: &Claim, a: &Action) -> bool {
-    match claim {
-        Claim::Key(k) => matches!(a, Action::Key(got) if got == k),
-        Claim::AnyChar => matches!(
-            a,
-            Action::Key(Key {
-                code: KeyCode::Char(_),
-                ..
-            })
-        ),
-        Claim::Paste => matches!(a, Action::Paste(_)),
-        Claim::Wheel => matches!(
-            a,
-            Action::ScrollUp { shift: false } | Action::ScrollDown { shift: false }
-        ),
-        Claim::WheelShift => matches!(
-            a,
-            Action::ScrollUp { shift: true } | Action::ScrollDown { shift: true }
-        ),
-    }
 }
 
 /// The static table: each sub-zone's own claims, in seat order.
@@ -70,8 +47,16 @@ impl Borrowed {
             .map(|(_, seat)| *seat)
     }
 
-    /// Record a loan. A later loan for the same seat replaces the earlier one.
+    /// Record a loan. Same seat, same claims: nothing moves.
     pub fn lend(&mut self, claims: &[Claim], seat: Seat) {
+        if self.rows.iter().filter(|(_, held)| *held == seat).count() == claims.len()
+            && claims
+                .iter()
+                .zip(self.rows.iter().filter(|(_, held)| *held == seat))
+                .all(|(want, (have, _))| want == have)
+        {
+            return;
+        }
         self.release(seat);
         self.rows.extend(claims.iter().map(|c| (*c, seat)));
     }

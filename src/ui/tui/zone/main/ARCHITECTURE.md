@@ -8,7 +8,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 |---|---|---|
 | `mod.rs` | the module list and the re-export | public |
 | `zone.rs` | `MainZone`, the bus flush, the directory reader, the `Zone` implementation | public |
-| `arbitrate.rs` | `Heights`, `arbitrate`, `settle`, `broadcast`, `lend`, the cursor's position | private |
+| `arbitrate.rs` | `Heights`, `arbitrate`, `settle`, `broadcast`, the cursor's position | private |
 | `dispatch.rs` | key routing, the exits that become requests or a handover | private |
 | `desk.rs` | `Hire`, `Reply` — what the input asks for and what a hand hands back | private |
 | `keys.rs` | `Seat`, `matches`, the static table, `Borrowed` | private |
@@ -21,7 +21,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 ## What it talks to
 
 - `zone::contract` for `Zone`, `SubZone`, `Claim`, `Kind`, `Request`, `Outcome`, `TermSize`,
-  `Shout`, `name`, `Packet`, `Structure`.
+  `Shout`, `name`, `Frame`, `Turns`.
 - `ui::tui::action::Action`, `ui::tui::theme` for the two colour snapshots.
 - The three sub-zone crates directly; they are private fields.
 

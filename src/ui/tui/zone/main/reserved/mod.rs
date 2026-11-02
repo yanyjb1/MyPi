@@ -11,7 +11,7 @@ use super::desk::{Hire, Reply};
 use crate::ui::tui::action::Action;
 use crate::ui::tui::theme::Palette;
 use crate::ui::tui::zone::SubZone;
-use crate::ui::tui::zone::{Claim, Kind, Packet, Request, TermSize, name};
+use crate::ui::tui::zone::{Claim, Frame, Kind, Request, TermSize, name};
 
 use hand::{Hand, IDLE_ROWS, Report};
 use pools::Pools;
@@ -141,21 +141,21 @@ impl SubZone for ReservedZone {
         self.report.map(|r| r.keys).unwrap_or(&[])
     }
 
-    fn deliver_event(&mut self, packet: &Packet, _size: TermSize) -> Vec<Request> {
-        match (packet.kind.as_str(), packet.name.as_str()) {
+    fn deliver_event(&mut self, frame: &Frame, _size: TermSize) -> Vec<Request> {
+        match (frame.class.as_str(), frame.name.as_str()) {
             ("call", "pools") => {
-                let pools = Pools::of(&packet.content);
+                let pools = Pools::of(&frame.content);
                 if let Some(who) = self.on_duty {
                     self.hand(who).pools(&pools);
                 }
                 self.pools = Some(pools);
             }
             ("call", "usage") => {
-                self.usage.take(&packet.content);
+                self.usage.take(&frame.content);
             }
             ("stream", _) | ("local", _) => {
                 if let Some(who) = self.on_duty {
-                    self.hand(who).on_event("stream", &packet.content);
+                    self.hand(who).on_event("stream", &frame.content);
                 }
             }
             _ => {}

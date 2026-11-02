@@ -6,9 +6,6 @@ use ratatui::text::Line;
 
 use crate::ui::tui::theme::theme_epoch;
 
-/// How many slots keep their rows around the sight line.
-pub(in crate::ui::tui::zone::main::history) const BUDGET: usize = 65;
-
 pub(in crate::ui::tui::zone::main::history) struct BlockCache {
     rows: HashMap<i64, Vec<Line<'static>>>,
     /// Admission order, oldest first.
@@ -31,7 +28,7 @@ impl Default for BlockCache {
             cwd: String::new(),
             epoch: u64::MAX,
             switches: (false, false),
-            budget: BUDGET,
+            budget: 64,
         }
     }
 }

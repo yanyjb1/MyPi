@@ -20,7 +20,7 @@ What is here, what each file holds, who calls whom. Current state only.
 
 ## What it calls
 
-- `ui::session::{Session, Packet, Structure}`.
+- `ui::session::Session`, and `zone::{Frame, Turns}` for what it hands down.
 - `zone::{Kind, Claim, Memo, Outcome, Request, TermSize, Zone, ZoneId}`.
 - `theme::init_from_config` once the palette answers are in.
 
@@ -35,9 +35,9 @@ fields.
 
 ## Must stay in sync
 
-1. `THEME_KEYS` and the server's `config.tui.theme.*` schema.
+1. `THEME_KEYS` and the server's `config.ui.tui.theme.*` schema.
 2. `Kind::of` and the upstream frame names it classifies.
-3. `App::boot` order and every zone's expectations: attach first, start second.
+3. `App::boot` order and the zone that shows: attach first, start second.
 4. `with_session` and the doors that do not take a session (`config`, `pools`, `sessions`).
 5. `create`'s payload and api's `post init` arguments.
 6. `Startup` and the CLI's launch parameters.

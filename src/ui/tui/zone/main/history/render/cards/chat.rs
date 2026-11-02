@@ -53,7 +53,7 @@ pub(in crate::ui::tui::zone::main::history) fn tool_node(
             result: outcome,
             expanded: o.tool,
             tail: block.ok.is_none(),
-            limit: o.rows,
+            budget: o.fold,
         },
         t,
         width,

@@ -80,4 +80,4 @@ A failed draw ends the loop; nothing tries to draw again.
 
 | key | use |
 |---|---|
-| `config.tui.theme.name`, `.accent`, `.gold`, `.black`, `.muted` | the palette; asked by the app at boot |
+| `config.ui.tui.theme.name`, `.accent`, `.gold`, `.black`, `.muted` | the palette; asked by the app at boot |

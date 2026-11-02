@@ -16,15 +16,6 @@ impl Shout {
     }
 }
 
-/// Who put an event out. The shouter never hears its own event back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Origin {
-    Main,
-    History,
-    Input,
-    Reserved,
-}
-
 /// The names this front end shouts today.
 pub mod name {
     /// The main zone: the terminal changed. `{cols, rows}`.

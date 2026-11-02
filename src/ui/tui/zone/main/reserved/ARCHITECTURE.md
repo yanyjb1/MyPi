@@ -23,7 +23,7 @@ To `Input`: nothing directly; the main zone carries `Reply` across.
 
 ## What it calls
 
-- `ui::tui::zone::{Packet, Request, TermSize, Claim, Kind, name}` and
+- `ui::tui::zone::{Frame, Request, TermSize, Claim, Kind, name}` and
   `super::desk::{Hire, Reply}`.
 - `ui::tui::action` for keys, `ui::tui::theme::Palette` for colors.
 - `commands` for the command table and the `Candidate` shape.

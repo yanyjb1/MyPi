@@ -90,4 +90,4 @@ A hand also has:
 
 | key | use |
 |---|---|
-| `config.tui.theme` | the panel's and the popup's colors |
+| `config.ui.tui.theme` | the panel's and the popup's colors |

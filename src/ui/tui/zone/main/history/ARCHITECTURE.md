@@ -25,7 +25,7 @@ To `Main`: `notice`, `focus`, `reset`, `render_rows`.
 
 ## What it calls
 
-- `ui::tui::zone::{Packet, Structure, Request, Shout, name, Claim, Kind, SubZone, TermSize}`.
+- `ui::tui::zone::{Frame, Turns, Request, Shout, name, Claim, Kind, SubZone, TermSize}`.
 - `ui::tui::TodoFold`, `ui::tui::theme::{HistoryTheme, Token, theme_epoch}`.
 - `text` for display width and wrapping.
 - `render::cards::tools` for the tool renderer table.

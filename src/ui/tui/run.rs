@@ -3,10 +3,11 @@
 use anyhow::Result;
 use serde_json::json;
 
-use crate::ui::session::{Packet, Session};
+use crate::ui::session::Session;
 use crate::ui::tui::app;
 use crate::ui::tui::signal;
 use crate::ui::tui::term;
+use crate::ui::tui::zone::Frame;
 
 /// The loop owns the terminal; the app owns the session.
 pub fn run(session: Session, startup: app::Startup) -> Result<()> {
@@ -26,7 +27,8 @@ pub fn run(session: Session, startup: app::Startup) -> Result<()> {
         let now = term.size()?;
         if now != last {
             last = now;
-            app.input(app::Input::Local(Packet::local(
+            app.input(app::Input::Local(Frame::new(
+                "local",
                 "resized",
                 json!({"cols": now.cols, "rows": now.rows}),
             )));
@@ -43,7 +45,8 @@ pub fn run(session: Session, startup: app::Startup) -> Result<()> {
 
         match term.poll()? {
             Some(term::Input::Action(action)) => app.input(app::Input::Action(action)),
-            Some(term::Input::Focus(gained)) => app.input(app::Input::Local(Packet::local(
+            Some(term::Input::Focus(gained)) => app.input(app::Input::Local(Frame::new(
+                "local",
                 "focus",
                 json!({"gained": gained}),
             ))),

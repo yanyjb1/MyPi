@@ -204,11 +204,23 @@ impl Session {
                 }
             }
             ("call", "config") => {
-                if request.payload.get("key").and_then(Value::as_str) == Some(BUDGET_KEY)
-                    && let Some(budget) = reply.payload.as_i64()
-                {
-                    self.content.set_budget(budget.max(1) as usize);
+                let Some(key) = request.payload.get("key").and_then(Value::as_str) else {
+                    return;
+                };
+                if key == BUDGET_KEY {
+                    if let Some(budget) = reply.payload.as_i64() {
+                        self.content.set_budget(budget.max(1) as usize);
+                    }
+                    // This layer's own question is not the front end's mail.
+                    return;
                 }
+                // The answer names the key it answers: three readers share one bus.
+                self.outbox.push(Packet::new(
+                    "call",
+                    "config",
+                    json!({"key": key, "value": reply.payload}),
+                ));
+                return;
             }
             ("post", "rewind") => {
                 // The ledger is the whole of this layer's interest: an accepted write is

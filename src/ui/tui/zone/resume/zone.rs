@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
-use crate::ui::tui::zone::{Claim, Kind, Outcome, Packet, Request, TermSize, Zone, ZoneId};
+use crate::ui::tui::zone::{Claim, Frame, Kind, Outcome, Request, TermSize, Turns, Zone, ZoneId};
 
 /// No modifiers held.
 const PLAIN: Mods = Mods {
@@ -293,10 +293,10 @@ impl Zone for ResumeZone {
         Vec::new()
     }
 
-    fn event(&mut self, packet: &Packet) -> Vec<Request> {
-        match (packet.kind.as_str(), packet.name.as_str()) {
-            ("call", "sessions") => self.load(&packet.content),
-            ("call", "delete") => self.failed = packet.content.get("error").is_some(),
+    fn event(&mut self, frame: &Frame) -> Vec<Request> {
+        match (frame.class.as_str(), frame.name.as_str()) {
+            ("call", "sessions") => self.load(&frame.content),
+            ("call", "delete") => self.failed = frame.content.get("error").is_some(),
             _ => {}
         }
         Vec::new()
@@ -379,7 +379,7 @@ impl Zone for ResumeZone {
         stay
     }
 
-    fn structure(&mut self, _snapshot: &crate::ui::session::Structure) -> Vec<Request> {
+    fn structure(&mut self, _snapshot: &Turns) -> Vec<Request> {
         Vec::new()
     }
 

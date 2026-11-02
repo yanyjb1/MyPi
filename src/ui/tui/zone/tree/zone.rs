@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use crate::ui::tui::zone::{
-    Claim, Kind, Memo, Outcome, Packet, Request, Structure, TermSize, Zone, ZoneId,
+    Claim, Frame, Kind, Memo, Outcome, Request, TermSize, Turns, Zone, ZoneId,
 };
 
 use super::rows::Row;
@@ -78,7 +78,7 @@ fn short_kind(kind: &str) -> &str {
 
 pub struct TreeZone {
     size: Option<TermSize>,
-    structure: Structure,
+    structure: Turns,
     blocks: BTreeMap<i64, Node>,
     rows: Vec<Row>,
     selected: usize,
@@ -92,7 +92,7 @@ impl Default for TreeZone {
     fn default() -> Self {
         Self {
             size: None,
-            structure: Structure::default(),
+            structure: Turns::default(),
             blocks: BTreeMap::new(),
             rows: Vec::new(),
             selected: 0,
@@ -214,10 +214,10 @@ impl Zone for TreeZone {
         Vec::new()
     }
 
-    fn event(&mut self, packet: &Packet) -> Vec<Request> {
-        match (packet.kind.as_str(), packet.name.as_str()) {
+    fn event(&mut self, frame: &Frame) -> Vec<Request> {
+        match (frame.class.as_str(), frame.name.as_str()) {
             ("call", "init") | ("call", "blocks") => {
-                if let Some(rows) = packet.content.get("blocks") {
+                if let Some(rows) = frame.content.get("blocks") {
                     self.merge(rows);
                 }
             }
@@ -266,7 +266,7 @@ impl Zone for TreeZone {
         stay
     }
 
-    fn structure(&mut self, snapshot: &Structure) -> Vec<Request> {
+    fn structure(&mut self, snapshot: &Turns) -> Vec<Request> {
         self.structure = snapshot.clone();
         self.stale = true;
         Vec::new()

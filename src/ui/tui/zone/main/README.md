@@ -77,4 +77,5 @@ A `local / disconnected` frame becomes `Request::Quit`: no session, no screen wo
 
 ## 4. Config fields
 
-None. The theme keys are asked by the app; the desk's usage alignment has no reader.
+None here. The app asks the theme keys; the history zone asks its own three through `call config`
+and the input zone asks the context window.

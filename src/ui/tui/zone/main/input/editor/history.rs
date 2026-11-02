@@ -28,7 +28,7 @@ impl History {
         Self::default()
     }
 
-    /// 内存环上限：最多保留 20 条，超出丢最旧。不落盘（用户决策）。
+    /// Twenty entries in memory, oldest dropped first; never stored.
     pub const CAP: usize = 20;
 
     /// Submit a new input. Exits history mode.

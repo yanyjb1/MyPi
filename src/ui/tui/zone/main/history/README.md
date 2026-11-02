@@ -32,15 +32,22 @@ whole when the round's `ranges` arrive; the blocks that land then come from `cal
 
 ### The sight line and the viewport
 
-The sight line is a seam between two rows, `focus_line` rows below the top of the zone. The anchor
-is a slot plus a row inside it, never a pixel and never a line offset.
+`config.ui.tui.history.focusLine` names the sight line as a screen row: `N` means the line sits
+between row `N` and row `N+1`, so `N` rows are above it and the rest below. The seam is either a
+spot (`slot` plus a row inside it) or the end of the sequence.
 
-Rows are walked out from the seam: older above, newer below. A slot with rows takes them; one blank
-row follows it. `Next` is stepped over and does not break that separator. Two rows are pinned last:
-the task list.
+The frame is a projection: every screen row is either one blank separator or one row of one block.
+Separators count against the height. Rows above the seam come from older slots, rows below from
+newer ones; a block cut by the top edge loses its head, one cut by the bottom edge loses its tail.
+`Next` is stepped over and breaks nothing. The pinned task list takes the last rows.
 
-At the bottom the seam is one past the newest slot, so the newest content sits against the pinned
-rows: a growing block pushes its own head off the top instead of moving the anchor.
+### Two render paths
+
+| | immutable (closed rounds) | mutable (the running turn) |
+|---|---|---|
+| identity | block id | no id, always last in the sequence |
+| rows | cached per block | painted each frame |
+| order | may be produced tail first | newest row last, older rows unchanged |
 
 ### Segments
 
@@ -52,14 +59,16 @@ walk can start from.
 ### The cache
 
 Per slot: the rows painted, keyed by width, working directory, theme epoch and the two fold
-switches. Any key change drops everything. At most `margin * 2 + 1` slots keep rows; the earliest
-admission is evicted first.
+switches. Any key change drops everything. `config.ui.tui.renderMargin` slots keep rows; the
+earliest admission is evicted first.
 
 ### Folding
 
 Two copies per block, one at a time: `Ctrl+T` is the thinking chain's own copy, `Ctrl+O` the tool
-exchanges'. A running tool's card shows its tail, up to the rows the zone has, with a
-`… N earlier lines` marker above it; a finished one folds from the head. Expanded shows everything.
+exchanges'. A card's head and its tail are budgeted apart: each folds only when it alone exceeds
+`config.ui.tui.history.cardFoldBudget`, and a folded run keeps row one, a placeholder row and the
+last `budget - 2` rows. A running tool keeps its newest `budget` rows instead. Expanded shows
+everything.
 
 ### Keys
 
@@ -101,8 +110,10 @@ back). It hears `cwd`.
 
 | key | use |
 |---|---|
-| `config.tui.theme` | colors for text, cards, code, and the tree |
-| `config.tui.renderMargin` | the cache budget around the sight line |
-| `config.tui.todoFold` | task-list folding policy |
+| `config.ui.tui.theme` | colors for text, cards, code, and the tree |
+| `config.ui.tui.renderMargin` | the cache budget around the sight line |
+| `config.ui.tui.todoFold` | task-list folding policy |
+| `config.ui.tui.history.focusLine` | the sight line, in screen rows above it |
+| `config.ui.tui.history.cardFoldBudget` | rows a card head or tail may take before folding |
 
-`focus_line`, the fold starting values and the thinking placeholder have no config keys yet.
+The thinking placeholder has no config key.

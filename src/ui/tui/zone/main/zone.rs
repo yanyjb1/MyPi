@@ -2,9 +2,10 @@
 
 use serde_json::{Value, json};
 
+use super::keys::Seat;
 use super::{arbitrate, dispatch, history, input, keys, reserved};
 use crate::ui::tui::zone::{
-    Claim, Kind, Memo, Outcome, Packet, Request, Shout, SubZone, TermSize, Zone, name,
+    Claim, Frame, Kind, Memo, Outcome, Request, Shout, SubZone, TermSize, Turns, Zone, name,
 };
 
 /// The fallback size before the first resize arrives.
@@ -82,10 +83,10 @@ impl MainZone {
     }
 
     /// The conversation's directory, out of the rows that carry it.
-    fn read_cwd(&mut self, packet: &Packet) {
-        let row = match (packet.kind.as_str(), packet.name.as_str()) {
-            ("call", "meta") => &packet.content,
-            ("stream", "change") => match packet.content.get("meta") {
+    fn read_cwd(&mut self, frame: &Frame) {
+        let row = match (frame.class.as_str(), frame.name.as_str()) {
+            ("call", "meta") => &frame.content,
+            ("stream", "change") => match frame.content.get("meta") {
                 Some(row) => row,
                 None => return,
             },
@@ -142,6 +143,7 @@ impl Zone for MainZone {
                     Request::call("meta", json!({})),
                     Request::Structure,
                 ];
+                requests.extend(self.history.take_requests());
                 requests.extend(self.reserved.take_requests());
                 requests.extend(self.input.take_requests());
                 requests
@@ -157,48 +159,48 @@ impl Zone for MainZone {
         }
     }
 
-    fn event(&mut self, packet: &Packet) -> Vec<Request> {
-        if packet.name == "resized"
-            && let Some(size) = TermSize::of(&packet.content)
+    fn event(&mut self, frame: &Frame) -> Vec<Request> {
+        if frame.name == "resized"
+            && let Some(size) = TermSize::of(&frame.content)
         {
             self.size = Some(size);
             self.shout(name::RESIZE, json!({"cols": size.cols, "rows": size.rows}));
         }
-        if packet.kind == "local" && packet.name == "disconnected" {
+        if frame.is_local() && frame.name == "disconnected" {
             return vec![Request::Quit];
         }
-        self.read_cwd(packet);
-        self.lend();
-        let kind = Kind::of(&packet.kind, &packet.name);
+        self.read_cwd(frame);
+        let kind = Kind::of(&frame.class, &frame.name);
         let size = self.term();
         let mut requests = Vec::new();
-        if kind.is_some_and(|kind| self.history.kinds().contains(&kind)) || packet.kind == "local" {
-            requests.extend(self.history.deliver_event(packet, size));
+        let local = frame.is_local();
+        if kind.is_some_and(|kind| self.history.kinds().contains(&kind)) || local {
+            requests.extend(self.history.deliver_event(frame, size));
         }
-        if kind.is_some_and(|kind| self.input.kinds().contains(&kind)) || packet.kind == "local" {
-            requests.extend(self.input.deliver_event(packet, size));
+        if kind.is_some_and(|kind| self.input.kinds().contains(&kind)) || local {
+            requests.extend(self.input.deliver_event(frame, size));
         }
-        if kind.is_some_and(|kind| self.reserved.kinds().contains(&kind)) || packet.kind == "local"
-        {
-            requests.extend(self.reserved.deliver_event(packet, size));
+        if kind.is_some_and(|kind| self.reserved.kinds().contains(&kind)) || local {
+            requests.extend(self.reserved.deliver_event(frame, size));
         }
         self.deliver_hires();
         self.flush();
+        requests.extend(self.history.take_requests());
         requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
         requests
     }
 
     fn action(&mut self, action: &crate::ui::tui::action::Action) -> (Outcome, Vec<Request>) {
-        self.lend();
         let (outcome, mut requests) = dispatch::dispatch(self, action);
+        requests.extend(self.history.take_requests());
         requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
         self.flush();
         (outcome, requests)
     }
 
-    fn structure(&mut self, snapshot: &crate::ui::session::Structure) -> Vec<Request> {
+    fn structure(&mut self, snapshot: &Turns) -> Vec<Request> {
         self.history.structure(snapshot);
         self.input.structure(snapshot);
         self.reserved.structure(snapshot);
@@ -233,14 +235,21 @@ impl MainZone {
         self.flush();
     }
 
-    fn lend(&mut self) {
-        arbitrate::lend(self);
+    /// A hand on duty holds the keys; a desk with nobody at it returns them.
+    pub(super) fn sync_borrowed(&mut self) {
+        let claims = self.reserved.borrowed();
+        if claims.is_empty() {
+            self.keys.release(Seat::Reserved);
+        } else {
+            self.keys.lend(claims, Seat::Reserved);
+        }
     }
 
     /// The editor asked for a hand: seat it, and feed it the text it missed.
     fn deliver_hires(&mut self) {
         if let Some(who) = self.input.take_hire() {
             self.reserved.hire(who);
+            self.sync_borrowed();
             let (text, cursor) = self.input.draft();
             self.reserved.text(&text, cursor);
         }

@@ -18,10 +18,10 @@ pub(super) struct Card<'a> {
     pub result: Option<tools::ToolOutcome<'a>>,
     /// The exchange's own copy.
     pub expanded: bool,
-    /// The tool is still running: the tail window is what shows.
+    /// The tool is still running: its newest rows are what show.
     pub tail: bool,
-    /// The rows a tail window may take.
-    pub limit: usize,
+    /// Rows a head or a tail may take before it folds.
+    pub budget: usize,
 }
 
 pub(super) fn tool_card(card: Card<'_>, t: &HistoryTheme, width: usize) -> Vec<Line<'static>> {
@@ -30,13 +30,16 @@ pub(super) fn tool_card(card: Card<'_>, t: &HistoryTheme, width: usize) -> Vec<L
         args: card.args,
         result: card.result,
         expanded: card.expanded,
-        tail: card.tail,
-        limit: card.limit,
     };
     let edge = block.edge_style(t);
     let bg = block.bg_style(t);
     let mut out = vec![card_edge_labeled(edge, bg, width, block.header(t))];
-    for (i, section) in block.sections(t).into_iter().enumerate() {
+    let mut sections = block.sections(t);
+    for (index, section) in sections.iter_mut().enumerate() {
+        let rows = std::mem::take(&mut section.lines);
+        section.lines = tools::fold(rows, card.budget, card.expanded, card.tail && index > 0, t);
+    }
+    for (i, section) in sections.into_iter().enumerate() {
         if i > 0 || section.label.is_some() {
             out.push(match section.label {
                 Some(label) => {

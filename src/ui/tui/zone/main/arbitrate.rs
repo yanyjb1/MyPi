@@ -64,6 +64,7 @@ pub fn settle(zone: &mut MainZone) {
         return;
     }
     zone.reserved.settle();
+    zone.sync_borrowed();
     let before = zone.heights;
     let after = arbitrate(zone);
     if after != before {
@@ -77,14 +78,4 @@ pub fn broadcast(zone: &mut MainZone) {
     let _ = zone.history.on_height_changed(h.history);
     let _ = zone.input.on_height_changed(h.input);
     let _ = zone.reserved.on_height_changed(h.reserved);
-}
-
-/// Lend the reserved zone the keys it asked for while the input zone is hung.
-pub fn lend(zone: &mut MainZone) {
-    let claims = zone.reserved.borrowed();
-    if claims.is_empty() {
-        zone.keys.release(super::keys::Seat::Reserved);
-    } else {
-        zone.keys.lend(claims, super::keys::Seat::Reserved);
-    }
 }

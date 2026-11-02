@@ -344,11 +344,6 @@ impl Palette {
         }
     }
 
-    /// Kept for call-site stability.
-    pub fn from_config(_cfg: &crate::ui::tui::ThemeConfig) -> Self {
-        Self::current()
-    }
-
     // ---- span builders: the single place that decides which color applies ----
 
     /// Accent text, transparent background.

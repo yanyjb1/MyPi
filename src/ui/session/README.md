@@ -31,6 +31,12 @@ whole of what this layer needs. When an accepted reply comes back the structure 
 spot and the rows outside it are dropped. A refused reply drops the note and changes nothing. The
 reply's own `cut` is forwarded untouched: what survived belongs to the zone that asked.
 
+### Config answers
+
+A `call config` answer is forwarded with the key it answers: `{key, value}`. Three readers share
+one bus, and the request's key is the only thing that tells them apart. This layer's own
+`preloadCache` question is swallowed here and never reaches the front end.
+
 ### The outbox
 
 `forward()` returns everything since the last call, in arrival order: pushes, answers, and the
@@ -70,6 +76,11 @@ send(kind, name, content, answer)  bye()
 
 1. No door turns a watch off: a detached connection keeps receiving pushes and drops them.
 2. A refused `call blocks` leaves the window untouched; the refusal is forwarded as it came.
+3. `post rewind` is the one door this layer special-cases: the spot is read out of the request and
+   held, and the index is trimmed on the answer. Every other window change is read from the answer
+   instead. The asymmetry is deliberate for now and the door is expected to be redesigned.
+4. A frame lost in the queue leaves its ledger entry behind, so a later rewind trims to the spot
+   of the frame that never landed.
 
 ## 4. Config fields
 

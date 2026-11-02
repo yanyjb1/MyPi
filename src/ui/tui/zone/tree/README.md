@@ -8,7 +8,7 @@ A full-screen navigator over the blocks of one conversation: one block, one row.
 
 | field | meaning |
 |---|---|
-| `structure: Structure` | the last structural window handed down |
+| `structure: Turns` | the last structural window handed down |
 | `blocks: BTreeMap<i64, Node>` | what each block says, as the answers carried it |
 | `rows: Vec<Row>` | the projection, rebuilt only when the inputs moved |
 | `selected` / `scroll` | position inside `rows` |

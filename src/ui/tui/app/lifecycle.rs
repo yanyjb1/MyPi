@@ -1,10 +1,10 @@
-//! Session attachment: data first, the zones' broadcast second.
+//! Session attachment: the data first, then the zone that shows.
 
 use super::App;
 use crate::ui::tui::zone::Kind;
 
 impl App {
-    /// Enter a conversation: follow it, watch it, then tell every zone.
+    /// Enter a conversation: follow it, watch it, then tell the zone that shows.
     pub fn attach(&mut self, id: i64) {
         if self.attached == Some(id) {
             return;
@@ -18,22 +18,34 @@ impl App {
         );
         self.attached = Some(id);
         self.reset_memo();
-        let mut requests = Vec::new();
-        for zone in &mut self.zones {
-            requests.extend(zone.session(Some(id)));
+        for told in &mut self.told {
+            *told = None;
         }
-        self.land_all(requests);
+        self.tell();
     }
 
-    /// Leave the conversation. Every zone hears it.
+    /// Leave the conversation. The zone that shows hears it.
     pub fn detach(&mut self) {
         self.session.detach();
         self.attached = None;
         self.reset_memo();
-        let mut requests = Vec::new();
-        for zone in &mut self.zones {
-            requests.extend(zone.session(None));
+        for told in &mut self.told {
+            *told = None;
         }
+        self.tell();
+    }
+
+    /// The zone that shows is the only one told about the attachment, and only once.
+    pub(super) fn tell(&mut self) {
+        let Some(owner) = self.owner else {
+            return;
+        };
+        let index = owner.index();
+        if self.told[index] == self.attached {
+            return;
+        }
+        self.told[index] = self.attached;
+        let requests = self.zones[index].session(self.attached);
         self.land_all(requests);
     }
 }
