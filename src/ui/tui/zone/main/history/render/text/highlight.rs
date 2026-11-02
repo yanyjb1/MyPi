@@ -236,12 +236,6 @@ pub fn warm(lang: &str) {
     });
 }
 
-pub fn warm_in_order<'a>(langs: impl IntoIterator<Item = &'a str>) {
-    for l in langs {
-        warm(l);
-    }
-}
-
 fn scope_to_category(stack: &ScopeStack) -> usize {
     for s in stack.as_slice().iter().rev() {
         let idx = MATCHERS.classify(*s);
@@ -372,116 +366,6 @@ pub fn highlight(code: &str, language: Option<&str>, t: &HistoryTheme) -> Vec<Li
     out
 }
 
-pub struct HighlightCursor {
-    state: ParseState,
-    stack: ScopeStack,
-    lines: std::vec::IntoIter<String>,
-    done: usize,
-    t: HistoryTheme,
-}
-
-impl HighlightCursor {
-    pub fn new(code: &str, lang: Option<&str>, t: &HistoryTheme) -> Option<Self> {
-        let lang = lang?;
-        let syntax = find_syntax(lang)?;
-        Some(Self {
-            state: ParseState::new(syntax),
-            stack: ScopeStack::new(),
-            lines: split_keep_empty(code),
-            done: 0,
-            t: *t,
-        })
-    }
-
-    pub fn done(&self) -> usize {
-        self.done
-    }
-
-    pub fn total(&self) -> usize {
-        self.done + self.lines.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.lines.len() == 0
-    }
-
-    pub fn peek_len(&self) -> usize {
-        self.lines.as_slice().first().map(|l| l.len()).unwrap_or(0)
-    }
-
-    pub fn take(&mut self, budget: usize) -> Vec<Line<'static>> {
-        let mut out = Vec::new();
-        for _ in 0..budget {
-            let Some(line) = self.lines.next() else { break };
-            self.done += 1;
-            out.push(color_one_line(
-                &line,
-                &mut self.state,
-                &mut self.stack,
-                &self.t,
-            ));
-        }
-        out
-    }
-}
-
-fn split_keep_empty(code: &str) -> std::vec::IntoIter<String> {
-    let mut v: Vec<String> = syntect::util::LinesWithEndings::from(code)
-        .map(|l| l.to_string())
-        .collect();
-    if v.is_empty() {
-        v.push(String::new());
-    }
-    v.into_iter()
-}
-
-fn color_one_line(
-    line: &str,
-    state: &mut ParseState,
-    stack: &mut ScopeStack,
-    t: &HistoryTheme,
-) -> Line<'static> {
-    let Ok(ops) = state.parse_line(line, &SYNTAXES) else {
-        return Line::from(line.trim_end_matches(['\n', '\r']).to_string());
-    };
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut prev_end = 0usize;
-    for (offset, op) in ops {
-        let offset = offset.min(line.len());
-        if offset > prev_end {
-            let text = &line[prev_end..offset];
-            let cat = scope_to_category(stack);
-            spans.push(spans_for(t, cat, text));
-            prev_end = offset;
-        }
-        match op {
-            ScopeStackOp::Push(scope) => stack.push(scope),
-            ScopeStackOp::Pop(count) => {
-                for _ in 0..count {
-                    stack.pop();
-                }
-            }
-            _ => {}
-        }
-    }
-    if prev_end < line.len() {
-        let text = &line[prev_end..];
-        let cat = scope_to_category(stack);
-        spans.push(spans_for(t, cat, text));
-    }
-    if let Some(last) = spans.last_mut() {
-        let mut s = last.content.to_string();
-        while s.ends_with('\n') || s.ends_with('\r') {
-            s.pop();
-        }
-        last.content = s.into();
-        if last.content.is_empty() {
-            spans.pop();
-        }
-    }
-    Line::from(spans)
-}
-
 fn spans_for(t: &HistoryTheme, cat: usize, text: &str) -> Span<'static> {
     if cat == NOMATCH {
         return Span::raw(text.to_string());
@@ -535,34 +419,4 @@ pub fn language_for_tool(tool: &str) -> Option<&'static str> {
         "bash" => Some("bash"),
         _ => None,
     }
-}
-
-pub fn language_for_alias(alias: &str) -> Option<&'static str> {
-    let a = alias.trim();
-    if a.is_empty() {
-        return None;
-    }
-    LANG_ALIASES
-        .iter()
-        .find(|(aliases, _)| aliases.iter().any(|x| x.eq_ignore_ascii_case(a)))
-        .map(|(aliases, _)| aliases[0])
-}
-
-pub fn fenced_languages(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for line in text.lines() {
-        let t = line.trim_start();
-        let Some(rest) = t.strip_prefix("```") else {
-            continue;
-        };
-        let lang: String = rest
-            .trim()
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '-' || *c == '#')
-            .collect();
-        if !lang.is_empty() && !out.iter().any(|x| x == &lang) {
-            out.push(lang);
-        }
-    }
-    out
 }

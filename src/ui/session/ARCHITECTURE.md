@@ -11,7 +11,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | `client.rs` | `Client`, `Incoming`: the queue, the matching, the send | private |
 | `session.rs` | `Session`: connect, forward, attach, send, the ingest of each frame | public |
 | `content.rs` | `ContentCache`: whole rows by id, the budget, the eviction | private |
-| `structure.rs` | `Turn`, `Structure`: the rounds and their ranges, the rewind trim | public |
+| `structure.rs` | `Turn`, `Structure`: the rounds, their ranges, the cut at one spot | public |
 
 ## What it talks to
 
@@ -36,6 +36,8 @@ Session
 - `Session::take` is the only place a frame reaches the windows: a push updates the structure,
   an answer updates both windows and the budget, then every frame goes to the outbox.
 - `Session::send` is the only outbound path; `call blocks` is the one door it answers itself.
+- A `post rewind` leaves a note in the ledger before its frame goes out; the accepted reply is
+  what makes the note land, and the spot comes from the note, not from the reply's `cut`.
 
 ## Must stay in sync
 
@@ -46,6 +48,7 @@ Session
 4. `Packet` and the front end's `Kind` table: a new upstream kind is a string here and a
    declaration there.
 5. The two doors the session reads by name (`call blocks`, `call config`) and api's door table.
+6. The rewind ledger and the structure cut: one entry per request, applied in arrival order.
 
 ## Not wired
 

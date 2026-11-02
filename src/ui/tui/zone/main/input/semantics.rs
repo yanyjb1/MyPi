@@ -41,13 +41,8 @@ pub enum Intent {
     // Undo / redo.
     Undo,
     Redo,
-    // Toggle reasoning fold / tool output fold.
-    ToggleReasoning,
-    ToggleTools,
     // Clear the input (Ctrl+C).
     ClearInput,
-    // Interrupt the in-flight round (Esc, not lent away).
-    Interrupt,
     // Submit the current input.
     Submit,
     // Unrecognized; ignore.
@@ -95,8 +90,6 @@ pub fn translate(key: Key) -> Intent {
         KeyCode::Char('d') if alt => Intent::DeleteWordForward,
         KeyCode::Char('u') if ctrl => Intent::DeleteToLineStart,
         KeyCode::Char('k') if ctrl => Intent::DeleteToLineEnd,
-        KeyCode::Char('t') if ctrl => Intent::ToggleReasoning,
-        KeyCode::Char('o') if ctrl => Intent::ToggleTools,
         KeyCode::Left => {
             if ctrl {
                 Intent::WordLeft

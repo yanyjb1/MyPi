@@ -3,10 +3,14 @@
 //! One hand is on duty at a time; its height is fixed from arrival until it leaves.
 
 use ratatui::text::Line;
+use serde_json::Value;
 
 use crate::ui::tui::action::Key;
-use crate::ui::tui::event::Event;
-use crate::ui::tui::zone::{Claim, Ctx, Reply};
+use crate::ui::tui::theme::Palette;
+use crate::ui::tui::zone::Claim;
+
+use super::super::desk::Reply;
+use super::pools::Pools;
 
 /// What a hand asks for when it takes the desk.
 #[derive(Debug, Clone, Copy)]
@@ -15,15 +19,11 @@ pub struct Report {
     pub rows: u16,
     /// Keys it borrows: while it is on duty these go to it and to nobody else.
     pub keys: &'static [Claim],
-    /// It wants the editor's text and cursor after every edit.
-    pub text: bool,
-    /// It wants the cursor's column after every draw.
-    pub col: bool,
 }
 
 pub trait Hand {
     /// On arrival, before the first report.
-    fn arrived(&mut self, ctx: &Ctx);
+    fn arrived(&mut self);
 
     /// Rows, keys, feeds. Read once, then kept until the hand leaves.
     fn report(&self) -> Report;
@@ -38,7 +38,14 @@ pub trait Hand {
         true
     }
 
-    fn on_event(&mut self, _ev: Event, _ctx: &Ctx) {}
+    /// One bus event. Unknown names are ignored.
+    fn on_event(&mut self, _event: &str, _content: &Value) {}
+
+    /// The workspace a path completes against.
+    fn place(&mut self, _cwd: &str) {}
+
+    /// The name pools, once the session has answered.
+    fn pools(&mut self, _pools: &Pools) {}
 
     fn text(&mut self, _text: &str, _cursor: usize) {}
 
@@ -49,7 +56,7 @@ pub trait Hand {
         None
     }
 
-    fn draw(&self, ctx: &Ctx, rows: u16) -> Vec<Line<'static>>;
+    fn draw(&self, width: u16, rows: u16, palette: &Palette) -> Vec<Line<'static>>;
 
     /// Leaving: put your own state away.
     fn left(&mut self);

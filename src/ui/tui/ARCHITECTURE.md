@@ -57,6 +57,5 @@ MainZone
 
 ## Not wired
 
-1. `Main`'s sub-zones still implement the previous surface; `Main` itself is written against the
-   current one, so the chat zone compiles only once the sub-zones follow.
-2. Suspend and resume: no trigger path, no handling.
+1. Suspend and resume: no trigger path, no handling.
+2. The main zone's bus is the only cross-sub-zone channel; there is no other.

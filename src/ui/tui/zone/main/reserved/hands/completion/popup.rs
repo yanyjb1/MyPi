@@ -27,8 +27,6 @@ pub struct PopupView {
     // Screen order, never reversed: ↑ moves up,
     // matching what the user sees — no "pressed up, jumped to the top" confusion.
     pub lines: Vec<Line<'static>>,
-    // 弹窗锚定的终端绝对列（= 光标列）。命令行的名字就落在这一列上。
-    pub anchor_col: usize,
 }
 
 // Render the popup. Empty content returns nothing.
@@ -43,10 +41,7 @@ pub fn render(
 ) -> PopupView {
     let visible = popup.visible(avail);
     if visible.is_empty() {
-        return PopupView {
-            lines: Vec::new(),
-            anchor_col: 0,
-        };
+        return PopupView { lines: Vec::new() };
     }
 
     // Locked height: pad with blank rows when candidates shrink; the reserved area stays put (no jitter)
@@ -111,7 +106,7 @@ pub fn render(
         lines.push(Line::from(""));
     }
 
-    PopupView { lines, anchor_col }
+    PopupView { lines }
 }
 
 // Split a candidate name into accented and plain runs.

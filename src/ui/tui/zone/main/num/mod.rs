@@ -6,4 +6,4 @@ mod money;
 
 pub use compact::compact;
 pub use exact::exact;
-pub use money::{money, money_within};
+pub use money::money;

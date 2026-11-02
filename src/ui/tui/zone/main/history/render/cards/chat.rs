@@ -1,148 +1,115 @@
-//! The kind dispatch: one node in, rows out. Grouping and pairing live in `block`.
+//! The tool card and the live tail: what a running turn draws.
 
 use ratatui::text::Line;
+use serde_json::Value;
 
-use super::super::block::Deferred;
-use super::super::{BlockKind, Streaming, render_block};
+use super::super::super::shape::{Block, Kind};
+use super::super::Opts;
+use super::super::block::block_gap;
+use super::super::paint;
+use super::Card;
 use super::tool_card;
-use super::tools::ToolOutcome;
-use crate::ipc::contract::BlockKind as Kind;
-use crate::ui::session::{BlockRef, Level};
+use super::tools::{self, ToolOutcome};
 use crate::ui::tui::text::glyphs;
-use crate::ui::tui::text::notice::notice_block;
 use crate::ui::tui::theme::{HistoryTheme, Token};
 
-fn push_block(
-    out: &mut Vec<Line<'static>>,
-    deferred: &mut Vec<Deferred>,
-    (rows, mut d): (Vec<Line<'static>>, Vec<Deferred>),
-) {
-    let base = out.len();
-    out.extend(rows);
-    for x in &mut d {
-        x.before += base;
-    }
-    deferred.extend(d);
-}
-
-pub(in crate::ui::tui::zone::main::history) fn single_node(
-    block: BlockRef<'_>,
-    paired: Option<BlockRef<'_>>,
+/// One tool exchange, and the assistant text that came before it.
+pub(in crate::ui::tui::zone::main::history) fn tool_node(
+    block: &Block,
+    paired: Option<&Block>,
     t: &HistoryTheme,
-    thinking: bool,
-    tool: bool,
-    placeholder: &str,
-    details: Option<&serde_json::Value>,
+    o: &Opts<'_>,
     width: usize,
-    defer: bool,
-    cwd: &str,
-) -> (Vec<Line<'static>>, Vec<Deferred>) {
-    match block.kind() {
-        Kind::Wake => (
-            notice_block(
-                block.content().map(String::as_str).unwrap_or_default(),
-                Level::Info,
-                t,
-            ),
-            Vec::new(),
-        ),
-        Kind::User => render_block(
-            BlockKind::User,
-            block.content().map(String::as_str).unwrap_or_default(),
-            Streaming::Final,
-            width,
-            t,
-            defer,
-        ),
-        Kind::Assistant => render_block(
-            BlockKind::Assistant,
-            block.content().map(String::as_str).unwrap_or_default(),
-            Streaming::Final,
-            width,
-            t,
-            defer,
-        ),
-        Kind::Reasoning => {
-            if thinking {
-                render_block(
-                    BlockKind::Reasoning,
-                    block.content().map(String::as_str).unwrap_or_default(),
-                    Streaming::Final,
-                    width,
-                    t,
-                    defer,
-                )
-            } else {
-                (
-                    vec![Line::from(t.fg(placeholder.to_string(), Token::SystemText))],
-                    Vec::new(),
-                )
-            }
-        }
-        Kind::ToolRequest => tool_node(block, paired, t, tool, details, width, defer, cwd),
-        Kind::ToolResult => (Vec::new(), Vec::new()),
-    }
-}
-
-fn tool_node(
-    block: BlockRef<'_>,
-    paired: Option<BlockRef<'_>>,
-    t: &HistoryTheme,
-    tool: bool,
-    details: Option<&serde_json::Value>,
-    width: usize,
-    defer: bool,
-    cwd: &str,
-) -> (Vec<Line<'static>>, Vec<Deferred>) {
-    let name = block.name().map(String::as_str).unwrap_or_default();
-    let args = block.args().map(String::as_str).unwrap_or_default();
-    let text = block.text().map(String::as_str).unwrap_or_default();
-    let first = block.first().unwrap_or(false);
-    let outcome = paired.map(|r| outcome_of(r, details));
+) -> Vec<Line<'static>> {
+    let name = block.name.as_deref().unwrap_or_default();
+    let args = block.args.as_deref().unwrap_or_default();
+    let details = paired.and_then(details_of);
+    let outcome = paired.map(|result| outcome_of(result, details.as_ref()));
     let mut out = Vec::new();
-    let mut deferred = Vec::new();
 
-    if first && !text.trim().is_empty() {
-        push_block(
-            &mut out,
-            &mut deferred,
-            render_block(
-                BlockKind::Assistant,
-                text,
-                Streaming::Final,
-                width,
-                t,
-                defer,
-            ),
-        );
-        out.push(super::super::block::block_gap());
+    if block.first
+        && let Some(text) = block.text.as_deref()
+        && !text.trim().is_empty()
+    {
+        out.extend(paint(text, t, width));
+        out.push(block_gap());
     }
 
     if name == "todo" {
-        out.extend(todo_marker(outcome.as_ref(), t));
-        return (out, deferred);
+        out.extend(todo_marker(outcome, t));
+        return out;
     }
     if name == "read" || name == "cd" {
         out.extend(match name {
-            "read" => super::tools::read_line(args, outcome, cwd, t),
-            _ => super::tools::cd_line(args, outcome, cwd, t),
+            "read" => tools::read_line(args, outcome, o.cwd, t),
+            _ => tools::cd_line(args, outcome, o.cwd, t),
         });
-        return (out, deferred);
+        return out;
     }
-    out.extend(tool_card(name, args, outcome, t, tool, width));
-    (out, deferred)
+    out.extend(tool_card(
+        Card {
+            name,
+            args,
+            result: outcome,
+            expanded: o.tool,
+            tail: block.ok.is_none(),
+            limit: o.rows,
+        },
+        t,
+        width,
+    ));
+    out
 }
 
-fn outcome_of<'a>(result: BlockRef<'a>, details: Option<&'a serde_json::Value>) -> ToolOutcome<'a> {
+/// The whole live tail, in the order upstream produced it.
+pub(in crate::ui::tui::zone::main::history) fn live_rows(
+    blocks: &[Block],
+    t: &HistoryTheme,
+    o: &Opts<'_>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for (at, block) in blocks.iter().enumerate() {
+        if block.kind == Kind::ToolResult {
+            continue;
+        }
+        let paired = blocks.get(at + 1).filter(|next| block.answers(next));
+        let rows = match block.kind {
+            Kind::ToolRequest => tool_node(block, paired, t, o, width),
+            Kind::User | Kind::Wake | Kind::Assistant | Kind::Reasoning | Kind::ToolResult => {
+                super::super::block(block, None, t, o, width)
+            }
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(block_gap());
+        }
+        out.extend(rows);
+    }
+    out
+}
+
+/// The memo a tool result carries, decoded.
+fn details_of(result: &Block) -> Option<Value> {
+    result
+        .memo
+        .as_deref()
+        .and_then(|memo| serde_json::from_str(memo).ok())
+}
+
+/// What the paired result says about the call.
+fn outcome_of<'a>(result: &'a Block, details: Option<&'a Value>) -> ToolOutcome<'a> {
     ToolOutcome {
-        text: result.result().map(String::as_str).unwrap_or_default(),
-        ok: result.ok().unwrap_or(false),
+        text: result.result.as_deref().unwrap_or_default(),
+        ok: result.ok.unwrap_or(false),
         details,
-        duration_ms: result.duration_ms().unwrap_or(0).max(0) as u64,
+        duration_ms: result.duration_ms.max(0) as u64,
     }
 }
 
-fn todo_marker(outcome: Option<&ToolOutcome<'_>>, t: &HistoryTheme) -> Vec<Line<'static>> {
+fn todo_marker(outcome: Option<ToolOutcome<'_>>, t: &HistoryTheme) -> Vec<Line<'static>> {
     let (glyph, tok) = match outcome {
         Some(o) if !o.ok => (glyphs::ERR, Token::Err),
         _ => (glyphs::PENDING, Token::ToolEdgePending),
@@ -155,16 +122,3 @@ fn todo_marker(outcome: Option<&ToolOutcome<'_>>, t: &HistoryTheme) -> Vec<Line<
     }
     out
 }
-
-pub(in crate::ui::tui::zone::main::history) fn tool_output_rows(
-    text: &str,
-    t: &HistoryTheme,
-    width: usize,
-) -> Vec<Line<'static>> {
-    super::super::block::wrap_rows(
-        super::tools::output_lines(text, LIVE_TOOL_LINES, false, false, t).into_iter(),
-        width,
-    )
-}
-
-pub(crate) const LIVE_TOOL_LINES: usize = 12;

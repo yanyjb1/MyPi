@@ -1,10 +1,10 @@
-//! The history zone: the local section, the viewport, and the block cache.
+//! The history zone: the block rows, the streaming tail, the local section, the viewport.
 
 mod cache;
-mod layout;
+mod live;
 mod local;
-mod product;
 mod render;
-mod resize;
+mod segment;
+mod shape;
 mod view;
 pub(in crate::ui::tui::zone::main) mod zone;

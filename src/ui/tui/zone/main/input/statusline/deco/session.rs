@@ -2,9 +2,9 @@
 
 use ratatui::text::Span;
 
-use crate::ui::tui::zone::Ctx;
-use crate::ui::tui::zone::main::input::statusline::theme::{StatusTheme, Token};
-use crate::ui::tui::zone::main::input::statusline::{Deco, Setup};
+use super::super::theme::{StatusTheme, Token};
+use super::super::{Deco, Setup};
+use crate::ui::tui::zone::main::input::Ctx;
 
 #[derive(Debug, Default)]
 pub struct Session;
@@ -15,7 +15,7 @@ pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
 
 impl Deco for Session {
     fn render(&self, t: &StatusTheme, _budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
-        let Some(name) = ctx.view.name else {
+        let Some(name) = ctx.data.name.as_deref() else {
             return Vec::new();
         };
         vec![t.capsule(name.to_string(), t.get(Token::Accent))]

@@ -15,6 +15,8 @@ The only vocabulary the app and the three major zones share.
 | `ZoneId` | `Main`, `Resume`, `Tree` |
 | `TermSize` | columns and rows |
 | `Memo` | string-to-string, owned by the app, open to the zone it starts |
+| `Shout` | one `(name, content)` event on the chat zone's bus |
+| `Origin` | who put a shout out; the shouter never hears it back |
 | `Packet`, `Structure` | re-exported from `ui::session`; zones never import that module |
 
 ### `Zone`
@@ -35,8 +37,8 @@ The only vocabulary the app and the three major zones share.
 ### `SubZone`
 
 `claims`, `kinds`, `deliver_event(packet, size)`, `deliver_action(action)`, `attach(session,
-size)`, `detach`, `borrowed`, `request_height`, `assign`, `on_height_changed`, `structure`.
-`Main` is the only host.
+size)`, `detach`, `borrowed`, `request_height`, `assign`, `on_height_changed`, `structure`,
+`take_shouts`, `hear`. `Main` is the only host.
 
 ### `Kind`
 
@@ -55,6 +57,15 @@ lifts `stream / notice` out of `Stream`. `local` returns `None`: it is delivered
 | `Attach(i64)` | `session.attach` + `subscribe watch` + the broadcast |
 | `Detach` | `session.detach` + the broadcast |
 | `Structure` | `session.structure()`, handed to every zone |
+| `Quit` | the app ends the loop |
+
+### `Shout`
+
+One event a sub-zone (or the main zone) puts out: `name` and `content`. The main zone delivers it
+to the other two and repeats until the queue is dry; a shouter never hears its own event, and a
+shout raised while delivering lands on the same queue. Unknown names are ignored.
+
+The names in use: `resize`, `cwd` (main), `usage`, `busy`, `prefill` (history and input).
 
 ### `Outcome`
 

@@ -3,6 +3,7 @@
 use super::layout::RowGeom;
 
 /// One line of the tree. A block is a line.
+#[derive(Debug, Clone)]
 pub struct Row {
     pub geom: RowGeom,
     pub block_id: i64,

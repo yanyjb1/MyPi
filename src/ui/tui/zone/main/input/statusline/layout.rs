@@ -4,7 +4,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::ui::tui::zone::Ctx;
+use super::super::Ctx;
 use unicode_width::UnicodeWidthStr;
 
 use super::theme::{StatusTheme, Token};

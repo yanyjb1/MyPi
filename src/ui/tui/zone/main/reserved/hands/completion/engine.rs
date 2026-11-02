@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::super::super::pools::Pools;
 use crate::commands::{self, Arg, Candidate};
-use crate::ipc::contract::CandidatePools;
 
 /// How many candidates the popup shows at most.
 pub const MAX_VISIBLE: usize = 8;
@@ -48,7 +48,7 @@ pub struct Look<'a> {
     /// `~` expands to it for lookups only.
     pub home: &'a Path,
     /// Model and profile names, asked for once at startup.
-    pub pools: Option<&'a CandidatePools>,
+    pub pools: Option<&'a Pools>,
 }
 
 /// Directory listings kept between keystrokes: one `read_dir` per directory.
@@ -449,10 +449,6 @@ impl CompletionPopup {
 
     pub fn items(&self) -> &[Completion] {
         &self.items
-    }
-
-    pub fn selected(&self) -> usize {
-        self.selected
     }
 
     /// Row height locked for this session; `None` when closed.

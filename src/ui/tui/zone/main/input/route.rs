@@ -7,7 +7,7 @@ use crate::commands::{self, CommandMeta};
 /// One input line, classified.
 pub enum Route<'a> {
     /// Not a command: it leaves as a message.
-    Message(&'a str),
+    Message,
     /// A command the table knows, with its argument text.
     Command(&'static CommandMeta, &'a str),
 }
@@ -15,6 +15,6 @@ pub enum Route<'a> {
 pub fn classify(input: &str) -> Route<'_> {
     match commands::split(input) {
         Some((meta, args)) => Route::Command(meta, args),
-        None => Route::Message(input),
+        None => Route::Message,
     }
 }

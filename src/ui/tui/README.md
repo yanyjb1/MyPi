@@ -4,13 +4,18 @@ The terminal front end: ratatui + crossterm on top of `ui::session`.
 
 ## 1. Design / Schema
 
-### Two lines and one broadcast
+### Two lines and one horn
 
 | line | carries | goes to |
 |---|---|---|
 | action | a key, a paste, a wheel notch | the zone that claimed it |
 | frame | `kind`, `name`, `content` | the showing zone, if it declared the kind |
 | local | the app's own facts (resize, focus, session loss) | the showing zone, unconditional |
+| shout | `name`, `content` | every other zone of the chat area |
+
+A shout is the chat zone's own bus: a sub-zone puts one out, the main zone hands it to the other
+two, and nobody hears its own. A zone that does not know a name does nothing. The shouter is
+always the zone, never one of its parts.
 
 Only the showing zone hears anything; the other two major zones are inert until the app starts
 one of them.

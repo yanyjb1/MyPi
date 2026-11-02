@@ -7,9 +7,11 @@ use std::time::Duration;
 
 use ratatui::text::Span;
 
+use serde_json::Value;
+
 use crate::git::GitStatus;
-use crate::ui::tui::event::Event;
-use crate::ui::tui::zone::Ctx;
+
+use crate::ui::tui::zone::main::input::Ctx;
 use crate::ui::tui::zone::main::input::statusline::theme::{StatusTheme, Token};
 use crate::ui::tui::zone::main::input::statusline::{Deco, Setup};
 
@@ -63,16 +65,17 @@ impl Git {
 }
 
 impl Deco for Git {
-    fn on_event(&mut self, ev: Event, ctx: &Ctx) {
-        // The workspace comes from the view; a temporary `cd` does not move it.
-        if !ctx.view.cwd_temporary && !ctx.view.cwd.is_empty() {
-            let dir = PathBuf::from(ctx.view.cwd);
+    fn on_event(&mut self, event: &str, _content: &Value, ctx: &Ctx) {
+        // The workspace comes from the zone's data; a temporary `cd` does not move it.
+        if !ctx.data.temporary && !ctx.data.cwd.is_empty() {
+            let dir = PathBuf::from(&ctx.data.cwd);
             let moved = self.dir.lock().map(|p| *p != dir).unwrap_or(false);
             if moved {
                 self.set_dir(dir);
             }
         }
-        if matches!(ev, Event::ToolFinished) {
+        // A round moved: tools ran, the tree may have changed.
+        if event == crate::ui::tui::zone::name::BUSY {
             self.dirty.store(true, Ordering::Relaxed);
         }
     }

@@ -6,81 +6,63 @@ What each file holds, who calls it, and what it depends on. Current state only.
 
 | file | holds | outside |
 |---|---|---|
-| `mod.rs` | `InputZone`, `ExitRequest`, `CLAIMS`, the `SubZone` implementation | private to `Main` |
-| `route.rs` | `Route`, `classify` — message or command | private |
-| `semantics.rs` | `Intent`, `translate` — key to intent | private |
-| `render.rs` | the container: edges, body, cursor mapping | private |
-| `editor/mod.rs` | `Editor`, `Effect`, text and cursor operations | private |
-| `editor/history.rs` | `History` — the submission ring | private |
-| `editor/undo.rs` | `Snapshot`, `UndoStack`, `EditKind` | private |
-| `editor/paste.rs` | `PasteStore`, markers, collapse thresholds | private |
-| `editor/separators.rs` | `SeparatorTable` — word boundaries | private |
-| `statusline/mod.rs` | `StatusLine`, `Entry`, `Deco`, `Setup`, `Side`, `ColorPolicy` | private |
-| `statusline/layout.rs` | groups, connectors, omission | private |
-| `statusline/theme.rs` | `StatusTheme`, `Token`, `ALL_TOKENS` | private |
-| `statusline/deco/` | `ROW` and one file per decoration | private |
+| `mod.rs` | `InputZone`, `CLAIMS`, `ExitRequest`, the frame answers it decodes | private |
+| `ctx.rs` | `Ctx`, `Data`, `Money` — what the parts read | private |
+| `editor/` | the text, undo, paste store, separators, submission ring | private |
+| `semantics.rs` | key → intent, one context-free table | private |
+| `route.rs` | one line classified as a message or a command | private |
+| `render.rs` | the container: top edge, body rows, bottom edge, cursor | private |
+| `statusline/` | the row engine, `StatusTheme`, and the seven decos | private |
 
 ## What it exposes
 
-Through `SubZone`:
+Through `SubZone`: `claims`, `kinds`, `deliver_event`, `deliver_action`, `attach`, `detach`,
+`request_height`, `assign`, `on_height_changed`, `take_shouts`, `hear`.
 
-- `claims`, `deliver_event`, `deliver_action`
-- `attach`, `detach`
-- `request_height`, `assign`, `on_height_changed`
-- `take_requests`
-
-To `Main`:
-
-- `CLAIMS`
-- `pending_exits`, `pending_hire`
-- `editor`, `history`, `scroll`, `rows`
-- `cursor_col`, `cursor_row`
-- `clear`, `prefill`, `apply_reply`
-- `render_rows`
+To `Main`: `take_hire`, `take_exits`, `draft`, `knows_cwd`, `apply_reply`, `clear`, `render_rows`,
+`cursor_row`, `cursor_col`, `editor`, `statusline`.
 
 ## What it calls
 
-- `zone::main::geometry` for inner width, container height, scroll, and cursor position.
-- `zone::main::reserved::{Hire, Reply}`.
-- `zone::{Action, Claim, Ctx, Event, Key, KeyCode, Request, TermSize}`.
-- `text::{wrap, Wrapped}`.
-- `theme::Palette` and `statusline::StatusTheme`.
-- `commands` for classification and local command names.
-- `ui::session::View` for the statusline and the busy state.
+- `ui::tui::zone::{Packet, Request, TermSize, Claim, Kind, name}` and `text` for wrapping.
+- `ui::tui::action`, `ui::tui::theme::Palette`.
+- `commands` for the command table and completion candidates.
+- `super::desk::{Hire, Reply}` for what it asks the desk and what the desk hands back.
 
 ## Who calls it
 
-`MainZone` only:
-
-- `arbitrate` → `request_height`, `assign`
-- `settle` / `broadcast` → `on_height_changed`
-- `dispatch` → `deliver_action`
-- `deliver_event` → `deliver_event`
-- `attach` / `detach`
-- `render` → `render_rows`
-- `take_requests`
-
-`Main` also reads `pending_hire`, `pending_exits`, `editor.text`, `editor.cursor`, and
-`cursor_col` directly; they are the input/reserved handshake.
+`MainZone` only: `arbitrate` → `request_height` / `assign`, `dispatch` → `deliver_action`, `event` →
+`deliver_event`, `render` → `render_rows`, the bus → `hear` / `take_shouts`.
 
 ## What it does not know
 
-The app, the history zone, the reserved zone's internals, the picker, the tree, the socket, the
-database, and the agent loop.
+The history zone, the session, the socket, the database, the agent loop, the picker, and the tree.
+
+## Inside
+
+```text
+InputZone
+ ├── editor   ── text, cursor, undo, paste, separators
+ ├── history  ── the 20-entry submission ring
+ ├── statusline ── table + decos
+ ├── data     ── model, name, directory, context, money, busy
+ └── pending_keys / pending_exits / pending_hire / shouts
+```
+
+- `deliver_action` applies the intent, then re-reads `hang`; a fresh hang hires completion.
+- `deliver_event` decodes only the frames it named: `call meta`, `call config`, `call usage`,
+  `stream change`.
+- `hear` takes `cwd`, `usage`, `busy`, `prefill`; the statusline hears the rest.
 
 ## Must stay in sync
 
-1. `semantics::Intent` and `apply`: every intent needs an effect.
-2. `ExitRequest` and `Main::dispatch::exits`: every variant needs a destination.
-3. `Claim` values and `Main`'s static table.
-4. `request_height` and `geometry::container_height`.
-5. `render_rows`' cursor report and `Main::cursor_position`.
-6. `StatusLine::ROW` and the deco trait: a new deco is a file plus one row.
-7. `detach` and the submission history: transient state goes, history stays.
+1. `CLAIMS` and the arms of `semantics::translate`.
+2. `Data` fields and the decos that read them.
+3. `ExitRequest` and `Main`'s exit conversion.
+4. `Hire` and `Reply` with the desk's hand table.
 
 ## Not wired
 
-1. `Setup.git_scan` is a three-second default; no config key is read.
-2. `view.pools` is not fetched at startup, so completion has no model or profile names.
-3. The statusline's language and several `statusLine*` tokens are not authoritative yet.
-4. The loop delivers actions and takes requests; it emits only `Tick`.
+1. `call usage` is asked once at attach, not after each round; the cost deco can lag.
+2. A model switch re-asks the window but keeps the old `used` until the next round closes.
+3. The `git` deco scans on its own thread; the interval is a constant.

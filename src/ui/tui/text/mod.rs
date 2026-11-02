@@ -2,7 +2,6 @@
 
 pub(crate) mod card;
 pub(crate) mod glyphs;
-pub(crate) mod notice;
 
 mod truncate;
 mod width;

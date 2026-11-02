@@ -1,12 +1,12 @@
-//! Key routing and the exits that become requests or a handover.
+//! Key routing, and the exits that become requests or one handover.
 
 use serde_json::json;
 
 use super::input::ExitRequest;
-use super::keys;
+use super::keys::{self, Seat};
 use super::zone::MainZone;
 use crate::ui::tui::action::Action;
-use crate::ui::tui::zone::{Outcome, Request, Seat, SubZone, ZoneId};
+use crate::ui::tui::zone::{Outcome, Request, SubZone, ZoneId};
 
 pub fn dispatch(zone: &mut MainZone, a: &Action) -> (Outcome, Vec<Request>) {
     let Some(seat) = keys::resolve(a, &zone.keys) else {
@@ -18,21 +18,9 @@ pub fn dispatch(zone: &mut MainZone, a: &Action) -> (Outcome, Vec<Request>) {
         }
         Seat::Input => {
             zone.input.deliver_action(a);
-            if let Some(who) = zone.input.pending_hire.take() {
-                zone.reserved.hire(who);
-            }
-            let text = zone.input.editor.text();
-            let cursor = zone.input.editor.cursor();
-            zone.reserved.text(&text, cursor);
-            if let Some(reply) = zone.reserved.take_reply() {
-                zone.input.apply_reply(reply);
-            }
         }
         Seat::Reserved => {
             zone.reserved.deliver_action(a);
-            if let Some(reply) = zone.reserved.take_reply() {
-                zone.input.apply_reply(reply);
-            }
         }
     }
     exits(zone)
@@ -42,7 +30,7 @@ pub fn dispatch(zone: &mut MainZone, a: &Action) -> (Outcome, Vec<Request>) {
 fn exits(zone: &mut MainZone) -> (Outcome, Vec<Request>) {
     let mut requests = Vec::new();
     let mut outcome = Outcome::Stay;
-    for exit in zone.input.pending_exits.drain(..) {
+    for exit in zone.input.take_exits() {
         match exit {
             ExitRequest::Submit(text) => {
                 requests.push(Request::subscribe("submit", json!({"text": text})));

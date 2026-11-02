@@ -81,11 +81,6 @@ impl Borrowed {
         self.rows.retain(|(_, held)| *held != seat);
     }
 
-    /// Whether this seat currently holds anything.
-    pub fn holds(&self, seat: Seat) -> bool {
-        self.rows.iter().any(|(_, held)| *held == seat)
-    }
-
     /// Drop every loan.
     pub fn clear(&mut self) {
         self.rows.clear();

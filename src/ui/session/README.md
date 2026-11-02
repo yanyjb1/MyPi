@@ -20,10 +20,16 @@ a type of its own, and nothing is rewritten on the way out.
   its answer feeds the window and is not forwarded.
 - Eviction: the earliest admission goes first, then the lowest id.
 - A pushed stream frame carrying `turn` and `ranges` sets that round.
-- A `call init` answer replaces both windows; a `call blocks` answer merges rows; a `post
-  rewind` answer trims the structure by its `cut` and drops the rows outside it; a `post delete`
+- A `call init` answer replaces both windows; a `call blocks` answer merges rows; a `post delete`
   answer for the attached session detaches.
 - A push whose `content.session` is not the attached one is dropped.
+
+### The rewind ledger
+
+A `post rewind` is noted before its frame leaves: the spot it names (a round and a block) is the
+whole of what this layer needs. When an accepted reply comes back the structure is cut at that
+spot and the rows outside it are dropped. A refused reply drops the note and changes nothing. The
+reply's own `cut` is forwarded untouched: what survived belongs to the zone that asked.
 
 ### The outbox
 
@@ -50,6 +56,7 @@ send(kind, name, content, answer)  bye()
 3. A reply is matched to the oldest queued frame with the same `kind` and `name`; a mismatch is
    reported as `local / lost`.
 4. Both windows live exactly as long as one attachment.
+5. The rewind ledger is written from the request, never read out of the reply.
 
 ## 2. Design intent
 

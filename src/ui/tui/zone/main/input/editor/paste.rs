@@ -80,14 +80,6 @@ impl PasteStore {
         self.entries.get(&id).map(|s| s.as_str())
     }
 
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     // Clear everything (called after submission).
     //
     // The counter resets too: the editor is cleared at that point, so no marker can reference old numbers.

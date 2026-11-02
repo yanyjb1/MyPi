@@ -1,62 +1,26 @@
-//! The history zone itself: what it reads from config, the keys it claims, and one row
-//! pass per frame.
+//! The history zone: what it claims, what it asks for, and one row pass per frame.
 
-use std::time::Duration;
+use std::collections::{BTreeMap, HashSet};
 
 use ratatui::text::Line;
+use serde_json::{Value, json};
 
-use super::cache::{BlockCache, Item};
-use super::layout;
-use super::local::{Local, SlotKind};
-use super::render::cards::{chat, todo as todo_rows};
-use super::resize;
+use super::cache::BlockCache;
+use super::live::Live;
+use super::local::{Level, Life, Local, SlotKind};
+use super::render::cards::chat::live_rows;
+use super::render::cards::todo::{self as todo_rows, Task};
+use super::render::notice::notice_block;
+use super::render::{self, Opts};
+use super::shape::{Block, Kind as BlockKind};
 use super::view::{Dir, Viewport};
 
-use crate::ipc::contract::BlockKind;
-use crate::ui::session::{Level, Life, View};
 use crate::ui::tui::TodoFold;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
-use crate::ui::tui::event::Event;
-use crate::ui::tui::theme::HistoryTheme;
-use crate::ui::tui::zone::{Claim, Ctx, Request, SubZone, TermSize, ViewAsk};
+use crate::ui::tui::theme::{HistoryTheme, Token};
+use crate::ui::tui::zone::{Claim, Kind, Request, Shout, Structure, SubZone, TermSize, name};
 
-/// Everything the zone reads from config, handed over once at assembly.
-#[derive(Debug, Clone)]
-pub struct Config {
-    /// Rows between the sight line and the top of the zone.
-    pub focus_line: u16,
-    /// How many blocks on each side of the sight line keep their rows.
-    pub focus_margin: usize,
-    /// How long the reader must be still before the receipt goes out.
-    pub rest_ms: u64,
-    /// Blocks already laid out before more is asked for.
-    pub overscan: usize,
-    /// What a folded thinking chain shows.
-    pub on_thinking: String,
-    /// Ctrl+T's starting position.
-    pub unfold_thinking: bool,
-    /// Ctrl+O's starting position.
-    pub unfold_tool: bool,
-    /// How the task list folds.
-    pub todo_fold: TodoFold,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            focus_line: 3,
-            focus_margin: 32,
-            rest_ms: 300,
-            overscan: 12,
-            on_thinking: "thinking…".to_string(),
-            unfold_thinking: false,
-            unfold_tool: false,
-            todo_fold: TodoFold::default(),
-        }
-    }
-}
-
-/// The keys the history zone consumes. The input zone yields Ctrl+arrows to it.
+/// The keys history consumes. The input zone yields Ctrl+arrows to it.
 pub const CLAIMS: &[Claim] = &[
     Claim::Key(Key {
         code: KeyCode::Char('t'),
@@ -142,88 +106,105 @@ pub const CLAIMS: &[Claim] = &[
     Claim::WheelShift,
 ];
 
+/// The classes the zone reads.
+const KINDS: &[Kind] = &[Kind::Call, Kind::Stream, Kind::Notice];
+
+/// Rows between the sight line and the top of the zone.
+const FOCUS_LINE: u16 = 3;
+
+/// Blocks on each side of the sight line that keep their rows.
+const MARGIN: i64 = 32;
+
 /// The chat history: what the reader sees of the conversation.
 pub struct HistoryZone {
+    /// Every landed block this front end holds, by id.
+    blocks: BTreeMap<i64, Block>,
+    /// Ranges already asked for, so one turn is not asked twice.
+    asking: HashSet<[i64; 2]>,
+    /// The structural window, as last handed down.
+    structure: Structure,
+    /// The latest block id that has taken a slot.
+    landed: i64,
+    /// What the conversation is made of, in order.
     local: Local,
+    /// The tail still growing.
+    live: Live,
     view: Viewport,
     cache: BlockCache,
-    /// Blocks already laid out before more is asked for.
-    overscan: usize,
-    /// How many blocks around the sight line keep their rows.
-    margin: i64,
-    /// How long the reader must be still before the receipt goes out.
-    silence: Duration,
+    /// The model's checklist, as the session replays it.
+    todo: Vec<Task>,
     todo_fold: TodoFold,
-    /// What is owed to the session, collected this frame.
-    ask: Vec<ViewAsk>,
-    /// The first attach is spared the destroy: a new conversation owns what is there.
-    reprieve: bool,
+    /// The thinking chain's own copy.
+    thinking: bool,
+    /// Tool exchanges' own copy.
+    tool: bool,
+    placeholder: String,
+    /// Where the tools ran, for shortening paths.
+    cwd: String,
     /// Rows the main zone handed down.
     rows: u16,
+    /// The last context size shouted, so one number is not repeated every frame.
+    usage: u64,
+    /// A fresh attach lays the structure out again.
+    needs_layout: bool,
+    /// A spot to put the sight line on, once its block has a slot.
+    pending_focus: Option<(i64, i64)>,
+    /// The next attach is spared the destroy: a new conversation owns what is there.
+    reprieve: bool,
+    /// What this frame owes the session.
+    outbox: Vec<Request>,
+    /// What this frame owes the other zones.
+    shouts: Vec<Shout>,
 }
 
 impl Default for HistoryZone {
     fn default() -> Self {
-        Self {
+        let mut zone = Self {
+            blocks: BTreeMap::new(),
+            asking: HashSet::new(),
+            structure: Structure::default(),
+            landed: 0,
             local: Local::default(),
+            live: Live::default(),
             view: Viewport::default(),
-            cache: BlockCache::new(),
-            overscan: 12,
-            margin: 32,
-            silence: Duration::from_millis(300),
+            cache: BlockCache::default(),
+            todo: Vec::new(),
             todo_fold: TodoFold::default(),
-            ask: Vec::new(),
-            reprieve: true,
+            thinking: false,
+            tool: false,
+            placeholder: "thinking…".to_string(),
+            cwd: String::new(),
             rows: 0,
-        }
+            usage: 0,
+            needs_layout: false,
+            pending_focus: None,
+            reprieve: true,
+            outbox: Vec::new(),
+            shouts: Vec::new(),
+        };
+        zone.view.set_line(FOCUS_LINE);
+        zone.cache.set_budget(MARGIN.max(1) as usize * 2 + 1);
+        zone
     }
 }
 
 impl HistoryZone {
-    /// Take the config, once.
-    pub fn set_config(&mut self, cfg: &Config) {
-        self.view.set_line(cfg.focus_line);
-        self.cache.set_budget(cfg.focus_margin.max(1) * 2 + 1);
-        self.cache.set_placeholder(&cfg.on_thinking);
-        self.cache
-            .set_switches(cfg.unfold_thinking, cfg.unfold_tool);
-        self.overscan = cfg.overscan.max(1);
-        self.margin = cfg.focus_margin.max(1) as i64;
-        self.silence = Duration::from_millis(cfg.rest_ms);
-        self.todo_fold = cfg.todo_fold;
-    }
-
-    /// Warm the languages the transcript actually uses, newest first.
-    pub fn warm(&self, view: &View<'_>) {
-        let names: Vec<String> = view
-            .chain()
-            .filter_map(|b| b.name().map(|n| n.to_string()))
-            .collect();
-        super::render::text::highlight::warm_in_order(names.iter().map(String::as_str));
-    }
-
-    /// Take what this frame owes the session.
-    pub fn take_out(&mut self) -> Vec<ViewAsk> {
-        std::mem::take(&mut self.ask)
-    }
-
     /// A line this front end has to say, on its own slot.
     pub fn notice(&mut self, text: String, level: Level, life: Life) {
-        if life == Life::Short {
-            self.local.kill_short_lived();
-        }
-        self.local.append(SlotKind::Notice { text, level, life });
+        self.local.kill_short_lived();
+        self.local.push_now(SlotKind::Notice { text, level, life });
     }
 
-    /// Open a conversation: destroy the old section, unless the first attach spares it. The
-    /// first attach still asks for the structure: a new conversation's answer is empty.
-    fn open(&mut self, session: i64) {
-        if self.reprieve {
-            self.reprieve = false;
-        } else {
-            self.destroy();
+    /// Put a block under the sight line. The spot is kept until the block has a slot,
+    /// because the tree leaves it in the memo before this zone has the structure.
+    pub fn focus(&mut self, turn: i64, block: i64) {
+        match self.local.num_of(block) {
+            Some(num) => self.view.focus_num(num),
+            None => {
+                self.pending_focus = Some((turn, block));
+                self.ask_turn(turn);
+            }
         }
-        self.ask.push(ViewAsk::Init { session });
     }
 
     /// `/new`: drop this conversation's section; the next attach asks for the new one.
@@ -232,332 +213,367 @@ impl HistoryZone {
         self.destroy();
     }
 
-    /// Put a landed block under the sight line; an absent block asks for its round.
-    pub fn focus(&mut self, turn: i64, block: i64) {
-        match self.local.num_of(block) {
-            Some(num) => self.view.focus_num(num),
-            None => self.ask.push(ViewAsk::Jump { turn }),
-        }
-    }
-
-    /// The local section goes, and the rows, the task list and the thinking state with it.
+    /// The local section goes, and the rows, the task list and the tail with it.
     fn destroy(&mut self) {
         self.local.clear();
         self.cache.clear();
-        self.ask.clear();
+        self.blocks.clear();
+        self.asking.clear();
+        self.live.clear();
+        self.todo.clear();
         self.view.follow();
+        self.landed = 0;
+        self.usage = 0;
+        self.needs_layout = false;
     }
 
     /// The rows of one frame: the conversation, then the pinned rows.
-    pub fn render_rows(
-        &mut self,
-        view: &View<'_>,
-        term_w: u16,
-        t: &HistoryTheme,
-    ) -> Vec<Line<'static>> {
+    pub fn render_rows(&mut self, term_w: u16, t: &HistoryTheme) -> Vec<Line<'static>> {
         let width = usize::from(term_w.max(1));
-        let mut items = self.items(view);
-        self.cache.sync(
-            &items,
-            view.generation,
-            view.tail.version(),
-            width,
-            view.cwd,
-        );
-        self.cache.set_busy(view.busy);
-        if self.land(view) {
-            items = self.items(view);
-            self.trim(view, &items);
-        }
-        let plan = resize::plan(
-            &self.local,
-            self.view.anchor(),
-            self.cache.cached_numbers(),
-            self.margin,
-        );
-        layout::visible::apply(&mut self.cache, &items, &plan.visible, t);
+        self.cache
+            .sync(width, &self.cwd, (self.thinking, self.tool));
+        let opts = Opts {
+            thinking: self.thinking,
+            tool: self.tool,
+            placeholder: &self.placeholder,
+            cwd: &self.cwd,
+            rows: usize::from(self.rows),
+        };
 
-        let mut pinned = todo_rows::rows(
-            view.todo,
+        let pinned = todo_rows::rows(
+            &self.todo,
             self.todo_fold,
             width,
             t,
             usize::from(self.rows) / 2,
         );
-        let skip = self.thinking_slot(&items);
-        pinned.extend(self.thinking_rows(&items, t));
+        let tail = if self.live.is_empty() {
+            Vec::new()
+        } else {
+            live_rows(self.live.blocks(), t, &opts, width)
+        };
 
-        let tail = view
-            .tail
-            .tool_output()
-            .map(|o| chat::tool_output_rows(&o.text, t, width))
-            .unwrap_or_default();
-
-        self.view.rows(
-            &self.local,
-            &items,
-            &mut self.cache,
-            &pinned,
+        let local = &self.local;
+        let blocks = &self.blocks;
+        let cache = &mut self.cache;
+        let view = &mut self.view;
+        view.compose(
+            local,
+            |num| {
+                let Some(slot) = local.at(num) else {
+                    return Vec::new();
+                };
+                match &slot.kind {
+                    SlotKind::Next => Vec::new(),
+                    SlotKind::Notice { text, level, .. } => notice_block(text, *level, t),
+                    SlotKind::Block(id) => match blocks.get(id) {
+                        Some(block) => {
+                            let paired = blocks.get(&(id + 1)).filter(|next| block.answers(next));
+                            cache
+                                .paint(num, || render::block(block, paired, t, &opts, width))
+                                .to_vec()
+                        }
+                        None => vec![Line::from(t.fg("…", Token::SystemText))],
+                    },
+                }
+            },
             &tail,
-            skip,
-            t,
-            width,
+            &pinned,
         )
     }
 
-    /// The blocks of this frame, in order, with tool exchanges glued to one node.
-    fn items<'a>(&mut self, view: &'a View<'_>) -> Vec<Item<'a>> {
-        let blocks: Vec<crate::ui::session::BlockRef<'a>> = view.chain().collect();
-        let waiting = self.waiting();
-        if waiting.len() < blocks.iter().filter(|b| b.id().is_none()).count() {
-            let need = blocks.iter().filter(|b| b.id().is_none()).count() - waiting.len();
-            for _ in 0..need {
-                self.local.append(SlotKind::Empty);
+    /// Take what this frame owes the session.
+    fn take_out(&mut self) -> Vec<Request> {
+        std::mem::take(&mut self.outbox)
+    }
+
+    /// Ask for one turn's blocks, unless they are here or already asked for.
+    fn ask_turn(&mut self, turn: i64) {
+        let Some(held) = self.structure.turns().iter().find(|t| t.id == turn) else {
+            return;
+        };
+        for range in &held.ranges {
+            if self.asking.contains(range) {
+                continue;
             }
+            let [lo, hi] = *range;
+            let have = (lo..=hi).all(|id| self.blocks.contains_key(&id));
+            if have {
+                continue;
+            }
+            self.asking.insert(*range);
+            self.outbox
+                .push(Request::call("blocks", json!({"ranges": [[lo, hi]]})));
         }
-        let waiting = self.waiting();
-        let mut out = Vec::with_capacity(blocks.len());
-        let mut live = 0usize;
-        let mut at = 0usize;
-        while at < blocks.len() {
-            let block = blocks[at];
-            let paired = super::render::block::pair(&blocks, at);
-            let num = match block.id().and_then(|id| self.local.num_of(id)) {
-                Some(num) => num,
-                None => {
-                    let num = waiting.get(live).copied().unwrap_or_default();
-                    live += 1;
-                    num
-                }
-            };
-            let version = if block.is_live() {
-                view.tail.version()
-            } else {
-                0
-            };
-            out.push(Item {
-                num,
-                block,
-                paired,
-                version,
-            });
-            at += if paired.is_some() { 2 } else { 1 };
-        }
-        out
     }
 
-    /// The numbers of the slots still waiting for a block id, oldest first.
-    fn waiting(&self) -> Vec<i64> {
-        self.local
+    /// The turn a block belongs to.
+    fn turn_of(&self, block: i64) -> Option<i64> {
+        self.structure
+            .turns()
             .iter()
-            .filter(|s| matches!(s.kind, SlotKind::Empty))
-            .map(|s| s.num)
-            .collect()
+            .find(|turn| turn.owns(block))
+            .map(|turn| turn.id)
     }
 
-    /// Land the ids the session handed out, and let dead notices go. The landed numbers keep
-    /// their places; their rows are dropped so the next pass paints the landed version.
-    fn land(&mut self, view: &View<'_>) -> bool {
-        let waiting = self.waiting();
-        if waiting.is_empty() {
-            return false;
+    /// Keep the anchor's own turn and its neighbours in hand.
+    fn ensure_around(&mut self) {
+        let anchor = self.view.anchor();
+        let Some(block) = self.local.at(anchor).and_then(|slot| match slot.kind {
+            SlotKind::Block(id) => Some(id),
+            _ => None,
+        }) else {
+            return;
+        };
+        let wanted: Vec<i64> = {
+            let turns = self.structure.turns();
+            let Some(at) = turns.iter().position(|turn| turn.owns(block)) else {
+                return;
+            };
+            [-1i64, 0, 1]
+                .iter()
+                .filter_map(|offset| {
+                    let index = at as i64 + offset;
+                    (index >= 0 && (index as usize) < turns.len()).then(|| turns[index as usize].id)
+                })
+                .collect()
+        };
+        for turn in wanted {
+            self.ask_turn(turn);
         }
-        let ids: Vec<i64> = view
-            .blocks
-            .iter()
-            .rev()
-            .take(waiting.len())
-            .map(|b| b.block.id)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        self.local.land(&ids);
-        for num in &waiting {
-            self.cache.invalidate(*num);
-        }
-        self.local.kill_short_lived();
-        true
     }
 
-    /// Drop the rows outside the circle, once, at landing.
-    ///
-    /// One circle when the reader is on the part that just landed: the sight line's block plus
-    /// `margin` either way. Two circles when the reader is elsewhere: that one, plus the bottom
-    /// of the mutable region and `margin` above it. Two passes: oldest write time first, skipping
-    /// the part the reader is looking at; then whatever is left goes by distance from the edge.
-    fn trim(&mut self, view: &View<'_>, items: &[Item<'_>]) {
-        if view.busy {
+    /// Decode a `blocks` array, keep the rows, and give the newest ones their numbers.
+    fn take_blocks(&mut self, rows: &Value) {
+        let Some(items) = rows.as_array() else {
+            return;
+        };
+        for row in items {
+            let Some(block) = Block::of(row) else {
+                continue;
+            };
+            let id = block.id;
+            if block.usage.prompt > 0 {
+                self.usage = block.usage.context();
+            }
+            let fresh = id > self.landed;
+            self.blocks.insert(id, block);
+            if !fresh {
+                continue;
+            }
+            self.landed = id;
+            if self.needs_layout {
+                // The attach's own blocks belong to the past; the layout pass numbers them.
+                continue;
+            }
+            let num = self.local.push_now(SlotKind::Block(id));
+            self.cache.drop_num(num);
+        }
+    }
+
+    /// Lay the whole structure out as the past, newest block at -1.
+    fn lay_out(&mut self) {
+        let turns = self.structure.turns();
+        if turns.is_empty() {
             return;
         }
-        let anchor = self.view.anchor();
-        let margin = self.margin;
-        let landing = items
+        let mut ids: Vec<i64> = Vec::new();
+        for turn in turns.iter().rev() {
+            for [lo, hi] in &turn.ranges {
+                ids.extend(*lo..=*hi);
+            }
+        }
+        self.local.clear();
+        for id in ids.iter().rev() {
+            self.local.push_older(SlotKind::Block(*id));
+        }
+        self.landed = ids.last().copied().unwrap_or(0);
+    }
+
+    /// Read one frame's content: a live piece, a closed round, a notice, a change.
+    fn read_stream(&mut self, packet: &crate::ui::tui::zone::Packet) {
+        let content = &packet.content;
+        match packet.name.as_str() {
+            "notice" => {
+                let level = match content.get("level").and_then(Value::as_str) {
+                    Some("error") => Level::Error,
+                    Some("warn") => Level::Warn,
+                    _ => Level::Info,
+                };
+                let text = content
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let life = if level == Level::Error {
+                    Life::Long
+                } else {
+                    Life::Short
+                };
+                self.notice(text, level, life);
+            }
+            "change" => {
+                if content.get("action").and_then(Value::as_str) == Some("rewind") {
+                    // Another front end rewound the session: the structure is the truth, so
+                    // ask for it again and let the slots follow.
+                    self.outbox.push(Request::Structure);
+                }
+            }
+            _ => {
+                if content.get("ranges").is_some() {
+                    self.closed(content);
+                    return;
+                }
+                self.piece(content);
+            }
+        }
+    }
+
+    /// One live piece from the running turn.
+    fn piece(&mut self, content: &Value) {
+        let kind = content
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let text = content
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let call = content
+            .get("call_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match kind {
+            "text" => self.live.text(text),
+            "thinking" => self.live.thinking(text),
+            "arguments" => self.live.arguments(call, text),
+            "boundary" => self.live.boundary(),
+            "tool_start" => {
+                let name = content
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let args = content
+                    .get("args")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let intent = content.get("intent").and_then(Value::as_str);
+                self.live.tool_start(call, name, args, intent);
+            }
+            "tool_progress" => self.live.tool_progress(call, text),
+            "tool_end" => {
+                let ok = content.get("ok").and_then(Value::as_bool).unwrap_or(false);
+                let result = content
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let memo = content.get("memo").and_then(Value::as_str);
+                let took = content
+                    .get("duration_ms")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                self.live.tool_end(call, ok, result, memo, took);
+            }
+            _ => {}
+        }
+        self.shouts
+            .push(Shout::new(name::BUSY, json!({"on": true})));
+    }
+
+    /// A round closed: its ranges are in hand, the tail is not needed any more.
+    fn closed(&mut self, content: &Value) {
+        self.live.clear();
+        self.shouts
+            .push(Shout::new(name::BUSY, json!({"on": false})));
+        let Some(ranges) = content.get("ranges").and_then(ranges_of) else {
+            return;
+        };
+        for range in ranges {
+            let [lo, hi] = range;
+            let have = (lo..=hi).all(|id| self.blocks.contains_key(&id));
+            if have {
+                continue;
+            }
+            self.outbox
+                .push(Request::call("blocks", json!({"ranges": [[lo, hi]]})));
+        }
+        self.outbox.push(Request::Structure);
+    }
+
+    /// The slots whose blocks the session no longer owns are gone with them. This is how
+    /// a rewind reaches this zone: the tree holds the reply's `cut`, the structure is the
+    /// truth, and the tail is simply what the structure stopped owning.
+    fn drop_unowned(&mut self) {
+        let keep: Vec<i64> = self
+            .local
             .iter()
-            .rev()
-            .find_map(|it| it.block.id().and_then(|id| view.turn(id)));
-        let reader = self.round_at(items, view, anchor);
-        let two_places = reader != landing;
-        let bottom = self.local.newest().unwrap_or(anchor);
-        let mut outside: Vec<i64> = self
-            .cache
-            .held_numbers()
-            .into_iter()
-            .filter(|num| {
-                let near_anchor = (*num - anchor).abs() <= margin;
-                let near_bottom = two_places && *num <= bottom && bottom - *num <= margin;
-                !near_anchor && !near_bottom
+            .filter_map(|slot| match slot.kind {
+                SlotKind::Block(id) if !self.structure.owns(id) => Some(slot.num),
+                _ => None,
             })
             .collect();
-        outside.sort_by_key(|num| self.cache.written(*num).unwrap_or(0));
-        let mut kept_back: Vec<i64> = Vec::new();
-        for num in outside {
-            if reader.is_some() && self.round_at(items, view, num) == reader {
-                kept_back.push(num);
-                continue;
-            }
-            self.cache.drop_slot(num);
+        let cut = keep
+            .first()
+            .copied()
+            .unwrap_or(self.local.newest().unwrap_or(0) + 1);
+        if cut >= 0 {
+            self.local.truncate_now(cut as usize);
         }
-        kept_back.sort_by_key(|num| std::cmp::Reverse((num - anchor).abs()));
-        for num in kept_back {
-            self.cache.drop_slot(num);
+        self.blocks.retain(|id, _| self.structure.owns(*id));
+        self.landed = self.blocks.keys().next_back().copied().unwrap_or(0);
+        let retyped = self
+            .blocks
+            .values()
+            .next_back()
+            .filter(|block| block.kind == BlockKind::User)
+            .and_then(|block| block.content.clone().or_else(|| block.text.clone()));
+        if let Some(text) = retyped {
+            self.shouts
+                .push(Shout::new(name::PREFILL, json!({"text": text})));
         }
     }
 
-    /// The round a slot belongs to.
-    fn round_at(&self, items: &[Item<'_>], view: &View<'_>, num: i64) -> Option<i64> {
-        Self::block_at(items, num).and_then(|id| view.turn(id))
-    }
-
-    /// The block id on one slot, if it has one. The mutable region has none.
-    fn block_at(items: &[Item<'_>], num: i64) -> Option<i64> {
-        items
+    /// The checklist, as one flat list.
+    fn take_todo(&mut self, value: &Value) {
+        if value.is_null() {
+            self.todo.clear();
+            return;
+        }
+        let Some(items) = value.as_array() else {
+            return;
+        };
+        self.todo = items
             .iter()
-            .find(|it| it.num == num)
-            .and_then(|it| it.block.id())
-    }
-
-    /// The thinking chain's rows: pinned at the bottom, above nothing.
-    fn thinking_rows(&mut self, items: &[Item<'_>], t: &HistoryTheme) -> Vec<Line<'static>> {
-        match self.thinking_slot(items) {
-            Some(num) => match items.iter().find(|it| it.num == num) {
-                Some(item) => self.cache.rows(item, t),
-                None => Vec::new(),
-            },
-            None => Vec::new(),
-        }
-    }
-
-    /// The slot the thinking chain sits on: drawn pinned, so the walk skips it.
-    fn thinking_slot(&self, items: &[Item<'_>]) -> Option<i64> {
-        items
-            .iter()
-            .rev()
-            .find(|it| it.block.kind() == BlockKind::Reasoning)
-            .map(|it| it.num)
-    }
-
-    /// Ask for more when the direction the reader moved in is running out of rows.
-    fn ask_more(&mut self, items: &[Item<'_>], dir: Dir) {
-        let ahead = self.view.overscan(&self.local, &self.cache, dir);
-        if !ahead.more || ahead.painted >= self.overscan {
-            return;
-        }
-        let Some(num) = Self::block_at(items, self.view.anchor()) else {
-            return;
-        };
-        self.ask.push(ViewAsk::Fetch {
-            num,
-            older: dir == Dir::Older,
-        });
-    }
-
-    /// A jump: the receipt is owed from here, and an empty target asks for its round. The
-    /// newest round is already in hand; jumping to it would do nothing.
-    fn ask_jump(&mut self, view: &View<'_>, items: &[Item<'_>]) {
-        self.view.arm();
-        let anchor = self.view.anchor();
-        let Some(item) = items.iter().find(|it| it.num == anchor) else {
-            return;
-        };
-        let Some(id) = item.block.id() else {
-            return;
-        };
-        if self.cache.has_rows(anchor) {
-            return;
-        }
-        let Some(turn) = view.turn(id) else {
-            return;
-        };
-        if Self::newest_turn(view, items) == Some(turn) {
-            return;
-        }
-        self.ask.push(ViewAsk::Jump { turn });
-    }
-
-    /// The newest round the window holds: the round of its last block with an id.
-    fn newest_turn(view: &View<'_>, items: &[Item<'_>]) -> Option<i64> {
-        items
-            .iter()
-            .rev()
-            .find_map(|it| it.block.id().and_then(|id| view.turn(id)))
-    }
-
-    /// One round older or newer: the sight line lands on that round's first block.
-    fn round_step(&mut self, view: &View<'_>, items: &[Item<'_>], older: bool) {
-        let anchor = self.view.anchor();
-        let Some(here) = self.round_at(items, view, anchor) else {
-            return;
-        };
-        let step = if older { -1 } else { 1 };
-        let mut num = anchor;
-        loop {
-            if self.local.at(num + step).is_none() {
-                return;
-            }
-            num += step;
-            let Some(turn) = self.round_at(items, view, num) else {
-                continue;
-            };
-            if turn == here {
-                continue;
-            }
-            if older {
-                while let Some(next) = self.round_at(items, view, num + step) {
-                    if next != turn {
-                        break;
-                    }
-                    num += step;
-                }
-            }
-            self.view.focus_num(num);
-            return;
-        }
-    }
-
-    /// Put the sight line's round's first or last block under the sight line.
-    fn align(&mut self, view: &View<'_>, items: &[Item<'_>], last: bool) {
-        let anchor = self.view.anchor();
-        let Some(id) = Self::block_at(items, anchor) else {
-            return;
-        };
-        let Some(turn) = view.turn(id) else { return };
-        if last && Self::newest_turn(view, items) == Some(turn) {
-            return;
-        }
-        let rounds: Vec<i64> = items
-            .iter()
-            .filter(|it| it.block.id().and_then(|b| view.turn(b)) == Some(turn))
-            .map(|it| it.num)
+            .filter_map(|item| {
+                Some(Task {
+                    text: item.get("text")?.as_str()?.to_string(),
+                    done: item.get("done").and_then(Value::as_bool).unwrap_or(false),
+                })
+            })
             .collect();
-        let num = if last {
-            rounds.iter().max()
+    }
+
+    /// A screen older or newer / one slot older or newer.
+    fn scroll(&mut self, dir: Dir, page: bool) {
+        if page {
+            let heights = &self.cache;
+            let mut view = std::mem::take(&mut self.view);
+            view.page(&self.local, |num| heights.known(num).unwrap_or(1), dir);
+            self.view = view;
         } else {
-            rounds.iter().min()
-        };
-        if let Some(num) = num {
-            self.view.focus_num(*num);
+            self.view.step(&self.local, dir);
         }
+        self.ensure_around();
+    }
+
+    fn toggle_thinking(&mut self) {
+        self.thinking = !self.thinking;
+        self.cache.clear();
+    }
+
+    fn toggle_tool(&mut self) {
+        self.tool = !self.tool;
+        self.cache.clear();
     }
 }
 
@@ -566,110 +582,131 @@ impl SubZone for HistoryZone {
         CLAIMS
     }
 
-    fn deliver_event(&mut self, ev: Event, ctx: &Ctx<'_>) {
-        match ev {
-            Event::Tick | Event::Deadline => {
-                if self.view.note_still(self.silence) {
-                    self.ask.push(ViewAsk::Settled);
+    fn kinds(&self) -> &'static [Kind] {
+        KINDS
+    }
+
+    fn deliver_event(
+        &mut self,
+        packet: &crate::ui::tui::zone::Packet,
+        _size: TermSize,
+    ) -> Vec<Request> {
+        match (packet.kind.as_str(), packet.name.as_str()) {
+            ("stream", _) => self.read_stream(packet),
+            ("call", "init") => {
+                if let Some(rows) = packet.content.get("blocks") {
+                    self.take_blocks(rows);
+                }
+                if let Some(todo) = packet.content.get("todo") {
+                    self.take_todo(todo);
+                }
+                self.outbox.push(Request::Structure);
+            }
+            ("call", "blocks") => {
+                self.asking.clear();
+                if let Some(rows) = packet.content.get("blocks") {
+                    self.take_blocks(rows);
                 }
             }
-            Event::Resized => {
-                let items = self.items(ctx.view);
-                self.view.on_resize(&self.local, &items, &self.cache);
+            ("call", "todo") => {
+                if let Some(todo) = packet.content.get("todo") {
+                    self.take_todo(todo);
+                }
             }
             _ => {}
         }
+        self.take_out()
     }
 
-    fn deliver_action(&mut self, a: &Action, ctx: &Ctx<'_>) -> bool {
-        let items = self.items(ctx.view);
+    fn deliver_action(&mut self, a: &Action) -> bool {
         match a {
             Action::ScrollUp { shift } => {
-                if *shift {
-                    self.round_step(ctx.view, &items, true);
-                    self.ask_jump(ctx.view, &items);
-                } else {
-                    self.view.step(&self.local, Dir::Older);
-                }
-                self.ask_more(&items, Dir::Older);
+                self.scroll(Dir::Older, *shift);
                 true
             }
             Action::ScrollDown { shift } => {
-                if *shift {
-                    self.round_step(ctx.view, &items, false);
-                    self.ask_jump(ctx.view, &items);
-                } else {
-                    self.view.step(&self.local, Dir::Newer);
-                }
-                self.ask_more(&items, Dir::Newer);
+                self.scroll(Dir::Newer, *shift);
                 true
             }
-            Action::Key(Key { code, mods }) => match code {
-                KeyCode::Char('t') if mods.ctrl => {
-                    let thinking = !self.cache.thinking();
-                    self.cache.set_switches(thinking, self.cache.tool());
-                    self.view.on_resize(&self.local, &items, &self.cache);
+            Action::Paste(_) => false,
+            Action::Key(key) => match key.code {
+                KeyCode::Char('t') if key.mods.ctrl => {
+                    self.toggle_thinking();
                     true
                 }
-                KeyCode::Char('o') if mods.ctrl => {
-                    let tool = !self.cache.tool();
-                    self.cache.set_switches(self.cache.thinking(), tool);
-                    self.view.on_resize(&self.local, &items, &self.cache);
+                KeyCode::Char('o') if key.mods.ctrl => {
+                    self.toggle_tool();
                     true
                 }
-                KeyCode::Up if mods.ctrl => {
+                KeyCode::Up if key.mods.ctrl => {
                     self.view.step(&self.local, Dir::Older);
-                    self.ask_more(&items, Dir::Older);
+                    self.ensure_around();
                     true
                 }
-                KeyCode::Down if mods.ctrl => {
+                KeyCode::Down if key.mods.ctrl => {
                     self.view.step(&self.local, Dir::Newer);
-                    self.ask_more(&items, Dir::Newer);
+                    self.ensure_around();
                     true
                 }
-                KeyCode::PageUp if mods.ctrl => {
+                KeyCode::PageUp if key.mods.ctrl => {
                     self.view.first(&self.local);
-                    self.ask_jump(ctx.view, &items);
-                    self.ask_more(&items, Dir::Older);
+                    self.ensure_around();
                     true
                 }
-                KeyCode::PageDown if mods.ctrl => {
+                KeyCode::PageDown if key.mods.ctrl => {
                     self.view.follow();
-                    self.view.arm();
                     true
                 }
                 KeyCode::PageUp => {
-                    self.view.page(&self.local, &items, &self.cache, Dir::Older);
-                    self.ask_more(&items, Dir::Older);
+                    self.scroll(Dir::Older, true);
                     true
                 }
                 KeyCode::PageDown => {
-                    self.view.page(&self.local, &items, &self.cache, Dir::Newer);
-                    self.ask_more(&items, Dir::Newer);
+                    self.scroll(Dir::Newer, true);
                     true
                 }
-                KeyCode::Home if mods.ctrl && mods.shift => {
-                    self.align(ctx.view, &items, false);
-                    self.ask_jump(ctx.view, &items);
+                KeyCode::Home if key.mods.ctrl && key.mods.shift => {
+                    self.align(false);
                     true
                 }
-                KeyCode::End if mods.ctrl && mods.shift => {
-                    self.align(ctx.view, &items, true);
-                    self.ask_jump(ctx.view, &items);
+                KeyCode::End if key.mods.ctrl && key.mods.shift => {
+                    self.align(true);
                     true
                 }
                 _ => false,
             },
-            _ => false,
         }
     }
 
-    fn attach(&mut self, session: i64, _ctx: &Ctx<'_>) {
-        self.open(session);
+    fn attach(&mut self, _session: i64, _size: TermSize) {
+        if self.reprieve {
+            self.reprieve = false;
+        } else {
+            self.destroy();
+        }
+        self.needs_layout = true;
+        self.view.follow();
     }
 
-    fn detach(&mut self, _ctx: &Ctx<'_>) {
+    fn detach(&mut self) {
         self.destroy();
+    }
+
+    fn structure(&mut self, snapshot: &Structure) {
+        self.structure = snapshot.clone();
+        if self.needs_layout && !self.structure.turns().is_empty() {
+            self.needs_layout = false;
+            self.lay_out();
+        } else {
+            self.drop_unowned();
+        }
+        if let Some((_, block)) = self.pending_focus
+            && let Some(num) = self.local.num_of(block)
+        {
+            self.pending_focus = None;
+            self.view.focus_num(num);
+        }
+        self.ensure_around();
     }
 
     fn request_height(&self, _term: TermSize) -> u16 {
@@ -677,17 +714,79 @@ impl SubZone for HistoryZone {
     }
 
     fn assign(&mut self, _term: TermSize, rows: u16) {
-        self.rows = rows;
-        self.view.assign(rows);
+        self.resize(rows);
     }
 
     fn on_height_changed(&mut self, rows: u16) -> bool {
-        self.rows = rows;
-        self.view.assign(rows);
+        self.resize(rows);
         true
     }
 
-    fn take_requests(&mut self) -> Vec<Request> {
-        self.take_out().into_iter().map(Request::View).collect()
+    fn take_shouts(&mut self) -> Vec<Shout> {
+        std::mem::take(&mut self.shouts)
     }
+
+    fn hear(&mut self, event: &str, content: &Value) {
+        if event == name::CWD
+            && let Some(path) = content.get("path").and_then(Value::as_str)
+            && self.cwd != path
+        {
+            self.cwd.clear();
+            self.cwd.push_str(path);
+        }
+    }
+}
+
+impl HistoryZone {
+    /// A new row budget: the seam stays, the row inside it is clamped.
+    fn resize(&mut self, rows: u16) {
+        self.rows = rows;
+        self.view.assign(rows);
+        let cache = &self.cache;
+        self.view
+            .on_resize(&self.local, |num| cache.known(num).unwrap_or(1));
+    }
+
+    /// Align the sight line's round's first or last block.
+    fn align(&mut self, last: bool) {
+        let anchor = self.view.anchor();
+        let Some(id) = self.local.at(anchor).and_then(|slot| match slot.kind {
+            SlotKind::Block(id) => Some(id),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(turn) = self.turn_of(id) else { return };
+        let nums: Vec<i64> = self
+            .local
+            .iter()
+            .filter(|slot| match slot.kind {
+                SlotKind::Block(id) => self.turn_of(id) == Some(turn),
+                _ => false,
+            })
+            .map(|slot| slot.num)
+            .collect();
+        let num = if last {
+            nums.iter().max()
+        } else {
+            nums.iter().min()
+        };
+        if let Some(num) = num {
+            self.view.focus_num(*num);
+            self.ensure_around();
+        }
+    }
+}
+
+/// A frame's ranges: `[[lo, hi], …]`.
+fn ranges_of(value: &Value) -> Option<Vec<[i64; 2]>> {
+    let mut out = Vec::new();
+    for item in value.as_array()? {
+        let pair = item.as_array()?;
+        if pair.len() != 2 {
+            return None;
+        }
+        out.push([pair[0].as_i64()?, pair[1].as_i64()?]);
+    }
+    Some(out)
 }

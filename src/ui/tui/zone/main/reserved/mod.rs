@@ -1,16 +1,23 @@
 //! The desk: one temp hand at a time, its frozen report, its keys, its rows.
-//!
-//! The input zone calls a hand in; the desk keeps no state of its own beyond the slot.
-
-use super::SubZone;
-use crate::ui::tui::action::Action;
-use crate::ui::tui::event::Event;
-use crate::ui::tui::zone::{Claim, Ctx, Hire, Reply, Request, TermSize};
 
 mod hand;
 mod hands;
+mod pools;
+
+use ratatui::text::Line;
+use serde_json::Value;
+
+use super::desk::{Hire, Reply};
+use crate::ui::tui::action::Action;
+use crate::ui::tui::theme::Palette;
+use crate::ui::tui::zone::SubZone;
+use crate::ui::tui::zone::{Claim, Kind, Packet, Request, TermSize, name};
 
 use hand::{Hand, IDLE_ROWS, Report};
+use pools::Pools;
+
+/// The classes the desk reads.
+const KINDS: &[Kind] = &[Kind::Call];
 
 /// The desk.
 #[derive(Default)]
@@ -21,15 +28,23 @@ pub struct ReservedZone {
     on_duty: Option<Hire>,
     /// The report taken the first frame after arrival: height and keys frozen here.
     report: Option<Report>,
-    /// Rows the zone allocated this frame.
+    /// Rows the desk allocated this frame.
     want: u16,
     /// A reply for the editor, waiting for the zone to take it.
     reply: Option<Reply>,
+    /// The workspace, as the conversation reports it.
+    cwd: String,
+    /// The name pools, once the session has answered.
+    pools: Option<Pools>,
+    /// The pools were asked for; one ask per attachment.
+    asked: bool,
+    /// Frames this zone owes the session.
+    outbox: Vec<Request>,
 }
 
 impl ReservedZone {
     /// Nothing is claimed up front; the desk only borrows.
-    pub const CLAIMS: &[Claim] = &[];
+    pub const CLAIMS: &'static [Claim] = &[];
 
     /// The hand for one hire signal. One `match`: a new hand touches here only.
     fn hand(&mut self, who: Hire) -> &mut dyn Hand {
@@ -40,7 +55,7 @@ impl ReservedZone {
     }
 
     /// Call a hand in. Whoever is on duty leaves first.
-    pub fn hire(&mut self, who: Hire, ctx: &Ctx) {
+    pub fn hire(&mut self, who: Hire) {
         if let Some(prev) = self.on_duty
             && prev != who
         {
@@ -48,21 +63,30 @@ impl ReservedZone {
         }
         self.on_duty = Some(who);
         self.report = None;
-        self.hand(who).arrived(ctx);
+        if who == Hire::Usage {
+            self.outbox
+                .push(Request::call("usage", serde_json::json!({})));
+        }
+        self.hand(who).arrived();
+        let cwd = self.cwd.clone();
+        self.hand(who).place(&cwd);
+        if let Some(pools) = &self.pools {
+            let pools = pools.clone();
+            self.hand(who).pools(&pools);
+        }
     }
 
-    /// The editor's text and cursor, after every edit.
+    /// The editor's text and cursor, after every edit. A hand that needs them reads them;
+    /// the report is what the desk needs, not the other way round.
     pub fn text(&mut self, text: &str, cursor: usize) {
-        let wants = self.report.is_some_and(|r| r.text);
-        if wants && let Some(who) = self.on_duty {
+        if let Some(who) = self.on_duty {
             self.hand(who).text(text, cursor);
         }
     }
 
     /// The cursor's column, after every draw.
     pub fn col(&mut self, col: u16) {
-        let wants = self.report.is_some_and(|r| r.col);
-        if wants && let Some(who) = self.on_duty {
+        if let Some(who) = self.on_duty {
             self.hand(who).col(col);
         }
     }
@@ -72,14 +96,9 @@ impl ReservedZone {
         self.reply.take()
     }
 
-    /// The panel's display options, read from the config once at assembly.
-    pub fn set_usage_config(&mut self, align: crate::ui::tui::UsageAlign) {
-        self.usage.set_align(align);
-    }
-
-    /// Feed the panel from the view; it keeps no copy of the numbers.
-    pub fn sync_usage(&mut self, view: &crate::ui::session::View<'_>) {
-        self.usage.sync(view);
+    /// Frames this zone asked the session for.
+    pub fn take_requests(&mut self) -> Vec<Request> {
+        std::mem::take(&mut self.outbox)
     }
 
     /// Frame start: drop a hand that left, take the report of a fresh one.
@@ -93,13 +112,19 @@ impl ReservedZone {
             self.report = None;
             return;
         }
-        if self.report.is_none() {
-            let ready = self.hand(who).ready();
-            if ready {
-                let report = self.hand(who).report();
-                self.report = Some(report);
-            }
+        if self.report.is_none() && self.hand(who).ready() {
+            self.report = Some(self.hand(who).report());
         }
+    }
+
+    /// Idle: one blank row. On duty: the hand draws its own rows.
+    pub fn render_rows(&mut self, term: TermSize, palette: &Palette) -> Vec<Line<'static>> {
+        self.settle();
+        let rows = self.want.max(IDLE_ROWS);
+        let Some(who) = self.on_duty else {
+            return vec![Line::from("")];
+        };
+        self.hand(who).draw(term.cols, rows, palette)
     }
 }
 
@@ -108,18 +133,37 @@ impl SubZone for ReservedZone {
         Self::CLAIMS
     }
 
+    fn kinds(&self) -> &'static [Kind] {
+        KINDS
+    }
+
     fn borrowed(&self) -> &'static [Claim] {
         self.report.map(|r| r.keys).unwrap_or(&[])
     }
 
-    fn deliver_event(&mut self, ev: Event, ctx: &Ctx) {
-        self.settle();
-        if let Some(who) = self.on_duty {
-            self.hand(who).on_event(ev, ctx);
+    fn deliver_event(&mut self, packet: &Packet, _size: TermSize) -> Vec<Request> {
+        match (packet.kind.as_str(), packet.name.as_str()) {
+            ("call", "pools") => {
+                let pools = Pools::of(&packet.content);
+                if let Some(who) = self.on_duty {
+                    self.hand(who).pools(&pools);
+                }
+                self.pools = Some(pools);
+            }
+            ("call", "usage") => {
+                self.usage.take(&packet.content);
+            }
+            ("stream", _) | ("local", _) => {
+                if let Some(who) = self.on_duty {
+                    self.hand(who).on_event("stream", &packet.content);
+                }
+            }
+            _ => {}
         }
+        self.take_requests()
     }
 
-    fn deliver_action(&mut self, a: &Action, _ctx: &Ctx) -> bool {
+    fn deliver_action(&mut self, a: &Action) -> bool {
         self.settle();
         let Action::Key(key) = a else {
             return false;
@@ -133,9 +177,20 @@ impl SubZone for ReservedZone {
         true
     }
 
-    fn attach(&mut self, _session: i64, _ctx: &Ctx) {}
+    fn attach(&mut self, _session: i64, _size: TermSize) {
+        self.cwd.clear();
+        self.pools = None;
+        self.asked = false;
+        self.on_duty = None;
+        self.report = None;
+        self.reply = None;
+        self.want = 0;
+        self.outbox
+            .push(Request::call("pools", serde_json::json!({})));
+        self.asked = true;
+    }
 
-    fn detach(&mut self, _ctx: &Ctx) {
+    fn detach(&mut self) {
         if let Some(who) = self.on_duty {
             self.hand(who).left();
         }
@@ -143,10 +198,9 @@ impl SubZone for ReservedZone {
         self.report = None;
         self.reply = None;
         self.want = 0;
-    }
-
-    fn take_requests(&mut self) -> Vec<Request> {
-        Vec::new()
+        self.cwd.clear();
+        self.pools = None;
+        self.asked = false;
     }
 
     fn request_height(&self, _term: TermSize) -> u16 {
@@ -160,28 +214,24 @@ impl SubZone for ReservedZone {
     fn on_height_changed(&mut self, _rows: u16) -> bool {
         false
     }
-}
 
-impl ReservedZone {
-    /// Idle: one blank row. On duty: the hand draws its own rows.
-    pub fn render_rows(
-        &mut self,
-        term_w: u16,
-        view: &crate::ui::session::View<'_>,
-    ) -> Vec<ratatui::text::Line<'static>> {
-        self.settle();
-        let rows = usize::from(self.want.max(IDLE_ROWS));
-        let Some(who) = self.on_duty else {
-            return vec![ratatui::text::Line::from("")];
-        };
-        let ctx = Ctx {
-            view,
-            size: TermSize {
-                cols: term_w,
-                rows: self.want,
-            },
-            memo: None,
-        };
-        self.hand(who).draw(&ctx, rows as u16)
+    fn hear(&mut self, event: &str, content: &Value) {
+        match event {
+            name::CWD => {
+                if let Some(path) = content.get("path").and_then(Value::as_str) {
+                    self.cwd.clear();
+                    self.cwd.push_str(path);
+                    if let Some(who) = self.on_duty {
+                        let cwd = self.cwd.clone();
+                        self.hand(who).place(&cwd);
+                    }
+                }
+            }
+            _ => {
+                if let Some(who) = self.on_duty {
+                    self.hand(who).on_event(event, content);
+                }
+            }
+        }
     }
 }

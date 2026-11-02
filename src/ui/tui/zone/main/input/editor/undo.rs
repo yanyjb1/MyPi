@@ -59,14 +59,6 @@ impl UndoStack {
         Self::default()
     }
 
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
-    }
-
     // Call **before** performing an edit: pushes the current state onto the undo stack.
     //
     // With `kind == Typing` right after another `Typing` within the window, no new

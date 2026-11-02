@@ -16,7 +16,9 @@ leaves before another sits down.
 | `report: Option<Report>` | the frozen report: rows, keys, feeds |
 | `want: u16` | rows the main zone allocated |
 | `reply: Option<Reply>` | a replacement waiting for the input zone |
-| `last_usage` | the last `(lang, groups)` handed to the panel |
+| `cwd: String` | the workspace paths complete against |
+| `pools: Option<Pools>` | the model and profile names |
+| `outbox: Vec<Request>` | frames the desk owes the session |
 
 `Hire` is `Completion` or `Usage`. `ReservedZone::CLAIMS` is empty: the desk only borrows keys
 through a hand's report.
@@ -34,77 +36,58 @@ A hand reports:
 
 A hand also has:
 
-- `arrived(ctx)` — before the first report;
+- `arrived()` — before the first report;
 - `ready()` — the desk waits for this before freezing the height;
 - `stays()` — `false` drops the hand;
-- `on_event(ev, ctx)`;
+- `on_event(event, content)` — one bus event;
+- `place(cwd)` and `pools(pools)` — what the desk knows and hands over;
 - `text(text, cursor)` and `col(col)`;
 - `on_key(key) -> Option<Reply>`;
-- `draw(ctx, rows) -> Vec<Line>`;
+- `draw(width, rows, palette) -> Vec<Line>`;
 - `left()`.
 
 `Reply` is `Replace { from, to, text }`; indices are char indices. The input zone applies it.
 
 `IDLE_ROWS` is one blank row, so the layout does not jump when a hand arrives or leaves.
 
+### Frames
+
+- On attach the desk asks `call pools` once and keeps the answer; the completion hand gets it.
+- Hiring the usage panel asks `call usage`; the panel decodes `groups` and keeps only what it draws.
+- The desk hears `cwd` from the bus and hands it to the hand on duty.
+
 ### Lifecycle
 
-- `hire(who, ctx)` calls `left()` on a different current hand, records the new hire, clears the
-  report, and calls `arrived`.
-- `settle()` runs at frame start and on delivery: it drops a hand whose `stays()` is false, and
-  takes the report of a fresh hand once `ready()` is true.
+- `hire(who)` calls `left()` on a different current hand, records the new hire, clears the report,
+  calls `arrived`, and feeds the hand the workspace and pools it already knows.
+- `settle()` drops a hand whose `stays()` is false and takes the report of a fresh hand once
+  `ready()` is true.
 - `request_height` returns the frozen report's rows, or `IDLE_ROWS`.
 - `assign` records the allocated rows, at least `IDLE_ROWS`.
 - `borrowed` returns the report's keys.
 - `deliver_action` passes a key to the hand and stores any reply.
-- `detach` calls `left()`, then clears the seat, report, reply, rows, and last usage.
-- `take_requests` is empty: the desk has no session work of its own.
-
-### Usage
-
-`sync_usage(view)` reads `view.usage` and compares `(lang, groups)` with the last value. It calls
-`show_usage` only when the value changed, so the panel's selected row survives a frame. The panel
-reports three header rows plus one row per model, capped at 24 rows. It borrows Esc, ↑, ↓, and Tab;
-Esc closes it, Tab switches the number language.
-
-The panel's numbers come from the server; the front end only lays them out. `set_usage_config`
-reads `UsageAlign` once at assembly.
-
-### Rendering
-
-Idle: one blank row. On duty: the hand draws its own rows at the allocated height. The desk does
-not draw the hand's content itself.
-
-### Invariants
-
-1. One hand at a time.
-2. A hand's height is constant from report to departure.
-3. An idle desk is one blank row.
-4. The desk never claims keys up front; it only borrows through a report.
-5. The desk never reaches the session, the store, or the socket.
+- `detach` calls `left()`, then clears the seat, report, reply, rows, workspace, and pools.
 
 ## 2. Design intent
 
-- **One seat, one roster.** A new hand is added in one match and one roster entry.
-- **Power goes down.** The desk owns the seat and the report; a hand only answers questions.
-- **A hand is an extension of the input zone.** It cannot reach outside; whatever it needs done
-  goes back through the input zone.
-- **Frozen height.** A report is taken once, so a popup cannot resize under the reader's cursor.
-- **The desk owns the reply slot.** A hand computes; the input zone writes.
-- **Usage is fed, not fetched.** The panel is a pure layout of numbers that arrive from outside.
+- **One seat.** A second panel would have to fight the first for the row and the keys; there is
+  exactly one desk.
+- **A frozen height.** The strip never grows or shrinks while a hand is sitting: the input and the
+  transcript would both move under the reader.
+- **A hand is a part of the input.** It borrows the editor's keys and draws its own rows; it never
+  talks to the session itself, it asks the desk.
+- **Data flows down.** The desk owns the workspace and the pools; a hand is handed them, never
+  reads them from a global.
 
 ## 3. Unresolved
 
-1. Completion's model and profile pools are not fetched at startup; `view.pools` is the intended
-   source.
-2. The usage panel's multi-language and absolute/percentage views are a later wave.
-3. The usage panel's `UsageAlign` is read, but the panel's width and row cap are fixed in code.
-4. The bridge mark and the model context window are not sent by the server yet.
-5. The loop delivers events, actions, and usage updates; it emits only `Tick`.
+1. `/usage`'s horizontal alignment has no reader: the panel draws the full width.
+2. The completion popup's anchor column is pushed after the first draw; the first frame of a hire
+   draws at column zero.
+3. A failed `call pools` leaves completion without model or profile names.
 
 ## 4. Config fields
 
 | key | use |
 |---|---|
-| `config.tui.usage.align` | which side the usage panel hugs |
-| `config.tui.theme` | colors for the panel and the popup |
+| `config.tui.theme` | the panel's and the popup's colors |

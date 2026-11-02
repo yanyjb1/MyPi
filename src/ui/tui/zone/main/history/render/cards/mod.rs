@@ -11,19 +11,27 @@ use crate::ui::tui::text::card::{card_edge, card_edge_labeled, card_row, pad_to}
 use crate::ui::tui::theme::{HistoryTheme, Token};
 use unicode_width::UnicodeWidthChar;
 
-fn tool_card(
-    name: &str,
-    args: &str,
-    result: Option<tools::ToolOutcome<'_>>,
-    t: &HistoryTheme,
-    expanded: bool,
-    width: usize,
-) -> Vec<Line<'static>> {
+/// One tool exchange as a card: header, labeled sections, closing edge.
+pub(super) struct Card<'a> {
+    pub name: &'a str,
+    pub args: &'a str,
+    pub result: Option<tools::ToolOutcome<'a>>,
+    /// The exchange's own copy.
+    pub expanded: bool,
+    /// The tool is still running: the tail window is what shows.
+    pub tail: bool,
+    /// The rows a tail window may take.
+    pub limit: usize,
+}
+
+pub(super) fn tool_card(card: Card<'_>, t: &HistoryTheme, width: usize) -> Vec<Line<'static>> {
     let block = tools::ToolBlock {
-        name,
-        args,
-        result,
-        expanded,
+        name: card.name,
+        args: card.args,
+        result: card.result,
+        expanded: card.expanded,
+        tail: card.tail,
+        limit: card.limit,
     };
     let edge = block.edge_style(t);
     let bg = block.bg_style(t);
@@ -43,26 +51,6 @@ fn tool_card(
     }
     out.push(card_edge(edge, bg, width));
     out
-}
-
-pub(in crate::ui::tui::zone::main::history) fn exchange_has_two_states(
-    name: &str,
-    ok: bool,
-    result: &str,
-    details: Option<&serde_json::Value>,
-) -> bool {
-    tools::ToolBlock {
-        name,
-        args: "",
-        result: Some(tools::ToolOutcome {
-            text: result,
-            ok,
-            details,
-            duration_ms: 0,
-        }),
-        expanded: false,
-    }
-    .has_two_states()
 }
 
 const GUTTER: &str = "▌ ";
@@ -95,30 +83,24 @@ fn fold_row(spans: Vec<Span<'static>>, avail: usize) -> Vec<Vec<Span<'static>>> 
     rows
 }
 
-pub(super) fn user_card(content: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'static>> {
+/// A user message: a bar on the left, the body on a filled band.
+pub(in crate::ui::tui::zone::main::history) fn user_card(
+    content: &str,
+    t: &HistoryTheme,
+    width: usize,
+) -> Vec<Line<'static>> {
     let bg = Style::new().bg(t.get(Token::UserCardBg));
+    let bar = Style::new()
+        .bg(t.get(Token::UserCardBg))
+        .fg(t.get(Token::UserCardBar));
     let mut out = Vec::new();
-    out.push(pad_to(
-        Line::from(Span::styled(
-            "▌ ",
-            Style::new()
-                .bg(t.get(Token::UserCardBg))
-                .fg(t.get(Token::UserCardBar)),
-        )),
-        width,
-        bg,
-    ));
+    out.push(pad_to(Line::from(Span::styled(GUTTER, bar)), width, bg));
     let avail = width.saturating_sub(GUTTER_COLS);
-    for line in super::text::markdown::render_markdown(content, t, true, avail).0 {
+    for line in super::text::markdown::render_markdown(content, t, avail) {
         for row in fold_row(line.spans, avail) {
-            let mut spans = vec![Span::styled(
-                GUTTER,
-                Style::new()
-                    .bg(t.get(Token::UserCardBg))
-                    .fg(t.get(Token::UserCardBar)),
-            )];
+            let mut spans = vec![Span::styled(GUTTER, bar)];
             let body_fg = match t.get(Token::UserCardText) {
-                ratatui::style::Color::Reset => Color::White,
+                Color::Reset => Color::White,
                 c => c,
             };
             for sp in row {
@@ -130,15 +112,6 @@ pub(super) fn user_card(content: &str, t: &HistoryTheme, width: usize) -> Vec<Li
             out.push(pad_to(Line::from(spans), width, bg));
         }
     }
-    out.push(pad_to(
-        Line::from(Span::styled(
-            "▌ ",
-            Style::new()
-                .bg(t.get(Token::UserCardBg))
-                .fg(t.get(Token::UserCardBar)),
-        )),
-        width,
-        bg,
-    ));
+    out.push(pad_to(Line::from(Span::styled(GUTTER, bar)), width, bg));
     out
 }

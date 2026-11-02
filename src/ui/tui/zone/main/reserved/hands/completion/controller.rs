@@ -4,11 +4,12 @@ use std::path::PathBuf;
 
 use super::engine::{self, Completion, CompletionPopup, Look, Scan};
 use crate::commands;
-use crate::ipc::contract::CandidatePools;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
-use crate::ui::tui::event::Event;
+use crate::ui::tui::theme::Palette;
+use crate::ui::tui::zone::Claim;
+use crate::ui::tui::zone::main::desk::Reply;
 use crate::ui::tui::zone::main::reserved::hand::{Hand, Report};
-use crate::ui::tui::zone::{Claim, Ctx, Reply};
+use crate::ui::tui::zone::main::reserved::pools::Pools;
 
 /// What the controller reads to compute candidates.
 pub struct InputCtx<'a> {
@@ -16,7 +17,7 @@ pub struct InputCtx<'a> {
     pub cursor: usize,
     pub cwd: &'a std::path::Path,
     pub home: &'a std::path::Path,
-    pub pools: Option<&'a CandidatePools>,
+    pub pools: Option<&'a Pools>,
 }
 
 pub struct CompletionController {
@@ -99,11 +100,6 @@ impl CompletionController {
         Some(self.popup.accept())
     }
 
-    /// Confirm the highlighted candidate.
-    pub fn accept(&mut self) -> engine::CompletionAction {
-        self.popup.accept()
-    }
-
     pub fn move_selection(&mut self, delta: isize) {
         self.popup.move_selection(delta);
     }
@@ -145,8 +141,8 @@ pub struct CompletionService {
     cwd: PathBuf,
     /// `~` resolves to it, for lookups only.
     home: PathBuf,
-    /// The model and profile names, taken from the view once.
-    pools: Option<CandidatePools>,
+    /// The model and profile names, taken once.
+    pools: Option<Pools>,
     /// The cursor's column, pushed by the input zone each frame.
     anchor_col: usize,
     /// The editor's text and cursor, as last fed.
@@ -168,16 +164,6 @@ impl CompletionService {
             anchor_col: 0,
             last: (String::new(), 0),
             scan: Scan::default(),
-        }
-    }
-
-    /// Take the view's data: the workspace always, the pools until they arrive.
-    fn sync(&mut self, ctx: &Ctx) {
-        if self.cwd.as_path() != std::path::Path::new(ctx.view.cwd) {
-            self.cwd = PathBuf::from(ctx.view.cwd);
-        }
-        if self.pools.is_none() {
-            self.pools = ctx.view.pools.cloned();
         }
     }
 
@@ -215,8 +201,16 @@ impl Default for CompletionService {
 }
 
 impl Hand for CompletionService {
-    fn arrived(&mut self, ctx: &Ctx) {
-        self.sync(ctx);
+    fn arrived(&mut self) {}
+
+    fn place(&mut self, cwd: &str) {
+        if self.cwd.as_path() != std::path::Path::new(cwd) {
+            self.cwd = PathBuf::from(cwd);
+        }
+    }
+
+    fn pools(&mut self, pools: &Pools) {
+        self.pools = Some(pools.clone());
     }
 
     fn ready(&self) -> bool {
@@ -227,17 +221,11 @@ impl Hand for CompletionService {
         Report {
             rows: self.controller.reserved_height().unwrap_or(1) as u16,
             keys: COMPLETION_KEYS,
-            text: true,
-            col: true,
         }
     }
 
     fn stays(&self) -> bool {
         self.controller.is_open()
-    }
-
-    fn on_event(&mut self, _ev: Event, ctx: &Ctx) {
-        self.sync(ctx);
     }
 
     fn text(&mut self, text: &str, cursor: usize) {
@@ -273,13 +261,13 @@ impl Hand for CompletionService {
         }
     }
 
-    fn draw(&self, ctx: &Ctx, rows: u16) -> Vec<ratatui::text::Line<'static>> {
+    fn draw(&self, width: u16, rows: u16, palette: &Palette) -> Vec<ratatui::text::Line<'static>> {
         super::popup::render(
             self.controller.popup(),
-            ctx.size.cols,
+            width,
             usize::from(rows),
             self.anchor_col,
-            &crate::ui::tui::theme::Palette::current(),
+            palette,
         )
         .lines
     }

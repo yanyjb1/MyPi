@@ -1,26 +1,37 @@
-//! The input zone: editor, input history, statusline, submit, command routing.
+//! The input zone: editor, history, statusline, submit, command routing.
 //! It does not know what sits above it; it only knows when it lent its keys away.
 
-use super::SubZone;
-use crate::ui::tui::action::{Action, Key, KeyCode};
-use crate::ui::tui::event::Event;
-use crate::ui::tui::zone::main::geometry;
-use crate::ui::tui::zone::{Claim, Ctx, Hire, Reply, Request, TermSize};
-
+mod ctx;
 mod editor;
 mod render;
 mod route;
 mod semantics;
 mod statusline;
 
+pub use ctx::{Ctx, Data};
+
+use super::desk::{Hire, Reply};
+use super::geometry;
+use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
+use crate::ui::tui::zone::{Claim, Packet, Request, Shout, SubZone, TermSize, name};
+use serde_json::Value;
+
 use editor::{Editor, Effect, History};
 use statusline::{Setup, StatusLine, StatusTheme};
 
-/// What the editor declares when it cannot act on its own. Where each one goes
-/// is the zone's, the app's and the session's business.
+pub use ctx::Money;
+
+/// What the editor declares when it cannot act on its own.
 ///
 /// Two un-lent Esc this close together ask for the node tree.
 pub const ESC_TREE_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// No modifiers held.
+const PLAIN: Mods = Mods {
+    ctrl: false,
+    alt: false,
+    shift: false,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitRequest {
@@ -48,33 +59,36 @@ pub struct InputZone {
     pub editor: Editor,
     /// Input history: an in-memory ring, 20 entries, never stored.
     pub history: History,
-    /// Idle and rewinding: the box is empty, so ↑↓ walks the history. Any typing
-    /// clears it.
+    /// Idle and rewinding: the box is empty, so ↑↓ walks the history.
     pub finished: bool,
     /// The cursor sits in a trigger word: the condition for lending keys.
     pub hang: bool,
     /// The hand to hire, produced here and taken by the zone.
-    pub pending_hire: Option<Hire>,
+    pending_hire: Option<Hire>,
     /// The last ↑↓ goal column, carried for `Editor::up` / `down`.
     pub goal_col: Option<usize>,
-    /// Exit requests, in order: taken upward one by one (input → main → app → loop).
-    /// A queue, not a slot: one batch may carry two Esc.
-    pub pending_exits: Vec<ExitRequest>,
+    /// Exit requests, in order: taken by the main zone.
+    pending_exits: Vec<ExitRequest>,
     /// When the last un-lent Esc fired: another one inside the window opens the tree.
     esc_armed: Option<std::time::Instant>,
     /// When Enter was last pressed mid-round: another one inside the window submits.
     enter_armed: Option<std::time::Instant>,
-    /// The cursor's absolute terminal column, border included; recomputed each
-    /// render, used to anchor the completion popup.
+    /// The cursor's absolute terminal column, border included.
     pub cursor_col: u16,
-    /// The cursor's row inside the container (0 = the statusline row). The zone
-    /// reports container-relative; the main zone converts to terminal coordinates.
+    /// The cursor's row inside the container (0 = the statusline row).
     pub cursor_row: u16,
     /// The statusline: the top edge of the container and its own deco table.
     pub statusline: StatusLine,
-    /// The terminal size from this round's arbitration; wrapping needs it between
-    /// resizes.
-    term: crate::ui::tui::zone::TermSize,
+    /// The terminal size from this round's arbitration.
+    term: TermSize,
+    /// What the parts read.
+    data: Data,
+    /// Config keys owed an answer, in the order they were asked.
+    pending_keys: std::collections::VecDeque<String>,
+    /// Events this zone puts out.
+    shouts: Vec<Shout>,
+    /// Frames this zone owes the session.
+    outbox: Vec<Request>,
 }
 
 impl Default for InputZone {
@@ -94,17 +108,142 @@ impl Default for InputZone {
             cursor_col: geometry::BORDER_COLS as u16,
             cursor_row: 1,
             statusline: StatusLine::new(&Setup::default()),
-            term: crate::ui::tui::zone::TermSize { cols: 80, rows: 24 },
+            term: TermSize { cols: 80, rows: 24 },
+            data: Data::default(),
+            pending_keys: std::collections::VecDeque::new(),
+            shouts: Vec::new(),
+            outbox: Vec::new(),
         }
     }
 }
 
 impl InputZone {
-    /// Claims: any printable character and pastes.
-    pub const CLAIMS: &[Claim] = &[Claim::AnyChar, Claim::Paste];
+    /// Everything the editor acts on. `AnyChar` covers the plain typing keys; the rest are
+    /// named so no key is taken by accident.
+    pub const CLAIMS: &'static [Claim] = &[
+        Claim::AnyChar,
+        Claim::Paste,
+        Claim::Key(Key {
+            code: KeyCode::Enter,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Enter,
+            mods: Mods {
+                ctrl: false,
+                alt: true,
+                shift: false,
+            },
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Enter,
+            mods: Mods {
+                ctrl: false,
+                alt: false,
+                shift: true,
+            },
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Esc,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Tab,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Backspace,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Delete,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Left,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Right,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Up,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Down,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Home,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::End,
+            mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Left,
+            mods: Mods {
+                ctrl: true,
+                alt: false,
+                shift: false,
+            },
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Right,
+            mods: Mods {
+                ctrl: true,
+                alt: false,
+                shift: false,
+            },
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Home,
+            mods: Mods {
+                ctrl: true,
+                alt: false,
+                shift: false,
+            },
+        }),
+        Claim::Key(Key {
+            code: KeyCode::End,
+            mods: Mods {
+                ctrl: true,
+                alt: false,
+                shift: false,
+            },
+        }),
+    ];
+
+    /// The hand the editor asked for, if it asked this frame.
+    pub fn take_hire(&mut self) -> Option<Hire> {
+        self.pending_hire.take()
+    }
+
+    /// Frames this zone asked the session for.
+    pub fn take_requests(&mut self) -> Vec<Request> {
+        std::mem::take(&mut self.outbox)
+    }
+
+    /// The exits waiting to be turned into requests.
+    pub fn take_exits(&mut self) -> Vec<ExitRequest> {
+        std::mem::take(&mut self.pending_exits)
+    }
+
+    /// The editor's text and where the cursor sits in it.
+    pub fn draft(&self) -> (String, usize) {
+        (self.editor.text(), self.editor.cursor())
+    }
+
+    /// Whether the conversation already knows this directory.
+    pub fn knows_cwd(&self, path: &str) -> bool {
+        self.data.cwd == path
+    }
 
     /// The height it asks for: content rows, capped at a share of the terminal.
-    pub fn request_height_for(&self, wrapped_lines: usize, term_h: u16) -> u16 {
+    fn request_height_for(&self, wrapped_lines: usize, term_h: u16) -> u16 {
         geometry::container_height(term_h, wrapped_lines)
             .try_into()
             .unwrap_or(u16::MAX)
@@ -114,16 +253,13 @@ impl InputZone {
     fn wrapped(&self) -> crate::ui::tui::text::Wrapped {
         crate::ui::tui::text::wrap(&self.editor.text(), geometry::inner_width(self.term.cols))
     }
-}
 
-impl InputZone {
     /// Apply one intent: editor actions drive the editor, the rest the history ring.
     /// `true` = consumed.
     fn apply(
         &mut self,
         intent: &semantics::Intent,
         wrapped: Option<&crate::ui::tui::text::Wrapped>,
-        ctx: &Ctx,
     ) -> bool {
         use semantics::Intent as I;
         let mut self_managed = false;
@@ -183,7 +319,7 @@ impl InputZone {
             I::Submit => {
                 // A live round with text in the box: the first Enter interrupts, a second
                 // one inside the window submits.
-                if ctx.view.busy && !self.editor.is_empty() {
+                if self.data.busy && !self.editor.is_empty() {
                     let now = std::time::Instant::now();
                     let again = self
                         .enter_armed
@@ -206,12 +342,11 @@ impl InputZone {
                     self.editor.clear();
                     self.finished = true;
                     self_managed = true;
+                    self.data.busy = true;
+                    self.shouts
+                        .push(Shout::new(name::BUSY, serde_json::json!({"on": true})));
                     Effect::Content
                 }
-            }
-            I::Interrupt => {
-                self.pending_exits.push(ExitRequest::Interrupt);
-                Effect::Nothing
             }
             I::ClearInput => {
                 self.editor.clear();
@@ -220,7 +355,7 @@ impl InputZone {
                 self_managed = true;
                 Effect::Content
             }
-            I::ToggleReasoning | I::ToggleTools | I::None => Effect::Nothing,
+            I::None => Effect::Nothing,
         };
         match eff {
             Effect::Nothing => false,
@@ -289,7 +424,7 @@ impl InputZone {
     }
 
     /// What a rewind put back: the text goes in as it was, cursor at the end. An
-    /// existing draft is not overwritten; the new text is appended after it.
+    /// existing draft is not overwritten.
     pub fn prefill(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -327,11 +462,9 @@ impl InputZone {
     }
 
     /// Whether the cursor sits in a completion trigger word, from the editor's own
-    /// text. Word bounds are the separator table's hard bounds.
-    ///
-    /// Triggers: a `/` as the input's first character (the command line); or a word
-    /// preceded by a space that starts with `./`, `../`, `~/`, a `/` plus one more
-    /// character, or a leading path segment followed by `/`.
+    /// text. Triggers: a `/` as the input's first character; or a word preceded by a
+    /// space that starts with `./`, `../`, `~/`, a `/` plus one more character, or a
+    /// leading path segment followed by `/`.
     fn refresh_hang(&mut self) {
         let text = self.editor.text();
         let cursor = self.editor.cursor();
@@ -342,11 +475,8 @@ impl InputZone {
             start -= 1;
         }
         let word: String = chars[start..cursor].iter().collect();
-        // The word must follow a space, or be the start of the text.
         let spaced = start == 0 || chars[start - 1] == ' ';
         let is_command = start == 0 && word.starts_with('/');
-        // A bare relative path counts only when its first segment looks like one:
-        // `/` inside ordinary prose is not a path.
         let head = word.split('/').next().unwrap_or("");
         let ascii_head = !head.is_empty()
             && head
@@ -358,6 +488,92 @@ impl InputZone {
             || (word.starts_with('/') && word.chars().count() > 1)
             || (word.contains('/') && ascii_head);
         self.hang = spaced && !word.is_empty() && (is_command || is_path);
+    }
+
+    /// The statusline's own reading of an event.
+    fn notify(&mut self, event: &str, content: &Value) {
+        let ctx = Ctx { data: &self.data };
+        self.statusline.on_event(event, content, &ctx);
+    }
+
+    fn ctx(&self) -> Ctx<'_> {
+        Ctx { data: &self.data }
+    }
+
+    /// One frame answer the zone reads for itself.
+    fn read_frame(&mut self, packet: &Packet) -> Vec<Request> {
+        let mut out = Vec::new();
+        match (packet.kind.as_str(), packet.name.as_str()) {
+            ("call", "meta") => {
+                self.read_meta(&packet.content, &mut out);
+            }
+            ("stream", "change") => {
+                if let Some(row) = packet.content.get("meta") {
+                    self.read_meta(row, &mut out);
+                }
+            }
+            ("call", "config") => {
+                if let Some(key) = self.pending_keys.pop_front()
+                    && key.ends_with(".contextWindow")
+                {
+                    self.data.limit = packet.content.as_u64().unwrap_or(0);
+                }
+            }
+            ("call", "usage") => {
+                self.read_usage(&packet.content);
+            }
+            _ => {}
+        }
+        out
+    }
+
+    /// The session row: model, name, and the window its model has.
+    fn read_meta(&mut self, row: &Value, out: &mut Vec<Request>) {
+        if let Some(name) = row.get("name").and_then(Value::as_str) {
+            self.data.name = Some(name.to_string());
+        }
+        let Some(provider) = row.get("provider").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(model) = row.get("model").and_then(Value::as_str) else {
+            return;
+        };
+        let address = format!("{provider}:{model}");
+        if self.data.model.as_deref() == Some(address.as_str()) {
+            return;
+        }
+        self.data.model = Some(address.clone());
+        let key = format!("models.model.{address}.contextWindow");
+        self.pending_keys.push_back(key.clone());
+        out.push(Request::call("config", serde_json::json!({"key": key})));
+    }
+
+    /// The bill: one currency, the model's own.
+    fn read_usage(&mut self, content: &Value) {
+        let Some(groups) = content.get("groups").and_then(Value::as_array) else {
+            return;
+        };
+        let mut total = 0.0;
+        let mut currency = String::new();
+        for group in groups {
+            let Some(price) = group.get("price") else {
+                continue;
+            };
+            if currency.is_empty()
+                && let Some(name) = price.get("currency").and_then(Value::as_str)
+            {
+                currency = name.to_string();
+            }
+            total += price.get("total").and_then(Value::as_f64).unwrap_or(0.0);
+        }
+        self.data.money = Money {
+            total,
+            symbol: match currency.as_str() {
+                "CNY" => "¥".to_string(),
+                "USD" => "$".to_string(),
+                _ => String::new(),
+            },
+        };
     }
 }
 
@@ -378,23 +594,27 @@ impl SubZone for InputZone {
         Self::CLAIMS
     }
 
-    /// Events carry no data: what a round is doing is read from `ctx.view`.
-    fn deliver_event(&mut self, ev: Event, ctx: &Ctx) {
-        self.term = ctx.size;
-        if matches!(ev, Event::RoundStarted | Event::RoundEnded) {
-            self.enter_armed = None;
-        }
-        self.statusline.on_event(ev, ctx);
+    fn kinds(&self) -> &'static [crate::ui::tui::zone::Kind] {
+        &[
+            crate::ui::tui::zone::Kind::Call,
+            crate::ui::tui::zone::Kind::Post,
+            crate::ui::tui::zone::Kind::Stream,
+            crate::ui::tui::zone::Kind::Notice,
+        ]
+    }
+
+    fn deliver_event(&mut self, packet: &Packet, size: TermSize) -> Vec<Request> {
+        self.term = size;
+        self.read_frame(packet)
     }
 
     /// Esc first (a lent-away Esc never arrives here), then the intent table.
-    fn deliver_action(&mut self, a: &Action, ctx: &Ctx) -> bool {
-        self.term = ctx.size;
+    fn deliver_action(&mut self, a: &Action) -> bool {
         let key = match a {
             Action::Key(key) => *key,
             Action::Paste(text) => {
                 let intent = semantics::Intent::Paste(text.clone());
-                return self.apply(&intent, None, ctx);
+                return self.apply(&intent, None);
             }
             Action::ScrollUp { .. } | Action::ScrollDown { .. } => return false,
         };
@@ -407,7 +627,7 @@ impl SubZone for InputZone {
         }
         let wrapped = matches!(intent, semantics::Intent::Up | semantics::Intent::Down)
             .then(|| self.wrapped());
-        let consumed = self.apply(&intent, wrapped.as_ref(), ctx);
+        let consumed = self.apply(&intent, wrapped.as_ref());
         // Hang is re-read after every edit; a fresh hang is what hires the completion.
         let was = self.hang;
         self.refresh_hang();
@@ -417,9 +637,14 @@ impl SubZone for InputZone {
         consumed
     }
 
-    fn attach(&mut self, _session: i64, _ctx: &Ctx) {}
+    fn attach(&mut self, _session: i64, _size: TermSize) {
+        self.data = Data::default();
+        self.pending_keys.clear();
+        self.outbox
+            .push(Request::call("usage", serde_json::json!({})));
+    }
 
-    fn detach(&mut self, _ctx: &Ctx) {
+    fn detach(&mut self) {
         self.pending_exits.clear();
         self.pending_hire = None;
         self.hang = false;
@@ -429,24 +654,10 @@ impl SubZone for InputZone {
         self.history.exit();
         self.finished = true;
         self.scroll = 0;
+        self.data = Data::default();
+        self.pending_keys.clear();
     }
 
-    /// Only session actions leave here; screen changes stay for Main's dispatch.
-    fn take_requests(&mut self) -> Vec<Request> {
-        let mut out = Vec::new();
-        let mut rest = Vec::new();
-        for exit in self.pending_exits.drain(..) {
-            match exit {
-                ExitRequest::Submit(text) => out.push(Request::Submit(text)),
-                ExitRequest::Interrupt => out.push(Request::Interrupt),
-                other => rest.push(other),
-            }
-        }
-        self.pending_exits = rest;
-        out
-    }
-
-    /// Rows wanted: the wrapped content, capped at a fifth of the terminal.
     fn request_height(&self, term: TermSize) -> u16 {
         self.request_height_for(self.wrapped_for(term).len(), term.rows)
     }
@@ -459,40 +670,72 @@ impl SubZone for InputZone {
     fn on_height_changed(&mut self, _rows: u16) -> bool {
         false
     }
+
+    fn take_shouts(&mut self) -> Vec<Shout> {
+        std::mem::take(&mut self.shouts)
+    }
+
+    fn hear(&mut self, event: &str, content: &Value) {
+        match event {
+            name::CWD => {
+                if let Some(path) = content.get("path").and_then(Value::as_str) {
+                    self.data.cwd.clear();
+                    self.data.cwd.push_str(path);
+                    self.notify(event, content);
+                }
+            }
+            name::USAGE => {
+                if let Some(used) = content.get("used").and_then(Value::as_u64) {
+                    self.data.used = used;
+                }
+            }
+            name::PREFILL => {
+                if let Some(text) = content.get("text").and_then(Value::as_str) {
+                    self.prefill(text);
+                }
+            }
+            name::BUSY => {
+                self.data.busy = content.get("on").and_then(Value::as_bool).unwrap_or(false);
+                if !self.data.busy {
+                    self.enter_armed = None;
+                    self.outbox
+                        .push(Request::call("usage", serde_json::json!({})));
+                }
+                self.notify(event, content);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl InputZone {
     /// The wrapped result at the given width — `request_height` runs before the new
     /// size is stored, so the width comes in as an argument.
-    fn wrapped_for(&self, term: crate::ui::tui::zone::TermSize) -> crate::ui::tui::text::Wrapped {
+    fn wrapped_for(&self, term: TermSize) -> crate::ui::tui::text::Wrapped {
         crate::ui::tui::text::wrap(&self.editor.text(), geometry::inner_width(term.cols))
     }
 
     /// Self-rendering; the width comes in as an argument, like its siblings.
     ///
     /// Order: wrap, scroll to the cursor, the statusline row, then the container.
-    /// The cursor column is reported to the completion popup along the way.
     pub fn render_rows(
         &mut self,
-        term_w: u16,
+        term: TermSize,
         p: &crate::ui::tui::theme::Palette,
-        view: &crate::ui::session::View<'_>,
     ) -> Vec<ratatui::text::Line<'static>> {
-        let term_w = term_w.max(1);
+        self.term = term;
+        let term_w = term.cols.max(1);
         let wrapped =
             crate::ui::tui::text::wrap(&self.editor.text(), geometry::inner_width(term_w));
         let (cursor_row, cursor_col) = wrapped.locate(self.editor.cursor());
         let container_rows = usize::from(self.rows.max(2));
         self.scroll =
             geometry::adjust_scroll(self.scroll, wrapped.len(), container_rows, cursor_row);
-        let ctx = Ctx {
-            view,
-            size: self.term,
-            memo: None,
+        let status_line = {
+            let ctx = self.ctx();
+            self.statusline
+                .render(&StatusTheme::resolve(), term_w, &ctx)
         };
-        let status_line = self
-            .statusline
-            .render(&StatusTheme::resolve(), term_w, &ctx);
         let drawn = render::render(
             &render::Spec {
                 status_line,

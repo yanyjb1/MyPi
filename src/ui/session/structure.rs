@@ -1,7 +1,5 @@
 //! The structural window: which rounds exist and the closed block ranges each owns.
 
-use serde_json::Value;
-
 /// One round: its id and the closed block id ranges it owns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Turn {
@@ -40,26 +38,20 @@ impl Structure {
         self.turns = turns;
     }
 
-    /// Cut back to one block, the way the warehouse did.
-    pub fn rewind(&mut self, turn: i64, block: i64, cut: &Value) {
+    /// Cut the index back to one block. The request names the spot, so the reply's `cut`
+    /// is none of this layer's business: everything newer than the round goes, and the
+    /// round itself keeps the blocks up to the named one.
+    pub fn cut_at(&mut self, turn: i64, block: i64) {
         let Some(at) = self.turns.iter().position(|held| held.id == turn) else {
             return;
         };
-        match cut
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("boundary")
-        {
-            "retyped" => self.turns.drain(..=at),
-            "rescued" => {
-                let rescued = cut.get("turn").and_then(Value::as_i64).unwrap_or(turn);
-                self.turns.drain(..at);
-                if let Some(first) = self.turns.first_mut() {
-                    first.id = rescued;
-                    first.ranges = head(&first.ranges, block);
-                }
-            }
-            _ => self.turns.drain(..at),
+        self.turns.drain(..at);
+        let Some(head) = self.turns.first_mut() else {
+            return;
+        };
+        head.ranges = kept(&head.ranges, block);
+        if head.ranges.is_empty() {
+            self.turns.remove(0);
         }
     }
 
@@ -79,7 +71,7 @@ impl Structure {
 }
 
 /// The kept head of a run of ranges, up to and including `upto`.
-fn head(ranges: &[[i64; 2]], upto: i64) -> Vec<[i64; 2]> {
+fn kept(ranges: &[[i64; 2]], upto: i64) -> Vec<[i64; 2]> {
     let mut out = Vec::new();
     for [lo, hi] in ranges {
         if *lo > upto {

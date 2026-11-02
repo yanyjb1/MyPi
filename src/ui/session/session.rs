@@ -1,7 +1,10 @@
 //! The session: one connection, two windows, one outbox.
 //!
 //! Every frame crosses unchanged. The only things read out of a frame are the ones the windows
-//! cannot be kept without: a push's session and turn, a round's ranges, a row's id, a rewind's cut.
+//! cannot be kept without: a push's session and turn, a round's ranges, a row's id, the spot a
+//! rewind was asked for.
+
+use std::collections::VecDeque;
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -17,12 +20,21 @@ use super::structure::{Structure, Turn};
 /// The configuration key that sizes the content window.
 const BUDGET_KEY: &str = "config.ui.session.preloadCache";
 
+/// A change this front end asked for and has not seen land yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    /// A rewind: the structure goes back to this spot once the write is accepted.
+    Rewind { turn: i64, block: i64 },
+}
+
 pub struct Session {
     client: Client,
     /// The session this connection follows; pushes for another are dropped.
     attached: Option<i64>,
     structure: Structure,
     content: ContentCache,
+    /// What was asked for and not yet answered, oldest first.
+    pending: VecDeque<Pending>,
     /// What arrived since the last `forward`, in arrival order.
     outbox: Vec<Packet>,
     /// The connection died once; the front end is told once.
@@ -38,6 +50,7 @@ impl Session {
             attached: None,
             structure: Structure::default(),
             content: ContentCache::default(),
+            pending: VecDeque::new(),
             outbox: Vec::new(),
             shut: false,
         };
@@ -65,6 +78,7 @@ impl Session {
         self.attached = Some(id);
         self.structure.clear();
         self.content.clear();
+        self.pending.clear();
     }
 
     /// Stop following. The watch is replaced by the next one.
@@ -73,6 +87,7 @@ impl Session {
         self.client.clear();
         self.structure.clear();
         self.content.clear();
+        self.pending.clear();
     }
 
     pub fn attached(&self) -> Option<i64> {
@@ -89,6 +104,17 @@ impl Session {
         if kind == "call" && name == "blocks" {
             self.blocks(content);
             return;
+        }
+        // A rewind is owed a trim of this layer's own index; the spot comes from the
+        // request, never from the reply, so it is noted before the frame leaves.
+        if kind == "post"
+            && name == "rewind"
+            && let (Some(turn), Some(block)) = (
+                content.get("turn").and_then(Value::as_i64),
+                content.get("block").and_then(Value::as_i64),
+            )
+        {
+            self.pending.push_back(Pending::Rewind { turn, block });
         }
         self.client.queue(Frame::new(kind, name, content), answer);
     }
@@ -185,12 +211,16 @@ impl Session {
                 }
             }
             ("post", "rewind") => {
-                let turn = request.payload.get("turn").and_then(Value::as_i64);
-                let block = request.payload.get("block").and_then(Value::as_i64);
-                if let (Some(turn), Some(block)) = (turn, block) {
-                    let cut = reply.payload.get("cut").cloned().unwrap_or(Value::Null);
-                    self.structure.rewind(turn, block, &cut);
-                    self.content.retain(|id| self.structure.owns(id));
+                // The ledger is the whole of this layer's interest: an accepted write is
+                // one that goes through, and the spot comes from the request.
+                match self.pending.pop_front() {
+                    Some(Pending::Rewind { turn, block })
+                        if reply.payload.get("error").is_none() =>
+                    {
+                        self.structure.cut_at(turn, block);
+                        self.content.retain(|id| self.structure.owns(id));
+                    }
+                    _ => {}
                 }
             }
             ("post", "delete") => {

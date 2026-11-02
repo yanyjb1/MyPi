@@ -14,12 +14,14 @@ What each file holds and who names it. Current state only.
 | `outcome.rs` | `ZoneId`, `Outcome` | public |
 | `size.rs` | `TermSize` | public |
 | `memo.rs` | `Memo` | public |
+| `shout.rs` | `Shout`, `Origin`, `name` | public |
 
 ## What it talks to
 
 - `action::{Action, Key}` for the claim projection.
 - `ui::session` for `Packet` and `Structure` — re-exported, so no zone imports session.
 - `ratatui::text::Line` for `Zone::render`.
+- `serde_json::Value` for what a shout carries and what `hear` reads.
 
 ## What calls it
 
@@ -32,6 +34,7 @@ What each file holds and who names it. Current state only.
 3. `Zone` and its three implementations.
 4. `Outcome` and `App::settle`.
 5. The re-exports and what zones actually import: a type zones need must be listed here.
+6. `shout::name` with every zone that shouts or hears a name.
 
 ## Not wired
 

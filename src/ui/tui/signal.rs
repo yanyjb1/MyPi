@@ -4,7 +4,7 @@
 //! and leaves; nothing tries to survive them.
 
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
-use signal_hook::iterator::{Signals, SignalsInfo};
+use signal_hook::iterator::Signals;
 
 /// The stop signals, registered once at startup.
 pub struct Stop {

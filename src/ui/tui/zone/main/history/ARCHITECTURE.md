@@ -1,89 +1,59 @@
 # history — architecture
 
-Where the history zone sits, what each file holds, and what it depends on. Current state only.
+Where the zone sits, what each file holds, and what it depends on. Current state only.
 
 ## Files
 
 | file | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list | private |
-| `zone.rs` | `HistoryZone`, `Config`, `CLAIMS`, the frame pass | private to `Main` |
-| `ask.rs` | `Ask` — init, jump, fetch, settled | private |
-| `local.rs` | `Local`, `Slot`, `SlotKind` — the append-only section | private |
-| `view.rs` | `Viewport`, `Anchor`, `Dir`, `Ahead` — sight line and layout walk | private |
-| `resize.rs` | `ResizePlan`, `plan` — visible vs lazy numbers | private |
-| `product/` | `Product`, `Segment`, `CutPoint`, `CutKind` | private |
-| `layout/` | `layout`, `visible::apply`, `lazy::nums` | private |
-| `cache/` | `BlockCache`, `Item` — products, rows, heights, versions | private |
-| `render/` | painting: block, cards, text, theme | private |
+| `zone.rs` | `HistoryZone`, `CLAIMS`, the frame pass, the asks it owes | private to `Main` |
+| `shape.rs` | `Block`, `Kind`, `Usage`: one row decoded | private |
+| `live.rs` | `Live`: the running turn's blocks, gathered from pieces | private |
+| `local.rs` | `Local`, `Slot`, `SlotKind`, `Level`, `Life` | private |
+| `view.rs` | `Viewport`, `Anchor`, `Dir`, the walk | private |
+| `segment.rs` | `Segment`, `Kind`, `split` — the source split by line | private |
+| `cache/` | `BlockCache`: rows per slot and their keys | private |
+| `render/` | painting: `block`, `cards`, `notice`, `text` | private |
 
 ## What it exposes
 
-Through `SubZone`:
+Through `SubZone`: `claims`, `kinds`, `deliver_event`, `deliver_action`, `attach`, `detach`,
+`structure`, `request_height`, `assign`, `on_height_changed`, `take_shouts`, `hear`.
 
-- `claims`, `deliver_event`, `deliver_action`
-- `attach`, `detach`
-- `request_height`, `assign`, `on_height_changed`
-- `take_requests`
-
-To `Main`:
-
-- `set_config(&Config)`
-- `warm(&View)`
-- `notice(text, level, life)`
-- `reset()`
-- `focus(turn, block)`
-- `render_rows(view, width, theme)`
-- `take_out() -> Vec<Ask>`
-
-`Config` fields: `focus_line`, `focus_margin`, `rest_ms`, `overscan`, `on_thinking`,
-`unfold_thinking`, `unfold_tool`, `todo_fold`.
+To `Main`: `notice`, `focus`, `reset`, `render_rows`.
 
 ## What it calls
 
-- `ui::session::View`: `chain`, `blocks`, `todo`, `tail`, `turn`, `busy`, `generation`, `cwd`,
-  `notices`.
-- `ui::session::{BlockKind, BlockRef, Level, Life, TodoPhase}`.
-- `ui::tui::TodoFold`.
-- `theme::theme_epoch`.
-- `render::text::highlight::warm_in_order`.
-- `history::render::cards::{chat, todo, notice}`.
-- `text` for width and wrapping.
+- `ui::tui::zone::{Packet, Structure, Request, Shout, name, Claim, Kind, SubZone, TermSize}`.
+- `ui::tui::TodoFold`, `ui::tui::theme::{HistoryTheme, Token, theme_epoch}`.
+- `text` for display width and wrapping.
+- `render::cards::tools` for the tool renderer table.
 
 ## Who calls it
 
-`MainZone` is the only caller:
-
-- `arbitrate` → `assign`
-- `settle` / `broadcast` → `on_height_changed`
-- `render` → `render_rows`
-- `dispatch` → `deliver_action`
-- `deliver_event` → `deliver_event`
-- `attach` / `detach`
-- `take_requests` → `take_out`
-- `take_over` → `focus`
+`MainZone` is the only caller: `arbitrate` → `assign`, `settle` → `on_height_changed`, `render` →
+`render_rows`, `dispatch` → `deliver_action`, `event` → `deliver_event`, `structure` → `structure`,
+the bus → `hear` and `take_shouts`.
 
 ## What it does not know
 
-The app, the input zone, the reserved zone, the picker, the tree, the socket, the database, and
-the agent loop. It never sends anything itself; every Ask leaves as a `Request::View`.
+The app, the input zone, the desk, the picker, the tree, the socket, the database, and the agent
+loop. Every ask leaves as a `Request`; every fact for another zone leaves as a `Shout`.
 
 ## Must stay in sync
 
-1. `Config` fields with the config keys in `README.md`; only three keys are read today.
-2. `Ask` with the loop's landing site; a variant without one is silent work.
-3. `Local`'s four slot kinds with the layout walk's height and separator rules.
-4. `Item`'s number/block/version with the cache's `ensure` and `sync`.
-5. The two copies in `cache/` with the switches in `HistoryZone`.
-6. `Product` and `layout`: a new product kind needs a wrap and a cut rule.
-7. `resize::plan` and `layout::visible`: the visible list is applied every frame; the lazy list is
-   not consumed yet.
-8. The cache's invalidation keys with `theme_epoch`, `generation`, `tail.version`, `width`, and
-   `cwd`.
+1. `shape::Kind` and the wire's `type` column.
+2. `local::SlotKind` and the walk's height/separator rules.
+3. `segment::Kind` and the painter's per-segment branch.
+4. `cache::sync` keys with `theme_epoch`, width, working directory and the fold switches.
+5. `shout::name` values with the names this zone shouts.
+6. `structure()` and the local section: a slot lives while the structure owns its block.
+7. `CLAIMS` and the key handling in `deliver_action`.
 
 ## Not wired
 
-1. `layout::lazy::nums` has no caller.
-2. `layout::layout` ignores its `seam` argument.
-3. `HistoryZone::notice` has no caller outside the zone.
-4. The loop emits only `Tick`; block/round events are not produced yet.
+1. `ask_turn` runs when the anchor's round and its neighbours are missing, but nothing asks for a
+   round whose rows the walk only partly reached.
+2. The cut-preserving re-layout on a resize is not built: `Viewport::on_resize` clamps the row.
+3. A live block is painted whole on every piece.

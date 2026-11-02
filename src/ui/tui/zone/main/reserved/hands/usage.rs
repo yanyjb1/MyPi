@@ -1,8 +1,6 @@
-//! The `/usage` panel: one of the reserved area's hands.
+//! The `/usage` panel: one of the desk's hands.
 //!
 //! The numbers are computed by the server; the front end only lays them out.
-//!
-//! Fixed layout: three header rows, then one row per model.
 //!
 //! ```text
 //!  Total Token: 2.4M, exactly: 2,440,000
@@ -10,22 +8,18 @@
 //!
 //!  Model              Total      Input      Output     CacheRead  CacheWrite
 //! >model-alpha        ¥4.62      ¥1.20      ¥3.40      ¥0.02      ¥0.00
-//!  model-beta         ¥1.74      ¥0.50      ¥1.20      ¥0.04      ¥0.00
 //! ```
-//!
-//! The first two rows are the whole session; the table is per model: fixed column
-//! widths, right aligned, no rules.
 //!
 //! The panel never enters the history, the store or the context: Esc closes it.
 
 use ratatui::text::{Line, Span};
+use serde_json::Value;
 
-use crate::ui::tui::UsageAlign;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
 use crate::ui::tui::theme::Palette;
+use crate::ui::tui::zone::Claim;
 use crate::ui::tui::zone::main::num;
 use crate::ui::tui::zone::main::reserved::hand::{Hand, Report};
-use crate::ui::tui::zone::{Claim, Ctx, Reply};
 
 /// No modifiers held.
 const PLAIN: Mods = Mods {
@@ -34,7 +28,7 @@ const PLAIN: Mods = Mods {
     shift: false,
 };
 
-/// Keys the panel borrows: Esc closes, arrows pick a row, Tab switches the number unit.
+/// Keys the panel borrows: Esc closes, arrows pick a row.
 const PANEL_KEYS: &[Claim] = &[
     Claim::Key(Key {
         code: KeyCode::Esc,
@@ -52,91 +46,73 @@ const PANEL_KEYS: &[Claim] = &[
 
 /// The panel's row cap.
 const MAX_ROWS: usize = 24;
-/// Columns the selection marker takes.
-const MARKER_W: usize = 1;
 
-/// Layout steps, widest first: `(name column, money column, header names)`.
-///
-/// The five money columns never shrink. Real width per step = `name + 5 * money`,
-/// plus the marker: 73 / 58 / 49 / 42 / 35 columns. Narrower terminals clip the
-/// row ends.
-const LAYOUTS: [(usize, usize, [&str; 5]); 5] = [
-    (
-        18,
-        11,
-        ["Total", "Input", "Output", "CacheRead", "CacheWrite"],
-    ),
-    (13, 9, ["Total", "Input", "Output", "CRead", "CWrite"]),
-    (9, 8, ["Total", "In", "Out", "CRead", "CWrite"]),
-    (7, 7, ["Tot", "In", "Out", "CRe", "CWr"]),
-    (5, 6, ["Tot", "In", "Out", "CR", "CW"]),
-];
+/// One model's share of the bill.
+#[derive(Debug, Clone, PartialEq)]
+struct Row {
+    address: String,
+    rounds: u64,
+    prompt: u64,
+    completion: u64,
+    cached: u64,
+    written: u64,
+    share: f64,
+    currency: String,
+    total: Option<f64>,
+    input: Option<f64>,
+    output: Option<f64>,
+    read: Option<f64>,
+    write: Option<f64>,
+}
 
 #[derive(Debug, Default)]
 pub struct UsagePanel {
     /// The selected table row.
     selected: usize,
-    /// Which side the block hugs; horizontal padding only.
-    align: UsageAlign,
     open: bool,
     /// The numbers arrived at least once.
     loaded: bool,
-    /// How many model rows the view holds; layout only, never the numbers.
-    body_rows: usize,
+    rows: Vec<Row>,
 }
 
 impl UsagePanel {
-    /// Open (or replace) the panel; one more `/usage` recomputes and reopens it.
-    pub fn show(&mut self) {
-        self.selected = 0;
-        self.open = true;
-    }
-
-    /// The view's usage arrived; remember only how many rows to reserve.
-    pub fn sync(&mut self, view: &crate::ui::session::View<'_>) {
-        let Some(usage) = view.usage else { return };
-        self.body_rows = usage.groups.len();
+    /// The view's usage arrived; remember the rows.
+    pub fn take(&mut self, answer: &Value) {
+        let Some(groups) = answer.get("groups").and_then(Value::as_array) else {
+            return;
+        };
+        self.rows = groups.iter().map(row_of).collect();
+        self.selected = self.selected.min(self.rows.len().saturating_sub(1));
         self.loaded = true;
     }
 
-    /// Where the block sits horizontally, told once at assembly.
-    pub fn set_align(&mut self, align: UsageAlign) {
-        self.align = align;
-    }
-
-    pub fn close(&mut self) {
+    fn close(&mut self) {
         self.open = false;
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    /// Three header rows plus one row per model; an empty session still gets one.
-    fn rows(&self) -> usize {
-        (3 + self.body_rows.max(1)).min(MAX_ROWS)
     }
 
     /// Move the selection, wrapping around.
     fn step(&mut self, delta: isize) {
-        let n = self.body_rows;
-        if n == 0 {
+        if self.rows.is_empty() {
             return;
         }
         let next = self.selected as isize + delta;
-        self.selected = next.rem_euclid(n as isize) as usize;
+        self.selected = next.rem_euclid(self.rows.len() as isize) as usize;
     }
 
-    fn draw_panel(&self, ctx: &Ctx, rows: usize, p: &Palette) -> Vec<Line<'static>> {
+    /// Three header rows plus one row per model.
+    fn height(&self) -> usize {
+        (3 + self.rows.len().max(1)).min(MAX_ROWS)
+    }
+
+    fn draw_panel(&self, width: u16, rows: usize, p: &Palette) -> Vec<Line<'static>> {
         let mut out = Vec::new();
-        let Some(usage) = ctx.view.usage else {
+        if !self.loaded {
             out.push(Line::from(p.muted("正在读取…")));
             return out;
-        };
-        let groups = &usage.groups;
-        let prompt: u64 = groups.iter().map(|g| g.prompt_tokens).sum();
-        let completion: u64 = groups.iter().map(|g| g.completion_tokens).sum();
-        let cached: u64 = groups.iter().map(|g| g.cached_tokens).sum();
+        }
+        let prompt: u64 = self.rows.iter().map(|r| r.prompt).sum();
+        let completion: u64 = self.rows.iter().map(|r| r.completion).sum();
+        let cached: u64 = self.rows.iter().map(|r| r.cached).sum();
         let total = prompt + completion;
         let hit = if prompt == 0 {
             0.0
@@ -145,8 +121,8 @@ impl UsagePanel {
         };
         out.push(Line::from(vec![
             p.accent_span("Total Token: "),
-            Span::raw(num::compact(total, usage.lang)),
-            Span::raw(format!(", exactly: {}", num::exact(total, usage.lang))),
+            Span::raw(num::compact(total)),
+            Span::raw(format!(", exactly: {}", num::exact(total))),
         ]));
         out.push(Line::from(format!("Cache Hit Rate: {hit:.2}%")));
         out.push(Line::from(""));
@@ -154,20 +130,18 @@ impl UsagePanel {
             "Model              Total      Input      Output     CacheRead  CacheWrite",
         ));
         let limit = rows.saturating_sub(out.len()).max(1);
-        for (i, g) in groups.iter().take(limit).enumerate() {
+        for (i, row) in self.rows.iter().take(limit).enumerate() {
             let marker = if i == self.selected { ">" } else { " " };
-            let cost = g.cost.as_ref();
-            let total = cost.map(|c| c.input + c.output + c.cache_read + c.cache_write);
-            let symbol = g.currency.as_deref().unwrap_or("");
+            let symbol = row.currency.as_str();
             let money = |v: Option<f64>| num::money(v.unwrap_or(0.0), symbol);
             let line = format!(
                 "{marker}{:<18} {:<10} {:<10} {:<10} {:<10} {:<10}",
-                g.id,
-                money(total),
-                money(cost.map(|c| c.input)),
-                money(cost.map(|c| c.output)),
-                money(cost.map(|c| c.cache_read)),
-                money(cost.map(|c| c.cache_write)),
+                row.address,
+                money(row.total),
+                money(row.input),
+                money(row.output),
+                money(row.read),
+                money(row.write),
             );
             out.push(Line::from(if i == self.selected {
                 p.accent_span(line)
@@ -175,26 +149,21 @@ impl UsagePanel {
                 Span::raw(line)
             }));
         }
-        if out.len() < rows {
-            out.push(Line::from(""));
-        }
-        let _ = self.align;
+        let _ = (width, self.rows.first().map(|r| r.share));
         out
     }
 }
 
 impl Hand for UsagePanel {
     /// Open right away: the numbers arrive on their own, a frame or two later.
-    fn arrived(&mut self, _ctx: &Ctx) {
+    fn arrived(&mut self) {
         self.open = true;
     }
 
     fn report(&self) -> Report {
         Report {
-            rows: self.rows() as u16,
+            rows: self.height() as u16,
             keys: PANEL_KEYS,
-            text: false,
-            col: false,
         }
     }
 
@@ -207,7 +176,7 @@ impl Hand for UsagePanel {
         self.open
     }
 
-    fn on_key(&mut self, key: &Key) -> Option<Reply> {
+    fn on_key(&mut self, key: &Key) -> Option<crate::ui::tui::zone::main::desk::Reply> {
         match key.code {
             KeyCode::Esc => self.close(),
             KeyCode::Up => self.step(-1),
@@ -217,11 +186,56 @@ impl Hand for UsagePanel {
         None
     }
 
-    fn draw(&self, ctx: &Ctx, rows: u16) -> Vec<Line<'static>> {
-        self.draw_panel(ctx, usize::from(rows), &Palette::current())
+    fn draw(&self, width: u16, rows: u16, palette: &Palette) -> Vec<Line<'static>> {
+        self.draw_panel(width, usize::from(rows), palette)
     }
 
     fn left(&mut self) {
         self.close();
+    }
+}
+
+/// One `groups` row, decoded.
+fn row_of(group: &Value) -> Row {
+    let price = group.get("price");
+    let money = |key: &str| price.and_then(|p| p.get(key)).and_then(Value::as_f64);
+    Row {
+        address: group
+            .get("address")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        rounds: group.get("rounds").and_then(Value::as_u64).unwrap_or(0),
+        prompt: group
+            .get("prompt_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        completion: group
+            .get("completion_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cached: group
+            .get("cached_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        written: group
+            .get("cache_write_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        share: group.get("share").and_then(Value::as_f64).unwrap_or(0.0),
+        currency: price
+            .and_then(|p| p.get("currency"))
+            .and_then(Value::as_str)
+            .map(|name| match name {
+                "CNY" => "¥".to_string(),
+                "USD" => "$".to_string(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default(),
+        total: money("total"),
+        input: money("input"),
+        output: money("output"),
+        read: money("cache_read"),
+        write: money("cache_write"),
     }
 }

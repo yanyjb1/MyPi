@@ -1,23 +1,16 @@
 //! 分隔符定义表 —— 编辑器"块"的唯一定义源。
 //!
-//! 两档：
-//! - **硬边界**（hard）：块与块的分界。词删除（Ctrl+W）与词滑动
-//!   （Ctrl+方向）在硬边界处停下；补全触发词的回扫也停在这里。
-//! - **连接符**（connector）：词内合法字符。`src/main.rs`、`./foo`、
-//!   `a-b_c.tar.gz` 是**一整块**——滑动滑过、删除一删整块。
+//! 一个集合：块与块的分界。词删除（Ctrl+W）与词滑动（Ctrl+方向）在这里停下，
+//! 补全触发词的回扫也停在这里。`src/main.rs`、`a-b_c.tar.gz` 因此是一整块。
 //!
-//! 其余字符（字母数字、CJK 正文）永远属于块内。
-//!
-//! 默认表内置；config 重构后通过 [`SeparatorTable::with_overrides`]
-//! 从配置注入覆盖表。
+//! 默认表内置；config 重构后通过覆盖表注入。
 
 use std::collections::HashSet;
 
-/// 两档分隔符表。编辑器与补全触发共用这一个定义。
+/// 块与块的分界。编辑器与补全触发共用这一个定义。
 #[derive(Debug, Clone)]
 pub struct SeparatorTable {
     hard: HashSet<char>,
-    connector: HashSet<char>,
 }
 
 impl Default for SeparatorTable {
@@ -33,11 +26,8 @@ impl Default for SeparatorTable {
             '，', '。', '、', '；', '：', '？', '！', '“', '”', '‘', '’', '（', '）', '【', '】',
             '《', '》', '「', '」', '『', '』', '—', '…', '·', '～',
         ];
-        // 连接符：path-like 词的骨架。
-        let connector: &[char] = &['.', '/', '\\', '-', '_'];
         Self {
             hard: hard.iter().copied().collect(),
-            connector: connector.iter().copied().collect(),
         }
     }
 }
@@ -46,10 +36,5 @@ impl SeparatorTable {
     /// 硬边界：块与块的分界。
     pub fn is_hard(&self, c: char) -> bool {
         self.hard.contains(&c)
-    }
-
-    /// 连接符：词内合法，不构成边界。
-    pub fn is_connector(&self, c: char) -> bool {
-        self.connector.contains(&c)
     }
 }

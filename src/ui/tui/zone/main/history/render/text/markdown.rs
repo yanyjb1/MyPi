@@ -4,7 +4,6 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::super::block::Deferred;
 use super::highlight;
 use crate::ui::tui::text::{char_width, display_width};
 use crate::ui::tui::theme::{HistoryTheme, Token};
@@ -30,14 +29,8 @@ impl Row {
     }
 }
 
-pub fn render_markdown(
-    text: &str,
-    t: &HistoryTheme,
-    defer: bool,
-    width: usize,
-) -> (Vec<Line<'static>>, Vec<Deferred>) {
+pub fn render_markdown(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
-    let mut deferred: Vec<Deferred> = Vec::new();
     let mut row: Option<Row> = None;
     let mut bold = false;
     let mut italic = false;
@@ -125,22 +118,10 @@ pub fn render_markdown(
                 } else {
                     Some(lang.as_str())
                 };
-                if defer {
-                    let before = out.len();
-                    let plain = highlight::plain(&code_buf);
-                    let count = plain.len();
-                    out.extend(plain);
-                    deferred.push(Deferred {
-                        before,
-                        count,
-                        code: std::mem::take(&mut code_buf),
-                        lang: hint.map(str::to_string),
-                    });
-                } else {
-                    for line in highlight::highlight(&code_buf, hint, t) {
-                        out.push(line);
-                    }
+                for line in highlight::highlight(&code_buf, hint, t) {
+                    out.push(line);
                 }
+                code_buf.clear();
                 out.push(Line::from(
                     t.fg("```".to_string(), Token::MdCodeBlockBorder),
                 ));
@@ -304,7 +285,7 @@ pub fn render_markdown(
     if out.last().is_some_and(|l| l.spans.is_empty()) {
         out.pop();
     }
-    (out, deferred)
+    out
 }
 
 const TABLE_MAX_WORD: usize = 30;

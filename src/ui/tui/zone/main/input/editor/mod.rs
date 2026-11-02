@@ -68,7 +68,6 @@ pub enum Effect {
     // epilogue clears it. Merged, the column just recorded by an ↑↓ move would be
     // wiped immediately, and long -> short -> long line could never
     // return to the original column.
-    VerticalMotion,
     // Content was mutated.
     Content,
 }
@@ -217,14 +216,6 @@ impl Editor {
     // merges into one undo and Ctrl+Z reverts the earlier word too.
     pub fn note_cursor_move(&mut self) {
         self.undo.break_coalescing();
-    }
-
-    pub fn can_undo(&self) -> bool {
-        self.undo.can_undo()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        self.undo.can_redo()
     }
 
     // Undo one step. Returns false when there is no history.
@@ -586,7 +577,4 @@ impl Editor {
 
     // Horizontal motion should clear the target-column memory, or ↑↓
     // would jump back to the old column.
-    pub fn reset_goal_col(goal_col: &mut Option<usize>) {
-        *goal_col = None;
-    }
 }

@@ -76,21 +76,6 @@ impl Token {
     }
 }
 
-/// How a deco gets its colors. **Declared, never inferred**: the engine
-/// only audits it ([`crate::ui::tui::zone::main::input::statusline::StatusLine::declared_tokens`]), so
-/// a deco stays free to apply the tokens it names however it needs — the
-/// usage gauge, for instance, interleaves accent and unstyled dashes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorPolicy {
-    /// Colors come from the global theme: these are the tokens the deco reads.
-    Tokens(&'static [Token]),
-    /// The deco paints fixed colors and ignores the theme entirely.
-    Fixed,
-    /// The deco builds its own styles (its own color control) and may
-    /// still read resolved theme values.
-    Custom,
-}
-
 /// A per-frame snapshot of the colors the statusline is allowed to use.
 #[derive(Debug, Clone, Copy)]
 pub struct StatusTheme {

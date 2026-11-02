@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use ratatui::text::Line;
 use serde_json::{Value, json};
 
+use super::startup::Startup;
 use crate::ui::session::{Packet, Session};
 use crate::ui::tui::ThemeConfig;
 use crate::ui::tui::action::Action;
@@ -242,6 +243,7 @@ impl App {
             Request::Attach(id) => self.attach(id),
             Request::Detach => self.detach(),
             Request::Structure => self.structure(),
+            Request::Quit => self.settle(Outcome::Quit),
         }
     }
 

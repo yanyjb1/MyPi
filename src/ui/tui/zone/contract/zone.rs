@@ -1,12 +1,14 @@
 //! The two levels: the app talks to major zones, a major zone talks to its sub-zones.
 
 use ratatui::text::Line;
+use serde_json::Value;
 
 use super::claim::Claim;
 use super::kind::Kind;
 use super::memo::Memo;
 use super::outcome::Outcome;
 use super::request::Request;
+use super::shout::Shout;
 use super::size::TermSize;
 use crate::ui::session::{Packet, Structure};
 use crate::ui::tui::action::Action;
@@ -75,4 +77,12 @@ pub trait SubZone {
 
     /// The host's row broadcast. `true` = consumed.
     fn on_height_changed(&mut self, rows: u16) -> bool;
+
+    /// Events this sub-zone put out since the last call, oldest first.
+    fn take_shouts(&mut self) -> Vec<Shout> {
+        Vec::new()
+    }
+
+    /// One event another party put out. Unknown names are ignored.
+    fn hear(&mut self, _name: &str, _content: &Value) {}
 }

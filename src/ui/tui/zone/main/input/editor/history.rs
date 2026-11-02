@@ -44,14 +44,6 @@ impl History {
         self.exit();
     }
 
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     /// Whether history is currently being browsed.
     pub fn browsing(&self) -> bool {
         self.index.is_some()

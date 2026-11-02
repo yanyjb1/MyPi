@@ -51,7 +51,7 @@ impl ToolView {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ToolOutcome<'a> {
+pub(in crate::ui::tui::zone::main::history) struct ToolOutcome<'a> {
     pub text: &'a str,
     pub ok: bool,
     pub details: Option<&'a serde_json::Value>,
@@ -181,19 +181,22 @@ pub(super) trait ToolRenderer {
         let lines = if b.name == "read" {
             read_body(o, t)
         } else {
+            // A running tool shows the newest rows it has, up to the space it was given;
+            // a finished one folds from the head.
+            let limit = if b.tail {
+                b.limit.max(1)
+            } else {
+                self.fold_limit()
+            };
             output_lines(
                 o.text,
-                self.fold_limit(),
+                limit,
                 b.expanded,
-                self.fold_takes_head(),
+                self.fold_takes_head() && !b.tail,
                 t,
             )
         };
         vec![Section { label: None, lines }]
-    }
-
-    fn is_diff(&self, o: ToolOutcome<'_>) -> bool {
-        ToolView::from_details(o.details, o.text).is_diff()
     }
 }
 
@@ -653,6 +656,10 @@ pub(super) struct ToolBlock<'a> {
     pub args: &'a str,
     pub result: Option<ToolOutcome<'a>>,
     pub expanded: bool,
+    /// The tool is still running: the tail is what shows, up to `limit` rows.
+    pub tail: bool,
+    /// How many rows a tail window may take.
+    pub limit: usize,
 }
 
 impl<'a> ToolBlock<'a> {
@@ -726,16 +733,6 @@ impl<'a> ToolBlock<'a> {
 
     fn result_sections(&self, o: ToolOutcome<'_>, t: &HistoryTheme) -> Vec<Section> {
         self.r().result_sections(self, o, t)
-    }
-
-    pub(super) fn has_two_states(&self) -> bool {
-        let Some(o) = self.result else {
-            return false;
-        };
-        if self.r().is_diff(o) {
-            return false;
-        }
-        non_empty_lines(o.text) > self.r().fold_limit()
     }
 }
 
@@ -1170,12 +1167,6 @@ fn arg_bool(args: &str, key: &str) -> Option<bool> {
 fn arg_str(args: &str, key: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(args).ok()?;
     Some(v.get(key)?.as_str()?.to_string())
-}
-
-impl ToolView {
-    pub(super) fn is_diff(&self) -> bool {
-        matches!(self, ToolView::Diff { .. })
-    }
 }
 
 fn contrast_on(bg: Color) -> Color {

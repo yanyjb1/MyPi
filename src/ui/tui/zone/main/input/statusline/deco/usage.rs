@@ -3,9 +3,9 @@
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
-use crate::ui::tui::zone::Ctx;
-use crate::ui::tui::zone::main::input::statusline::theme::{StatusTheme, Token};
-use crate::ui::tui::zone::main::input::statusline::{Deco, Setup};
+use super::super::theme::{StatusTheme, Token};
+use super::super::{Deco, Setup};
+use crate::ui::tui::zone::main::input::Ctx;
 
 #[derive(Debug, Default)]
 pub struct Usage;
@@ -16,11 +16,12 @@ pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
 
 impl Deco for Usage {
     fn render(&self, t: &StatusTheme, budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
-        let Some(limit) = ctx.view.ctx_limit.filter(|n| *n > 0) else {
+        let limit = ctx.data.limit;
+        if limit == 0 {
             return Vec::new();
-        };
-        let now = ctx.view.ctx_tokens.unwrap_or(0);
-        let pct = ((now.min(limit) as f64 / limit as f64 * 100.0).round() as u64).min(100);
+        }
+        let now = ctx.data.used.min(limit);
+        let pct = ((now as f64 / limit as f64 * 100.0).round() as u64).min(100);
         let pct_txt = format!("{pct}%");
         let denom = format!(":{}", fmt_tokens(limit));
         // Cells outside the overhead belong to the dashes.

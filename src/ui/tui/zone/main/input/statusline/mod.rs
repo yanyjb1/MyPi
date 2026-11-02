@@ -4,14 +4,15 @@ mod deco;
 mod layout;
 mod theme;
 
-pub use theme::{ALL_TOKENS, ColorPolicy, StatusTheme, Token};
+pub use theme::StatusTheme;
 
 use std::time::Duration;
 
 use ratatui::text::Line;
 
-use crate::ui::tui::event::Event;
-use crate::ui::tui::zone::Ctx;
+use serde_json::Value;
+
+use super::Ctx;
 
 /// Which group of the row a deco renders in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,23 +40,16 @@ impl Side {
 /// counts as part of this tier.
 pub const PRIORITY_BASE: u8 = 100;
 
-/// Tokens the engine itself uses, not a deco.
-const ENGINE_TOKENS: [Token; 2] = [Token::Accent, Token::Sep];
-
 /// One row of the table: everything about a deco that is not behaviour.
 #[derive(Debug, Clone, Copy)]
 pub struct Entry {
-    /// Stable identifier.
-    pub id: &'static str,
     /// Which group of the row.
     pub side: Side,
     /// Position inside its group, ascending = left to right.
     pub order: u8,
     /// Omission priority: higher survives longer.
     pub priority: u8,
-    /// Tokens this deco reads.
-    pub colors: ColorPolicy,
-    /// Builds it. May not read `Ctx`.
+    /// Builds it.
     pub make: fn(&Setup) -> Box<dyn Deco>,
 }
 
@@ -76,8 +70,8 @@ impl Default for Setup {
 
 /// What a deco does. Where it sits and what it costs live in its [`Entry`].
 pub trait Deco {
-    /// Broadcast event; ignore the ones you do not care about.
-    fn on_event(&mut self, _ev: Event, _ctx: &Ctx) {}
+    /// One bus event; ignore the ones you do not care about.
+    fn on_event(&mut self, _event: &str, _content: &Value, _ctx: &Ctx) {}
 
     /// `budget` is `None` while measuring (return the narrowest form), else the
     /// cells allocated. An empty run hides the deco and its connector.
@@ -106,28 +100,14 @@ impl StatusLine {
     }
 
     /// Broadcast one event to every deco.
-    pub fn on_event(&mut self, ev: Event, ctx: &Ctx) {
+    pub fn on_event(&mut self, event: &str, content: &Value, ctx: &Ctx) {
         for (_, deco) in &mut self.rows {
-            deco.on_event(ev, ctx);
+            deco.on_event(event, content, ctx);
         }
     }
 
     /// Render the row. Exactly `width` cells, always.
     pub fn render(&self, t: &StatusTheme, width: u16, ctx: &Ctx) -> Line<'static> {
         layout::render_line(&self.rows, t, width, ctx)
-    }
-
-    /// Tokens the table declares plus the engine's own, in `ALL_TOKENS` order.
-    pub fn declared_tokens(&self) -> Vec<Token> {
-        ALL_TOKENS
-            .into_iter()
-            .filter(|tok| {
-                ENGINE_TOKENS.contains(tok)
-                    || self.rows.iter().any(|(entry, _)| match entry.colors {
-                        ColorPolicy::Tokens(toks) => toks.contains(tok),
-                        ColorPolicy::Fixed | ColorPolicy::Custom => false,
-                    })
-            })
-            .collect()
     }
 }

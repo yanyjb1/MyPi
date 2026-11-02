@@ -1,11 +1,11 @@
-//! The row's head: `π` idle, `Tel` with a bridge, spinning while busy.
+//! The row's head: `π` idle, spinning while busy.
 
 use ratatui::text::Span;
+use serde_json::Value;
 
-use crate::ui::tui::event::Event;
-use crate::ui::tui::zone::Ctx;
-use crate::ui::tui::zone::main::input::statusline::theme::{StatusTheme, Token};
-use crate::ui::tui::zone::main::input::statusline::{Deco, Setup};
+use super::super::theme::{StatusTheme, Token};
+use super::super::{Deco, Setup};
+use crate::ui::tui::zone::main::input::Ctx;
 
 /// Animation frames.
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
@@ -20,14 +20,12 @@ pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
 }
 
 impl Deco for Activity {
-    fn on_event(&mut self, ev: Event, _ctx: &Ctx) {
-        if matches!(ev, Event::Tick) {
-            self.frame = (self.frame + 1) % SPINNER.len();
-        }
+    fn on_event(&mut self, _event: &str, _content: &Value, _ctx: &Ctx) {
+        self.frame = (self.frame + 1) % SPINNER.len();
     }
 
     fn render(&self, t: &StatusTheme, _budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
-        if ctx.view.busy {
+        if ctx.data.busy {
             let glyph = SPINNER[self.frame].to_string();
             return vec![t.capsule(glyph, t.get(Token::Accent))];
         }

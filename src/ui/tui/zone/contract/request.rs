@@ -27,6 +27,8 @@ pub enum Request {
     Detach,
     /// The structural window, as it stands.
     Structure,
+    /// Nobody shows any more: the app ends the loop.
+    Quit,
 }
 
 impl Request {

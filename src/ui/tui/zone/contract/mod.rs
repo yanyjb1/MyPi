@@ -5,6 +5,7 @@ mod kind;
 mod memo;
 mod outcome;
 mod request;
+mod shout;
 mod size;
 mod zone;
 
@@ -13,6 +14,7 @@ pub use kind::Kind;
 pub use memo::Memo;
 pub use outcome::{Outcome, ZoneId};
 pub use request::{ModelId, Request};
+pub use shout::{Origin, Shout, name};
 pub use size::TermSize;
 pub use zone::{SubZone, Zone};
 
