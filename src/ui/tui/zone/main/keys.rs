@@ -5,7 +5,15 @@
 //! is hung) sit in front of the static ones and are checked first.
 
 use crate::ui::tui::action::{Action, Key, KeyCode};
-use crate::ui::tui::zone::{Claim, Seat};
+use crate::ui::tui::zone::Claim;
+
+/// Which sub-zone consumes an input. `Main` owns this: no other level needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seat {
+    History,
+    Input,
+    Reserved,
+}
 
 /// Whether one claim covers this action.
 pub fn matches(claim: &Claim, a: &Action) -> bool {

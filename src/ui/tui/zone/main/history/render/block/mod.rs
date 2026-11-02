@@ -4,9 +4,9 @@ use ratatui::text::Line;
 
 use super::cards::chat;
 use super::text::highlight;
-use super::theme::HistoryTheme;
-use crate::server::storage::BlockKind;
+use crate::ipc::contract::BlockKind;
 use crate::ui::session::BlockRef;
+use crate::ui::tui::theme::HistoryTheme;
 
 #[derive(Debug, Clone)]
 pub struct Deferred {
@@ -100,7 +100,7 @@ impl Block {
     }
 }
 
-pub(crate) fn pair(blocks: &[BlockRef<'_>], at: usize) -> Option<BlockRef<'_>> {
+pub(crate) fn pair<'a>(blocks: &[BlockRef<'a>], at: usize) -> Option<BlockRef<'a>> {
     let first = blocks.get(at)?;
     if first.kind() != BlockKind::ToolRequest {
         return None;
@@ -110,7 +110,7 @@ pub(crate) fn pair(blocks: &[BlockRef<'_>], at: usize) -> Option<BlockRef<'_>> {
         return None;
     }
     let id = first.call_id()?;
-    (second.call_id().as_deref() == Some(id.as_str())).then_some(second)
+    (second.call_id() == Some(id)).then_some(second)
 }
 
 pub(crate) fn render_product(
@@ -164,7 +164,7 @@ pub(crate) fn render_group(
         defer,
         cwd,
     );
-    super::super::layout::layout(&product, width, None)
+    super::super::layout::layout(&product, width, None, t)
 }
 
 pub(crate) fn wrap_rows(

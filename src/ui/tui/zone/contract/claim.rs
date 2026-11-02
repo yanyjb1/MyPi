@@ -1,6 +1,6 @@
-//! Input claims and the seats that hold them.
+//! The input claims: one concrete key, or a class of input.
 
-use crate::ui::tui::action::Key;
+use crate::ui::tui::action::{Action, Key};
 
 /// A zone's claim on input: one concrete key, or a class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,10 +16,16 @@ pub enum Claim {
     WheelShift,
 }
 
-/// Which sub-zone a claim belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Seat {
-    History,
-    Input,
-    Reserved,
+impl Claim {
+    /// The claim one action falls under.
+    pub fn of(action: &Action) -> Claim {
+        match action {
+            Action::Key(key) => Claim::Key(*key),
+            Action::Paste(_) => Claim::Paste,
+            Action::ScrollUp { shift: false } | Action::ScrollDown { shift: false } => Claim::Wheel,
+            Action::ScrollUp { shift: true } | Action::ScrollDown { shift: true } => {
+                Claim::WheelShift
+            }
+        }
+    }
 }

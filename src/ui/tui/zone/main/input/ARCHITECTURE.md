@@ -83,4 +83,4 @@ database, and the agent loop.
 1. `Setup.git_scan` is a three-second default; no config key is read.
 2. `view.pools` is not fetched at startup, so completion has no model or profile names.
 3. The statusline's language and several `statusLine*` tokens are not authoritative yet.
-4. The loop that delivers actions and takes requests does not exist.
+4. The loop delivers actions and takes requests; it emits only `Tick`.

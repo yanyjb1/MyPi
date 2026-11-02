@@ -1,20 +1,32 @@
 //! The screen: the alternate screen, the keyboard flags mypi asks for, and giving it all back.
 //!
-//! One flag only. `DISAMBIGUATE_ESCAPE_CODES` makes the terminal report Esc as `\x1b[27u`, so a
+//! Two flags matter. `DISAMBIGUATE_ESCAPE_CODES` makes the terminal report Esc as `\x1b[27u`, so a
 //! bare `\x1b` can only be the start of an escape sequence — the whole of Esc's routing rests on
-//! that premise. The other two are not asked for: `REPORT_ALL_KEYS_AS_ESCAPE_CODES` spreads the
-//! parsing surface over the whole keyboard and nothing reads the result (`Modifier(LeftControl)`
-//! noise is its only visible effect), and mypi never reads an alternate key.
+//! that premise. Focus reporting is what tells the app whether the reader is still looking;
+//! nothing else asks for it.
+
+use std::time::Duration;
 
 use anyhow::Result;
 use ratatui::crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::text::Line;
 
+use crate::ui::tui::action::{self, Action};
+
 use crate::ui::tui::zone::TermSize;
+
+/// What the terminal produced on its own.
+pub enum Input {
+    /// The user did something.
+    Action(Action),
+    /// The window took (`true`) or lost (`false`) focus.
+    Focus(bool),
+}
 
 /// The terminal, taken for as long as this value lives.
 pub struct Term {
@@ -31,6 +43,7 @@ impl Term {
         );
         let _ = execute!(std::io::stdout(), EnableBracketedPaste);
         let _ = execute!(std::io::stdout(), EnableMouseCapture);
+        let _ = execute!(std::io::stdout(), EnableFocusChange);
         Ok(Term { inner })
     }
 
@@ -57,47 +70,27 @@ impl Term {
         Ok(())
     }
 
-    /// Put text on the system clipboard (OSC 52). A terminal that ignores it stays silent.
-    pub fn copy(&mut self, text: &str) -> Result<()> {
-        use std::io::Write;
-        let mut out = std::io::stdout();
-        write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
-        out.flush()?;
-        Ok(())
+    /// Wait up to one frame for terminal input. `None` = nothing worth an action this frame.
+    pub fn poll(&self) -> Result<Option<Input>> {
+        if !event::poll(Duration::from_millis(16))? {
+            return Ok(None);
+        }
+        match event::read()? {
+            event::Event::Key(key) => Ok(action::from_key(key).map(Input::Action)),
+            event::Event::Mouse(mouse) => Ok(action::from_mouse(&mouse).map(Input::Action)),
+            event::Event::Paste(text) => Ok(Some(Input::Action(action::from_paste(text)))),
+            event::Event::FocusGained => Ok(Some(Input::Focus(true))),
+            event::Event::FocusLost => Ok(Some(Input::Focus(false))),
+            event::Event::Resize(_, _) => Ok(None),
+        }
     }
 
     /// Give the screen back.
     pub fn leave(self) {
+        let _ = execute!(std::io::stdout(), DisableFocusChange);
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
         let _ = execute!(std::io::stdout(), DisableBracketedPaste);
         ratatui::restore();
     }
-}
-
-/// Base64, no padding-free shortcuts: OSC 52 wants the standard alphabet.
-fn base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            TABLE[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TABLE[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
 }

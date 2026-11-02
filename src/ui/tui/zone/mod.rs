@@ -2,10 +2,12 @@
 
 pub mod contract;
 pub mod main;
+mod registry;
 pub mod resume;
 pub mod tree;
 
 pub use contract::*;
 pub use main::MainZone;
+pub use registry::zones;
 pub use resume::ResumeZone;
 pub use tree::TreeZone;

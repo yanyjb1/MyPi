@@ -1,101 +1,81 @@
 # contract — the two-level zone boundary
 
-The contract is the only vocabulary shared by the app, the three major zones, and the three
-sub-zones of `Main`.
+The only vocabulary the app and the three major zones share.
 
 ## 1. Design / Schema
 
-### `Ctx`
-
-Every delivery carries:
-
-| field | meaning |
+| type | meaning |
 |---|---|
-| `view: &View` | the borrowed session read model |
-| `size: TermSize` | terminal columns and rows |
-| `memo: Option<&Memo>` | the handover memo, open only during handover and takeover |
+| `Zone` | what the app knows of a major zone |
+| `SubZone` | what `Main` knows of history, input and reserved |
+| `Kind` | a frame class a zone may declare |
+| `Claim` | one action a zone may declare |
+| `Request` | what a zone asks the app to land |
+| `Outcome` | what a delivery made the screen do |
+| `ZoneId` | `Main`, `Resume`, `Tree` |
+| `TermSize` | columns and rows |
+| `Memo` | string-to-string, owned by the app, open to the zone it starts |
+| `Packet`, `Structure` | re-exported from `ui::session`; zones never import that module |
 
 ### `Zone`
 
-A major zone implements:
-
 | method | meaning |
 |---|---|
-| `deliver_event` | receive a broadcast event |
-| `deliver_action` | receive one claimed action; return a handover to give the screen up |
-| `attach` / `detach` | hear a session lifecycle change |
-| `hand_over` | lose the screen; the memo is open |
-| `take_over` | take the screen; the memo is open |
-| `render` | return this zone's rows |
-| `cursor` | return the hardware cursor, if any |
-| `take_requests` | return session work produced since the last take |
+| `name` | the registry name |
+| `keys` | the actions it consumes |
+| `kinds` | the frame classes it handles; `local` is never listed |
+| `start` | the app gives it the screen: size and the memo |
+| `session` | the conversation was entered (`Some`) or left (`None`) |
+| `event` | one frame it declared, or any `local` one |
+| `action` | one input it claimed |
+| `structure` | the structural window after `Request::Structure` |
+| `render` | this zone's rows |
+| `cursor` | the hardware cursor, if any |
 
 ### `SubZone`
 
-A sub-zone implements:
+`claims`, `kinds`, `deliver_event(packet, size)`, `deliver_action(action)`, `attach(session,
+size)`, `detach`, `borrowed`, `request_height`, `assign`, `on_height_changed`, `structure`.
+`Main` is the only host.
 
-| method | meaning |
-|---|---|
-| `claims` | the static input claims it owns |
-| `deliver_event` / `deliver_action` | receive a broadcast or one claimed action |
-| `attach` / `detach` | hear a session lifecycle change |
-| `borrowed` | keys it borrows at run time |
-| `request_height` | rows it needs for a terminal size |
-| `assign` | rows the main zone allocated, plus the terminal size |
-| `on_height_changed` | the row broadcast; `true` means consumed |
-| `take_requests` | session work produced since the last take |
+### `Kind`
+
+`Call`, `Post`, `Subscribe`, `Stream`, `Notice`. `Kind::of(kind, name)` classifies one frame and
+lifts `stream / notice` out of `Stream`. `local` returns `None`: it is delivered unconditionally.
+
+### `Claim`
+
+`Key(Key)`, `AnyChar`, `Paste`, `Wheel`, `WheelShift`. `Claim::of(action)` projects one action.
 
 ### `Request`
 
-| variant | asks for |
+| variant | lands as |
 |---|---|
-| `Submit(String)` | send one message |
-| `Interrupt` | stop the running round |
-| `Rewind { turn, block, text }` | cut back to a block; text is for the clipboard |
-| `View(Ask)` | a history ask: init, jump, fetch, or settled |
-| `List { under }` | read the session list, optionally scoped to a directory |
-| `Attach(i64)` | attach to a session |
-| `Delete(i64)` | delete a session |
-| `Detach` | leave the current session |
-| `TreeRange { start, end }` | read raw material for a block-id range |
+| `Send { kind, name, content, answer }` | one session frame; the app fills in the session |
+| `Attach(i64)` | `session.attach` + `subscribe watch` + the broadcast |
+| `Detach` | `session.detach` + the broadcast |
+| `Structure` | `session.structure()`, handed to every zone |
 
-### `Handover` and `ZoneId`
+### `Outcome`
 
-`Handover { to: Option<ZoneId>, requests: Vec<Request> }`. `ZoneId` is `Main`, `Resume`, or
-`Tree`. `to: None` means nobody shows and the loop exits. The losing zone carries its queue in
-`requests`.
-
-### `Claim` and `Seat`
-
-`Claim` is `Key(Key)`, `AnyChar`, `Paste`, `Wheel`, or `WheelShift`. `Seat` is `History`, `Input`,
-or `Reserved`. The main zone resolves one action to one seat.
-
-### `Ownership`
-
-One `Option<ZoneId>`. `register` replaces it; `showing` reads it. There is no stack and no second
-ledger.
+`Stay`; `Show { to, memo }` — the successor and what to leave in the memo; `Quit`.
 
 ## 2. Design intent
 
-- **Two levels, no skipping.** The app talks to major zones; `Main` talks to sub-zones. A
-  sub-zone never reaches the app.
-- **One delivery carries everything.** The session view and the size ride the context, so an
-  event can stay a signal.
-- **The memo is part of the contract, not a global.** It is `Some` only in the two transfer
-  methods, which makes the window explicit.
-- **Requests are not screen changes.** A zone asks for session work; only a handover changes what
-  is shown.
-- **Claims belong to the consumer.** The table is assembled from the sub-zones' own declarations.
-- **A losing zone carries its queue.** The app does not keep a second pending list.
+- **Declaration is the interface.** A zone says what it hears and what it claims; the app never
+  inspects a payload.
+- **Two levels, no skipping.** The app talks to major zones; a major zone talks to its sub-zones.
+- **The memo is part of the boundary.** It is owned by the app and handed to the zone being
+  started; nothing else can reach it.
+- **Requests are data.** A zone never touches the session; it names work and the app lands it.
 
 ## 3. Unresolved
 
-1. The loop that lands `Request` does not exist.
-2. `TreeRange` has no session-side landing call.
-3. Duplicate claims are not rejected at compile time; the static table is resolved at run time.
-4. `Ctrl+C` has no decided meaning.
-5. Terminal-too-small degradation is not designed; sizes are clamped by the consumers.
+1. Duplicate claims are not rejected at compile time; the app resolves one action to one zone by
+   table order.
+2. `SubZone` still carries `request_height`/`assign`/`on_height_changed`: the row handshake is
+   `Main`'s private business and is not in this contract's final shape.
 
 ## 4. Config fields
 
-None. The contract carries values; it does not read configuration.
+None. The contract carries values; it reads no configuration.

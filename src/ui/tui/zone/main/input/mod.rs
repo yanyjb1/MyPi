@@ -1,18 +1,17 @@
 //! The input zone: editor, input history, statusline, submit, command routing.
 //! It does not know what sits above it; it only knows when it lent its keys away.
 
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-
 use super::SubZone;
+use crate::ui::tui::action::{Action, Key, KeyCode};
+use crate::ui::tui::event::Event;
 use crate::ui::tui::zone::main::geometry;
-use crate::ui::tui::zone::main::reserved::{Hire, Reply};
-use crate::ui::tui::zone::{Action, Claim, Ctx, Event, Key, KeyCode, Request, TermSize};
+use crate::ui::tui::zone::{Claim, Ctx, Hire, Reply, Request, TermSize};
 
-pub mod editor;
-pub mod render;
-pub mod route;
-pub mod semantics;
-pub mod statusline;
+mod editor;
+mod render;
+mod route;
+mod semantics;
+mod statusline;
 
 use editor::{Editor, Effect, History};
 use statusline::{Setup, StatusLine, StatusTheme};

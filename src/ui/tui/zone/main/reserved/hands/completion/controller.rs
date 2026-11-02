@@ -4,10 +4,11 @@ use std::path::PathBuf;
 
 use super::engine::{self, Completion, CompletionPopup, Look, Scan};
 use crate::commands;
-use crate::server::api::types::CandidatePools;
-use crate::ui::tui::action::{Claim, Key, KeyCode, Mods};
-use crate::ui::tui::zone::main::reserved::hand::{Hand, Reply, Report};
-use crate::ui::tui::zone::{Ctx, Event};
+use crate::ipc::contract::CandidatePools;
+use crate::ui::tui::action::{Key, KeyCode, Mods};
+use crate::ui::tui::event::Event;
+use crate::ui::tui::zone::main::reserved::hand::{Hand, Report};
+use crate::ui::tui::zone::{Claim, Ctx, Reply};
 
 /// What the controller reads to compute candidates.
 pub struct InputCtx<'a> {

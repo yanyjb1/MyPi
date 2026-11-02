@@ -5,9 +5,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::super::block::Deferred;
-use super::super::theme::{HistoryTheme, Token};
 use super::highlight;
 use crate::ui::tui::text::{char_width, display_width};
+use crate::ui::tui::theme::{HistoryTheme, Token};
 
 #[derive(Default)]
 struct TableBuf {

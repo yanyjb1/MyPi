@@ -1,6 +1,6 @@
 //! Exact numbers, grouped by the same base as the short form.
 
-use crate::server::api::types::UsageLang;
+use crate::ipc::contract::UsageLang;
 
 pub fn exact(n: u64, lang: UsageLang) -> String {
     let digits = n.to_string();

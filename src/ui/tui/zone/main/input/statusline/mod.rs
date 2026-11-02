@@ -1,8 +1,8 @@
 //! One row of the statusline: the deco table, the width engine, the theme.
 
-pub mod deco;
+mod deco;
 mod layout;
-pub mod theme;
+mod theme;
 
 pub use theme::{ALL_TOKENS, ColorPolicy, StatusTheme, Token};
 
@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use ratatui::text::Line;
 
-use crate::ui::tui::zone::{Ctx, Event};
+use crate::ui::tui::event::Event;
+use crate::ui::tui::zone::Ctx;
 
 /// Which group of the row a deco renders in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

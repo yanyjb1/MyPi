@@ -5,21 +5,20 @@ use std::time::Duration;
 
 use ratatui::text::Line;
 
-use super::ask::Ask;
 use super::cache::{BlockCache, Item};
 use super::layout;
 use super::local::{Local, SlotKind};
 use super::render::cards::{chat, todo as todo_rows};
-use super::render::theme::HistoryTheme;
 use super::resize;
-use super::todo::TaskList;
 use super::view::{Dir, Viewport};
 
-use crate::server::config::read::config::TodoFold;
-use crate::server::storage::BlockKind;
+use crate::ipc::contract::BlockKind;
 use crate::ui::session::{Level, Life, View};
+use crate::ui::tui::TodoFold;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
-use crate::ui::tui::zone::{Claim, Ctx, Event, Request, SubZone, TermSize};
+use crate::ui::tui::event::Event;
+use crate::ui::tui::theme::HistoryTheme;
+use crate::ui::tui::zone::{Claim, Ctx, Request, SubZone, TermSize, ViewAsk};
 
 /// Everything the zone reads from config, handed over once at assembly.
 #[derive(Debug, Clone)]
@@ -154,13 +153,13 @@ pub struct HistoryZone {
     margin: i64,
     /// How long the reader must be still before the receipt goes out.
     silence: Duration,
-    /// The task list: the server's start, then one increment per call.
-    task: TaskList,
     todo_fold: TodoFold,
     /// What is owed to the session, collected this frame.
-    ask: Vec<Ask>,
+    ask: Vec<ViewAsk>,
     /// The first attach is spared the destroy: a new conversation owns what is there.
     reprieve: bool,
+    /// Rows the main zone handed down.
+    rows: u16,
 }
 
 impl Default for HistoryZone {
@@ -172,10 +171,10 @@ impl Default for HistoryZone {
             overscan: 12,
             margin: 32,
             silence: Duration::from_millis(300),
-            task: TaskList::default(),
             todo_fold: TodoFold::default(),
             ask: Vec::new(),
             reprieve: true,
+            rows: 0,
         }
     }
 }
@@ -204,7 +203,7 @@ impl HistoryZone {
     }
 
     /// Take what this frame owes the session.
-    pub fn take_out(&mut self) -> Vec<Ask> {
+    pub fn take_out(&mut self) -> Vec<ViewAsk> {
         std::mem::take(&mut self.ask)
     }
 
@@ -224,7 +223,7 @@ impl HistoryZone {
         } else {
             self.destroy();
         }
-        self.ask.push(Ask::Init { session });
+        self.ask.push(ViewAsk::Init { session });
     }
 
     /// `/new`: drop this conversation's section; the next attach asks for the new one.
@@ -237,7 +236,7 @@ impl HistoryZone {
     pub fn focus(&mut self, turn: i64, block: i64) {
         match self.local.num_of(block) {
             Some(num) => self.view.focus_num(num),
-            None => self.ask.push(Ask::Jump { turn }),
+            None => self.ask.push(ViewAsk::Jump { turn }),
         }
     }
 
@@ -245,7 +244,6 @@ impl HistoryZone {
     fn destroy(&mut self) {
         self.local.clear();
         self.cache.clear();
-        self.task.clear();
         self.ask.clear();
         self.view.follow();
     }
@@ -271,8 +269,6 @@ impl HistoryZone {
             items = self.items(view);
             self.trim(view, &items);
         }
-        self.todo(view);
-
         let plan = resize::plan(
             &self.local,
             self.view.anchor(),
@@ -282,12 +278,11 @@ impl HistoryZone {
         layout::visible::apply(&mut self.cache, &items, &plan.visible, t);
 
         let mut pinned = todo_rows::rows(
-            self.task.phases(),
-            self.task.touched(),
+            view.todo,
             self.todo_fold,
             width,
             t,
-            usize::from(self.view.rows()) / 2,
+            usize::from(self.rows) / 2,
         );
         let skip = self.thinking_slot(&items);
         pinned.extend(self.thinking_rows(&items, t));
@@ -442,11 +437,6 @@ impl HistoryZone {
             .and_then(|it| it.block.id())
     }
 
-    /// Keep the task list: the server's start, then the calls whose result has landed.
-    fn todo(&mut self, view: &View<'_>) {
-        self.task.sync(view);
-    }
-
     /// The thinking chain's rows: pinned at the bottom, above nothing.
     fn thinking_rows(&mut self, items: &[Item<'_>], t: &HistoryTheme) -> Vec<Line<'static>> {
         match self.thinking_slot(items) {
@@ -476,7 +466,7 @@ impl HistoryZone {
         let Some(num) = Self::block_at(items, self.view.anchor()) else {
             return;
         };
-        self.ask.push(Ask::Fetch {
+        self.ask.push(ViewAsk::Fetch {
             num,
             older: dir == Dir::Older,
         });
@@ -502,7 +492,7 @@ impl HistoryZone {
         if Self::newest_turn(view, items) == Some(turn) {
             return;
         }
-        self.ask.push(Ask::Jump { turn });
+        self.ask.push(ViewAsk::Jump { turn });
     }
 
     /// The newest round the window holds: the round of its last block with an id.
@@ -580,7 +570,7 @@ impl SubZone for HistoryZone {
         match ev {
             Event::Tick | Event::Deadline => {
                 if self.view.note_still(self.silence) {
-                    self.ask.push(Ask::Settled);
+                    self.ask.push(ViewAsk::Settled);
                 }
             }
             Event::Resized => {
@@ -687,10 +677,12 @@ impl SubZone for HistoryZone {
     }
 
     fn assign(&mut self, _term: TermSize, rows: u16) {
+        self.rows = rows;
         self.view.assign(rows);
     }
 
     fn on_height_changed(&mut self, rows: u16) -> bool {
+        self.rows = rows;
         self.view.assign(rows);
         true
     }

@@ -76,6 +76,7 @@ mod architecture {
             &[
                 "server",
                 "ipc::client",
+                "ipc::contract",
                 "ipc::server",
                 "ipc::endpoint",
                 "ipc::transport",

@@ -4,8 +4,9 @@
 
 use ratatui::text::Line;
 
-use crate::ui::tui::action::{Claim, Key};
-use crate::ui::tui::zone::{Ctx, Event};
+use crate::ui::tui::action::Key;
+use crate::ui::tui::event::Event;
+use crate::ui::tui::zone::{Claim, Ctx, Reply};
 
 /// What a hand asks for when it takes the desk.
 #[derive(Debug, Clone, Copy)]
@@ -18,16 +19,6 @@ pub struct Report {
     pub text: bool,
     /// It wants the cursor's column after every draw.
     pub col: bool,
-}
-
-/// What a hand hands back to the editor.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Reply {
-    Replace {
-        from: usize,
-        to: usize,
-        text: String,
-    },
 }
 
 pub trait Hand {

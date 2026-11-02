@@ -1,21 +1,25 @@
-//! Key routing and the exit requests that become handovers.
+//! Key routing and the exits that become requests or a handover.
 
-use super::MainZone;
+use serde_json::json;
+
 use super::input::ExitRequest;
 use super::keys;
+use super::zone::MainZone;
 use crate::ui::tui::action::Action;
-use crate::ui::tui::zone::{Ctx, Handover, Request, Seat, SubZone, ZoneId};
+use crate::ui::tui::zone::{Outcome, Request, Seat, SubZone, ZoneId};
 
-pub fn dispatch(zone: &mut MainZone, a: &Action, ctx: &Ctx) -> Option<Handover> {
-    let seat = keys::resolve(a, &zone.keys)?;
+pub fn dispatch(zone: &mut MainZone, a: &Action) -> (Outcome, Vec<Request>) {
+    let Some(seat) = keys::resolve(a, &zone.keys) else {
+        return (Outcome::Stay, Vec::new());
+    };
     match seat {
         Seat::History => {
-            zone.history.deliver_action(a, ctx);
+            zone.history.deliver_action(a);
         }
         Seat::Input => {
-            zone.input.deliver_action(a, ctx);
+            zone.input.deliver_action(a);
             if let Some(who) = zone.input.pending_hire.take() {
-                zone.reserved.hire(who, ctx);
+                zone.reserved.hire(who);
             }
             let text = zone.input.editor.text();
             let cursor = zone.input.editor.cursor();
@@ -25,7 +29,7 @@ pub fn dispatch(zone: &mut MainZone, a: &Action, ctx: &Ctx) -> Option<Handover> 
             }
         }
         Seat::Reserved => {
-            zone.reserved.deliver_action(a, ctx);
+            zone.reserved.deliver_action(a);
             if let Some(reply) = zone.reserved.take_reply() {
                 zone.input.apply_reply(reply);
             }
@@ -35,22 +39,28 @@ pub fn dispatch(zone: &mut MainZone, a: &Action, ctx: &Ctx) -> Option<Handover> 
 }
 
 /// Turn the input zone's exits into session requests or one handover.
-fn exits(zone: &mut MainZone) -> Option<Handover> {
-    let mut requests = std::mem::take(&mut zone.pending_requests);
-    requests.extend(zone.history.take_requests());
-    requests.extend(zone.reserved.take_requests());
-    requests.extend(zone.input.take_requests());
-    let mut exits = std::mem::take(&mut zone.pending_exits);
-    exits.append(&mut zone.input.pending_exits);
-
-    let mut to = None;
-    for exit in exits {
+fn exits(zone: &mut MainZone) -> (Outcome, Vec<Request>) {
+    let mut requests = Vec::new();
+    let mut outcome = Outcome::Stay;
+    for exit in zone.input.pending_exits.drain(..) {
         match exit {
-            ExitRequest::Submit(text) => requests.push(Request::Submit(text)),
-            ExitRequest::Interrupt => requests.push(Request::Interrupt),
-            ExitRequest::OpenTree => to = Some(Some(ZoneId::Tree)),
-            ExitRequest::OpenResume => to = Some(Some(ZoneId::Resume)),
-            ExitRequest::Quit => to = Some(None),
+            ExitRequest::Submit(text) => {
+                requests.push(Request::subscribe("submit", json!({"text": text})));
+            }
+            ExitRequest::Interrupt => requests.push(Request::post("interrupt", json!({}))),
+            ExitRequest::OpenTree => {
+                outcome = Outcome::Show {
+                    to: ZoneId::Tree,
+                    memo: Vec::new(),
+                };
+            }
+            ExitRequest::OpenResume => {
+                outcome = Outcome::Show {
+                    to: ZoneId::Resume,
+                    memo: Vec::new(),
+                };
+            }
+            ExitRequest::Quit => outcome = Outcome::Quit,
             ExitRequest::New => {
                 zone.history.reset();
                 zone.input.clear();
@@ -58,12 +68,5 @@ fn exits(zone: &mut MainZone) -> Option<Handover> {
             }
         }
     }
-
-    match to {
-        Some(to) => Some(Handover { to, requests }),
-        None => {
-            zone.pending_requests.extend(requests);
-            None
-        }
-    }
+    (outcome, requests)
 }

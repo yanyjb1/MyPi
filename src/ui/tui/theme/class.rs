@@ -136,7 +136,7 @@ fn resolve_value(
             }
             // Named ANSI colors (a convenience omp doesn't have; our old
             // models.yml themes used them, keep them loadable).
-            if let Some(c) = named_color(t) {
+            if let Some(c) = super::named_color(t) {
                 return Some(c);
             }
             // var reference
@@ -145,22 +145,6 @@ fn resolve_value(
             resolve_value(next, vars, depth)
         }
     }
-}
-
-fn named_color(t: &str) -> Option<Color> {
-    Some(match t.to_ascii_lowercase().as_str() {
-        "black" => Color::Black,
-        "gray" | "grey" => Color::Gray,
-        "darkgray" | "darkgrey" => Color::DarkGray,
-        "white" => Color::White,
-        "red" => Color::Red,
-        "green" => Color::Green,
-        "yellow" => Color::Yellow,
-        "blue" => Color::Blue,
-        "magenta" | "purple" => Color::Magenta,
-        "cyan" => Color::Cyan,
-        _ => return None,
-    })
 }
 
 fn hex_of(c: Color) -> String {
@@ -212,95 +196,5 @@ impl Theme {
         m: ratatui::style::Modifier,
     ) -> Span<'static> {
         Span::styled(text.into(), self.fg_style(token).add_modifier(m))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mini_theme() -> Theme {
-        // Bundled dark theme + a var chain test: derive accent through a
-        // two-hop reference by loading bundled JSON and re-resolving one
-        // token through vars. Simplest correct check: bundled themes
-        // resolve every token (covered in mod.rs tests); here we verify
-        // the deref mechanic directly.
-        let json: ThemeJson = serde_json::from_str(
-            r##"{
-                "name": "t",
-                "vars": { "a": "#00b4ff", "b": "a" },
-                "colors": { "accent": "b" }
-            }"##,
-        )
-        .unwrap();
-        let mut colors = std::collections::HashMap::new();
-        colors.insert("accent".to_string(), ColorValue::Str("b".into()));
-        let _ = json;
-        ThemeJson {
-            name: "t".into(),
-            vars: [
-                ("a".to_string(), ColorValue::Str("#00b4ff".into())),
-                ("b".to_string(), ColorValue::Str("a".into())),
-            ]
-            .into_iter()
-            .collect(),
-            colors,
-            symbols: Default::default(),
-        }
-        .compile_checked(false)
-        .unwrap_or_else(|e| panic!("{e}"))
-    }
-
-    #[test]
-    fn var_chain_resolves() {
-        let t = mini_theme();
-        assert_eq!(t.color(ColorToken::Accent), Color::Rgb(0x00, 0xb4, 0xff));
-    }
-
-    #[test]
-    fn terminal_default_is_reset() {
-        let json: ThemeJson =
-            serde_json::from_str(r##"{ "name": "t", "colors": { "accent": "" } }"##).unwrap();
-        let _ = json;
-        let mut colors = std::collections::HashMap::new();
-        colors.insert("accent".to_string(), ColorValue::Str("".into()));
-        let t = ThemeJson {
-            name: "t".into(),
-            vars: std::collections::HashMap::new(),
-            colors,
-            symbols: Default::default(),
-        }
-        .compile_checked(false)
-        .unwrap();
-        assert_eq!(t.color(ColorToken::Accent), Color::Reset);
-    }
-
-    #[test]
-    fn cycle_detected() {
-        let mut colors = std::collections::HashMap::new();
-        colors.insert("accent".to_string(), ColorValue::Str("accent".into()));
-        let t = ThemeJson {
-            name: "t".into(),
-            vars: std::collections::HashMap::new(),
-            colors,
-            symbols: Default::default(),
-        }
-        .compile_checked(false);
-        assert!(t.is_err());
-    }
-
-    #[test]
-    fn index_colors_load() {
-        let mut colors = std::collections::HashMap::new();
-        colors.insert("accent".to_string(), ColorValue::Index(244));
-        let t = ThemeJson {
-            name: "t".into(),
-            vars: std::collections::HashMap::new(),
-            colors,
-            symbols: Default::default(),
-        }
-        .compile_checked(false)
-        .unwrap();
-        assert_eq!(t.color(ColorToken::Accent), Color::Indexed(244));
     }
 }

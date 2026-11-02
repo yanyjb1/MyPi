@@ -65,7 +65,7 @@ Subscribe: `watch`, `submit`, `compact`.
 | `call` | `children` | `session` | `rows`, each a child session's `id` and `anchor` |
 | `call` | `config` | `key` | the value |
 | `call` | `pools` | — | `models`, `profiles` |
-| `call` | `sessions` | `under` (optional directory) | `rows`, main sessions only, newest first |
+| `call` | `sessions` | `under` (optional directory) | `rows`: main sessions, newest first, each carrying `first_user`, `bytes`, `last_ts`, `memos` |
 | `post` | `init` | `cwd`, `name`, `model`, `profile` | `session` |
 | `post` | `name` | `session`, `name` | — |
 | `post` | `cwd` | `session`, `path` | — |
@@ -77,6 +77,10 @@ Subscribe: `watch`, `submit`, `compact`.
 | `subscribe` | `watch` | `session` | — |
 | `subscribe` | `submit` | `session`, `text`, `prefix`, `suffix` | `turn` |
 | `subscribe` | `compact` | `session`, `retention` (`{"chars"}` or `{"blocks"}`), `focus` | `turn` |
+
+A `sessions` row is the session's own columns plus four the picker draws: `first_user` (the
+first user block's body), `bytes` (the UTF-8 size of every block body), `last_ts` (the time of
+the session's last block), and `memos` (how many distinct memo names the session holds).
 
 `model` is `{"provider", "model"}` everywhere it appears. `usage`'s `groups` carry `address`,
 `provider`, `model`, `rounds`, four token counts, `share`, and `price` (`input`, `output`,

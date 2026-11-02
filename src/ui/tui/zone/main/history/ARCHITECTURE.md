@@ -11,7 +11,6 @@ Where the history zone sits, what each file holds, and what it depends on. Curre
 | `ask.rs` | `Ask` — init, jump, fetch, settled | private |
 | `local.rs` | `Local`, `Slot`, `SlotKind` — the append-only section | private |
 | `view.rs` | `Viewport`, `Anchor`, `Dir`, `Ahead` — sight line and layout walk | private |
-| `todo.rs` | `TaskList` — the server's start plus increments | private |
 | `resize.rs` | `ResizePlan`, `plan` — visible vs lazy numbers | private |
 | `product/` | `Product`, `Segment`, `CutPoint`, `CutKind` | private |
 | `layout/` | `layout`, `visible::apply`, `lazy::nums` | private |
@@ -44,10 +43,8 @@ To `Main`:
 
 - `ui::session::View`: `chain`, `blocks`, `todo`, `tail`, `turn`, `busy`, `generation`, `cwd`,
   `notices`.
-- `ui::session::{BlockRef, Level, Life}`.
-- `server::storage::BlockKind`.
-- `server::agent::tools::TodoPhase` and the todo state.
-- `server::config::read::config::TodoFold`.
+- `ui::session::{BlockKind, BlockRef, Level, Life, TodoPhase}`.
+- `ui::tui::TodoFold`.
 - `theme::theme_epoch`.
 - `render::text::highlight::warm_in_order`.
 - `history::render::cards::{chat, todo, notice}`.
@@ -86,9 +83,7 @@ the agent loop. It never sends anything itself; every Ask leaves as a `Request::
 
 ## Not wired
 
-1. `Request::View` has no landing site; the loop does not exist.
-2. `Session` has no `init` and no `Call::Init`; `Ask::Init` cannot be answered as designed.
-3. `layout::lazy::nums` has no caller.
-4. `layout::layout` ignores its `seam` argument.
-5. `HistoryZone::notice` has no caller outside the zone.
-6. `ui` is not in the build.
+1. `layout::lazy::nums` has no caller.
+2. `layout::layout` ignores its `seam` argument.
+3. `HistoryZone::notice` has no caller outside the zone.
+4. The loop emits only `Tick`; block/round events are not produced yet.

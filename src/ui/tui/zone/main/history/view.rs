@@ -6,8 +6,8 @@ use ratatui::text::Line;
 
 use super::cache::{BlockCache, Item};
 use super::local::{Local, SlotKind};
-use super::render::cards::notice::notice_block;
-use super::render::theme::HistoryTheme;
+use crate::ui::tui::text::notice::notice_block;
+use crate::ui::tui::theme::HistoryTheme;
 
 /// The seam the sight line sits on: above row `row` of slot `num`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

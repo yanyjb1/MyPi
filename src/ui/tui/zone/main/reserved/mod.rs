@@ -4,20 +4,13 @@
 
 use super::SubZone;
 use crate::ui::tui::action::Action;
-use crate::ui::tui::zone::{Claim, Ctx, Event, Request, TermSize};
+use crate::ui::tui::event::Event;
+use crate::ui::tui::zone::{Claim, Ctx, Hire, Reply, Request, TermSize};
 
-pub mod hand;
-pub mod hands;
+mod hand;
+mod hands;
 
-pub use hand::Reply;
 use hand::{Hand, IDLE_ROWS, Report};
-
-/// Who the input zone calls in. Also the roster key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Hire {
-    Completion,
-    Usage,
-}
 
 /// The desk.
 #[derive(Default)]
@@ -32,11 +25,6 @@ pub struct ReservedZone {
     want: u16,
     /// A reply for the editor, waiting for the zone to take it.
     reply: Option<Reply>,
-    /// The last numbers handed to the usage panel.
-    last_usage: Option<(
-        crate::server::api::types::UsageLang,
-        Vec<crate::server::api::call::usage::ModelUsage>,
-    )>,
 }
 
 impl ReservedZone {
@@ -85,30 +73,13 @@ impl ReservedZone {
     }
 
     /// The panel's display options, read from the config once at assembly.
-    pub fn set_usage_config(&mut self, cfg: &crate::server::config::read::config::UsageConfig) {
-        self.usage.set_align(cfg.align);
+    pub fn set_usage_config(&mut self, align: crate::ui::tui::UsageAlign) {
+        self.usage.set_align(align);
     }
 
-    /// The panel's numbers arrived.
-    pub fn show_usage(
-        &mut self,
-        lang: crate::server::api::types::UsageLang,
-        groups: Vec<crate::server::api::call::usage::ModelUsage>,
-    ) {
-        self.usage.show(lang, groups);
-    }
-
-    /// Feed the panel only when the numbers actually moved.
+    /// Feed the panel from the view; it keeps no copy of the numbers.
     pub fn sync_usage(&mut self, view: &crate::ui::session::View<'_>) {
-        let Some(usage) = view.usage else { return };
-        let same = self.last_usage.as_ref().is_some_and(|(lang, groups)| {
-            *lang == usage.lang && groups.as_slice() == usage.groups.as_slice()
-        });
-        if same {
-            return;
-        }
-        self.last_usage = Some((usage.lang, usage.groups.clone()));
-        self.show_usage(usage.lang, usage.groups.clone());
+        self.usage.sync(view);
     }
 
     /// Frame start: drop a hand that left, take the report of a fresh one.
@@ -172,7 +143,6 @@ impl SubZone for ReservedZone {
         self.report = None;
         self.reply = None;
         self.want = 0;
-        self.last_usage = None;
     }
 
     fn take_requests(&mut self) -> Vec<Request> {
@@ -212,6 +182,6 @@ impl ReservedZone {
             },
             memo: None,
         };
-        self.hand(who).draw(&ctx, rows)
+        self.hand(who).draw(&ctx, rows as u16)
     }
 }

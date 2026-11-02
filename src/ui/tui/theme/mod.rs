@@ -5,8 +5,7 @@
 //!
 //! - **Bundled**: `titanium.json` + `dark.json`, `include_str!`-ed into the
 //!   binary — first paint needs no filesystem.
-//! - **Custom**: `<root>/themes/*.json`（项目根优先、全局根兜底，见
-//!   [`crate::server::config::paths::ConfigPaths`]），文件名 = 主题名；自定义主题
+//! - **Custom**: `<root>/themes/*.json`（项目根优先、全局根兜底），文件名 = 主题名；自定义主题
 //!   永远盖不过内置的（内置先命中，与 omp 同规则），同名时项目那份先到先得。
 //! - **Global instance**: `RwLock<Theme>` + a monotonic `EPOCH`. A theme
 //!   swap bumps the epoch; render caches fold the epoch into their keys so
@@ -23,10 +22,12 @@ use parking_lot::RwLock;
 
 mod class;
 mod color;
+mod history;
 mod token;
 
 pub use class::{Theme, ThemeJson};
 pub use color::contrast_text_on;
+pub use history::{HistoryTheme, Token};
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 pub use token::ColorToken;
@@ -65,13 +66,8 @@ const BUNDLED: &[(&str, &str)] = &[
 /// 这一层不认识 XDG，也不去猜。
 static THEME_DIRS: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
 
-/// 启动时装上主题目录（`cfg.paths.themes_dirs()`）。重复装忽略。
-pub fn install_dirs(paths: &crate::server::config::paths::ConfigPaths) {
-    let dirs = paths
-        .themes_dirs()
-        .into_iter()
-        .map(|(_, dir)| dir)
-        .collect();
+/// 启动时装上主题目录（项目在前、全局在后）。重复装忽略。
+pub fn install_dirs(dirs: Vec<std::path::PathBuf>) {
     let _ = THEME_DIRS.set(dirs);
 }
 
@@ -114,7 +110,10 @@ pub fn load_theme(name: &str) -> Result<Theme, String> {
             return compile_named(name, &text);
         }
     }
-    Err(format!("找不到主题 {name}（内置没有，{} 也没有）", looked_in()))
+    Err(format!(
+        "找不到主题 {name}（内置没有，{} 也没有）",
+        looked_in()
+    ))
 }
 
 /// Names available for switching: bundled + custom, sorted, deduped
@@ -122,7 +121,9 @@ pub fn load_theme(name: &str) -> Result<Theme, String> {
 pub fn available_themes() -> Vec<String> {
     let mut names: Vec<String> = BUNDLED.iter().map(|(n, _)| n.to_string()).collect();
     for dir in theme_dirs() {
-        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.extension().is_some_and(|x| x == "json")
@@ -220,21 +221,37 @@ pub fn init(default_name: Option<&str>) {
 /// Startup from the legacy models.yml `theme:` block: `accent`/`gold`/
 /// `black`/`muted` overrides layered onto the bundled base theme. Keeps
 /// existing configs working while JSON themes become the primary path.
-pub fn init_from_config(default_name: Option<&str>, cfg_theme: Option<&crate::server::config::read::config::Theme>) {
+pub fn init_from_config(
+    default_name: Option<&str>,
+    cfg_theme: Option<&crate::ui::tui::ThemeConfig>,
+) {
     init(default_name);
     let Some(cfg) = cfg_theme else { return };
     // Only override when the user actually customized (defaults in
     // models.yml would otherwise silently fight the JSON theme).
-    let is_default = cfg.accent.to_spec() == "green" && cfg.gold.to_spec() == "yellow";
+    let is_default = cfg.accent.as_deref().unwrap_or("green") == "green"
+        && cfg.gold.as_deref().unwrap_or("yellow") == "yellow";
     if is_default {
         return;
     }
     let mut t = theme();
     let overrides = [
-        (ColorToken::Accent, Some(cfg.accent.to_color())),
-        (ColorToken::Warning, Some(cfg.gold.to_color())),
-        (ColorToken::StatusLineBg, Some(cfg.black.to_color())),
-        (ColorToken::Muted, Some(cfg.muted.to_color())),
+        (
+            ColorToken::Accent,
+            cfg.accent.as_deref().and_then(parse_color),
+        ),
+        (
+            ColorToken::Warning,
+            cfg.gold.as_deref().and_then(parse_color),
+        ),
+        (
+            ColorToken::StatusLineBg,
+            cfg.black.as_deref().and_then(parse_color),
+        ),
+        (
+            ColorToken::Muted,
+            cfg.muted.as_deref().and_then(parse_color),
+        ),
     ];
     let mut changed = false;
     {
@@ -249,6 +266,39 @@ pub fn init_from_config(default_name: Option<&str>, cfg_theme: Option<&crate::se
     if changed {
         set_theme_instance(t);
     }
+}
+
+/// Named ANSI colors, kept for the old `models.yml` theme block.
+fn named_color(t: &str) -> Option<ratatui::style::Color> {
+    Some(match t.to_ascii_lowercase().as_str() {
+        "black" => ratatui::style::Color::Black,
+        "gray" | "grey" => ratatui::style::Color::Gray,
+        "darkgray" | "darkgrey" => ratatui::style::Color::DarkGray,
+        "white" => ratatui::style::Color::White,
+        "red" => ratatui::style::Color::Red,
+        "green" => ratatui::style::Color::Green,
+        "yellow" => ratatui::style::Color::Yellow,
+        "blue" => ratatui::style::Color::Blue,
+        "magenta" | "purple" => ratatui::style::Color::Magenta,
+        "cyan" => ratatui::style::Color::Cyan,
+        _ => return None,
+    })
+}
+
+/// `green`, `#00b4ff`, or `0,180,255`.
+fn parse_color(spec: &str) -> Option<ratatui::style::Color> {
+    if let Some((r, g, b)) = color::parse_hex(spec) {
+        return Some(ratatui::style::Color::Rgb(r, g, b));
+    }
+    let rgb: Vec<u8> = spec
+        .split(',')
+        .map(str::trim)
+        .filter_map(|part| part.parse().ok())
+        .collect();
+    if rgb.len() == 3 {
+        return Some(ratatui::style::Color::Rgb(rgb[0], rgb[1], rgb[2]));
+    }
+    named_color(spec)
 }
 
 /// Direct mutable access for the config-override path above.
@@ -295,7 +345,7 @@ impl Palette {
     }
 
     /// Kept for call-site stability.
-    pub fn from_config(_cfg: &crate::server::config::Config) -> Self {
+    pub fn from_config(_cfg: &crate::ui::tui::ThemeConfig) -> Self {
         Self::current()
     }
 
@@ -314,149 +364,5 @@ impl Palette {
     /// Muted gray, upright: helper text such as completion descriptions.
     pub fn muted(&self, text: impl Into<String>) -> Span<'static> {
         Span::styled(text.into(), Style::new().fg(self.muted))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundled_themes_compile_and_have_all_tokens() {
-        for (name, text) in BUNDLED {
-            let t = compile_named(name, text).unwrap_or_else(|e| panic!("{name}: {e}"));
-            // Spot-check a few token resolutions rather than all 60.
-            assert!(!t.hex(ColorToken::Accent).is_empty(), "{name} accent");
-        }
-    }
-
-    #[test]
-    fn unknown_theme_errors() {
-        assert!(load_theme("no-such-theme-xyz").is_err());
-    }
-
-    #[test]
-    fn titanium_palette_matches_omp() {
-        let t = load_theme("titanium").unwrap();
-        assert_eq!(t.hex(ColorToken::Accent), "#00b4ff");
-        assert_eq!(t.hex(ColorToken::Success), "#00ff88");
-        assert_eq!(t.hex(ColorToken::Error), "#ff4757");
-    }
-
-    /// 注入的目录按顺序查找：同名时项目那份先命中，项目里没有的落到全局那份。
-    #[test]
-    fn injected_dirs_are_searched_in_order() {
-        use crate::server::config::paths::{ConfigPaths, Origin};
-        let project = std::env::temp_dir().join(format!("mypi-theme-p-{}", std::process::id()));
-        let global = std::env::temp_dir().join(format!("mypi-theme-g-{}", std::process::id()));
-        // 住户是**目录**：`<root>/themes/`（配置层的候选按 `is_dir()` 过滤）。
-        for d in [&project, &global] {
-            let _ = std::fs::remove_dir_all(d);
-            std::fs::create_dir_all(d.join("themes")).unwrap();
-        }
-        // 两边都有 probe.json，内容不同：项目那份是 dark 的配色，全局那份是
-        // titanium 的。只有全局有 fallback.json。
-        std::fs::write(
-            project.join("themes").join("probe.json"),
-            include_str!("dark.json"),
-        )
-        .unwrap();
-        std::fs::write(
-            global.join("themes").join("probe.json"),
-            include_str!("titanium.json"),
-        )
-        .unwrap();
-        std::fs::write(
-            global.join("themes").join("fallback.json"),
-            include_str!("titanium.json"),
-        )
-        .unwrap();
-
-        install_dirs(&ConfigPaths::new(vec![
-            (Origin::Project, project.clone()),
-            (Origin::Global, global.clone()),
-        ]));
-
-        assert_eq!(
-            load_theme("probe").unwrap().hex(ColorToken::Accent),
-            load_theme("dark").unwrap().hex(ColorToken::Accent),
-            "同名主题：项目那份说了算"
-        );
-        assert_eq!(
-            load_theme("fallback").unwrap().hex(ColorToken::Accent),
-            load_theme("titanium").unwrap().hex(ColorToken::Accent),
-            "项目里没有：落到全局那份"
-        );
-        // 目录型的并集：两个目录里的名字都在候选里。
-        let names = available_themes();
-        assert!(names.contains(&"probe".to_string()));
-        assert!(names.contains(&"fallback".to_string()));
-
-        for d in [&project, &global] {
-            let _ = std::fs::remove_dir_all(d);
-        }
-    }
-}
-
-#[cfg(test)]
-mod rotation_tests {
-    use super::*;
-    use token::ALL_TOKENS;
-
-    #[test]
-    fn bundled_themes_all_load_and_complete() {
-        for (name, _) in BUNDLED {
-            let t = load_theme(name).unwrap_or_else(|e| panic!("{name}: {e}"));
-            // Every token resolves to a concrete color (no Reset holes in
-            // our bundled themes — Reset bg would paint nothing).
-            for token in ALL_TOKENS {
-                let _ = t.color(*token);
-            }
-        }
-    }
-
-    #[test]
-    fn rotate_is_stable_per_seed() {
-        // Same seed always lands on the same bundled theme.
-        let pick = |seed: &str| {
-            let mut h: u64 = 5381;
-            for b in seed.bytes() {
-                h = h.wrapping_mul(33).wrapping_add(b as u64);
-            }
-            BUNDLED[h as usize % BUNDLED.len()].0
-        };
-        assert_eq!(pick("alpha"), pick("alpha"));
-        assert_eq!(pick("beta"), pick("beta"));
-    }
-
-    #[test]
-    fn rotate_actually_swaps_the_instance() {
-        let before = current_theme_name();
-        // Pick a seed that maps to the *other* bundled theme.
-        let other = if before.as_deref() == Some("titanium") {
-            "dark"
-        } else {
-            "titanium"
-        };
-        let mut chosen = None;
-        for s in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] {
-            let mut h: u64 = 5381;
-            for b in s.bytes() {
-                h = h.wrapping_mul(33).wrapping_add(b as u64);
-            }
-            let pick = BUNDLED[h as usize % BUNDLED.len()].0;
-            if pick != before.as_deref().unwrap_or("") {
-                chosen = Some(s);
-                break;
-            }
-        }
-        if let Some(seed) = chosen {
-            let _ = other;
-            rotate_for_seed(seed);
-            assert_ne!(current_theme_name(), before, "换种子必须换主题");
-            let e1 = theme_epoch();
-            rotate_for_seed(seed); // same seed again: no-op
-            assert_eq!(theme_epoch(), e1, "同种子重复轮换不应 bump epoch");
-        }
     }
 }

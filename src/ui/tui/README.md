@@ -1,126 +1,78 @@
-# tui — the terminal front end
+# tui
 
-The terminal front end of mypi. It draws a screen, reads a keyboard, and asks `ui::session` for
-the data behind both. It knows nothing about the database, the model, the socket, or the agent
-loop.
+The terminal front end: ratatui + crossterm on top of `ui::session`.
 
 ## 1. Design / Schema
 
-### Three layers
+### Two lines and one broadcast
 
-`App` owns the screen. It holds three zones and the ledger that says which one shows:
+| line | carries | goes to |
+|---|---|---|
+| action | a key, a paste, a wheel notch | the zone that claimed it |
+| frame | `kind`, `name`, `content` | the showing zone, if it declared the kind |
+| local | the app's own facts (resize, focus, session loss) | the showing zone, unconditional |
 
-| zone | screen |
-|---|---|
-| `Main` | the chat: transcript, input box, reserved strip |
-| `Resume` | the session picker |
-| `Tree` | the block tree of the current conversation |
+Only the showing zone hears anything; the other two major zones are inert until the app starts
+one of them.
 
-Only `Main` has sub-zones: `history`, `input`, `reserved`. They are private to `Main`. At most
-one zone shows at a time; showing is the right to interact with the session.
+### Declarations
 
-### Two input lines
+A major zone declares:
 
-`Action` is user behaviour: a key, a paste, a wheel notch. It goes to exactly one seat.
+- `keys()` — every action it consumes, as `Claim` values. One action goes to exactly one zone.
+- `kinds()` — the frame classes it handles: `Call`, `Post`, `Subscribe`, `Stream`, `Notice`.
+  `local` is never declared.
 
-`Event` is everything else: a round started or ended, blocks arrived, a tool started or finished,
-a notice, an idle tick, a deadline, the connection dropped or returned, the terminal resized,
-suspended, resumed, focused, lost, gone, or broken. It is broadcast to the showing zone.
+`notice` is the one class the app lifts out of `stream` by name, so a zone can hear notices
+without hearing every text delta.
 
-Neither line carries data. A consumer reads what it needs from `Ctx`: the borrowed session view,
-the terminal size, and the handover memo when that window is open.
+### Size
 
-### Claims and the key table
-
-A sub-zone declares the input it consumes as `Claim` values: one concrete key, any printable
-character, a paste, a wheel notch, or a shifted wheel notch. `Main` builds one table from those
-declarations and resolves an `Action` to a `Seat`. Runtime loans are checked before the static
-table; an unclaimed action is dropped.
+The app hands the size to the zone it starts, and again in `local / resized` when the terminal
+changes. Nothing else carries a size; a zone keeps the last one it was given.
 
 ### Handover
 
-A showing zone gives the screen up by returning `Handover { to, requests }`. The old zone puts
-its pending requests into `requests`; the app registers the new zone and hands it the first
-context. Naming nobody (`to: None`) ends the front end. There is no second path for changing the
-screen.
+A zone gives the screen up by returning `Outcome`:
 
-### Requests
+| outcome | meaning |
+|---|---|
+| `Stay` | keep the screen |
+| `Show { to, memo }` | name the successor; `memo` is what it leaves behind |
+| `Quit` | nobody shows; the loop ends |
 
-A zone never touches the socket. It declares work for the loop: submit, interrupt, rewind, a
-history ask, a session list, attach, delete, detach, or a tree range. Screen changes are not
-requests; they are handovers.
+The successor is started by the app: it receives the current size and the app's memo, and
+decides itself whether to read anything out of it.
 
-### Lifecycle
+### The loop
 
-`App::attach` is data first, display second: a different session detaches the old one, clears the
-memo, records the new id, broadcasts `attach`, and warms the transcript. `App::detach` broadcasts
-`detach` and clears the session and memo. Every zone hears both, attached or not.
+```text
+resize?  -> local / resized
+pump     -> session.forward() -> deliver
+draw     -> the showing zone's rows and cursor
+poll     -> one action or one focus change
+```
 
-### Identity and memo
-
-An `App` has a `Uuid`. The same credential is meant to accompany every session call; it never
-travels through a zone.
-
-`Memo` is a string-to-string slot table with `Write`, `Read`, and `Delete`. It is open only during
-`hand_over` and `take_over`. Zones use it by alias; the app stores content without interpreting
-it. It is cleared on attach and detach.
-
-### Invariants
-
-1. An event carries no data.
-2. A zone never touches the socket.
-3. At most one zone shows.
-4. One input goes to one seat.
-5. Nobody showing means the loop exits.
-6. A handover is the only way the screen changes.
-7. The memo is open only during handover and takeover.
+A failed draw ends the loop; nothing tries to draw again.
 
 ## 2. Design intent
 
-- **Two input lines.** User behaviour has one consumer; world events may have several. One line
-  for both would need a router that decides precedence, which this design refuses.
-- **Events carry no data.** A signal says that something happened; the details already live in
-  the session view. A per-event snapshot would duplicate state and let the copies drift.
-- **Claims come from the consumer.** Whoever reads a key names it, so no other zone can mislabel
-  it. `Main` only relays.
-- **Showing is one id.** Showing is the right to talk to the session; the server cannot tell which
-  zone is talking and does not need to.
-- **The size rides the context.** A zone that has just taken over still has to lay out. The first
-  context carries the size, and every delivery carries the current one.
-- **Handover carries the queue.** A zone that loses the screen cannot keep work for a loop that
-  will not ask it again. The queue travels with the handover.
-- **The memo is a transaction window.** Cross-zone facts are written and read only while one zone
-  gives the screen to another; outside that window there is no shared mutable state.
-- **The session view is the only data source.** Zones read the same borrowed view; they do not
-  keep a second copy of session state.
+- **Declare, do not guess.** A zone says what it hears; the app never inspects a payload.
+- **Only the showing zone talks.** The display right is the right to interact; a zone that is not
+  showing neither hears nor asks.
+- **`local` is the floor.** Terminal facts and connection facts arrive without a declaration,
+  because every zone has to survive them.
+- **The app is a postman with a ledger.** It classifies by `kind`, fills in the session id, and
+  lands requests; it holds no conversation state of its own.
 
 ## 3. Unresolved
 
-1. The frame loop does not exist: nothing produces events, nothing draws, and nothing lands
-   requests.
-2. `lib.rs` does not declare `ui`, and `Cargo.toml` has no `ratatui` or `crossterm`: the tree is
-   not in the build.
-3. The session API lacks `Call::Init`, `Reply::Init`, `Session::tree_range`, and
-   `Session::register` / `unregister`. History's `Init`, Tree's range, and App identity therefore
-   have no landing site.
-4. `Ctrl+C` has no decided meaning.
-5. Terminal-too-small behaviour has no design; the current arithmetic clamps instead of degrading.
-6. The static key table is resolved at run time; duplicate claims are not rejected at compile
-   time.
-7. History's seam is preserved as an anchor, but the layout's `seam` argument does not select a
-   cut point yet.
-8. Tree currently projects one fork; the multi-fork geometry exists but is not fed by session
-   structure.
+1. Suspend and resume have no trigger path: raw mode turns Ctrl+Z into an ordinary key, so
+   nothing suspends the front end.
+2. A zone started again re-asks what it needs; there is no warm handover of data.
 
 ## 4. Config fields
 
 | key | use |
 |---|---|
-| `config.tui.theme.accent` | accent color override |
-| `config.tui.theme.gold` | money and warning color override |
-| `config.tui.theme.black` | capsule background override |
-| `config.tui.theme.muted` | secondary gray override |
-| `config.tui.renderMargin` | blocks kept around the sight line, and the history overscan |
-| `config.tui.todoFold` | task-list folding policy |
-| `config.tui.usage.align` | horizontal placement of the usage panel |
-| `config.tui.fx.usdCny` | USD-to-CNY rate used when the usage panel folds currencies |
+| `config.tui.theme.name`, `.accent`, `.gold`, `.black`, `.muted` | the palette; asked by the app at boot |

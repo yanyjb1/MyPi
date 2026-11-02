@@ -1,8 +1,8 @@
 //! Row arbitration, the row broadcast, and the cursor's terminal position.
 
-use super::MainZone;
 use super::geometry;
-use crate::ui::tui::zone::{Seat, SubZone, TermSize};
+use super::zone::MainZone;
+use crate::ui::tui::zone::SubZone;
 
 /// Blank row between history and the block below it.
 pub const HISTORY_GAP: u16 = 1;
@@ -83,13 +83,8 @@ pub fn broadcast(zone: &mut MainZone) {
 pub fn lend(zone: &mut MainZone) {
     let claims = zone.reserved.borrowed();
     if claims.is_empty() {
-        zone.keys.release(Seat::Reserved);
+        zone.keys.release(super::keys::Seat::Reserved);
     } else {
-        zone.keys.lend(claims, Seat::Reserved);
+        zone.keys.lend(claims, super::keys::Seat::Reserved);
     }
-}
-
-/// The current size, for callers that need it without a delivery.
-pub fn size(zone: &MainZone) -> Option<TermSize> {
-    zone.size
 }

@@ -1,25 +1,18 @@
-//! The raw content cache: landed blocks by id, bounded, evicted by time then by id.
+//! The content window: whole rows as they arrived, bounded, evicted by time then by id.
 
 use std::collections::BTreeMap;
 
-use super::event::Block;
+use serde_json::Value;
 
-/// The default number of blocks kept.
+/// The default number of rows kept.
 const DEFAULT_BUDGET: usize = 128;
 
-/// Which side of the cache a read extends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    Older,
-    Newer,
-}
-
-/// The raw material: landed rows, and the budget they live under.
+/// The raw rows, each exactly as the answer carried it.
 #[derive(Debug)]
 pub struct ContentCache {
     budget: usize,
     clock: u64,
-    blocks: BTreeMap<i64, (u64, Block)>,
+    rows: BTreeMap<i64, (u64, Value)>,
 }
 
 impl Default for ContentCache {
@@ -33,7 +26,7 @@ impl ContentCache {
         ContentCache {
             budget: budget.max(1),
             clock: 0,
-            blocks: BTreeMap::new(),
+            rows: BTreeMap::new(),
         }
     }
 
@@ -43,56 +36,72 @@ impl ContentCache {
         self.evict();
     }
 
-    /// Landed blocks, ascending by id.
-    pub fn landed(&self) -> impl Iterator<Item = &Block> {
-        self.blocks.values().map(|(_, block)| block)
-    }
-
-    /// Replace the whole cache.
-    pub fn replace(&mut self, blocks: Vec<Block>) {
-        self.blocks.clear();
+    /// Replace the whole window.
+    pub fn replace(&mut self, rows: impl IntoIterator<Item = Value>) {
+        self.rows.clear();
         self.clock = 0;
-        for block in blocks {
-            self.insert(block);
+        for row in rows {
+            self.insert(row);
         }
     }
 
-    /// Merge landed rows; a row seen again takes a fresh admission time.
-    pub fn merge(&mut self, blocks: Vec<Block>) {
-        for block in blocks {
-            self.insert(block);
+    /// Merge rows; a row seen again takes a fresh admission time.
+    pub fn merge(&mut self, rows: impl IntoIterator<Item = Value>) {
+        for row in rows {
+            self.insert(row);
         }
+        self.evict();
     }
 
-    /// Drop the oldest admissions until the cache fits its budget.
-    pub fn evict(&mut self) {
-        while self.blocks.len() > self.budget {
+    /// Every id the ranges name is present.
+    pub fn covers(&self, ranges: &[[i64; 2]]) -> bool {
+        ranges.iter().all(|[lo, hi]| {
+            let held = self.rows.range(*lo..=*hi).count() as i64;
+            held == hi - lo + 1
+        })
+    }
+
+    /// The rows of the ranges, in range order; the caller has checked [`covers`].
+    pub fn select(&self, ranges: &[[i64; 2]]) -> Vec<Value> {
+        let mut out = Vec::new();
+        for [lo, hi] in ranges {
+            out.extend(self.rows.range(*lo..=*hi).map(|(_, (_, row))| row.clone()));
+        }
+        out
+    }
+
+    /// Drop every row the predicate rejects.
+    pub fn retain(&mut self, keep: impl Fn(i64) -> bool) {
+        self.rows.retain(|id, _| keep(*id));
+    }
+
+    pub fn clear(&mut self) {
+        self.rows.clear();
+        self.clock = 0;
+    }
+
+    fn insert(&mut self, row: Value) {
+        let Some(id) = row.get("id").and_then(Value::as_i64) else {
+            return;
+        };
+        self.clock += 1;
+        self.rows.insert(id, (self.clock, row));
+    }
+
+    /// Drop the earliest admissions until the window fits its budget.
+    fn evict(&mut self) {
+        while self.rows.len() > self.budget {
             let victim = self
-                .blocks
+                .rows
                 .iter()
                 .min_by_key(|(id, (stamp, _))| (*stamp, **id))
                 .map(|(id, _)| *id);
             match victim {
                 Some(id) => {
-                    self.blocks.remove(&id);
+                    self.rows.remove(&id);
                 }
                 None => break,
             }
         }
-    }
-
-    /// Drop every block the predicate rejects.
-    pub fn retain(&mut self, keep: impl Fn(i64) -> bool) {
-        self.blocks.retain(|id, _| keep(*id));
-    }
-
-    pub fn clear(&mut self) {
-        self.blocks.clear();
-        self.clock = 0;
-    }
-
-    fn insert(&mut self, block: Block) {
-        self.clock += 1;
-        self.blocks.insert(block.id, (self.clock, block));
     }
 }

@@ -1,7 +1,7 @@
 //! Lay out the blocks the sight line can see right now.
 
 use super::super::cache::{BlockCache, Item};
-use super::super::render::theme::HistoryTheme;
+use crate::ui::tui::theme::HistoryTheme;
 
 pub fn apply(cache: &mut BlockCache, items: &[Item<'_>], nums: &[i64], t: &HistoryTheme) {
     for item in items {

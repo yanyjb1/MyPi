@@ -6,89 +6,57 @@ What is here, what each file holds, who calls whom. Current state only.
 
 | path | holds | outside |
 |---|---|---|
-| `mod.rs` | the module list | private |
+| `mod.rs` | the module list and the re-exports | public |
+| `run.rs` | `run`: the terminal, the loop, the exit path | public |
+| `signal.rs` | `Stop`: the four stop signals, polled once a frame | public |
+| `config.rs` | `ThemeConfig`, `TodoFold`, `UsageAlign` | public |
 | `action.rs` | `Action`, `Key`, `KeyCode`, `Mods`, crossterm projections | public |
-| `event.rs` | `Event` — runtime and environment signals | public |
-| `term.rs` | `Term` — alternate screen, keyboard flags, size, one frame, restore | public |
-| `app/` | `App` — registry, ownership, delivery, lifecycle, handover, memo, identity, startup | public |
-| `app/mod.rs` | `App` fields and the delivery/render/request surface | public |
-| `app/startup.rs` | `Startup` — initial zone, session, working directory | public |
-| `app/id.rs` | dependency-free `Uuid` | public |
-| `app/memo.rs` | `Memo`, `Operator` | public |
-| `app/lifecycle.rs` | attach, detach, session id | public |
-| `app/handover.rs` | the handover transaction | public |
-| `zone/` | contract and the three major zones | public |
-| `zone/contract/` | `Ctx`, `TermSize`, `Zone`, `SubZone`, `Request`, `Handover`, `ZoneId`, `Claim`, `Seat`, `Ownership` | public |
-| `zone/main/` | `MainZone` and its private sub-zones | public |
-| `zone/main/arbitrate.rs` | row division, height broadcast, cursor position | private |
-| `zone/main/dispatch.rs` | key routing and exit-to-handover conversion | private |
-| `zone/main/requests.rs` | request aggregation | private |
-| `zone/main/keys.rs` | static claims table and runtime loans | private |
-| `zone/main/geometry.rs` | input container geometry and cursor clamping | private |
-| `zone/main/num/` | compact, exact, and money formatting | private |
-| `zone/main/history/` | transcript: local section, viewport, products, layout, cache, painter | private |
-| `zone/main/input/` | editor, input history, command route, key semantics, statusline, container | private |
-| `zone/main/reserved/` | desk, hand contract, completion, usage panel | private |
-| `zone/resume/` | `ResumeZone` — session picker | public |
-| `zone/tree/` | `TreeZone` — block tree | public |
-| `theme/` | bundled and custom themes, token vocabulary, epoch, repaint hook, palette snapshot | public |
-| `text/` | display width, truncation, wrapping | public |
+| `term.rs` | `Term`, `Input`: alternate screen, flags, size, one frame, one poll | public |
+| `app/` | `App`: registry, display ledger, delivery, landing, lifecycle, memo | public |
+| `zone/` | `contract`, `registry`, the three major zones | public |
+| `theme/` | bundled and custom themes, token vocabulary, epoch | public |
+| `text/` | display width, truncation, wrapping, the card frame | public |
 
 ## What it talks to
 
-- **Calls**: `ui::session` for the borrowed view and for what the loop lands; `commands` for the
-  command table; `server::config::read::config` for the TUI config shapes; `ratatui` and
-  `crossterm` for the screen and input.
-- **Is called by**: a frame loop. It does not exist yet.
+- **Calls**: `ui::session` for the connection and the structural window; `commands` for the
+  command table; `crate::git` for the statusline.
+- **Is called by**: `ui::tui::run`, from `main::front_end_with`.
 - **Does not know**: the server process, the database, the socket, the agent loop, or the model.
 
 ## Inside
 
 ```text
 App
- ├── ownership: Ownership      ── which zone shows
- ├── memo: Memo                ── only during handover/takeover
- ├── main: MainZone            ── history + input + reserved
- ├── resume: ResumeZone
- └── tree: TreeZone
+ ├── session: Session
+ ├── zones: Vec<Box<dyn Zone>>   ── Main, Resume, Tree
+ ├── owner: Option<ZoneId>
+ ├── memo: Memo
+ ├── size / theme / attached
+ └── finished
 
 MainZone
- ├── history: HistoryZone
- ├── input: InputZone
- ├── reserved: ReservedZone
- ├── keys: Borrowed
- ├── heights: Heights
- ├── pending_exits: Vec<ExitRequest>
- └── pending_requests: Vec<Request>
+ ├── history / input / reserved
+ └── keys, heights
 ```
 
-- `App::deliver_event` broadcasts to the showing zone; `App::deliver_action` gives the action to
-  that zone and executes any handover it returns.
-- `MainZone` resolves the action to a seat, delivers it, then drains the sub-zones' requests and
-  exit requests. Screen exits become one `Handover`; the rest are kept for the next `take`.
-- `App::render` asks only the showing zone for rows; `App::cursor` asks only `Main`.
-- `App::take_requests` returns carried requests first, then the showing zone's own.
-- `Term` owns the terminal and draws one `Vec<Line>` plus an optional cursor.
+- `App::pump` forwards what the session produced and reconciles the attachment.
+- `App::deliver` classifies by `kind`, checks the showing zone's declaration, hands the frame over.
+- `App::action` resolves the claim, hands the action over, carries the outcome.
+- `App::land` is the only outbound path: it fills in the session id and calls the session.
+- `run` owns the terminal; `App` owns the session.
 
 ## Must stay in sync
 
-1. `Zone` and `SubZone` and every implementation: one method added is two levels of edits.
-2. `Action`'s key identity and `Claim`: a new key kind has to be claimable.
-3. `Event` and the loop that will produce it: a variant nobody produces is dead.
-4. `Ctx` and every zone that reads it.
-5. `Request` and the loop that lands it: a new variant with no landing site is silent work.
-6. `App::attach` / `detach` order and the sub-zones' lifecycle: data first, display second.
-7. `theme_epoch()` and every cache keyed by it.
-8. `TuiConfig` fields and the zones that consume them.
+1. `zone::Kind` and `ui::session::Packet`: one upstream class, one declaration.
+2. `Action` and `Claim`: a new action kind has to be claimable.
+3. `Zone` and every implementation: one method added is four edits.
+4. `App::boot` order and every zone's expectations: attach first, start second.
+5. `Memo` aliases with the zones that write and read them (`tree.focus` is the only one).
+6. `theme_epoch()` and every cache keyed by it.
 
-## Not wired yet
+## Not wired
 
-1. No frame loop: no event producer, no tick, no resize delivery, no draw, no request landing.
-2. `src/lib.rs` has no `pub mod ui;`; `src/ui/mod.rs` does not exist; `Cargo.toml` has no
-   `ratatui` or `crossterm`.
-3. `main.rs::front_end` bails instead of constructing `App` and `Session`.
-4. Session lacks the `Init` call/reply, `tree_range`, and `register` / `unregister`; App identity
-   and History's `Init` / Tree's range are dangling.
-5. `Startup.session` is not consumed by `App::new`; `App` starts with no session.
-6. `App::set_tree_config` has no caller; `cherishYourWords` stays at its default.
-7. History's `layout::lazy` is not consumed; `resize::plan` computes a lazy list nobody uses.
+1. `Main`'s sub-zones still implement the previous surface; `Main` itself is written against the
+   current one, so the chat zone compiles only once the sub-zones follow.
+2. Suspend and resume: no trigger path, no handling.

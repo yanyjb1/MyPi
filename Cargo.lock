@@ -968,6 +968,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "signal-hook",
  "syntect",
  "tungstenite",
  "unicode-width",

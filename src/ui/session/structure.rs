@@ -1,27 +1,29 @@
-//! The structure snapshot: the rounds of the attached session and the block ids each owns.
+//! The structural window: which rounds exist and the closed block ranges each owns.
 
-use std::ops::RangeInclusive;
+use serde_json::Value;
 
-use super::event::Cut;
-
-/// One round: its id, and the closed intervals of block ids it owns.
+/// One round: its id and the closed block id ranges it owns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Turn {
     pub id: i64,
-    pub blocks: Vec<RangeInclusive<i64>>,
+    pub ranges: Vec<[i64; 2]>,
 }
 
 impl Turn {
     pub fn new(id: i64, ranges: Vec<[i64; 2]>) -> Turn {
-        Turn {
-            id,
-            blocks: ranges.into_iter().map(|[lo, hi]| lo..=hi).collect(),
-        }
+        Turn { id, ranges }
+    }
+
+    /// Whether one block id falls in this round.
+    pub fn owns(&self, block: i64) -> bool {
+        self.ranges
+            .iter()
+            .any(|[lo, hi]| *lo <= block && block <= *hi)
     }
 }
 
-/// The kept rounds, newest first.
-#[derive(Debug, Clone, Default)]
+/// The kept rounds, newest first. Handed down whole when a front end asks for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Structure {
     turns: Vec<Turn>,
 }
@@ -33,59 +35,42 @@ impl Structure {
         self.turns.insert(0, turn);
     }
 
-    /// The round's intervals.
-    pub fn ranges(&self, turn: i64) -> Option<&[RangeInclusive<i64>]> {
-        self.turns
-            .iter()
-            .find(|held| held.id == turn)
-            .map(|held| held.blocks.as_slice())
-    }
-
-    /// The interval that owns this block.
-    pub fn interval(&self, block: i64) -> Option<(i64, i64)> {
-        self.turns
-            .iter()
-            .flat_map(|held| held.blocks.iter())
-            .find(|range| range.contains(&block))
-            .map(|range| (*range.start(), *range.end()))
-    }
-
-    /// The round that owns this block.
-    pub fn turn_of(&self, block: i64) -> Option<i64> {
-        self.turns
-            .iter()
-            .find(|held| held.blocks.iter().any(|range| range.contains(&block)))
-            .map(|held| held.id)
-    }
-
-    /// Replace the whole structure; `turns` is newest first.
+    /// Replace the whole thing; `turns` is newest first.
     pub fn replace(&mut self, turns: Vec<Turn>) {
         self.turns = turns;
     }
 
-    /// Cut the list back to one block, the same way the warehouse did.
-    pub fn rewind(&mut self, turn: i64, block: i64, cut: Cut) {
+    /// Cut back to one block, the way the warehouse did.
+    pub fn rewind(&mut self, turn: i64, block: i64, cut: &Value) {
         let Some(at) = self.turns.iter().position(|held| held.id == turn) else {
             return;
         };
-        match cut {
-            Cut::Retyped { .. } => {
-                self.turns.drain(..=at);
-            }
-            Cut::Boundary { .. } => {
+        match cut
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("boundary")
+        {
+            "retyped" => self.turns.drain(..=at),
+            "rescued" => {
+                let rescued = cut.get("turn").and_then(Value::as_i64).unwrap_or(turn);
                 self.turns.drain(..at);
+                if let Some(first) = self.turns.first_mut() {
+                    first.id = rescued;
+                    first.ranges = head(&first.ranges, block);
+                }
             }
-            Cut::Rescued { turn: rescued } => {
-                self.turns.drain(..at);
-                self.turns[0].id = rescued;
-                self.turns[0].blocks = head(&self.turns[0].blocks, block);
-            }
+            _ => self.turns.drain(..at),
         }
     }
 
+    /// Whether any round owns this block.
+    pub fn owns(&self, block: i64) -> bool {
+        self.turns.iter().any(|held| held.owns(block))
+    }
+
     /// Newest first.
-    pub fn iter(&self) -> impl Iterator<Item = &Turn> {
-        self.turns.iter()
+    pub fn turns(&self) -> &[Turn] {
+        &self.turns
     }
 
     pub fn clear(&mut self) {
@@ -93,14 +78,14 @@ impl Structure {
     }
 }
 
-/// The kept head of a run of intervals, up to and including `upto`.
-fn head(blocks: &[RangeInclusive<i64>], upto: i64) -> Vec<RangeInclusive<i64>> {
+/// The kept head of a run of ranges, up to and including `upto`.
+fn head(ranges: &[[i64; 2]], upto: i64) -> Vec<[i64; 2]> {
     let mut out = Vec::new();
-    for range in blocks {
-        if *range.start() > upto {
+    for [lo, hi] in ranges {
+        if *lo > upto {
             break;
         }
-        out.push(*range.start()..=(*range.end()).min(upto));
+        out.push([*lo, (*hi).min(upto)]);
     }
     out
 }

@@ -1,30 +1,59 @@
-//! What a zone asks the loop to do. Screen changes never appear here.
+//! What a zone asks the app to land on the session.
 
-use crate::ui::tui::zone::main::history::ask::Ask;
+use serde_json::Value;
 
+use super::kind::Kind;
+
+/// A model address: the provider and the id.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelId {
+    pub provider: String,
+    pub model: String,
+}
+
+/// One ask. The zone builds the content; the app fills in the session and sends it.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
-    Submit(String),
-    Interrupt,
-    /// Cut back to a block; user text rides along for the clipboard.
-    Rewind {
-        turn: i64,
-        block: i64,
-        text: Option<String>,
+    /// One frame out. `answer` says whether the server replies to it.
+    Send {
+        kind: Kind,
+        name: &'static str,
+        content: Value,
+        answer: bool,
     },
-    /// A history note: jump, fetch, or settle.
-    View(Ask),
-    /// The picker's list, scoped to a directory (`None` = every session).
-    List {
-        under: Option<std::path::PathBuf>,
-    },
+    /// Enter a conversation.
     Attach(i64),
-    Delete(i64),
-    /// Leave the current session without attaching another.
+    /// Leave the conversation.
     Detach,
-    /// Raw material for the tree, block ids `[start, end)`.
-    TreeRange {
-        start: i64,
-        end: i64,
-    },
+    /// The structural window, as it stands.
+    Structure,
+}
+
+impl Request {
+    pub fn call(name: &'static str, content: Value) -> Request {
+        Request::Send {
+            kind: Kind::Call,
+            name,
+            content,
+            answer: true,
+        }
+    }
+
+    pub fn post(name: &'static str, content: Value) -> Request {
+        Request::Send {
+            kind: Kind::Post,
+            name,
+            content,
+            answer: true,
+        }
+    }
+
+    pub fn subscribe(name: &'static str, content: Value) -> Request {
+        Request::Send {
+            kind: Kind::Subscribe,
+            name,
+            content,
+            answer: true,
+        }
+    }
 }

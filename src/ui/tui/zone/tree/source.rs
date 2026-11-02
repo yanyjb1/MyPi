@@ -1,77 +1,66 @@
-//! Project the session structure into tree rows.
+//! Project the structure and the blocks into tree rows.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use super::layout::{self, ForkRef, NodeRef};
 use super::rows::Row;
-use crate::server::storage::BlockKind;
-use crate::ui::session::{BlockRef, View};
-
-struct Node {
-    turn: i64,
-    kind: String,
-    text: String,
-    body: Option<String>,
-}
+use super::zone::Node;
+use crate::ui::session::Structure;
 
 /// Rows in tree order. `only_user` keeps user messages.
-pub fn rows(view: &View<'_>, only_user: bool) -> Vec<Row> {
-    let mut held: HashMap<i64, BlockRef<'_>> = HashMap::new();
-    for block in view.chain() {
-        if let Some(id) = block.id() {
-            held.insert(id, block);
+pub fn rows(structure: &Structure, blocks: &BTreeMap<i64, Node>, only_user: bool) -> Vec<Row> {
+    // Every shaped block id, with the round that owns it; a block the window did not carry
+    // still gets a row, only without a summary.
+    let mut held: BTreeMap<i64, (i64, Option<&Node>)> = BTreeMap::new();
+    for turn in structure.turns() {
+        for [lo, hi] in &turn.ranges {
+            for id in *lo..=*hi {
+                held.entry(id).or_insert((turn.id, None));
+            }
         }
+    }
+    for (id, node) in blocks {
+        let turn = held.get(id).map(|(turn, _)| *turn).unwrap_or(0);
+        held.insert(*id, (turn, Some(node)));
     }
 
-    let mut nodes: BTreeMap<i64, (i64, Option<BlockRef<'_>>)> = BTreeMap::new();
-    for shape in view.shapes.iter() {
-        for block in &shape.blocks {
-            nodes
-                .entry(block.id)
-                .or_insert((shape.turn, held.get(&block.id).copied()));
-        }
-    }
-    for block in view.blocks.iter() {
-        nodes.entry(block.block.id).or_insert((
-            block.turn.unwrap_or(0),
-            Some(BlockRef::Landed(&block.block)),
-        ));
-    }
-
-    let session = view.attached.unwrap_or(0);
-    let mut selected: Vec<(i64, Node)> = Vec::new();
-    for (id, (turn, block)) in nodes {
-        let kind = block.map(|b| role(b.kind())).unwrap_or("block");
-        if only_user && kind != "user" {
-            continue;
-        }
-        let text = block
-            .map(summary)
-            .unwrap_or_else(|| format!("{kind}: #{id}"));
-        let body = block.and_then(|b| match b.kind() {
-            BlockKind::User => b.content().cloned().or_else(|| b.text().cloned()),
-            _ => None,
-        });
-        selected.push((
-            id,
-            Node {
-                turn,
-                kind: kind.to_string(),
-                text,
-                body,
-            },
-        ));
-    }
+    let selected: Vec<(i64, Row)> = held
+        .into_iter()
+        .filter(|(_, (_, node))| !only_user || node.is_some_and(|node| node.kind == "user"))
+        .map(|(id, (turn, node))| {
+            let row = match node {
+                Some(node) => Row {
+                    geom: Default::default(),
+                    block_id: id,
+                    turn,
+                    text: node.text.clone(),
+                    body: node.body.clone(),
+                    fork: 0,
+                    kind: node.kind.clone(),
+                },
+                None => Row {
+                    geom: Default::default(),
+                    block_id: id,
+                    turn,
+                    text: format!("block: #{id}"),
+                    body: None,
+                    fork: 0,
+                    kind: "block".to_string(),
+                },
+            };
+            (id, row)
+        })
+        .collect();
 
     let refs: Vec<NodeRef> = selected
         .iter()
         .map(|(id, _)| NodeRef {
             block: *id,
-            session,
+            session: 0,
         })
         .collect();
     let forks = [ForkRef {
-        id: session,
+        id: 0,
         parent: None,
         fork_block: None,
     }];
@@ -79,66 +68,9 @@ pub fn rows(view: &View<'_>, only_user: bool) -> Vec<Row> {
     placed
         .into_iter()
         .filter_map(|p| {
-            let (id, node) = selected.get(p.src)?;
-            Some(Row {
-                geom: p.geom,
-                block_id: *id,
-                turn: node.turn,
-                text: node.text,
-                body: node.body,
-                fork: 0,
-                kind: node.kind.clone(),
-            })
+            let mut row = selected.get(p.src)?.1.clone();
+            row.geom = p.geom;
+            Some(row)
         })
         .collect()
-}
-
-/// The range the tree still needs: every shaped block, full span.
-pub fn range(view: &View<'_>) -> Option<(i64, i64)> {
-    let mut start = i64::MAX;
-    let mut end = i64::MIN;
-    for shape in view.shapes.iter() {
-        for block in &shape.blocks {
-            start = start.min(block.id);
-            end = end.max(block.id);
-        }
-    }
-    (start <= end).then_some((start, end.saturating_add(1)))
-}
-
-/// The row the history's newest landed block sits on.
-pub fn current(view: &View<'_>, rows: &[Row]) -> usize {
-    let Some(last) = view.blocks.back().map(|b| b.block.id) else {
-        return 0;
-    };
-    rows.iter()
-        .position(|row| row.block_id == last)
-        .unwrap_or(0)
-}
-
-fn role(kind: BlockKind) -> &'static str {
-    match kind {
-        BlockKind::User => "user",
-        BlockKind::Assistant => "assistant",
-        BlockKind::Reasoning => "reasoning",
-        BlockKind::ToolRequest => "tool_call",
-        BlockKind::ToolResult => "tool_result",
-    }
-}
-
-fn summary(block: BlockRef<'_>) -> String {
-    let kind = role(block.kind());
-    let body = block
-        .content()
-        .or_else(|| block.text())
-        .or_else(|| block.result())
-        .or_else(|| block.args())
-        .map(String::as_str)
-        .unwrap_or("");
-    let first = body.lines().next().unwrap_or("").trim();
-    if first.is_empty() {
-        format!("{kind}: #{}", block.id().unwrap_or_default())
-    } else {
-        format!("{kind}: {first}")
-    }
 }

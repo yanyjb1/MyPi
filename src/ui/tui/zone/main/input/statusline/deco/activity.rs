@@ -2,9 +2,10 @@
 
 use ratatui::text::Span;
 
+use crate::ui::tui::event::Event;
+use crate::ui::tui::zone::Ctx;
 use crate::ui::tui::zone::main::input::statusline::theme::{StatusTheme, Token};
 use crate::ui::tui::zone::main::input::statusline::{Deco, Setup};
-use crate::ui::tui::zone::{Ctx, Event};
 
 /// Animation frames.
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
@@ -30,11 +31,7 @@ impl Deco for Activity {
             let glyph = SPINNER[self.frame].to_string();
             return vec![t.capsule(glyph, t.get(Token::Accent))];
         }
-        let glyph = if ctx.view.bridge.is_some() {
-            "Tel"
-        } else {
-            "π"
-        };
+        let glyph = "π";
         vec![t.capsule(glyph.to_string(), t.get(Token::Muted))]
     }
 }

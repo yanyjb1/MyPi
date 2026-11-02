@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use syntect::parsing::ScopeStack;
 use syntect::parsing::{ParseState, Scope, ScopeStackOp, SyntaxSet};
 
-use super::theme::{HistoryTheme, Token};
+use crate::ui::tui::theme::{HistoryTheme, Token};
 
 const COMMENT: usize = 0;
 const KEYWORD: usize = 1;

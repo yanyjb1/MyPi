@@ -5,8 +5,8 @@
 //! - `controller.rs`: the popup state plus the completion hand itself;
 //! - `popup.rs`: the reserved area's rendering of the popup.
 
-pub mod controller;
-pub mod engine;
-pub mod popup;
+pub(in crate::ui::tui::zone::main::reserved) mod controller;
+pub(in crate::ui::tui::zone::main::reserved) mod engine;
+pub(in crate::ui::tui::zone::main::reserved) mod popup;
 
-pub use controller::CompletionService;
+pub(in crate::ui::tui::zone::main::reserved) use controller::CompletionService;

@@ -3,17 +3,16 @@
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::super::text::glyphs::{
+use crate::ipc::contract::{TodoPhase, TodoStatus, TodoTask};
+use crate::ui::tui::TodoFold;
+use crate::ui::tui::text::card::clip_spans;
+use crate::ui::tui::text::glyphs::{
     TODO_ACTIVE, TODO_BLOCKED, TODO_DONE, TODO_DROPPED, TODO_PENDING, TREE_BRANCH, TREE_HOOK,
     TREE_LAST, TREE_VERTICAL,
 };
-use super::super::theme::{HistoryTheme, Token};
-use super::clip_spans;
-use crate::server::agent::tools::TodoPhase;
-use crate::server::agent::tools::todo::state::{TodoStatus, TodoTask};
-use crate::server::config::read::config::TodoFold;
+use crate::ui::tui::theme::{HistoryTheme, Token};
 
-pub fn roman(one_based: usize) -> String {
+fn roman(one_based: usize) -> String {
     const PAIRS: [(usize, &str); 13] = [
         (1000, "M"),
         (900, "CM"),
@@ -40,9 +39,8 @@ pub fn roman(one_based: usize) -> String {
     out
 }
 
-pub fn rows(
+pub(in crate::ui::tui::zone::main::history) fn rows(
     phases: &[TodoPhase],
-    touched: &[String],
     fold: TodoFold,
     width: usize,
     t: &HistoryTheme,
@@ -54,11 +52,10 @@ pub fn rows(
     if phases
         .iter()
         .flat_map(|p| p.tasks.iter())
-        .all(|x| x.status.is_closed())
+        .all(|x| is_closed(x.status))
     {
         return Vec::new();
     }
-    let folding = fold.is_on() && phases.len() > 1 && !touched.is_empty();
     let cap = fold.cap();
     let clip = |line: Line<'static>| -> Line<'static> {
         if line.width() <= width {
@@ -77,16 +74,15 @@ pub fn rows(
         let last_phase = idx + 1 == total;
         let branch = if last_phase { TREE_LAST } else { TREE_BRANCH };
         let name = format!("{}. {}", roman(idx + 1), phase.name);
-        let done = phase.tasks.iter().filter(|x| x.status.is_closed()).count();
+        let done = phase.tasks.iter().filter(|x| is_closed(x.status)).count();
         let progress = format!(" · {done}/{}", phase.tasks.len());
         let live: Vec<_> = phase
             .tasks
             .iter()
-            .filter(|x| !x.status.is_closed())
+            .filter(|x| !is_closed(x.status))
             .collect();
-        let untouched = folding && !touched.iter().any(|n| n == &phase.name);
         let mut spans = vec![t.fg(format!(" {branch} "), Token::Dim)];
-        if live.is_empty() || untouched {
+        if live.is_empty() {
             spans.push(t.fg_mod(name, Token::Dim, Modifier::BOLD));
             spans.push(t.fg(progress, Token::Dim));
             body.push(Line::from(spans));
@@ -132,6 +128,10 @@ pub fn rows(
         t.fg(format!(" … 还有 {hidden} 行"), Token::Muted),
     ));
     out.into_iter().map(clip).collect()
+}
+
+fn is_closed(status: TodoStatus) -> bool {
+    matches!(status, TodoStatus::Done | TodoStatus::Abandoned)
 }
 
 fn task_spans(t: &HistoryTheme, task: &TodoTask) -> Vec<Span<'static>> {

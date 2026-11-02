@@ -2,19 +2,16 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 
 use mypi::cli::Cli;
-use mypi::ipc::contract::Viewer;
 use mypi::ipc::endpoint::{self, Endpoint};
 use mypi::ipc::server;
 use mypi::server::api::Api;
 use mypi::server::config::Config;
 use mypi::server::platform::time;
 use mypi::server::storage;
-use mypi::ui::session::Switches;
 use mypi::ui::tui;
 
 fn main() -> anyhow::Result<()> {
@@ -78,8 +75,7 @@ fn front_end(file: PathBuf, cli: &Cli) -> anyhow::Result<()> {
 
 fn front_end_with(endpoint: Endpoint, cli: &Cli) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().context("cannot read the current directory")?;
-    let session =
-        mypi::ui::session::Session::connect(endpoint, cwd.clone(), Switches::default(), viewer())?;
+    let session = mypi::ui::session::Session::connect(endpoint)?;
     let model = cli.model.as_deref().and_then(model_id);
     let startup = if let Some(id) = cli.attach {
         tui::app::Startup::attach(cwd, id, model)
@@ -93,18 +89,10 @@ fn front_end_with(endpoint: Endpoint, cli: &Cli) -> anyhow::Result<()> {
     tui::run(session, startup)
 }
 
-fn model_id(spec: &str) -> Option<mypi::ipc::contract::ModelId> {
+fn model_id(spec: &str) -> Option<mypi::ui::tui::zone::ModelId> {
     let (provider, model) = spec.split_once(':')?;
-    Some(mypi::ipc::contract::ModelId {
+    Some(mypi::ui::tui::zone::ModelId {
         provider: provider.to_string(),
         model: model.to_string(),
     })
-}
-
-fn viewer() -> Viewer {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    Viewer(format!("{}-{now}", std::process::id()))
 }

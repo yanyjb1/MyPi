@@ -8,9 +8,9 @@ use ratatui::text::Line;
 use super::product::{CutPoint, Product};
 use super::render::block::{Block, Pending, wrap_rows};
 use super::render::text::highlight;
-use super::render::theme::HistoryTheme;
+use crate::ui::tui::theme::HistoryTheme;
 
-pub fn layout(product: &Product, width: usize, _seam: Option<CutPoint>) -> Block {
+pub fn layout(product: &Product, width: usize, _seam: Option<CutPoint>, t: &HistoryTheme) -> Block {
     let lines: Vec<Line<'static>> = product.lines().cloned().collect();
     let mut rows: Vec<Line<'static>> = Vec::new();
     let mut pending: Vec<Pending> = Vec::new();

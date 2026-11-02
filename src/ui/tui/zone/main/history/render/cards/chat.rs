@@ -3,14 +3,14 @@
 use ratatui::text::Line;
 
 use super::super::block::Deferred;
-use super::super::theme::{HistoryTheme, Token};
 use super::super::{BlockKind, Streaming, render_block};
-use super::glyphs;
-use super::notice::notice_block;
 use super::tool_card;
 use super::tools::ToolOutcome;
-use crate::server::storage::BlockKind as Kind;
-use crate::ui::session::BlockRef;
+use crate::ipc::contract::BlockKind as Kind;
+use crate::ui::session::{BlockRef, Level};
+use crate::ui::tui::text::glyphs;
+use crate::ui::tui::text::notice::notice_block;
+use crate::ui::tui::theme::{HistoryTheme, Token};
 
 fn push_block(
     out: &mut Vec<Line<'static>>,
@@ -25,7 +25,7 @@ fn push_block(
     deferred.extend(d);
 }
 
-pub(crate) fn single_node(
+pub(in crate::ui::tui::zone::main::history) fn single_node(
     block: BlockRef<'_>,
     paired: Option<BlockRef<'_>>,
     t: &HistoryTheme,
@@ -38,6 +38,14 @@ pub(crate) fn single_node(
     cwd: &str,
 ) -> (Vec<Line<'static>>, Vec<Deferred>) {
     match block.kind() {
+        Kind::Wake => (
+            notice_block(
+                block.content().map(String::as_str).unwrap_or_default(),
+                Level::Info,
+                t,
+            ),
+            Vec::new(),
+        ),
         Kind::User => render_block(
             BlockKind::User,
             block.content().map(String::as_str).unwrap_or_default(),
@@ -116,12 +124,12 @@ fn tool_node(
     }
     if name == "read" || name == "cd" {
         out.extend(match name {
-            "read" => super::tools::read_line(args, outcome.as_ref(), cwd, t),
-            _ => super::tools::cd_line(args, outcome.as_ref(), cwd, t),
+            "read" => super::tools::read_line(args, outcome, cwd, t),
+            _ => super::tools::cd_line(args, outcome, cwd, t),
         });
         return (out, deferred);
     }
-    out.extend(tool_card(name, args, outcome.as_ref(), t, tool, width));
+    out.extend(tool_card(name, args, outcome, t, tool, width));
     (out, deferred)
 }
 
@@ -130,7 +138,7 @@ fn outcome_of<'a>(result: BlockRef<'a>, details: Option<&'a serde_json::Value>) 
         text: result.result().map(String::as_str).unwrap_or_default(),
         ok: result.ok().unwrap_or(false),
         details,
-        duration_ms: result.duration_ms(),
+        duration_ms: result.duration_ms().unwrap_or(0).max(0) as u64,
     }
 }
 
@@ -148,7 +156,11 @@ fn todo_marker(outcome: Option<&ToolOutcome<'_>>, t: &HistoryTheme) -> Vec<Line<
     out
 }
 
-pub(crate) fn tool_output_rows(text: &str, t: &HistoryTheme, width: usize) -> Vec<Line<'static>> {
+pub(in crate::ui::tui::zone::main::history) fn tool_output_rows(
+    text: &str,
+    t: &HistoryTheme,
+    width: usize,
+) -> Vec<Line<'static>> {
     super::super::block::wrap_rows(
         super::tools::output_lines(text, LIVE_TOOL_LINES, false, false, t).into_iter(),
         width,

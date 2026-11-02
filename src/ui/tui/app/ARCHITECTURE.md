@@ -1,59 +1,48 @@
 # app — architecture
 
-Where the app sits, what each file holds, and what it depends on. Current state only.
+What is here, what each file holds, who calls whom. Current state only.
 
 ## Files
 
 | file | holds | outside |
 |---|---|---|
-| `mod.rs` | `App`, its fields, and the delivery/render/request surface | public |
-| `startup.rs` | `Startup` and its two constructors | public |
-| `id.rs` | `Uuid`, `new`, `as_bytes`, `Display` | public |
-| `memo.rs` | `Memo`, `Operator`, `call`, `clear` | public |
-| `lifecycle.rs` | `session`, `attach`, `detach` | public |
-| `handover.rs` | `hand_over` and the debug assertion | public |
+| `mod.rs` | the module list and the re-exports | public |
+| `app.rs` | `App`, `Input`, `THEME_KEYS`, boot, delivery, landing, handover, palette | public |
+| `lifecycle.rs` | `attach`, `detach` | public |
+| `startup.rs` | `Startup` and its three constructors | public |
 
 ## What it exposes
 
-- `App::new(startup, cfg)` — assemble zones, initialize the theme, apply history and usage
-  config, and open `Resume` when the startup asks for it.
-- `id`, `born`, `died` — the front end's identity.
-- `set_tree_config` — the tree's `cherishYourWords` switch.
-- `showing` — the current `ZoneId`, or `None`.
-- `deliver_event`, `deliver_action`, `render`, `cursor`, `take_requests`.
-- `attach`, `detach`, `session`.
-- `hand_over`.
+- `App::boot(session, size, startup, zones)`.
+- `finished`, `size`, `pump`, `input`, `render`, `cursor`, `bye`.
+- `attach`, `detach`.
+- `Startup::main`, `Startup::resume`, `Startup::attach`.
 
 ## What it calls
 
-- `zone::MainZone`, `ResumeZone`, `TreeZone` through `Zone` only.
-- `zone::Ownership` for the screen ledger.
-- `zone::Ctx` for every delivery.
-- `theme::init_from_config` at assembly.
-- `MainZone::set_usage_config`, `set_history_config`, and `warm`.
-- `ResumeZone::begin` when the initial zone is `Resume`.
+- `ui::session::{Session, Packet, Structure}`.
+- `zone::{Kind, Claim, Memo, Outcome, Request, TermSize, Zone, ZoneId}`.
+- `theme::init_from_config` once the palette answers are in.
 
 ## What calls it
 
-A frame loop. It does not exist yet.
+`ui::tui::run`, the frame loop in `run.rs`.
 
 ## What it does not know
 
-The terminal, crossterm, the socket, the session client, the database, the agent loop, and the
-zones' internal fields.
+The terminal, crossterm, the socket, the database, the agent loop, and the zones' internal
+fields.
 
 ## Must stay in sync
 
-1. `Startup` and the CLI's launch parameters.
-2. `App::attach` order and every zone's `attach` expectations: data first, display second.
-3. `App::hand_over` and the `Zone` contract: old `hand_over`, carry, register, new `take_over`.
-4. `Memo` aliases with the zones that read them; `tree.focus` is the only alias in use.
-5. `App::new` and the `TuiConfig` fields it consumes.
+1. `THEME_KEYS` and the server's `config.tui.theme.*` schema.
+2. `Kind::of` and the upstream frame names it classifies.
+3. `App::boot` order and every zone's expectations: attach first, start second.
+4. `with_session` and the doors that do not take a session (`config`, `pools`, `sessions`).
+5. `create`'s payload and api's `post init` arguments.
+6. `Startup` and the CLI's launch parameters.
 
 ## Not wired
 
-1. No loop constructs `App`, delivers events, draws, or lands requests.
-2. `Startup.session` is not used after construction.
-3. `Uuid` is not registered with the session.
-4. `set_tree_config` has no caller.
-5. `src/lib.rs` does not declare `ui`; the app is not in the build.
+1. A refused palette key leaves the palette at the bundled default; there is no retry.
+2. A refused `post init` drops the waiting message; the reader has to type it again.

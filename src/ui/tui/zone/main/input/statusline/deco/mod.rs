@@ -1,13 +1,13 @@
 //! The statusline's decos, and the table that declares them.
 //! Adding one: a new file plus a line in [`ROW`]; removing one: delete that line.
 
-pub mod activity;
-pub mod cost;
-pub mod cwd;
-pub mod git;
-pub mod model;
-pub mod session;
-pub mod usage;
+mod activity;
+mod cost;
+mod cwd;
+pub(super) mod git;
+mod model;
+mod session;
+mod usage;
 
 use super::{ColorPolicy, Entry, PRIORITY_BASE, Side, Token};
 

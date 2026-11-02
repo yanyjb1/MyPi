@@ -168,20 +168,18 @@ One row pass per frame:
 
 ## 3. Unresolved
 
-1. The frame loop does not exist, so `Init`, `Jump`, `Fetch`, and `Settled` are collected and
-   dropped.
-2. `Ask::Init` has no `Session::init`; `Session::enter` still uses `Call::Tail`.
-3. `resize::plan` computes a lazy list, but `layout::lazy` has no consumer.
-4. `layout::layout` accepts a seam but does not use it to choose a cut point; a resize keeps the
+1. The loop lands `Init`, `Jump`, `Fetch`, and `Settled`; only `Tick` is produced as an event.
+2. `resize::plan` computes a lazy list, but `layout::lazy` has no consumer.
+3. `layout::layout` accepts a seam but does not use it to choose a cut point; a resize keeps the
    anchor, not the exact row.
-5. Products are generated from rendered logical lines at the current width. Cards and tables are
+4. Products are generated from rendered logical lines at the current width. Cards and tables are
    still width-dependent at generation time, so a width change can only re-wrap what was already
    generated.
-6. The task list's folding, the thinking placeholder, and the fold switches have no config keys;
-   they use `Config::default` unless `App` overrides the fields it knows.
-7. `HistoryZone::notice` has no caller outside the zone.
-8. Terminal-too-small behaviour is clamping, not a designed degradation.
-9. A long-lived notice does not kill a short-lived one; the design calls for any persistent
+5. The thinking placeholder and the fold switches have no config keys; they use
+   `Config::default` unless `App` overrides the fields it knows.
+6. `HistoryZone::notice` has no caller outside the zone.
+7. Terminal-too-small behaviour is clamping, not a designed degradation.
+8. A long-lived notice does not kill a short-lived one; the design calls for any persistent
    arrival to do so.
 
 ## 4. Config fields

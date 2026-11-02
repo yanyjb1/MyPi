@@ -1,6 +1,6 @@
 //! Short number forms. English groups by three; Chinese by four.
 
-use crate::server::api::types::UsageLang;
+use crate::ipc::contract::UsageLang;
 
 pub fn compact(n: u64, lang: UsageLang) -> String {
     let units: &[(u64, &str)] = match lang {

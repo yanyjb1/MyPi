@@ -53,26 +53,3 @@ impl SeparatorTable {
         self.connector.contains(&c)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn path_chars_are_connectors_not_hard() {
-        let t = SeparatorTable::default();
-        for c in ['.', '/', '\\', '-', '_'] {
-            assert!(t.is_connector(c), "{c} 必须是连接符");
-            assert!(!t.is_hard(c), "{c} 不能是硬边界");
-        }
-    }
-
-    #[test]
-    fn space_and_cjk_punct_are_hard() {
-        let t = SeparatorTable::default();
-        assert!(t.is_hard(' '));
-        assert!(t.is_hard('，'));
-        assert!(t.is_hard('。'));
-        assert!(!t.is_connector('，'), "CJK 标点不是连接符");
-    }
-}

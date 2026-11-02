@@ -1,14 +1,14 @@
 //! The painter: content in, rows out. One entry point.
 
-pub mod block;
-pub mod cards;
-pub mod text;
-pub mod theme;
+pub(in crate::ui::tui::zone::main::history) mod block;
+pub(in crate::ui::tui::zone::main::history) mod cards;
+pub(in crate::ui::tui::zone::main::history) mod text;
 
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
-use self::theme::{HistoryTheme, Token};
+use self::text::markdown;
+use crate::ui::tui::theme::{HistoryTheme, Token};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockKind {

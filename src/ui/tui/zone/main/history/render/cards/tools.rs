@@ -3,9 +3,9 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::super::text::glyphs as g;
 use super::super::text::highlight;
-use super::super::theme::{HistoryTheme, Token};
+use crate::ui::tui::text::glyphs as g;
+use crate::ui::tui::theme::{HistoryTheme, Token};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum ToolView {

@@ -36,8 +36,8 @@ To `Main`:
 
 - `zone::Ctx`, `Event`, `Request`, `TermSize`, `Claim`.
 - `action::{Action, Key}`.
-- `api::types::UsageLang` and `api::call::usage::ModelUsage`.
-- `config::UsageAlign`.
+- `ui::session::{UsageLang, ModelUsage}`.
+- `ui::tui::UsageAlign`.
 - `zone::main::num` for compact, exact, and money formatting.
 - `theme::Palette`.
 - `ui::session::View` for `usage`, `cwd`, and `pools`.
@@ -71,6 +71,6 @@ database, and the agent loop.
 ## Not wired
 
 1. Completion's pools are not fetched; `view.pools` is the intended source.
-2. The loop that calls `deliver_event`, `deliver_action`, and `render` does not exist.
+2. The loop calls `deliver_event`, `deliver_action`, and `render`; it emits only `Tick`.
 3. The usage panel's absolute/percentage and multi-language views are not implemented.
 4. The statusline's bridge mark is not sent by the server.

@@ -1,18 +1,11 @@
-//! session — the layer every front end sits on: the connection, the caches, the event exit.
+//! session — the front end's half of the wire: one connection, two windows, one outbox.
 
 mod client;
 mod content;
-mod event;
-mod ingest;
+mod packet;
 mod session;
-mod state;
 mod structure;
 
-pub use content::Direction;
-pub use event::{
-    Block, BlockKind, Change, ChildRow, ConfigValue, Cut, Event, FailKind, MemoData, MemoOp,
-    MemoScope, MemoVersion, ModelEntry, ModelId, NoticeLevel, Piece, Pools, Price, Retention,
-    SessionMeta, TodoItem, UsageGroup, UsageReply,
-};
+pub use packet::Packet;
 pub use session::Session;
 pub use structure::{Structure, Turn};

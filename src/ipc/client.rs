@@ -4,9 +4,9 @@ use std::io::{BufReader, BufWriter, Write};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Mutex, MutexGuard};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
-use crate::ipc::contract::{Frame, error};
+use crate::ipc::contract::Frame;
 use crate::ipc::endpoint::Endpoint;
 use crate::ipc::line::{self, Lines};
 use crate::ipc::transport::{self, Stream};
@@ -38,23 +38,6 @@ impl Client {
         Ok(client)
     }
 
-    /// One question, its answer. Frames that are not the answer are kept for [`drain`].
-    pub fn ask(&self, kind: &str, name: &str, payload: serde_json::Value) -> Result<Frame> {
-        self.send(Frame::new(kind, name, payload))?;
-        let incoming = self.incoming();
-        loop {
-            let Ok(frame) = incoming.recv() else {
-                bail!("the server closed the connection");
-            };
-            if frame.kind != kind || frame.name != name {
-                self.skipped().push(frame);
-                continue;
-            }
-            refuse(&frame)?;
-            return Ok(frame);
-        }
-    }
-
     /// Say something without waiting for anything.
     pub fn send(&self, frame: Frame) -> Result<()> {
         let bytes = line::encode(&frame)?;
@@ -62,6 +45,19 @@ impl Client {
         out.write_all(&bytes)?;
         out.flush()?;
         Ok(())
+    }
+
+    /// Whether the read half still lives. A frame found while checking is kept for {@link drain}.
+    pub fn alive(&self) -> bool {
+        let incoming = self.incoming();
+        match incoming.try_recv() {
+            Ok(frame) => {
+                self.skipped().push(frame);
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        }
     }
 
     /// Everything the server pushed that no question claimed.
@@ -101,11 +97,4 @@ fn read(mut lines: Lines<BufReader<Stream>>, tx: mpsc::Sender<Frame>) {
             break;
         }
     }
-}
-
-fn refuse(answer: &Frame) -> Result<()> {
-    if let Ok(err) = serde_json::from_value::<error::ErrorPayload>(answer.payload.clone()) {
-        bail!("{} {}: {}", answer.name, err.error.code, err.error.message);
-    }
-    Ok(())
 }

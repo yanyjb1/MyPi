@@ -4,14 +4,14 @@
 //! （标题 / 首条消息预览 / 元信息），块间空一行；选中行 accent + 粗体，
 //! 其余文字 dim。框线复用卡片原语，所以整页和工具卡片是一套视觉。
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{ResumeZone, Scope};
-use crate::server::api::call::sessions::SessionRow;
-use crate::ui::session::View;
-use crate::ui::tui::zone::main::history::render::cards::{card_edge, card_edge_labeled, card_row};
-use crate::ui::tui::zone::main::history::render::theme::{HistoryTheme, Token};
+use super::zone::{ResumeZone, Row, Scope};
+use crate::ui::tui::text::card::{card_edge, card_edge_labeled, card_row};
+use crate::ui::tui::theme::{HistoryTheme, Token};
 
 /// 一条会话在屏幕上的块高（标题 + 预览 + 元信息 + 空行）。
 ///
@@ -20,7 +20,7 @@ fn block_height(has_preview: bool) -> usize {
     if has_preview { 4 } else { 3 }
 }
 
-pub(super) fn lines(z: &mut ResumeZone, view: &View<'_>) -> Vec<Line<'static>> {
+pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
     let t = HistoryTheme::resolve();
     let Some(size) = z.size() else {
         return Vec::new();
@@ -59,9 +59,9 @@ pub(super) fn lines(z: &mut ResumeZone, view: &View<'_>) -> Vec<Line<'static>> {
     out.push(card_edge(edge, bg, width));
     // 服务端的拒绝（删除被拒之类）就画在列表上方：选择器占着整屏时，
     // 主区的错误注记用户看不见。
-    if let Some(err) = view.notices.last() {
+    if z.failed() {
         out.push(card_row(
-            Line::from(t.fg(err.text.clone(), Token::Err)),
+            Line::from(t.fg("删除被拒".to_string(), Token::Err)),
             edge,
             bg,
             width,
@@ -69,7 +69,7 @@ pub(super) fn lines(z: &mut ResumeZone, view: &View<'_>) -> Vec<Line<'static>> {
     }
 
     // ---- 列表 ----
-    let (blocks, top) = window(z, body_rows, view);
+    let (blocks, top) = window(z, body_rows);
     z.set_scroll(top);
 
     if count == 0 {
@@ -90,17 +90,17 @@ pub(super) fn lines(z: &mut ResumeZone, view: &View<'_>) -> Vec<Line<'static>> {
         ));
     } else {
         for i in top..(top + blocks).min(count) {
-            let Some(row) = z.row_at(i, view) else {
+            let Some(row) = z.row_at(i) else {
                 continue;
             };
             let selected = i == z.selected();
-            let confirming = z.pending_delete() == Some(row.meta.id);
+            let confirming = z.pending_delete() == Some(row.id);
             out.extend(row_lines(
                 &t,
                 &row,
                 selected,
                 confirming,
-                view.refused,
+                z.failed(),
                 width,
                 edge,
                 bg,
@@ -127,7 +127,7 @@ pub(super) fn lines(z: &mut ResumeZone, view: &View<'_>) -> Vec<Line<'static>> {
 /// 一条会话的三行。
 fn row_lines(
     t: &HistoryTheme,
-    row: &SessionRow,
+    row: &Row,
     selected: bool,
     confirming: bool,
     refused: bool,
@@ -155,7 +155,7 @@ fn row_lines(
         Token::AssistantText
     };
     let mut spans = vec![t.fg(cursor, cursor_tok)];
-    let title = super::title(row);
+    let title = super::zone::title(row);
     spans.push(t.fg_mod(title, title_tok, Modifier::BOLD));
     // 两段式删除的第二步提示：Delete 亮出来，Enter 才真删——红色加粗，
     // 免得用户以为是随手多出来的一行字。
@@ -170,7 +170,7 @@ fn row_lines(
     out.push(card_row(Line::from(spans), edge, bg, width));
 
     // 第二行：首条消息预览（只有显式命名的会话才画，见 `super::preview`）。
-    if let Some(preview) = super::preview(row) {
+    if let Some(preview) = super::zone::preview(row) {
         out.push(card_row(
             Line::from(t.fg(format!("  {preview}"), Token::Dim)),
             edge,
@@ -183,14 +183,17 @@ fn row_lines(
     // 整行一起包色会把状态段的颜色吃掉）。
     let mut meta: Vec<Span<'static>> = vec![t.fg("  ", Token::Muted)];
     let dot = || t.fg(" · ", Token::Muted);
-    match crate::server::platform::time::age_seconds(&row.meta.started_at) {
-        Some(age) => meta.push(t.fg(human_age(age), Token::Dim)),
-        // 戳坏了：画原文，别画一个错的年龄。
-        None => meta.push(t.fg(row.meta.started_at.clone(), Token::Dim)),
-    }
+    let stamp = row.last_ts.as_deref().unwrap_or(&row.started_at);
+    meta.push(t.fg(age_text(stamp), Token::Dim));
     meta.push(dot());
-    meta.push(t.fg(human_bytes(row.bytes), Token::Dim));
-    if let Some(cwd) = row.meta.cwd.as_deref() {
+    if let Some(bytes) = row.bytes {
+        meta.push(t.fg(human_bytes(bytes), Token::Dim));
+    }
+    if row.memos > 0 {
+        meta.push(dot());
+        meta.push(t.fg(format!("memo {}", row.memos), Token::Dim));
+    }
+    if let Some(cwd) = row.cwd.as_deref() {
         meta.push(dot());
         meta.push(t.fg(shorten(cwd), Token::Dim));
     }
@@ -219,7 +222,7 @@ fn footer(t: &HistoryTheme) -> Line<'static> {
 ///
 /// 窗口按**物理行**预算滚动（块高 3 或 4 行），所以短会话不会把最下面
 /// 那条挤到屏幕外——按条数算窗口会留一堆看不了的空白。
-fn window(z: &ResumeZone, budget: usize, view: &View<'_>) -> (usize, usize) {
+fn window(z: &ResumeZone, budget: usize) -> (usize, usize) {
     let count = z.visible_len();
     if count == 0 || budget == 0 {
         return (0, 0);
@@ -233,7 +236,7 @@ fn window(z: &ResumeZone, budget: usize, view: &View<'_>) -> (usize, usize) {
         let mut used = 0usize;
         let mut seen = 0usize;
         for i in top..count {
-            let h = block_height(has_preview(z, i, view)) + usize::from(i + 1 < count);
+            let h = block_height(has_preview(z, i)) + usize::from(i + 1 < count);
             if used + h > budget && seen > 0 {
                 break;
             }
@@ -249,10 +252,81 @@ fn window(z: &ResumeZone, budget: usize, view: &View<'_>) -> (usize, usize) {
     }
 }
 
-fn has_preview(z: &ResumeZone, i: usize, view: &View<'_>) -> bool {
-    z.row_at(i, view)
-        .map(|r| super::preview(r).is_some())
+fn has_preview(z: &ResumeZone, i: usize) -> bool {
+    z.row_at(i)
+        .map(|r| super::zone::preview(r).is_some())
         .unwrap_or(false)
+}
+
+fn age_text(stamp: &str) -> String {
+    let Some(then) = stamp_epoch(stamp) else {
+        return stamp.to_string();
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(then);
+    human_age(now.saturating_sub(then).max(0) as u64)
+}
+
+/// `started_at` is local wall time (`YYYY-MM-DD HH:MM:SS`); subtract the local offset to
+/// compare it with the epoch clock.
+fn stamp_epoch(stamp: &str) -> Option<i64> {
+    let (date, time) = stamp.split_once(' ')?;
+    let mut date = date.split('-');
+    let y = date.next()?.parse::<i64>().ok()?;
+    let m = date.next()?.parse::<i64>().ok()?;
+    let d = date.next()?.parse::<i64>().ok()?;
+    let mut time = time.split(':');
+    let hh = time.next()?.parse::<i64>().ok()?;
+    let mm = time.next()?.parse::<i64>().ok()?;
+    let ss = time.next()?.parse::<i64>().ok()?;
+    Some(days_from_civil(y, m, d) * 86_400 + hh * 3600 + mm * 60 + ss - local_offset())
+}
+
+/// Howard Hinnant's civil-date algorithm: days since 1970-01-01.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+#[repr(C)]
+struct Tm {
+    tm_sec: i32,
+    tm_min: i32,
+    tm_hour: i32,
+    tm_mday: i32,
+    tm_mon: i32,
+    tm_year: i32,
+    tm_wday: i32,
+    tm_yday: i32,
+    tm_isdst: i32,
+    tm_gmtoff: i64,
+    tm_zone: *const i8,
+}
+
+unsafe extern "C" {
+    fn localtime_r(time: *const i64, out: *mut Tm) -> *mut Tm;
+}
+
+fn local_offset() -> i64 {
+    static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let mut tm: Tm = unsafe { std::mem::zeroed() };
+        unsafe {
+            localtime_r(&now, &mut tm);
+        }
+        tm.tm_gmtoff
+    })
 }
 
 /// 相对时间。中文用「刚刚 / N 分钟前 / N 小时前 / N 天前」，再老就没有

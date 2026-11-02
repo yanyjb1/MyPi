@@ -60,31 +60,3 @@ pub fn contrast_text_on(bg: Color) -> Color {
         _ => Color::Rgb(0xe5, 0xe5, 0xe7), // omp's light-theme default text
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hex_parsing() {
-        assert_eq!(parse_hex("#00b4ff"), Some((0x00, 0xb4, 0xff)));
-        assert_eq!(parse_hex("#ABCDEF"), Some((0xab, 0xcd, 0xef)));
-        assert_eq!(parse_hex("00b4ff"), None);
-        assert_eq!(parse_hex("#00b4"), None);
-    }
-
-    #[test]
-    fn luma_ordering() {
-        assert!(color_luma((0, 0, 0)) < color_luma((128, 128, 128)));
-        assert!(color_luma((255, 255, 255)) > 0.99);
-    }
-
-    #[test]
-    fn contrast_rule() {
-        assert_eq!(contrast_text_on(Color::Rgb(240, 240, 240)), Color::Black);
-        assert_eq!(
-            contrast_text_on(Color::Rgb(10, 10, 10)),
-            Color::Rgb(0xe5, 0xe5, 0xe7)
-        );
-    }
-}

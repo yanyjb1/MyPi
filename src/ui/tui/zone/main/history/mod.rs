@@ -1,12 +1,10 @@
 //! The history zone: the local section, the viewport, and the block cache.
 
-pub mod ask;
-pub mod cache;
-pub mod layout;
-pub mod local;
-pub mod product;
-pub mod render;
-pub mod resize;
-pub mod todo;
-pub mod view;
-pub mod zone;
+mod cache;
+mod layout;
+mod local;
+mod product;
+mod render;
+mod resize;
+mod view;
+pub(in crate::ui::tui::zone::main) mod zone;

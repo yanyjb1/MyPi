@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::commands::{self, Arg, Candidate};
-use crate::server::api::types::CandidatePools;
+use crate::ipc::contract::CandidatePools;
 
 /// How many candidates the popup shows at most.
 pub const MAX_VISIBLE: usize = 8;
@@ -161,7 +161,7 @@ fn command_line(before: &str, word: &str, look: &Look, scan: &mut Scan) -> Vec<C
 }
 
 /// The two name pools, or an empty run when the server has not answered yet.
-fn pools(look: &Look, models: bool) -> &[Candidate] {
+fn pools<'a>(look: &'a Look<'a>, models: bool) -> &'a [Candidate] {
     let Some(pools) = look.pools else {
         return &[];
     };

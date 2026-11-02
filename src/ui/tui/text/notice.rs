@@ -3,10 +3,10 @@
 use ratatui::style::Style;
 use ratatui::text::Line;
 
-use super::super::theme::{HistoryTheme, Token};
 use crate::ui::session::Level;
+use crate::ui::tui::theme::{HistoryTheme, Token};
 
-pub(super) fn notice_block(text: &str, level: Level, t: &HistoryTheme) -> Vec<Line<'static>> {
+pub(crate) fn notice_block(text: &str, level: Level, t: &HistoryTheme) -> Vec<Line<'static>> {
     let style = Style::new().fg(t.get(match level {
         Level::Info => Token::SystemText,
         Level::Error => Token::ErrorText,

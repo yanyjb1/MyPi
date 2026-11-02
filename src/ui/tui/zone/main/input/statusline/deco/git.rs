@@ -8,9 +8,10 @@ use std::time::Duration;
 use ratatui::text::Span;
 
 use crate::git::GitStatus;
+use crate::ui::tui::event::Event;
+use crate::ui::tui::zone::Ctx;
 use crate::ui::tui::zone::main::input::statusline::theme::{StatusTheme, Token};
 use crate::ui::tui::zone::main::input::statusline::{Deco, Setup};
-use crate::ui::tui::zone::{Ctx, Event};
 
 /// Fallback scan interval: `config.ui.tui.zone.main.input.deco.gitScanInterval`.
 pub const DEFAULT_SCAN: Duration = Duration::from_secs(3);

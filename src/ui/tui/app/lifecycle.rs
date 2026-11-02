@@ -1,36 +1,39 @@
-//! Session attachment: data first, display broadcast second.
+//! Session attachment: data first, the zones' broadcast second.
 
 use super::App;
-use crate::ui::tui::zone::{Ctx, Zone};
+use crate::ui::tui::zone::Kind;
 
 impl App {
-    pub fn session(&self) -> Option<i64> {
-        self.session
-    }
-
-    /// Enter a conversation. A different id leaves the old one first.
-    pub fn attach(&mut self, id: i64, ctx: &Ctx) {
-        if self.session == Some(id) {
+    /// Enter a conversation: follow it, watch it, then tell every zone.
+    pub fn attach(&mut self, id: i64) {
+        if self.attached == Some(id) {
             return;
         }
-        if self.session.is_some() {
-            self.detach(ctx);
+        self.session.attach(id);
+        self.session.send(
+            Kind::Subscribe.as_str(),
+            "watch",
+            serde_json::json!({"session": id}),
+            false,
+        );
+        self.attached = Some(id);
+        self.reset_memo();
+        let mut requests = Vec::new();
+        for zone in &mut self.zones {
+            requests.extend(zone.session(Some(id)));
         }
-        self.memo.clear();
-        self.session = Some(id);
-        self.main.attach(id, ctx);
-        self.resume.attach(id, ctx);
-        self.tree.attach(id, ctx);
-        self.main.warm(ctx.view);
+        self.land_all(requests);
     }
 
-    /// Leave the conversation. Every zone hears it, attached or not.
-    pub fn detach(&mut self, ctx: &Ctx) {
-        self.main.detach(ctx);
-        self.resume.detach(ctx);
-        self.tree.detach(ctx);
-        self.session = None;
-        self.memo.clear();
-        self.carried.clear();
+    /// Leave the conversation. Every zone hears it.
+    pub fn detach(&mut self) {
+        self.session.detach();
+        self.attached = None;
+        self.reset_memo();
+        let mut requests = Vec::new();
+        for zone in &mut self.zones {
+            requests.extend(zone.session(None));
+        }
+        self.land_all(requests);
     }
 }

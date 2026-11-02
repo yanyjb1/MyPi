@@ -1,7 +1,6 @@
-# app — the screen owner
+# app
 
-The app is the top of the terminal front end. It owns the three major zones, decides which one
-shows, and is the only place where a handover is executed.
+The front end's centre: the registry, the display ledger, and the only exit to the session.
 
 ## 1. Design / Schema
 
@@ -9,104 +8,76 @@ shows, and is the only place where a handover is executed.
 
 | field | meaning |
 |---|---|
-| `id: Uuid` | this front end's identity |
-| `memo: Memo` | aliases written during handover and read during takeover |
-| `session: Option<i64>` | the attached session, or `None` for a draft |
-| `ownership: Ownership` | the showing zone, or `None` after the last handover |
-| `main`, `resume`, `tree` | the three zones; private to the app |
-| `carried: Vec<Request>` | requests taken from a zone that just lost the screen |
+| `session: Session` | the only handle; nothing below this file holds one |
+| `zones: Vec<Box<dyn Zone>>` | Main, Resume, Tree, in `ZoneId` order |
+| `owner: Option<ZoneId>` | who shows; `None` after the last handover and the loop end |
+| `memo: Memo` | what one zone leaves for the next |
+| `size: TermSize` | the last size handed down |
+| `attached: Option<i64>` | the session the zones were last told about |
+| `theme: ThemeConfig`, `pending` | the palette being assembled from `call config` answers |
+| `cwd`, `model` | what a new session is created with |
+| `waiting` | a message sent before the session row existed |
+| `finished: bool` | nobody shows |
 
-### Startup
+### Boot
 
-`Startup` is an open parameter object:
+1. Ask the five palette keys (see `THEME_KEYS` in `app.rs`) through `call config`.
+2. If the startup names a session, attach it: `session.attach`, `subscribe watch`, broadcast
+   `session(Some(id))` to every zone, land what they ask for.
+3. Start the first zone: `start(size, &memo)`, land its requests.
 
-| field | meaning |
+The memo carries the launch directory (`cwd`) for the picker; `attach` and `detach` reset the
+memo but always write it back.
+
+### Delivery
+
+| input | rule |
 |---|---|
-| `initial: Option<ZoneId>` | the first showing zone; `None` means `Main` |
-| `session: Option<i64>` | a session to attach after the first frame; `None` means a draft |
-| `cwd: PathBuf` | the directory a picker or a draft starts in |
+| frame | the showing zone, and only if its `kinds()` contains the frame's class |
+| `local` | the showing zone, always |
+| action | the showing zone, and only if its `keys()` contains the claim |
 
-`Startup::main()` is the default. `Startup::resume(cwd)` sets `initial` to `Resume`. A new caller
-adds a field instead of adding an enum variant.
+Every delivery returns requests; they are landed at once, in order.
 
-### Identity
+### Landing
 
-`Uuid` is a 16-byte value built from the current time and a process-local counter. It has no
-dependency on a UUID crate. `App::id`, `App::born`, and `App::died` expose the same value; the
-loop is expected to register and unregister it with the session.
-
-### Memo
-
-`Memo` is a `HashMap<String, String>` behind interior mutability. `Operator::Write`, `Read`, and
-`Delete` act on one alias. The app never validates content. The memo is open only while
-`Ctx.memo` is `Some`, which happens only inside `hand_over` and `take_over`.
+`Request::Send` gets the attached session filled in (unless the zone named one) and goes to the
+session. A `subscribe / submit` with no session attached first creates the row (`post init` with
+`cwd` and `model`), parks the message, and sends it after the id lands. `Attach` / `Detach` are
+the lifecycle. `Structure` asks the session for the structural window and hands the same snapshot
+to every zone; a nested `Structure` request is dropped.
 
 ### Lifecycle
 
-`attach(id)`:
-
-1. Return if the id is already attached.
-2. Detach the old session if there is one.
-3. Clear the memo and record the new id.
-4. Broadcast `attach` to all three zones.
-5. Warm the history zone's languages.
-
-`detach()`:
-
-1. Broadcast `detach` to all three zones.
-2. Clear the session, memo, and carried requests.
-
-Data is set before the display broadcast. A zone that was not attached still receives `detach`.
+- `attach(id)`: follow, watch, clear the memo, tell every zone, land.
+- `detach()`: stop following, clear the memo, tell every zone, land.
+- `pump()` reconciles: if the session attached somewhere else (a delete landed upstream), the app
+  detaches; a session the app attached itself is already consistent.
 
 ### Handover
 
-`hand_over(h)`:
-
-1. Take the old showing zone.
-2. Open the memo context.
-3. Call the old zone's `hand_over`.
-4. Append `h.requests` to `carried`.
-5. Register `h.to` as the showing zone.
-6. Call the new zone's `take_over` with the same memo context.
-7. Assert in debug builds that the old zone's queue is empty.
-
-The app has no pending queue of its own.
-
-### Delivery and drawing
-
-- `deliver_event(ev, ctx)` sends the event to the showing zone only.
-- `deliver_action(action, ctx)` sends the action to the showing zone; a returned handover is
-  executed immediately.
-- `render(ctx)` asks the showing zone for rows.
-- `cursor()` asks `Main` for the hardware cursor.
-- `take_requests()` returns carried requests first, then the showing zone's own.
+`settle(Outcome::Show)` writes the memo the old zone left, makes the new zone the owner, and
+starts it. `Outcome::Quit` empties the owner and marks the app finished.
 
 ## 2. Design intent
 
-- **One ledger, no side doors.** Every screen change is a `Handover`; no zone switch bypasses the
-  ledger.
-- **The app owns no zone internals.** It talks through `Zone`; the three fields are private.
-- **The memo is a transaction, not a bus.** Cross-zone facts exist only while the screen is being
-  transferred, so no ordinary delivery can observe a half-written handover.
-- **Requests travel with the losing zone.** A zone that will not be asked again cannot keep work
-  in its own queue.
-- **Startup is open.** New launch parameters do not force a closed enum or a second constructor.
-- **Identity is local and dependency-free.** The session can accept the bytes without depending
-  on the TUI's app module.
+- **One handle.** The session lives here and nowhere else; zones produce requests, the app lands
+  them.
+- **No payload knowledge.** `kind` picks the route; `content` is never read except for the five
+  palette answers, which are this layer's own configuration.
+- **Declaration, not inspection.** What a zone hears is what it declared.
+- **The memo is a transaction.** It exists between one handover and the next, and attach/detach
+  clears it.
 
 ## 3. Unresolved
 
-1. `Startup.session` is stored but not consumed; `App::new` always starts with `session = None`.
-2. `App::born` / `App::died` are exposed but no loop registers or unregisters the identity.
-3. `set_tree_config` has no caller, so `cherishYourWords` cannot be configured.
-4. The frame loop that should call `deliver_*`, `render`, and `take_requests` does not exist.
-5. The first frame of a `Resume` start has no size until an event or action arrives.
+1. A second palette ask (after the first) is unanswered; the palette is fixed at boot.
+2. One waiting message at a time: a second submit before the row lands replaces the first.
+3. The draft carries no name or profile; both are sent as `null`.
 
 ## 4. Config fields
 
 | key | use |
 |---|---|
-| `config.tui.theme` | palette passed to the history and input renderers |
-| `config.tui.renderMargin` | history focus margin and overscan |
-| `config.tui.todoFold` | history task-list folding |
-| `config.tui.usage.align` | usage panel placement |
+| `config.tui.theme.name` | the JSON theme to load |
+| `config.tui.theme.accent` / `.gold` / `.black` / `.muted` | colour overrides |

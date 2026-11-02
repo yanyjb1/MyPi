@@ -1,57 +1,66 @@
-//! The two-level contract: App talks to zones, Main talks to sub-zones.
+//! The two levels: the app talks to major zones, a major zone talks to its sub-zones.
+
+use ratatui::text::Line;
 
 use super::claim::Claim;
-use super::ctx::{Ctx, TermSize};
-use super::handover::Handover;
+use super::kind::Kind;
+use super::memo::Memo;
+use super::outcome::Outcome;
 use super::request::Request;
+use super::size::TermSize;
+use crate::ui::session::{Packet, Structure};
 use crate::ui::tui::action::Action;
-use crate::ui::tui::event::Event;
 
-/// A zone the app can show. The app never looks inside one.
+/// A major zone. The app only ever sees this.
 pub trait Zone {
-    fn deliver_event(&mut self, ev: Event, ctx: &Ctx);
+    /// Every input this zone consumes, declared once.
+    fn keys(&self) -> Vec<Claim>;
 
-    /// An action. Returns `Some` when the zone gives the screen up.
-    fn deliver_action(&mut self, a: &Action, ctx: &Ctx) -> Option<Handover>;
+    /// The frame classes this zone handles. `local` never appears here: it is unconditional.
+    fn kinds(&self) -> &'static [Kind];
 
-    /// The front end is on a conversation: every zone hears it.
-    fn attach(&mut self, _session: i64, _ctx: &Ctx) {}
+    /// The app gives the screen to this zone: the size, and the memo the last zone left.
+    fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request>;
 
-    /// The front end left the conversation.
-    fn detach(&mut self, _ctx: &Ctx) {}
+    /// The conversation was entered (`Some`) or left (`None`).
+    fn session(&mut self, id: Option<i64>) -> Vec<Request>;
 
-    /// The zone is losing the screen; this is the only memo window besides takeover.
-    fn hand_over(&mut self, _ctx: &Ctx) {}
+    /// One frame the zone declared (or any `local` one).
+    fn event(&mut self, packet: &Packet) -> Vec<Request>;
 
-    /// The zone is taking the screen; this is the only memo window besides handover.
-    fn take_over(&mut self, _ctx: &Ctx) {}
+    /// One input, already resolved to this zone.
+    fn action(&mut self, action: &Action) -> (Outcome, Vec<Request>);
 
-    /// Draw this zone. Row allocation inside it is its own business.
-    fn render(&mut self, ctx: &Ctx) -> Vec<ratatui::text::Line<'static>>;
+    /// The structural window, after a `Request::Structure`.
+    fn structure(&mut self, snapshot: &Structure) -> Vec<Request>;
+
+    /// This zone's rows for the frame.
+    fn render(&mut self) -> Vec<Line<'static>>;
 
     /// Where the hardware cursor goes, in terminal coordinates.
     fn cursor(&self) -> Option<(u16, u16)> {
         None
     }
-
-    /// Take what this zone asks the session to do.
-    fn take_requests(&mut self) -> Vec<Request> {
-        Vec::new()
-    }
 }
 
-/// A sub-zone of the chat zone: claims input, receives events, draws itself.
+/// A sub-zone of the chat zone. Only `Main` implements the host side.
 pub trait SubZone {
     fn claims(&self) -> &'static [Claim];
 
-    fn deliver_event(&mut self, ev: Event, ctx: &Ctx);
+    fn kinds(&self) -> &'static [Kind];
+
+    /// One frame this sub-zone declared.
+    fn deliver_event(&mut self, packet: &Packet, size: TermSize) -> Vec<Request>;
 
     /// An action claimed by this sub-zone. `true` = consumed.
-    fn deliver_action(&mut self, a: &Action, ctx: &Ctx) -> bool;
+    fn deliver_action(&mut self, action: &Action) -> bool;
 
-    fn attach(&mut self, _session: i64, _ctx: &Ctx) {}
+    fn attach(&mut self, session: i64, size: TermSize);
 
-    fn detach(&mut self, _ctx: &Ctx) {}
+    fn detach(&mut self);
+
+    /// The structural window, after a `Request::Structure`.
+    fn structure(&mut self, _snapshot: &Structure) {}
 
     /// The keys this sub-zone borrows right now.
     fn borrowed(&self) -> &'static [Claim] {
@@ -61,14 +70,9 @@ pub trait SubZone {
     /// Rows this sub-zone needs, given the terminal size.
     fn request_height(&self, term: TermSize) -> u16;
 
-    /// Rows the zone allocated, plus the terminal size for wrapping and hit tests.
+    /// Rows the host allocated, plus the terminal size.
     fn assign(&mut self, term: TermSize, rows: u16);
 
-    /// The zone's row broadcast. `true` = consumed.
+    /// The host's row broadcast. `true` = consumed.
     fn on_height_changed(&mut self, rows: u16) -> bool;
-
-    /// Session actions this sub-zone produced since the last take.
-    fn take_requests(&mut self) -> Vec<Request> {
-        Vec::new()
-    }
 }

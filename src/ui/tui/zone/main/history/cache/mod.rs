@@ -8,9 +8,9 @@ use ratatui::text::Line;
 use super::layout;
 use super::product::Product;
 use super::render::block::{self, Block};
-use super::render::theme::HistoryTheme;
-use crate::server::storage::BlockKind;
+use crate::ipc::contract::BlockKind;
 use crate::ui::session::BlockRef;
+use crate::ui::tui::theme::HistoryTheme;
 
 pub(crate) const DEFAULT_BLOCK_BUDGET: usize = 64;
 
@@ -303,7 +303,7 @@ impl BlockCache {
                 .unwrap_or_default();
             let variants: Vec<Block> = products
                 .iter()
-                .map(|product| layout::layout(product, self.width, None))
+                .map(|product| layout::layout(product, self.width, None, t))
                 .collect();
             if let Some(slot) = self.slots.get_mut(&item.num) {
                 slot.variants = variants;
@@ -316,7 +316,7 @@ impl BlockCache {
             return;
         }
         let products = self.render_variants(item, t);
-        self.admit(item.num, item.version, products);
+        self.admit(item.num, item.version, products, t);
     }
 
     fn measure(&mut self, num: i64) {
@@ -328,10 +328,10 @@ impl BlockCache {
         self.heights.insert(num, [h0, h1]);
     }
 
-    fn admit(&mut self, num: i64, version: u64, products: Vec<Product>) {
+    fn admit(&mut self, num: i64, version: u64, products: Vec<Product>, t: &HistoryTheme) {
         let variants: Vec<Block> = products
             .iter()
-            .map(|product| layout::layout(product, self.width, None))
+            .map(|product| layout::layout(product, self.width, None, t))
             .collect();
         let h0 = variants[0].height;
         let h1 = variants.last().map(|block| block.height).unwrap_or(h0);

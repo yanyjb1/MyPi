@@ -100,7 +100,7 @@ not draw the hand's content itself.
 2. The usage panel's multi-language and absolute/percentage views are a later wave.
 3. The usage panel's `UsageAlign` is read, but the panel's width and row cap are fixed in code.
 4. The bridge mark and the model context window are not sent by the server yet.
-5. The loop that delivers events, actions, and usage updates does not exist.
+5. The loop delivers events, actions, and usage updates; it emits only `Tick`.
 
 ## 4. Config fields
 

@@ -1,4 +1,8 @@
-//! Terminal text primitives: cell width, truncation, wrapping.
+//! Terminal text primitives: cell width, truncation, wrapping, and the shared card frame.
+
+pub(crate) mod card;
+pub(crate) mod glyphs;
+pub(crate) mod notice;
 
 mod truncate;
 mod width;

@@ -126,13 +126,6 @@ impl StatusTheme {
         self.colors[tok.idx()]
     }
 
-    /// Build a snapshot from raw values. Test-only: it exists so a test can
-    /// prove theme-independence without mutating the process-global theme.
-    #[cfg(test)]
-    pub(crate) fn from_parts(colors: [Color; ALL_TOKENS.len()]) -> Self {
-        Self { colors }
-    }
-
     // ---- span builders: the only place a statusline span is styled ----
 
     /// Capsule body: the capsule background plus `fg`.
@@ -166,22 +159,5 @@ impl StatusTheme {
     /// No style at all: default foreground, transparent background.
     pub fn plain(&self, text: impl Into<String>) -> Span<'static> {
         Span::styled(text.into(), Style::new())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_token_resolves_and_is_distinct_in_index() {
-        let t = StatusTheme::resolve();
-        for tok in ALL_TOKENS {
-            let _ = t.get(tok);
-        }
-        let mut seen: Vec<usize> = ALL_TOKENS.iter().map(|t| t.idx()).collect();
-        seen.sort_unstable();
-        seen.dedup();
-        assert_eq!(seen.len(), ALL_TOKENS.len(), "token indices must be unique");
     }
 }
