@@ -12,11 +12,12 @@
 //!
 //! The panel never enters the history, the store or the context: Esc closes it.
 
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::ui::tui::action::{Key, KeyCode, Mods};
-use crate::ui::tui::theme::Palette;
+use crate::ui::tui::theme::{Accent, fixed};
 use crate::ui::tui::zone::Claim;
 use crate::ui::tui::zone::main::num;
 use crate::ui::tui::zone::main::reserved::hand::{Hand, Report};
@@ -104,10 +105,13 @@ impl UsagePanel {
         (3 + self.rows.len().max(1)).min(MAX_ROWS)
     }
 
-    fn draw_panel(&self, width: u16, rows: usize, p: &Palette) -> Vec<Line<'static>> {
+    fn draw_panel(&self, width: u16, rows: usize, accent: &Accent) -> Vec<Line<'static>> {
         let mut out = Vec::new();
         if !self.loaded {
-            out.push(Line::from(p.muted("正在读取…")));
+            out.push(Line::from(Span::styled(
+                "正在读取…",
+                Style::new().fg(fixed::MUTED),
+            )));
             return out;
         }
         let prompt: u64 = self.rows.iter().map(|r| r.prompt).sum();
@@ -120,7 +124,7 @@ impl UsagePanel {
             cached as f64 / prompt as f64 * 100.0
         };
         out.push(Line::from(vec![
-            p.accent_span("Total Token: "),
+            accent.span("Total Token: "),
             Span::raw(num::compact(total)),
             Span::raw(format!(", exactly: {}", num::exact(total))),
         ]));
@@ -144,7 +148,7 @@ impl UsagePanel {
                 money(row.write),
             );
             out.push(Line::from(if i == self.selected {
-                p.accent_span(line)
+                accent.span(line)
             } else {
                 Span::raw(line)
             }));
@@ -186,8 +190,8 @@ impl Hand for UsagePanel {
         None
     }
 
-    fn draw(&self, width: u16, rows: u16, palette: &Palette) -> Vec<Line<'static>> {
-        self.draw_panel(width, usize::from(rows), palette)
+    fn draw(&self, width: u16, rows: u16, accent: &Accent) -> Vec<Line<'static>> {
+        self.draw_panel(width, usize::from(rows), accent)
     }
 
     fn left(&mut self) {

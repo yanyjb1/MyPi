@@ -22,7 +22,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 
 - `zone::contract` for `Zone`, `SubZone`, `Claim`, `Kind`, `Request`, `Outcome`, `TermSize`,
   `Shout`, `name`, `Frame`, `Turns`.
-- `ui::tui::action::Action`, `ui::tui::theme` for the two colour snapshots.
+- `ui::tui::action::Action`, and `ui::tui::theme::Accent` for the one live color.
 - The three sub-zone crates directly; they are private fields.
 
 ## What calls it

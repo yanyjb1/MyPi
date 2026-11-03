@@ -49,6 +49,23 @@ A zone gives the screen up by returning `Outcome`:
 The successor is started by the app: it receives the current size and the app's memo, and
 decides itself whether to read anything out of it.
 
+### Colors
+
+Two kinds of color, nothing between them:
+
+| kind | where it comes from |
+|---|---|
+| accent | one color, picked at startup, replaced on rename, carried by a `local / accent` frame |
+| fixed | `theme::fixed`, constants taken from the old bundled theme |
+
+The accent is worn by exactly five things: a running tool card's border, the input box's top and
+bottom edges, the user card's left bar, the statusline capsule and model name, and the tree's user
+node. Everything else is fixed. A tool card's border is accent while running, grey when it
+succeeded, red when it failed.
+
+A row carries color slots, not colors (`history::line::Ink`); the palette is resolved when the row
+is painted, so a color change costs one repaint and nothing else.
+
 ### The loop
 
 ```text
@@ -75,9 +92,10 @@ A failed draw ends the loop; nothing tries to draw again.
 1. Suspend and resume have no trigger path: raw mode turns Ctrl+Z into an ordinary key, so
    nothing suspends the front end.
 2. A zone started again re-asks what it needs; there is no warm handover of data.
+3. Streaming animations per tool are not built; a running card is the finished card.
 
 ## 4. Config fields
 
-| key | use |
-|---|---|
-| `config.ui.tui.theme.name`, `.accent`, `.gold`, `.black`, `.muted` | the palette; asked by the app at boot |
+None of this domain's colors come from config: the accent is picked at startup and replaced on
+rename. The keys this domain reads are listed per area — `zone/main/history/README.md`,
+`zone/main/input/README.md`, `zone/main/reserved/README.md`.

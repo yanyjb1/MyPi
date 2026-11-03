@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use super::super::Ctx;
 use unicode_width::UnicodeWidthStr;
 
-use super::theme::{StatusTheme, Token};
+use super::theme::{Slot, StatusTheme};
 use super::{Deco, Entry, PRIORITY_BASE, Side};
 
 /// The row: table entries paired with what they built.
@@ -70,8 +70,8 @@ fn assemble(
     ctx: &Ctx,
 ) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = Vec::new();
-    out.push(t.fg("+", Token::Accent));
-    out.push(t.fg("--", Token::Accent));
+    out.push(t.fg("+", Slot::Accent));
+    out.push(t.fg("--", Slot::Accent));
     out.push(t.on_capsule(" "));
 
     // Left group: ` > ` between neighbours, nothing if a deco stays empty.
@@ -136,17 +136,17 @@ fn assemble(
             continue;
         }
         if !any_right {
-            out.push(t.fg(" | ", Token::Accent));
+            out.push(t.fg(" | ", Slot::Accent));
         }
-        out.push(t.fg("<", Token::Accent));
+        out.push(t.fg("<", Slot::Accent));
         out.push(t.on_capsule(" "));
         out.extend(spans);
         any_right = true;
     }
 
     out.push(t.on_capsule(" "));
-    out.push(t.fg("--", Token::Accent));
-    out.push(t.fg("+", Token::Accent));
+    out.push(t.fg("--", Slot::Accent));
+    out.push(t.fg("+", Slot::Accent));
     out
 }
 

@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::desk::{Hire, Reply};
 use crate::ui::tui::action::Action;
-use crate::ui::tui::theme::Palette;
+use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::SubZone;
 use crate::ui::tui::zone::{Claim, Frame, Kind, Request, TermSize, name};
 
@@ -118,13 +118,13 @@ impl ReservedZone {
     }
 
     /// Idle: one blank row. On duty: the hand draws its own rows.
-    pub fn render_rows(&mut self, term: TermSize, palette: &Palette) -> Vec<Line<'static>> {
+    pub fn render_rows(&mut self, term: TermSize, accent: &Accent) -> Vec<Line<'static>> {
         self.settle();
         let rows = self.want.max(IDLE_ROWS);
         let Some(who) = self.on_duty else {
             return vec![Line::from("")];
         };
-        self.hand(who).draw(term.cols, rows, palette)
+        self.hand(who).draw(term.cols, rows, accent)
     }
 }
 

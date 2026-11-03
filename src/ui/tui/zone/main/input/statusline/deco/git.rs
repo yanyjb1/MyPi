@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::git::GitStatus;
 
 use crate::ui::tui::zone::main::input::Ctx;
-use crate::ui::tui::zone::main::input::statusline::theme::{StatusTheme, Token};
+use crate::ui::tui::zone::main::input::statusline::theme::{Slot, StatusTheme};
 use crate::ui::tui::zone::main::input::statusline::{Deco, Setup};
 
 /// Fallback scan interval: `config.ui.tui.zone.main.input.deco.gitScanInterval`.
@@ -92,9 +92,9 @@ impl Deco for Git {
         let mut out: Vec<Span<'static>> = Vec::new();
         if let Some(b) = g.branch.as_deref() {
             let color = if g.unstaged == 0 && g.staged == 0 {
-                t.get(Token::GitClean)
+                t.get(Slot::GitClean)
             } else {
-                t.get(Token::GitDirty)
+                t.get(Slot::GitDirty)
             };
             out.push(t.capsule(format!("@ {b}"), color));
         }
@@ -105,7 +105,7 @@ impl Deco for Git {
         for (marker, n) in [(" ?", g.unstaged), (" +", g.staged)] {
             if n > 0 {
                 out.push(t.on_capsule(marker));
-                out.push(t.capsule(n.to_string(), t.get(Token::Gold)));
+                out.push(t.capsule(n.to_string(), t.get(Slot::Gold)));
             }
         }
         out

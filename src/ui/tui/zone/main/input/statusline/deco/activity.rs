@@ -3,7 +3,7 @@
 use ratatui::text::Span;
 use serde_json::Value;
 
-use super::super::theme::{StatusTheme, Token};
+use super::super::theme::{Slot, StatusTheme};
 use super::super::{Deco, Setup};
 use crate::ui::tui::zone::main::input::Ctx;
 
@@ -27,9 +27,9 @@ impl Deco for Activity {
     fn render(&self, t: &StatusTheme, _budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
         if ctx.data.busy {
             let glyph = SPINNER[self.frame].to_string();
-            return vec![t.capsule(glyph, t.get(Token::Accent))];
+            return vec![t.capsule(glyph, t.get(Slot::Accent))];
         }
         let glyph = "π";
-        vec![t.capsule(glyph.to_string(), t.get(Token::Muted))]
+        vec![t.capsule(glyph.to_string(), t.get(Slot::Muted))]
     }
 }

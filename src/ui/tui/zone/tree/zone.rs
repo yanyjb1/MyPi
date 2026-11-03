@@ -10,6 +10,7 @@ use crate::ui::tui::zone::{
 
 use super::rows::Row;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
+use crate::ui::tui::theme::Accent;
 
 /// No modifiers held.
 const PLAIN: Mods = Mods {
@@ -84,6 +85,8 @@ pub struct TreeZone {
     selected: usize,
     scroll: usize,
     only_user: bool,
+    /// The live accent, broadcast as a local frame.
+    accent: Accent,
     /// The rows are stale and must be rebuilt before the next draw.
     stale: bool,
 }
@@ -98,6 +101,7 @@ impl Default for TreeZone {
             selected: 0,
             scroll: 0,
             only_user: false,
+            accent: Accent::default(),
             stale: true,
         }
     }
@@ -221,6 +225,16 @@ impl Zone for TreeZone {
                     self.merge(rows);
                 }
             }
+            ("local", "accent") => {
+                if let Some(accent) = frame
+                    .content
+                    .get("color")
+                    .and_then(Value::as_str)
+                    .and_then(Accent::parse)
+                {
+                    self.accent = accent;
+                }
+            }
             _ => {}
         }
         Vec::new()
@@ -274,13 +288,12 @@ impl Zone for TreeZone {
 
     fn render(&mut self) -> Vec<ratatui::text::Line<'static>> {
         self.sync();
-        let theme = crate::ui::tui::theme::HistoryTheme::resolve();
         super::render::rows(
             &self.rows,
             self.selected,
             self.size,
             &mut self.scroll,
-            &theme,
+            &self.accent,
         )
     }
 }

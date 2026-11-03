@@ -1,74 +1,70 @@
 //! The tail that is still growing: upstream's live pieces, gathered into blocks.
 
-use super::shape::{Block, Kind, Usage};
+use super::line::{Lead, Row};
+use super::paint::{self, Opts};
+use super::segment::{self, Kind};
+use super::shape::{Block, Kind as BlockKind, Usage};
 
-/// The blocks a running turn has produced so far. They carry no block id: a number
-/// is given the moment the round closes its ranges.
-#[derive(Debug, Default)]
+/// One block's finished segments: source length in, natural rows out.
+#[derive(Default)]
+struct Segments {
+    segments: Vec<(usize, Vec<Row>)>,
+    /// The open fence, fed one line at a time.
+    fence: Option<Fence>,
+}
+
+struct Fence {
+    painter: paint::code::Painter,
+    fed: usize,
+    rows: Vec<Row>,
+}
+
+#[derive(Default)]
 pub struct Live {
     blocks: Vec<Block>,
-    /// The block still taking pieces, if any.
     open: Option<usize>,
+    laid: Vec<Segments>,
 }
 
 impl Live {
     pub fn clear(&mut self) {
         self.blocks.clear();
+        self.laid.clear();
         self.open = None;
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.blocks.is_empty()
-    }
-
-    pub fn blocks(&self) -> &[Block] {
-        &self.blocks
-    }
-
-    /// One piece of the reply's own text.
     pub fn text(&mut self, piece: &str) {
-        self.grow(Kind::Assistant, piece);
+        self.grow(BlockKind::Assistant, piece);
     }
 
-    /// One piece of the thinking chain.
     pub fn thinking(&mut self, piece: &str) {
-        self.grow(Kind::Reasoning, piece);
+        self.grow(BlockKind::Reasoning, piece);
     }
 
-    /// The block ends here: the next piece opens a new one.
     pub fn boundary(&mut self) {
         self.open = None;
     }
 
-    /// One fragment of a tool call's arguments.
     pub fn arguments(&mut self, call_id: &str, piece: &str) {
         let at = self.request(call_id);
-        let args = self.blocks[at].args.get_or_insert_with(String::new);
-        args.push_str(piece);
+        let block = &mut self.blocks[at];
+        block.args.get_or_insert_with(String::new).push_str(piece);
     }
 
-    /// A tool call the model asked for.
     pub fn tool_start(&mut self, call_id: &str, name: &str, args: &str, intent: Option<&str>) {
         let at = self.request(call_id);
-        if !name.is_empty() {
-            self.blocks[at].name = Some(name.to_string());
-        }
-        if !args.is_empty() {
-            self.blocks[at].args = Some(args.to_string());
-        }
-        if let Some(intent) = intent {
-            self.blocks[at].intent = Some(intent.to_string());
-        }
+        let block = &mut self.blocks[at];
+        block.name = Some(name.to_string());
+        block.args = Some(args.to_string());
+        block.intent = intent.map(str::to_string);
     }
 
-    /// What a running tool printed.
     pub fn tool_progress(&mut self, call_id: &str, piece: &str) {
         let at = self.result(call_id);
-        let result = self.blocks[at].result.get_or_insert_with(String::new);
-        result.push_str(piece);
+        let block = &mut self.blocks[at];
+        block.result.get_or_insert_with(String::new).push_str(piece);
     }
 
-    /// A tool call ended.
     pub fn tool_end(
         &mut self,
         call_id: &str,
@@ -78,56 +74,219 @@ impl Live {
         duration_ms: i64,
     ) {
         let at = self.result(call_id);
-        self.blocks[at].ok = Some(ok);
-        if !result.is_empty() {
-            self.blocks[at].result = Some(result.to_string());
+        let block = &mut self.blocks[at];
+        block.ok = Some(ok);
+        block.result = Some(result.to_string());
+        block.memo = memo.map(str::to_string);
+        block.duration_ms = duration_ms;
+    }
+
+    /// Every block of the running turn, as rows at this width.
+    pub fn rows(&mut self, opts: &Opts<'_>, width: usize) -> Vec<Row> {
+        let mut out: Vec<Row> = Vec::new();
+        for at in 0..self.blocks.len() {
+            if self.blocks[at].kind == BlockKind::ToolResult {
+                continue;
+            }
+            let paired = self
+                .blocks
+                .get(at + 1)
+                .cloned()
+                .filter(|next| self.blocks[at].answers(next));
+            let rows = self.block_rows(at, paired.as_ref(), opts, width);
+            if rows.is_empty() {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push(Row::blank());
+            }
+            out.extend(rows);
         }
-        if let Some(memo) = memo {
-            self.blocks[at].memo = Some(memo.to_string());
+        out
+    }
+
+    fn block_rows(
+        &mut self,
+        at: usize,
+        paired: Option<&Block>,
+        opts: &Opts<'_>,
+        width: usize,
+    ) -> Vec<Row> {
+        match self.blocks[at].kind {
+            BlockKind::ToolRequest => paint::card::node(&self.blocks[at], paired, opts, width),
+            BlockKind::User => paint::user::block(&self.blocks[at], width),
+            BlockKind::Wake => vec![Row::blank()],
+            BlockKind::Assistant | BlockKind::Reasoning => {
+                let rows = self.text_rows(at, width);
+                if self.blocks[at].kind == BlockKind::Reasoning {
+                    if opts.thinking {
+                        paint::prose::thinking(rows)
+                    } else {
+                        vec![paint::prose::placeholder(opts.placeholder)]
+                    }
+                } else {
+                    rows
+                }
+            }
+            BlockKind::ToolResult => Vec::new(),
         }
-        self.blocks[at].duration_ms = duration_ms;
+    }
+
+    fn text_rows(&mut self, at: usize, width: usize) -> Vec<Row> {
+        let text = self.blocks[at]
+            .content
+            .as_deref()
+            .or(self.blocks[at].text.as_deref())
+            .unwrap_or_default()
+            .to_string();
+        let segments = segment::split(&text);
+        let last = segments.len().saturating_sub(1);
+        let mut out: Vec<Row> = Vec::new();
+        for (index, seg) in segments.iter().enumerate() {
+            let open = index == last && !closed(seg);
+            if !open {
+                let rows = self.closed_rows(at, index, seg, width);
+                out.extend(super::wrap::rows(rows, width));
+                continue;
+            }
+            if seg.kind == Kind::Code {
+                let rows = self.fence_rows(at, seg);
+                out.extend(super::wrap::rows(rows, width));
+            } else {
+                let rows = match seg.kind {
+                    Kind::Table => paint::table::rows(seg, width),
+                    _ => paint::prose::text(seg),
+                };
+                out.extend(super::wrap::rows(rows, width));
+            }
+        }
+        out
+    }
+
+    fn closed_rows(
+        &mut self,
+        at: usize,
+        index: usize,
+        seg: &segment::Segment,
+        width: usize,
+    ) -> Vec<Row> {
+        let state = &mut self.laid[at];
+        if let Some((len, rows)) = state.segments.get(index)
+            && *len == seg.source.len()
+        {
+            return rows.clone();
+        }
+        let rows = match seg.kind {
+            Kind::Code => paint::code::rows(seg),
+            Kind::Table => paint::table::rows(seg, width),
+            _ => paint::prose::text(seg),
+        };
+        let entry = (seg.source.len(), rows.clone());
+        if state.segments.len() > index {
+            state.segments[index] = entry;
+        } else {
+            state.segments.push(entry);
+        }
+        rows
+    }
+
+    fn fence_rows(&mut self, at: usize, seg: &segment::Segment) -> Vec<Row> {
+        let opener = seg
+            .source
+            .lines()
+            .next()
+            .unwrap_or("```")
+            .trim_end()
+            .to_string();
+        let state = &mut self.laid[at];
+        let fence = state.fence.get_or_insert_with(|| Fence {
+            painter: paint::code::Painter::new(seg.lang.as_deref()),
+            fed: 0,
+            rows: vec![Row::of(
+                Lead::First,
+                vec![super::line::Run::fixed(
+                    opener,
+                    crate::ui::tui::theme::fixed::MD_CODE_BLOCK_BORDER,
+                )],
+            )],
+        });
+        let source = &seg.source;
+        let mut at_byte = fence.fed;
+        while at_byte < source.len() {
+            let Some(rel) = source[at_byte..].find('\n') else {
+                break;
+            };
+            let end = at_byte + rel + 1;
+            let line = &source[at_byte..end];
+            if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
+                break;
+            }
+            fence.rows.push(fence.painter.push(line));
+            at_byte = end;
+        }
+        fence.fed = at_byte;
+        fence.rows.clone()
     }
 
     /// Append to the open block of this kind, or open one.
-    fn grow(&mut self, kind: Kind, piece: &str) {
-        let at = match self.open {
-            Some(at) if self.blocks[at].kind == kind => at,
-            _ => {
-                self.blocks.push(blank(kind, None));
+    fn grow(&mut self, kind: BlockKind, piece: &str) {
+        let at = match self.open.filter(|at| self.blocks[*at].kind == kind) {
+            Some(at) => at,
+            None => {
+                let mut block = blank(kind, None);
+                block.text = Some(String::new());
+                self.blocks.push(block);
+                self.laid.push(Segments::default());
                 let at = self.blocks.len() - 1;
                 self.open = Some(at);
                 at
             }
         };
-        let body = self.blocks[at].content.get_or_insert_with(String::new);
-        body.push_str(piece);
+        if let Some(text) = self.blocks[at].text.as_mut() {
+            text.push_str(piece);
+        }
     }
 
-    /// The tool request with this call id, opened if it is not there.
     fn request(&mut self, call_id: &str) -> usize {
-        self.find(Kind::ToolRequest, call_id).unwrap_or_else(|| {
-            self.blocks.push(blank(Kind::ToolRequest, Some(call_id)));
-            self.blocks.len() - 1
-        })
+        self.find(BlockKind::ToolRequest, call_id)
+            .unwrap_or_else(|| {
+                let mut block = blank(BlockKind::ToolRequest, Some(call_id));
+                block.ok = None;
+                self.blocks.push(block);
+                self.laid.push(Segments::default());
+                self.blocks.len() - 1
+            })
     }
 
-    /// The tool result with this call id, opened if it is not there.
     fn result(&mut self, call_id: &str) -> usize {
-        self.find(Kind::ToolResult, call_id).unwrap_or_else(|| {
-            self.blocks.push(blank(Kind::ToolResult, Some(call_id)));
-            self.blocks.len() - 1
-        })
+        self.find(BlockKind::ToolResult, call_id)
+            .unwrap_or_else(|| {
+                let mut block = blank(BlockKind::ToolResult, Some(call_id));
+                block.result = Some(String::new());
+                self.blocks.push(block);
+                self.laid.push(Segments::default());
+                self.blocks.len() - 1
+            })
     }
 
-    fn find(&self, kind: Kind, call_id: &str) -> Option<usize> {
+    fn find(&self, kind: BlockKind, call_id: &str) -> Option<usize> {
         self.blocks
             .iter()
-            .position(|b| b.kind == kind && b.call_id.as_deref() == Some(call_id))
+            .position(|block| block.kind == kind && block.call_id.as_deref() == Some(call_id))
     }
 }
 
-/// One empty block of this kind and call id.
-fn blank(kind: Kind, call_id: Option<&str>) -> Block {
+/// A segment stops growing only when a fence closes it or another segment follows.
+fn closed(seg: &segment::Segment) -> bool {
+    if seg.kind != Kind::Code {
+        return false;
+    }
+    let last = seg.source.lines().next_back().unwrap_or_default();
+    let trimmed = last.trim_start();
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
+fn blank(kind: BlockKind, call_id: Option<&str>) -> Block {
     Block {
         id: 0,
         kind,

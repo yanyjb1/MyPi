@@ -1,77 +1,54 @@
-//! Statusline theme surface — the single place a statusline deco gets colors.
-//!
-//! Why not `Palette`: that is a four-slot legacy façade (`accent` / `gold` /
-//! `black` / `muted`) over a ~60-token theme. The statusline needs more slots
-//! than four, and every deco must be able to *declare* which tokens it
-//! consumes. So the engine resolves one `StatusTheme` snapshot per frame and
-//! hands it down; a deco never reaches for the global theme itself. A
-//! mid-session theme switch therefore restyles the row with zero plumbing —
-//! the snapshot is rebuilt on the next frame (same contract as `Palette::current`).
-//!
-//! **Wiring status.** Most slots below still resolve to a literal instead of
-//! the theme: the `statusLine*` tokens are declared and load fine but are not
-//! yet authoritative (that audit is deliberately deferred). Each slot names the
-//! token it will be plugged into, so activating one is a one-line change here
-//! and touches no deco. `Text` is wired; the rest are not.
+//! Statusline colors: one snapshot per frame, built from the live accent.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
-use crate::ui::tui::theme::{ColorToken, theme};
+use crate::ui::tui::theme::{Accent, fixed};
 
-/// Every color a statusline deco may ask for.
-///
-/// One entry per *distinct* rendering decision in the row, not one per theme
-/// token. This is also the audit surface: `StatusLine::declared_tokens` unions
-/// the decos' `ColorPolicy`, and a test asserts the union stays a subset
-/// of [`ALL_TOKENS`].
+/// Every color a statusline deco may ask for: one entry per rendering decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Token {
-    /// Frames, the gauge's arrow and used part, the model pill, the session
-    /// pill, the ` | ` / `< ` connectors. (theme: `accent`)
+pub enum Slot {
+    /// Frames, the gauge's used part, the model pill, the session pill, connectors.
     Accent,
-    /// Money and the `?N` / `+N` counts. (theme: `statusLineCost`)
+    /// Money and the `?N` / `+N` counts.
     Gold,
-    /// The idle `π`. (theme: `muted`)
+    /// The idle `π`.
     Muted,
     /// The capsule band the left group and the session pill sit on.
-    /// (theme: `userMessageBg` — see the note in [`StatusTheme::resolve`])
     Capsule,
     /// Plain foreground text: the working-directory path.
-    /// (theme: `statusLinePath`)
     Text,
-    /// Clean git branch. (theme: `statusLineGitClean`)
+    /// Clean git branch.
     GitClean,
-    /// Dirty git branch. (theme: `statusLineGitDirty`)
+    /// Dirty git branch.
     GitDirty,
     /// The ` > ` connector between left decos.
-    /// (theme: `statusLineSep`; today the terminal's default foreground)
     Sep,
 }
 
-/// Every token, for the coverage audit.
-pub const ALL_TOKENS: [Token; 8] = [
-    Token::Accent,
-    Token::Gold,
-    Token::Muted,
-    Token::Capsule,
-    Token::Text,
-    Token::GitClean,
-    Token::GitDirty,
-    Token::Sep,
+/// Every slot, in index order.
+pub const ALL_SLOTS: [Slot; 8] = [
+    Slot::Accent,
+    Slot::Gold,
+    Slot::Muted,
+    Slot::Capsule,
+    Slot::Text,
+    Slot::GitClean,
+    Slot::GitDirty,
+    Slot::Sep,
 ];
 
-impl Token {
+impl Slot {
     const fn idx(self) -> usize {
         match self {
-            Token::Accent => 0,
-            Token::Gold => 1,
-            Token::Muted => 2,
-            Token::Capsule => 3,
-            Token::Text => 4,
-            Token::GitClean => 5,
-            Token::GitDirty => 6,
-            Token::Sep => 7,
+            Slot::Accent => 0,
+            Slot::Gold => 1,
+            Slot::Muted => 2,
+            Slot::Capsule => 3,
+            Slot::Text => 4,
+            Slot::GitClean => 5,
+            Slot::GitDirty => 6,
+            Slot::Sep => 7,
         }
     }
 }
@@ -79,35 +56,26 @@ impl Token {
 /// A per-frame snapshot of the colors the statusline is allowed to use.
 #[derive(Debug, Clone, Copy)]
 pub struct StatusTheme {
-    colors: [Color; ALL_TOKENS.len()],
+    colors: [Color; ALL_SLOTS.len()],
 }
 
 impl StatusTheme {
-    /// Snapshot the active theme. Called once per frame by the render loop
-    /// (next to `Palette::current`), so a runtime theme switch lands on the
-    /// next frame.
-    pub fn resolve() -> Self {
-        let t = theme();
-        let mut colors = [Color::Reset; ALL_TOKENS.len()];
-        let mut put = |tok: Token, c: Color| colors[tok.idx()] = c;
-        put(Token::Accent, t.color(ColorToken::Accent));
-        put(Token::Gold, t.color(ColorToken::StatusLineCost));
-        put(Token::Muted, t.color(ColorToken::Muted));
-        // `statusLineBg` is deliberately not read: the capsule band has always
-        // been `userMessageBg` here, while models.yml's `theme.black` override
-        // is written into `statusLineBg` (so it currently does nothing). Left
-        // as is — which side moves is the token audit's call, not this
-        // refactor's.
-        put(Token::Capsule, t.color(ColorToken::UserMessageBg));
-        put(Token::Text, t.color(ColorToken::StatusLinePath));
-        put(Token::GitClean, t.color(ColorToken::StatusLineGitClean));
-        put(Token::GitDirty, t.color(ColorToken::StatusLineGitDirty));
-        put(Token::Sep, Color::Reset);
+    /// Snapshot one frame's colors from the live accent.
+    pub fn new(accent: Accent) -> Self {
+        let mut colors = [Color::Reset; ALL_SLOTS.len()];
+        colors[Slot::Accent.idx()] = accent.color();
+        colors[Slot::Gold.idx()] = fixed::STATUS_COST;
+        colors[Slot::Muted.idx()] = fixed::MUTED;
+        colors[Slot::Capsule.idx()] = fixed::USER_BG;
+        colors[Slot::Text.idx()] = fixed::STATUS_PATH;
+        colors[Slot::GitClean.idx()] = fixed::STATUS_GIT_CLEAN;
+        colors[Slot::GitDirty.idx()] = fixed::STATUS_GIT_DIRTY;
+        colors[Slot::Sep.idx()] = fixed::STATUS_SEP;
         Self { colors }
     }
 
-    /// The resolved value of one token.
-    pub fn get(&self, tok: Token) -> Color {
+    /// The resolved value of one slot.
+    pub fn get(&self, tok: Slot) -> Color {
         self.colors[tok.idx()]
     }
 
@@ -115,15 +83,12 @@ impl StatusTheme {
 
     /// Capsule body: the capsule background plus `fg`.
     pub fn capsule(&self, text: impl Into<String>, fg: Color) -> Span<'static> {
-        Span::styled(
-            text.into(),
-            Style::new().bg(self.get(Token::Capsule)).fg(fg),
-        )
+        Span::styled(text.into(), Style::new().bg(self.get(Slot::Capsule)).fg(fg))
     }
 
     /// Capsule background only — the capsule's breathing room.
     pub fn on_capsule(&self, text: impl Into<String>) -> Span<'static> {
-        Span::styled(text.into(), Style::new().bg(self.get(Token::Capsule)))
+        Span::styled(text.into(), Style::new().bg(self.get(Slot::Capsule)))
     }
 
     /// A left-group connector: capsule background, separator foreground.
@@ -131,13 +96,13 @@ impl StatusTheme {
         Span::styled(
             text.into(),
             Style::new()
-                .bg(self.get(Token::Capsule))
-                .fg(self.get(Token::Sep)),
+                .bg(self.get(Slot::Capsule))
+                .fg(self.get(Slot::Sep)),
         )
     }
 
     /// Foreground only, transparent background.
-    pub fn fg(&self, text: impl Into<String>, tok: Token) -> Span<'static> {
+    pub fn fg(&self, text: impl Into<String>, tok: Slot) -> Span<'static> {
         Span::styled(text.into(), Style::new().fg(self.get(tok)))
     }
 

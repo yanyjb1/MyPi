@@ -14,7 +14,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | `term.rs` | `Term`, `Input`: alternate screen, flags, size, one frame, one poll | public |
 | `app/` | `App`: registry, display ledger, delivery, landing, lifecycle, memo | public |
 | `zone/` | `contract`, `registry`, the three major zones | public |
-| `theme/` | bundled and custom themes, token vocabulary, epoch | public |
+| `theme/` | the live accent and the fixed palette | public |
 | `text/` | display width, truncation, wrapping, the card frame | public |
 
 ## What it talks to
@@ -32,7 +32,7 @@ App
  ├── zones: Vec<Box<dyn Zone>>   ── Main, Resume, Tree
  ├── owner: Option<ZoneId>
  ├── memo: Memo
- ├── size / theme / attached
+ ├── size / accent / attached
  └── finished
 
 MainZone
@@ -53,7 +53,7 @@ MainZone
 3. `Zone` and every implementation: one method added is four edits.
 4. `App::boot` order and the zone that shows: attach first, start second.
 5. `Memo` aliases with the zones that write and read them (`tree.focus` is the only one).
-6. `theme_epoch()` and every cache keyed by it.
+6. The accent broadcast and every painter that resolves it.
 
 ## Not wired
 

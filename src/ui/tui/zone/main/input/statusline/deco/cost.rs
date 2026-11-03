@@ -2,7 +2,7 @@
 
 use ratatui::text::Span;
 
-use super::super::theme::{StatusTheme, Token};
+use super::super::theme::{Slot, StatusTheme};
 use super::super::{Deco, Setup};
 use crate::ui::tui::zone::main::input::Ctx;
 
@@ -18,6 +18,6 @@ impl Deco for Cost {
         let Some(text) = ctx.data.money.text() else {
             return Vec::new();
         };
-        vec![t.capsule(text, t.get(Token::Gold))]
+        vec![t.capsule(text, t.get(Slot::Gold))]
     }
 }

@@ -1,14 +1,4 @@
-//! Everything the terminal front end reads out of the server's configuration.
-
-/// Palette overrides layered over the bundled JSON theme.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ThemeConfig {
-    pub name: Option<String>,
-    pub accent: Option<String>,
-    pub gold: Option<String>,
-    pub black: Option<String>,
-    pub muted: Option<String>,
-}
+//! What the terminal front end reads out of the server's configuration.
 
 /// How the task list folds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

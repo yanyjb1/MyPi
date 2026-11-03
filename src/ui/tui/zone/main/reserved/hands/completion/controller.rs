@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use super::engine::{self, Completion, CompletionPopup, Look, Scan};
 use crate::commands;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
-use crate::ui::tui::theme::Palette;
+use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::Claim;
 use crate::ui::tui::zone::main::desk::Reply;
 use crate::ui::tui::zone::main::reserved::hand::{Hand, Report};
@@ -261,13 +261,13 @@ impl Hand for CompletionService {
         }
     }
 
-    fn draw(&self, width: u16, rows: u16, palette: &Palette) -> Vec<ratatui::text::Line<'static>> {
+    fn draw(&self, width: u16, rows: u16, accent: &Accent) -> Vec<ratatui::text::Line<'static>> {
         super::popup::render(
             self.controller.popup(),
             width,
             usize::from(rows),
             self.anchor_col,
-            palette,
+            accent,
         )
         .lines
     }

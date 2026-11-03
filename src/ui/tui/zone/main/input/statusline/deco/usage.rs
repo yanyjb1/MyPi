@@ -3,7 +3,7 @@
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
-use super::super::theme::{StatusTheme, Token};
+use super::super::theme::{Slot, StatusTheme};
 use super::super::{Deco, Setup};
 use crate::ui::tui::zone::main::input::Ctx;
 
@@ -34,15 +34,15 @@ impl Deco for Usage {
         let used = if dash_w > 0 { used.max(1) } else { 0 };
         let plain_rest = dash_w - used;
 
-        let mut out = vec![t.fg(">", Token::Accent)];
+        let mut out = vec![t.fg(">", Slot::Accent)];
         if used > 0 {
-            out.push(t.fg("-".repeat(used), Token::Accent));
+            out.push(t.fg("-".repeat(used), Slot::Accent));
         }
-        out.push(t.fg(pct_txt, Token::Accent));
+        out.push(t.fg(pct_txt, Slot::Accent));
         if plain_rest > 0 {
             out.push(t.plain("-".repeat(plain_rest)));
         }
-        out.push(t.fg(denom, Token::Accent));
+        out.push(t.fg(denom, Slot::Accent));
         out
     }
 }

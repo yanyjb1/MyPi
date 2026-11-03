@@ -2,7 +2,7 @@
 
 use ratatui::text::Span;
 
-use super::super::theme::{StatusTheme, Token};
+use super::super::theme::{Slot, StatusTheme};
 use super::super::{Deco, Setup};
 use crate::ui::tui::zone::main::input::Ctx;
 
@@ -18,6 +18,6 @@ impl Deco for Session {
         let Some(name) = ctx.data.name.as_deref() else {
             return Vec::new();
         };
-        vec![t.capsule(name.to_string(), t.get(Token::Accent))]
+        vec![t.capsule(name.to_string(), t.get(Slot::Accent))]
     }
 }

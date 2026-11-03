@@ -7,21 +7,11 @@ use serde_json::{Value, json};
 
 use super::startup::Startup;
 use crate::ui::session::Session;
-use crate::ui::tui::ThemeConfig;
 use crate::ui::tui::action::Action;
-use crate::ui::tui::theme;
+use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::{
     Frame, Kind, Memo, ModelId, Outcome, Request, Round, TermSize, Turns, Zone, ZoneId, matches,
 };
-
-/// The configuration keys the terminal's palette is built from.
-const THEME_KEYS: &[&str] = &[
-    "config.ui.tui.theme.name",
-    "config.ui.tui.theme.accent",
-    "config.ui.tui.theme.gold",
-    "config.ui.tui.theme.black",
-    "config.ui.tui.theme.muted",
-];
 
 /// One thing the loop hands the app.
 pub enum Input {
@@ -39,9 +29,8 @@ pub struct App {
     pub(super) memo: Memo,
     size: TermSize,
     pub(super) attached: Option<i64>,
-    theme: ThemeConfig,
-    /// How many palette answers have landed.
-    palette_seen: usize,
+    /// The one color the input zone and the running cards wear.
+    accent: Accent,
     /// The directory a new session is created in.
     cwd: PathBuf,
     /// `--model`: the model a new session is created with; `None` = the configured default.
@@ -69,8 +58,7 @@ impl App {
             memo: Memo::default(),
             size,
             attached: None,
-            theme: ThemeConfig::default(),
-            palette_seen: 0,
+            accent: Accent::pick(),
             cwd: startup.cwd,
             model: startup.model,
             waiting: None,
@@ -78,10 +66,6 @@ impl App {
             finished: false,
         };
         app.reset_memo();
-        for key in THEME_KEYS {
-            app.session
-                .send("call", "config", json!({"key": key}), true);
-        }
         if let Some(id) = startup.session {
             app.attach(id);
         }
@@ -98,11 +82,12 @@ impl App {
     pub fn pump(&mut self) {
         for packet in self.session.forward() {
             let frame = Frame::new(packet.kind, packet.name, packet.content);
-            if frame.class == "call" && frame.name == "config" {
-                self.palette(&frame);
-            }
             if frame.class == "post" && frame.name == "init" {
                 self.created(&frame);
+            }
+            if frame.class == "post" && frame.name == "name" {
+                self.accent = self.accent.pick_other();
+                self.announce_accent();
             }
             self.deliver(&frame);
         }
@@ -198,6 +183,7 @@ impl App {
                 self.tell();
                 let requests = self.zones[to.index()].start(self.size, &self.memo);
                 self.land_all(requests);
+                self.announce_accent();
             }
         }
     }
@@ -209,6 +195,7 @@ impl App {
         };
         let requests = self.zones[owner.index()].start(self.size, &self.memo);
         self.land_all(requests);
+        self.announce_accent();
     }
 
     fn structure(&mut self) {
@@ -308,24 +295,10 @@ impl App {
         }
     }
 
-    /// Read one palette answer; the five together rebuild the theme.
-    fn palette(&mut self, frame: &Frame) {
-        let Some(key) = frame.content.get("key").and_then(Value::as_str) else {
-            return;
-        };
-        let value = frame.content.get("value").unwrap_or(&Value::Null);
-        match key {
-            "config.ui.tui.theme.name" => self.theme.name = text_of(value),
-            "config.ui.tui.theme.accent" => self.theme.accent = color_of(value),
-            "config.ui.tui.theme.gold" => self.theme.gold = color_of(value),
-            "config.ui.tui.theme.black" => self.theme.black = color_of(value),
-            "config.ui.tui.theme.muted" => self.theme.muted = color_of(value),
-            _ => return,
-        }
-        self.palette_seen += 1;
-        if self.palette_seen >= THEME_KEYS.len() {
-            theme::init_from_config(self.theme.name.as_deref(), Some(&self.theme));
-        }
+    /// Hand the current accent to whatever shows.
+    fn announce_accent(&mut self) {
+        let frame = Frame::new("local", "accent", json!({"color": self.accent.hex()}));
+        self.deliver(&frame);
     }
 }
 
@@ -340,23 +313,4 @@ fn with_session(content: Value, session: Option<i64>) -> Value {
         map.insert("session".to_string(), json!(session));
     }
     Value::Object(map)
-}
-
-fn text_of(value: &Value) -> Option<String> {
-    let text = value.as_str()?;
-    (text != "null" && !text.is_empty()).then(|| text.to_string())
-}
-
-/// A color is a name, or an `[r, g, b]` list.
-fn color_of(value: &Value) -> Option<String> {
-    if let Some(text) = text_of(value) {
-        return Some(text);
-    }
-    let items = value.as_array()?;
-    let parts: Vec<String> = items
-        .iter()
-        .filter_map(Value::as_i64)
-        .map(|n| n.to_string())
-        .collect();
-    (parts.len() == 3).then(|| parts.join(","))
 }

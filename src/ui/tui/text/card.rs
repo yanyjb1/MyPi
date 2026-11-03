@@ -9,15 +9,6 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::ui::tui::text::take_width;
 
-pub(crate) fn pad_to(mut line: Line<'static>, width: usize, fill: Style) -> Line<'static> {
-    let used: usize = line.spans.iter().map(|s| s.content.as_ref().width()).sum();
-    if used < width {
-        line.spans
-            .push(Span::styled(" ".repeat(width - used), fill));
-    }
-    line
-}
-
 pub(crate) fn on_bg(spans: Vec<Span<'static>>, bg: Style) -> Vec<Span<'static>> {
     spans
         .into_iter()

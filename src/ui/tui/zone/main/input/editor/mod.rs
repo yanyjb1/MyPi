@@ -2,7 +2,15 @@
 
 use std::time::Instant;
 
-use undo::{Snapshot, UndoStack};
+mod history;
+mod paste;
+mod separators;
+mod undo;
+
+pub use history::History;
+use paste::PasteStore;
+use separators::SeparatorTable;
+use undo::{EditKind, Snapshot, UndoStack};
 
 use crate::ui::tui::text;
 

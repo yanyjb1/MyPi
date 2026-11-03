@@ -4,7 +4,7 @@ use std::path::Path;
 
 use ratatui::text::Span;
 
-use super::super::theme::{StatusTheme, Token};
+use super::super::theme::{Slot, StatusTheme};
 use super::super::{Deco, Setup};
 use crate::ui::tui::zone::main::input::Ctx;
 
@@ -23,7 +23,7 @@ impl Deco for Cwd {
         let marker = if ctx.data.temporary { "[T]" } else { "[D]" };
         vec![t.capsule(
             format!("{} {}", marker, short_path(Path::new(&ctx.data.cwd))),
-            t.get(Token::Text),
+            t.get(Slot::Text),
         )]
     }
 }

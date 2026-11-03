@@ -28,6 +28,8 @@ pub struct MainZone {
     pub(super) keys: keys::Borrowed,
     pub(super) size: Option<TermSize>,
     pub(super) heights: super::arbitrate::Heights,
+    /// The color the input zone and the running cards wear.
+    pub(super) accent: crate::ui::tui::theme::Accent,
     /// Events this zone itself put out, not yet on the bus.
     shouts: Vec<Shout>,
 }
@@ -169,6 +171,17 @@ impl Zone for MainZone {
         if frame.is_local() && frame.name == "disconnected" {
             return vec![Request::Quit];
         }
+        if frame.is_local() && frame.name == "accent" {
+            if let Some(accent) = frame
+                .content
+                .get("color")
+                .and_then(Value::as_str)
+                .and_then(crate::ui::tui::theme::Accent::parse)
+            {
+                self.accent = accent;
+            }
+            return Vec::new();
+        }
         self.read_cwd(frame);
         let kind = Kind::of(&frame.class, &frame.name);
         let size = self.term();
@@ -210,16 +223,15 @@ impl Zone for MainZone {
 
     fn render(&mut self) -> Vec<ratatui::text::Line<'static>> {
         self.settle();
-        let palette = crate::ui::tui::theme::Palette::current();
-        let theme = crate::ui::tui::theme::HistoryTheme::resolve();
+        let accent = self.accent;
         let width = self.term().cols;
-        let mut out = self.history.render_rows(width, &theme);
+        let mut out = self.history.render_rows(width, accent);
         for _ in 0..self.heights.gap {
             out.push(ratatui::text::Line::default());
         }
-        out.extend(self.input.render_rows(self.term(), &palette));
+        out.extend(self.input.render_rows(self.term(), &accent));
         self.reserved.col(self.input.cursor_col);
-        out.extend(self.reserved.render_rows(self.term(), &palette));
+        out.extend(self.reserved.render_rows(self.term(), &accent));
         out
     }
 

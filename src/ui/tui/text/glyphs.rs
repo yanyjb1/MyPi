@@ -4,8 +4,6 @@ pub(crate) const OK: &str = "[ok]";
 pub(crate) const ERR: &str = "[!!]";
 pub(crate) const PENDING: &str = "[*]";
 
-pub(crate) const EXPAND_HINT: &str = "[ctrl+o: Expand]";
-
 pub(crate) const SEP: &str = "·";
 
 pub(crate) const TODO_PENDING: &str = "[ ]";

@@ -1,10 +1,16 @@
-//! The history zone: the block rows, the streaming tail, the local section, the viewport.
+//! The conversation on screen: slots, blocks, rows.
 
-mod cache;
-mod live;
-mod local;
-mod render;
-mod segment;
-mod shape;
-mod view;
-pub(in crate::ui::tui::zone::main) mod zone;
+pub(crate) mod ask;
+pub(crate) mod cache;
+pub(crate) mod feed;
+pub(crate) mod fold;
+pub(crate) mod line;
+pub(crate) mod live;
+pub(crate) mod local;
+pub(crate) mod paint;
+pub(crate) mod render;
+pub(crate) mod segment;
+pub(crate) mod shape;
+pub(crate) mod view;
+pub(crate) mod wrap;
+pub(crate) mod zone;

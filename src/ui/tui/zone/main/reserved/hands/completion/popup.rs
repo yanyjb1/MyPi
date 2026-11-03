@@ -8,10 +8,11 @@
 //! column**. Command rows park their `>` marker in the two columns *left* of that
 //! column, so the marker never pushes the name rightward.
 
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 
 use super::engine::{CandidateKind, CompletionPopup, VisibleRow};
-use crate::ui::tui::theme::Palette;
+use crate::ui::tui::theme::{Accent, fixed};
 
 // The two columns a command row spends on its selection marker, immediately
 // left of the anchor column.
@@ -37,7 +38,7 @@ pub fn render(
     term_w: u16,
     avail: usize,
     anchor_col: usize,
-    p: &Palette,
+    accent: &Accent,
 ) -> PopupView {
     let visible = popup.visible(avail);
     if visible.is_empty() {
@@ -85,17 +86,17 @@ pub fn render(
         // Every row hangs off the same anchor; `>` and its trailing space are paid
         // for out of the two columns to the left of it.
         let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
-        spans.push(p.plain(" ".repeat(anchor_col.saturating_sub(MARKER_W))));
-        spans.push(p.plain(if selected { "> " } else { "  " }));
+        spans.push(Span::raw(" ".repeat(anchor_col.saturating_sub(MARKER_W))));
+        spans.push(Span::raw(if selected { "> " } else { "  " }));
 
         // The name is drawn as a run of spans: matched characters accent, the rest
         // in normal foreground, so the list shows why each candidate is in it.
-        spans.extend(name_spans(kind, name, hits, is_dir, p));
+        spans.extend(name_spans(kind, name, hits, is_dir, accent));
 
         if !detail.is_empty() {
             let pad = name_col.saturating_sub(crate::ui::tui::text::display_width(name));
-            spans.push(p.plain(format!("{}  ", " ".repeat(pad))));
-            spans.push(p.muted(detail.to_string()));
+            spans.push(Span::raw(format!("{}  ", " ".repeat(pad))));
+            spans.push(muted(detail));
         }
 
         lines.push(Line::from(spans));
@@ -127,10 +128,10 @@ fn name_spans(
     name: &str,
     hits: &[usize],
     is_dir: bool,
-    p: &Palette,
+    accent: &Accent,
 ) -> Vec<ratatui::text::Span<'static>> {
     if kind == CandidateKind::Command {
-        return vec![p.accent_span(name.to_string())];
+        return vec![accent.span(name)];
     }
     let chars: Vec<char> = name.chars().collect();
     // The trailing directory slash is decoration, not part of the name proper:
@@ -142,7 +143,7 @@ fn name_spans(
         chars.len()
     };
     if hits.is_empty() {
-        return vec![p.plain(name.to_string())];
+        return vec![Span::raw(name.to_string())];
     }
     let hit = |i: usize| hits.binary_search(&i).is_ok();
     let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
@@ -153,9 +154,9 @@ fn name_spans(
         if this_hit != run_hit {
             if !run.is_empty() {
                 spans.push(if run_hit {
-                    p.accent_span(std::mem::take(&mut run))
+                    accent.span(std::mem::take(&mut run))
                 } else {
-                    p.plain(std::mem::take(&mut run))
+                    Span::raw(std::mem::take(&mut run))
                 });
             }
             run_hit = this_hit;
@@ -164,9 +165,9 @@ fn name_spans(
     }
     if !run.is_empty() {
         spans.push(if run_hit {
-            p.accent_span(run)
+            accent.span(run)
         } else {
-            p.plain(run)
+            Span::raw(run)
         });
     }
     spans
@@ -181,4 +182,8 @@ fn row_content_width(name: &str, detail: &str) -> usize {
         return name_w + MARKER_W;
     }
     name_w + 2 + crate::ui::tui::text::display_width(detail) + MARKER_W
+}
+
+fn muted(text: impl Into<String>) -> ratatui::text::Span<'static> {
+    ratatui::text::Span::styled(text.into(), Style::new().fg(fixed::MUTED))
 }

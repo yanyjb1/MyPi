@@ -13,6 +13,7 @@ pub use ctx::{Ctx, Data};
 use super::desk::{Hire, Reply};
 use super::geometry;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
+use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::{Claim, Frame, Request, Shout, SubZone, TermSize, name};
 use serde_json::Value;
 
@@ -718,7 +719,7 @@ impl InputZone {
     pub fn render_rows(
         &mut self,
         term: TermSize,
-        p: &crate::ui::tui::theme::Palette,
+        accent: &Accent,
     ) -> Vec<ratatui::text::Line<'static>> {
         self.term = term;
         let term_w = term.cols.max(1);
@@ -731,7 +732,7 @@ impl InputZone {
         let status_line = {
             let ctx = self.ctx();
             self.statusline
-                .render(&StatusTheme::resolve(), term_w, &ctx)
+                .render(&StatusTheme::new(*accent), term_w, &ctx)
         };
         let drawn = render::render(
             &render::Spec {
@@ -743,7 +744,7 @@ impl InputZone {
                 cursor_col,
                 term_w,
             },
-            p,
+            accent,
         );
         self.cursor_col = drawn.cursor_col as u16;
         self.cursor_row = drawn.cursor_row as u16;

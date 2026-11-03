@@ -12,5 +12,5 @@ pub mod text;
 pub mod theme;
 pub mod zone;
 
-pub use config::{ThemeConfig, TodoFold};
+pub use config::TodoFold;
 pub use run::run;

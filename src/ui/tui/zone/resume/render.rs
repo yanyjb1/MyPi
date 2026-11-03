@@ -1,8 +1,7 @@
-//! `/resume` 的画法。
+//! Rendering for `/resume`.
 //!
-//! 布局照 omp 的 `session-selector.ts`：一条会话一块，块内三行
-//! （标题 / 首条消息预览 / 元信息），块间空一行；选中行 accent + 粗体，
-//! 其余文字 dim。框线复用卡片原语，所以整页和工具卡片是一套视觉。
+//! One block per session: title, first-message preview and meta lines, with a
+//! blank line between blocks. Selected rows are blue + bold, other text dim.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,64 +10,76 @@ use ratatui::text::{Line, Span};
 
 use super::zone::{ResumeZone, Row, Scope};
 use crate::ui::tui::text::card::{card_edge, card_edge_labeled, card_row};
-use crate::ui::tui::theme::{HistoryTheme, Token};
+use crate::ui::tui::theme::fixed;
 
-/// 一条会话在屏幕上的块高（标题 + 预览 + 元信息 + 空行）。
+/// A span in one fixed color.
+fn fg(text: impl Into<String>, color: ratatui::style::Color) -> Span<'static> {
+    Span::styled(text.into(), Style::new().fg(color))
+}
+
+/// A bold span in one fixed color.
+fn bold(text: impl Into<String>, color: ratatui::style::Color) -> Span<'static> {
+    Span::styled(
+        text.into(),
+        Style::new().fg(color).add_modifier(Modifier::BOLD),
+    )
+}
+
+/// Screen rows one session block takes: title + preview + meta + blank line.
 ///
-/// 列表里最下面那条不画空行（footer 自带间隔），窗口计算按 py 处理。
+/// The last block draws no blank line; the window math accounts for that.
 fn block_height(has_preview: bool) -> usize {
     if has_preview { 4 } else { 3 }
 }
 
 pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
-    let t = HistoryTheme::resolve();
     let Some(size) = z.size() else {
         return Vec::new();
     };
     let width = size.cols as usize;
-    // 框架：标题 + 搜索 + 分隔 + 列表 + 分隔 + 提示 + 底边 = 6 行。
+    // Frame: title + search + divider + list + divider + hint + bottom = 6 rows.
     let body_rows = (size.rows as usize).saturating_sub(6);
-    let edge = t.fg_style(Token::Dim);
+    let edge = Style::new().fg(fixed::DIM);
     let bg = Style::new();
 
     let mut out = Vec::with_capacity(size.rows as usize);
 
-    // ---- 标题栏：一共几条 · 作用域 ----
+    // ---- Title bar: total count, scope ----
     let count = z.visible_len();
     let header = format!("会话 · {count} 个 · {}", z.scope_label());
     out.push(card_edge_labeled(
         edge,
         bg,
         width,
-        Line::from(t.fg_mod(header, Token::ToolTitle, Modifier::BOLD)),
+        Line::from(bold(header, fixed::TOOL_TITLE)),
     ));
 
-    // ---- 搜索框 ----
+    // ---- Search box ----
     let search = if z.filter().is_empty() {
         Line::from(vec![
-            t.fg("> ", Token::ToolEdgePending),
-            t.fg("输入关键字筛选（名字 / 首条消息 / 目录）", Token::Muted),
+            fg("> ", fixed::MD_HEADING),
+            fg("输入关键字筛选（名字 / 首条消息 / 目录）", fixed::MUTED),
         ])
     } else {
         Line::from(vec![
-            t.fg("> ", Token::ToolEdgePending),
-            t.fg(z.filter().to_string(), Token::SystemText),
+            fg("> ", fixed::MD_HEADING),
+            fg(z.filter().to_string(), fixed::SYSTEM),
         ])
     };
     out.push(card_row(search, edge, bg, width));
     out.push(card_edge(edge, bg, width));
-    // 服务端的拒绝（删除被拒之类）就画在列表上方：选择器占着整屏时，
-    // 主区的错误注记用户看不见。
+    // Server-side refusals (delete rejected etc.) are drawn above the list, since
+    // the main area is hidden while this selector is open.
     if z.failed() {
         out.push(card_row(
-            Line::from(t.fg("删除被拒".to_string(), Token::Err)),
+            Line::from(fg("删除被拒", fixed::ERR)),
             edge,
             bg,
             width,
         ));
     }
 
-    // ---- 列表 ----
+    // ---- List ----
     let (blocks, top) = window(z, body_rows);
     z.set_scroll(top);
 
@@ -82,12 +93,7 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
         } else {
             "没有匹配的会话（退格改筛选）"
         };
-        out.push(card_row(
-            Line::from(t.fg(msg, Token::Muted)),
-            edge,
-            bg,
-            width,
-        ));
+        out.push(card_row(Line::from(fg(msg, fixed::MUTED)), edge, bg, width));
     } else {
         for i in top..(top + blocks).min(count) {
             let Some(row) = z.row_at(i) else {
@@ -96,7 +102,6 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
             let selected = i == z.selected();
             let confirming = z.pending_delete() == Some(row.id);
             out.extend(row_lines(
-                &t,
                 &row,
                 selected,
                 confirming,
@@ -105,28 +110,27 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
                 edge,
                 bg,
             ));
-            // 块间空行；最下面那条留白由 body 的填充补齐。
+            // Blank line between blocks; the last one is covered by body padding.
             if i + 1 < (top + blocks).min(count) {
                 out.push(card_row(Line::default(), edge, bg, width));
             }
         }
     }
 
-    // 填满剩余高度：列表短的时候下面不该出现未上色的空隙。
+    // Fill the remaining height so a short list leaves no unpainted gap.
     while out.len() < body_rows + 3 {
         out.push(card_row(Line::default(), edge, bg, width));
     }
 
-    // ---- 页脚：按键提示 ----
+    // ---- Footer: key hints ----
     out.push(card_edge(edge, bg, width));
-    out.push(card_row(footer(&t), edge, bg, width));
+    out.push(card_row(footer(), edge, bg, width));
     out.push(card_edge(edge, bg, width));
     out
 }
 
-/// 一条会话的三行。
+/// The three lines of one session block.
 fn row_lines(
-    t: &HistoryTheme,
     row: &Row,
     selected: bool,
     confirming: bool,
@@ -137,98 +141,94 @@ fn row_lines(
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
 
-    // 第一行：光标 + 标题。选中行 accent + 粗体（照 omp：cursor 是唯一
-    // 的位置指示，其余行用等宽空白占位，所以整列文字对齐）。
-    // 光标是唯一的位置指示；未选中行用等宽空白占位，整列文字因此对齐。
+    // Line 1: cursor + title; selected rows are blue + bold.
+    // The cursor is the only position indicator, and its blank placeholder keeps
+    // every title starting at the same column.
     let cursor = if selected { "> " } else { "  " };
-    let cursor_tok = if selected {
-        Token::ToolEdgePending
+    let cursor_color = if selected {
+        fixed::MD_HEADING
     } else {
-        Token::Muted
+        fixed::MUTED
     };
-    // 标题一律**加粗**：名字（不管是用户起的还是合成出来的）是第一眼要
-    // 认出来的东西。选中行唱 accent，其余用正文色（`text`，即白）——
-    // 灰色会让标题和下面的元信息糊成一片。
-    let title_tok = if selected {
-        Token::ToolEdgePending
+    // Titles are always bold; only the color marks the selection.
+    let title_color = if selected {
+        fixed::MD_HEADING
     } else {
-        Token::AssistantText
+        fixed::BODY
     };
-    let mut spans = vec![t.fg(cursor, cursor_tok)];
+    let mut spans = vec![fg(cursor, cursor_color)];
     let title = super::zone::title(row);
-    spans.push(t.fg_mod(title, title_tok, Modifier::BOLD));
-    // 两段式删除的第二步提示：Delete 亮出来，Enter 才真删——红色加粗，
-    // 免得用户以为是随手多出来的一行字。
+    spans.push(bold(title, title_color));
+    // Second step of the two-step delete: Delete raises the prompt, Enter commits.
     if confirming {
-        let (label, token) = if refused {
-            (" - fail", Token::Warn)
+        let (label, color) = if refused {
+            (" - fail", fixed::WARN)
         } else {
-            (" - delete?", Token::Err)
+            (" - delete?", fixed::ERR)
         };
-        spans.push(t.fg_mod(label, token, Modifier::BOLD));
+        spans.push(bold(label, color));
     }
     out.push(card_row(Line::from(spans), edge, bg, width));
 
-    // 第二行：首条消息预览（只有显式命名的会话才画，见 `super::preview`）。
+    // Line 2: first-message preview, only for sessions with an explicit name.
     if let Some(preview) = super::zone::preview(row) {
         out.push(card_row(
-            Line::from(t.fg(format!("  {preview}"), Token::Dim)),
+            Line::from(fg(format!("  {preview}"), fixed::DIM)),
             edge,
             bg,
             width,
         ));
     }
 
-    // 第三行：多久以前 · 多大 · 在哪个目录。每段单独上色（omp 同款理由：
-    // 整行一起包色会把状态段的颜色吃掉）。
-    let mut meta: Vec<Span<'static>> = vec![t.fg("  ", Token::Muted)];
-    let dot = || t.fg(" · ", Token::Muted);
+    // Line 3: age, size, directory, each segment colored separately.
+    let mut meta: Vec<Span<'static>> = vec![fg("  ", fixed::MUTED)];
+    let dot = || fg(" · ", fixed::MUTED);
     let stamp = row.last_ts.as_deref().unwrap_or(&row.started_at);
-    meta.push(t.fg(age_text(stamp), Token::Dim));
+    meta.push(fg(age_text(stamp), fixed::DIM));
     meta.push(dot());
     if let Some(bytes) = row.bytes {
-        meta.push(t.fg(human_bytes(bytes), Token::Dim));
+        meta.push(fg(human_bytes(bytes), fixed::DIM));
     }
     if row.memos > 0 {
         meta.push(dot());
-        meta.push(t.fg(format!("memo {}", row.memos), Token::Dim));
+        meta.push(fg(format!("memo {}", row.memos), fixed::DIM));
     }
     if let Some(cwd) = row.cwd.as_deref() {
         meta.push(dot());
-        meta.push(t.fg(shorten(cwd), Token::Dim));
+        meta.push(fg(shorten(cwd), fixed::DIM));
     }
     out.push(card_row(Line::from(meta), edge, bg, width));
 
     out
 }
 
-/// 页脚提示。o mp 的 overlay 把提示放在底部同一行，我们照做。
-fn footer(t: &HistoryTheme) -> Line<'static> {
+/// Footer key hints, drawn on the bottom row.
+fn footer() -> Line<'static> {
     Line::from(vec![
-        t.fg("Enter", Token::SystemText),
-        t.fg(" 附着 · ", Token::Muted),
-        t.fg("Esc", Token::SystemText),
-        t.fg(" 返回 · ", Token::Muted),
-        t.fg("↑↓", Token::SystemText),
-        t.fg(" 选择 · ", Token::Muted),
-        t.fg("Tab", Token::SystemText),
-        t.fg(" 范围 · ", Token::Muted),
-        t.fg("Ctrl+U", Token::SystemText),
-        t.fg(" 清筛选", Token::Muted),
+        fg("Enter", fixed::SYSTEM),
+        fg(" 附着 · ", fixed::MUTED),
+        fg("Esc", fixed::SYSTEM),
+        fg(" 返回 · ", fixed::MUTED),
+        fg("↑↓", fixed::SYSTEM),
+        fg(" 选择 · ", fixed::MUTED),
+        fg("Tab", fixed::SYSTEM),
+        fg(" 范围 · ", fixed::MUTED),
+        fg("Ctrl+U", fixed::SYSTEM),
+        fg(" 清筛选", fixed::MUTED),
     ])
 }
 
-/// 算列表窗口：起点 `top` 与能放下几个块。
+/// List window: the start index `top` and how many blocks fit.
 ///
-/// 窗口按**物理行**预算滚动（块高 3 或 4 行），所以短会话不会把最下面
-/// 那条挤到屏幕外——按条数算窗口会留一堆看不了的空白。
+/// The budget is in physical rows (a block is 3 or 4 rows), so a short last block
+/// is never pushed off screen.
 fn window(z: &ResumeZone, budget: usize) -> (usize, usize) {
     let count = z.visible_len();
     if count == 0 || budget == 0 {
         return (0, 0);
     }
     let mut top = z.scroll().min(count - 1);
-    // 选中行在窗口上面：窗口跟上去。
+    // Selected row is above the window: follow it.
     if z.selected() < top {
         top = z.selected();
     }
@@ -243,7 +243,7 @@ fn window(z: &ResumeZone, budget: usize) -> (usize, usize) {
             used += h;
             seen += 1;
         }
-        // 选中的块没进来：窗口往下挪一格再试。
+        // Selected block is outside the window: move it down one and retry.
         if z.selected() >= top + seen && seen > 0 {
             top += 1;
             continue;
@@ -329,20 +329,18 @@ fn local_offset() -> i64 {
     })
 }
 
-/// 相对时间。中文用「刚刚 / N 分钟前 / N 小时前 / N 天前」，再老就没有
-/// 相对的意义了，画原戳的日期部分。
+/// Relative age in Chinese: just now / N minutes / N hours / N days.
 fn human_age(secs: u64) -> String {
     match secs {
         0..=59 => "刚刚".to_string(),
         60..=3599 => format!("{} 分钟前", secs / 60),
         3600..=86_399 => format!("{} 小时前", secs / 3600),
         86_400..=2_591_999 => format!("{} 天前", secs / 86_400),
-        // 30 天以上：相对时间反而要靠心算。
         _ => format!("{} 天前", secs / 86_400),
     }
 }
 
-/// 体积。跟 `format_duration` 一个思路：只在有意义时才带小数。
+/// Byte size; decimals only where they carry information.
 fn human_bytes(bytes: i64) -> String {
     let b = bytes.max(0) as f64;
     if b < 1024.0 {
@@ -355,9 +353,8 @@ fn human_bytes(bytes: i64) -> String {
     format!("{:.1} MB", kb / 1024.0)
 }
 
-/// 目录压缩显示：`/home/me/projects/a` → `~/projects/a` 太长就取尾两段。
-///
-/// 与状态栏的 `tmp/mypi-fake` 风格一致：去掉前导斜杠，只留能认出来的尾巴。
+/// Path shortening: at most the last two segments, no leading slash,
+/// prefixed with an ellipsis marker when segments were dropped.
 fn shorten(path: &str) -> String {
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
     if parts.len() <= 2 {

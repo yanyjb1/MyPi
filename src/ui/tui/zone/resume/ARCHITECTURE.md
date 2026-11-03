@@ -19,7 +19,7 @@ What each file holds and who calls it. Current state only.
 
 - `zone::contract` for `Kind`, `Claim`, `Outcome`, `Request`, `TermSize`, `Zone`, `ZoneId`.
 - `action::{Action, Key, KeyCode, Mods}`.
-- `text::card` and `HistoryTheme` for the card frame and colors.
+- `text::card` for the card frame, `theme::fixed` for the colors.
 
 ## Who calls it
 

@@ -6,7 +6,7 @@ use ratatui::text::Line;
 use serde_json::Value;
 
 use crate::ui::tui::action::Key;
-use crate::ui::tui::theme::Palette;
+use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::Claim;
 
 use super::super::desk::Reply;
@@ -56,7 +56,7 @@ pub trait Hand {
         None
     }
 
-    fn draw(&self, width: u16, rows: u16, palette: &Palette) -> Vec<Line<'static>>;
+    fn draw(&self, width: u16, rows: u16, accent: &Accent) -> Vec<Line<'static>>;
 
     /// Leaving: put your own state away.
     fn left(&mut self);

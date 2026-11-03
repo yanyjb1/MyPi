@@ -16,7 +16,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::ui::tui::text;
-use crate::ui::tui::theme::Palette;
+use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::main::geometry;
 
 /// What the renderer produced: the rows, and where the cursor sits in them.
@@ -49,7 +49,7 @@ pub struct Spec<'a> {
 }
 
 /// Draw the input zone.
-pub fn render(spec: &Spec<'_>, p: &Palette) -> InputView {
+pub fn render(spec: &Spec<'_>, accent: &Accent) -> InputView {
     let w = spec.term_w as usize;
     // The statusline is exactly the container's width; one cell off tears the
     // rows below, so both sides are held to it here.
@@ -74,7 +74,7 @@ pub fn render(spec: &Spec<'_>, p: &Palette) -> InputView {
 
     if n == 0 {
         // An empty input still gets a bottom edge to stand on.
-        lines.push(bottom_line("", w, p));
+        lines.push(bottom_line("", w, accent));
         return InputView {
             lines,
             cursor_row: 1,
@@ -87,9 +87,9 @@ pub fn render(spec: &Spec<'_>, p: &Palette) -> InputView {
     let visible = body_rows + 1;
     let bottom_row = (starts + visible - 1).min(n - 1);
     for i in starts..bottom_row {
-        lines.push(bar_line(&wrapped.lines[i], w, p));
+        lines.push(bar_line(&wrapped.lines[i], w, accent));
     }
-    lines.push(bottom_line(&wrapped.lines[bottom_row], w, p));
+    lines.push(bottom_line(&wrapped.lines[bottom_row], w, accent));
 
     // The statusline takes the first row, scrolled rows come off the top, and both
     // body rows and the bottom edge carry a two-cell prefix.
@@ -103,30 +103,30 @@ pub fn render(spec: &Spec<'_>, p: &Palette) -> InputView {
 }
 
 /// A body row: `| content |`, left aligned, padded to the full width.
-fn bar_line(content: &str, w: usize, p: &Palette) -> Line<'static> {
+fn bar_line(content: &str, w: usize, accent: &Accent) -> Line<'static> {
     let inner = geometry::inner_width(w as u16);
     let (seg, seg_w) = text::take_width(content, inner);
     let pad = inner.saturating_sub(seg_w);
     Line::from(vec![
-        p.accent_span("| "),
+        accent.span("| "),
         Span::styled(seg, Style::new()),
         // Padding is spaces: the user types here.
         Span::styled(" ".repeat(pad), Style::new()),
-        p.accent_span(" |"),
+        accent.span(" |"),
     ])
 }
 
 /// The bottom edge: `+-{content}`, padding, `-+`. Both ends are one dash shorter
 /// than the statusline.
-fn bottom_line(content: &str, w: usize, p: &Palette) -> Line<'static> {
+fn bottom_line(content: &str, w: usize, accent: &Accent) -> Line<'static> {
     let inner = geometry::inner_width(w as u16);
     // Too wide is truncated by display width; the border never breaks.
     let (seg, seg_w) = text::take_width(content, inner);
     let pad = inner.saturating_sub(seg_w);
     Line::from(vec![
-        p.accent_span("+-"),
+        accent.span("+-"),
         Span::styled(seg, Style::new()),
         Span::styled(" ".repeat(pad), Style::new()),
-        p.accent_span("-+"),
+        accent.span("-+"),
     ])
 }

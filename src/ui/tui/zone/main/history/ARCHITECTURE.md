@@ -1,59 +1,54 @@
 # history — architecture
 
-Where the zone sits, what each file holds, and what it depends on. Current state only.
+What is here, what each file holds, who calls whom. Current state only.
 
 ## Files
 
-| file | holds | outside |
-|---|---|---|
-| `mod.rs` | the module list | private |
-| `zone.rs` | `HistoryZone`, `CLAIMS`, the frame pass, the asks it owes | private to `Main` |
-| `shape.rs` | `Block`, `Kind`, `Usage`: one row decoded | private |
-| `live.rs` | `Live`: the running turn's blocks, gathered from pieces | private |
-| `local.rs` | `Local`, `Slot`, `SlotKind`, `Level`, `Life` | private |
-| `view.rs` | `Viewport`, `Anchor`, `Dir`, the walk | private |
-| `segment.rs` | `Segment`, `Kind`, `split` — the source split by line | private |
-| `cache/` | `BlockCache`: rows per slot and their keys | private |
-| `render/` | painting: `block`, `cards`, `notice`, `text` | private |
+| path | holds |
+|---|---|
+| `mod.rs` | the module list and the re-export |
+| `shape.rs` | `Block`, `Kind`, `Usage`: one decoded block row |
+| `local.rs` | `Local`: the numbered slots; `Level`, `Life`, `SlotKind` |
+| `segment.rs` | `split`: one block's text into segments |
+| `line.rs` | `Row`, `Run`, `Ink`, `Lead`: a finished row and its color slots |
+| `wrap.rs` | natural line → width rows |
+| `fold.rs` | a long run of rows → head, placeholder, tail |
+| `paint/` | every block kind to natural rows |
+| `paint/prose.rs` | text segments, a whole markdown text, the thinking chain |
+| `paint/markdown.rs` | headings, lists, quotes, inline emphasis |
+| `paint/code.rs` | fenced code: syntect state, one line at a time |
+| `paint/table.rs` | tables, laid out at the width |
+| `paint/card/` | tool cards: the renderer interface and one file per tool family |
+| `paint/user.rs` | the user card |
+| `paint/todo.rs` | the pinned task list |
+| `paint/notice.rs` | a notice slot |
+| `paint/opts.rs` | `Opts`: fold switches, placeholder, cwd, budget |
+| `cache/text.rs` | segment natural rows per block |
+| `cache/rows.rs` | width rows per block, with the natural-line marks |
+| `cache/store.rs` | the two layers, their keys, the block classes |
+| `live.rs` | the growing tail and its per-block segment cache |
+| `view.rs` | the sight line, the seam, the window |
+| `zone.rs` | the zone: types, keys, the `SubZone` contract |
+| `feed.rs` | frames in: pieces, closed rounds, notices, config, structure |
+| `ask.rs` | which blocks to fetch |
+| `render.rs` | one frame: cache, window, accent at the exit |
 
-## What it exposes
+## Who calls whom
 
-Through `SubZone`: `claims`, `kinds`, `deliver_event`, `deliver_action`, `attach`, `detach`,
-`structure`, `request_height`, `assign`, `on_height_changed`, `take_shouts`, `hear`.
-
-To `Main`: `notice`, `focus`, `reset`, `render_rows`.
-
-## What it calls
-
-- `ui::tui::zone::{Frame, Turns, Request, Shout, name, Claim, Kind, SubZone, TermSize}`.
-- `ui::tui::TodoFold`, `ui::tui::theme::{HistoryTheme, Token, theme_epoch}`.
-- `text` for display width and wrapping.
-- `render::cards::tools` for the tool renderer table.
-
-## Who calls it
-
-`MainZone` is the only caller: `arbitrate` → `assign`, `settle` → `on_height_changed`, `render` →
-`render_rows`, `dispatch` → `deliver_action`, `event` → `deliver_event`, `structure` → `structure`,
-the bus → `hear` and `take_shouts`.
-
-## What it does not know
-
-The app, the input zone, the desk, the picker, the tree, the socket, the database, and the agent
-loop. Every ask leaves as a `Request`; every fact for another zone leaves as a `Shout`.
+- `zone::main::zone` calls `history::HistoryZone::render_rows(width, accent)` and the `SubZone` methods.
+- `history::render` drives `view::compose`, which asks the cache for one slot's rows at a time.
+- `history::paint::card` calls `paint::prose::inline` for the prose above a tool call, and `fold::fold` for its sections.
+- `paint::code` calls nothing above it; it owns the syntect tables.
 
 ## Must stay in sync
 
-1. `shape::Kind` and the wire's `type` column.
-2. `local::SlotKind` and the walk's height/separator rules.
-3. `segment::Kind` and the painter's per-segment branch.
-4. `cache::sync` keys with `theme_epoch`, width, working directory and the fold switches.
-5. `shout::name` values with the names this zone shouts.
-6. `structure()` and the local section: a slot lives while the structure owns its block.
-7. `CLAIMS` and the key handling in `deliver_action`.
+1. `line::Lead` and `wrap`: a folded row must become `Wrapped`, or the reader loses the marker.
+2. `cache::store::Class` and `render::block_rows`: a card painted as segments loses its frame.
+3. `view::Spot` and `cache::rows::Entry::row_of` / `spot_of`: the seam survives a resize only through the pair.
+4. `shape::Kind` and `paint`: a new block kind needs a painter.
+5. `feed.rs` and the config keys in `zone.rs`: one key read, one key asked for.
 
 ## Not wired
 
-1. `ask_turn` runs when the anchor's round and its neighbours are missing, but nothing asks for a
-   round whose rows the walk only partly reached.
-2. The cut-preserving re-layout on a resize is not built: `Viewport::on_resize` clamps the row.
-3. A live block is painted whole on every piece.
+1. The tool-specific stream animations: the running card is a static card.
+2. `next` slots render nothing and break no separator; that is intended, not a gap.

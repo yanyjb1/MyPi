@@ -25,7 +25,7 @@ To `Input`: nothing directly; the main zone carries `Reply` across.
 
 - `ui::tui::zone::{Frame, Request, TermSize, Claim, Kind, name}` and
   `super::desk::{Hire, Reply}`.
-- `ui::tui::action` for keys, `ui::tui::theme::Palette` for colors.
+- `ui::tui::action` for keys, `ui::tui::theme::Accent` for the accent.
 - `commands` for the command table and the `Candidate` shape.
 - `crate::git` is not called here; the statusline owns that.
 

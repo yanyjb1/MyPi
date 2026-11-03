@@ -25,7 +25,7 @@ To `Main`: `take_hire`, `take_exits`, `draft`, `knows_cwd`, `apply_reply`, `clea
 ## What it calls
 
 - `ui::tui::zone::{Frame, Request, TermSize, Claim, Kind, name}` and `text` for wrapping.
-- `ui::tui::action`, `ui::tui::theme::Palette`.
+- `ui::tui::action`, `ui::tui::theme::Accent`.
 - `commands` for the command table and completion candidates.
 - `super::desk::{Hire, Reply}` for what it asks the desk and what the desk hands back.
 
