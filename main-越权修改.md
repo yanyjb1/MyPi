@@ -4,7 +4,7 @@
 
 ### 触发
 
-用户要求"先看看历史区渲染的现状"，我给出说明后又自行把"排版与上色分离"落到代码，属于决策未成形就动手。
+用户要求「先看看历史区渲染的现状」，我给出说明后又自行把「排版与上色分离」落到代码，属于决策未成形就动手。
 
 ### 动过的文件
 
@@ -17,35 +17,10 @@
 
 ### 处置
 
-按用户规矩：不还原、不顺手补，原样留档并单独提交（WIP）。
+按用户规矩：不还原、不顺手补，原样留档并单独提交（`0044c5f`，WIP）。
 
-## 二、这批改动留下的遗留
+## 二、结案（2026-11-04）
 
-1. 树内不一致：`render::block`、`render::paint`、`view::compose`、`history::cache`、`history/zone.rs::render_rows` 仍按 `ratatui::Line` 走；`row::Laid` 只在 markdown / highlight 两侧接上，中间断着。
-2. 恢复一致所需的最小接线（未做）：
-   - `render::block` / `paint` 返回 `Vec<Laid>`；
-   - `view::compose` 的 `rows_of` 与返回值改为 `Laid`，空格行用 `Laid::empty()`；
-   - `cache` 存 `Vec<Laid>`；
-   - `history/zone.rs::render_rows` 在最终窗口上统一 `Laid::color(&theme)`。
-3. 尚未拍板的决策（决定后才可以继续）：
-   - 成品行类型放在哪个文件、叫什么；
-   - 谁负责上色（历史区出口 vs main 拼帧）；
-   - 缓存存排版成品还是已配色行（主题是否进缓存键）；
-   - 块的产行接口（尾部 N 行 vs 段区间）；
-   - 卡片（工具卡/用户卡/表格）是否也拆 Token，还是允许混入已配色行；
-   - 可变区是否与不可变区同一波做增量。
+`render/` 整片删除，渲染链换成段—自然行—宽行加两层缓存（`a160628`）。上表四个文件里，前两个已不存在；后两个的样式原样搬进了 `paint/markdown.rs` 与 `paint/code.rs`。
 
-## 三、其他遗留（本轮未处理，仅供盘点）
-
-- 工具专属渲染缺口：见 `main-todo.md`（web/context/memo/kairos/mcp/alias；`final` 不做）。
-- 非流式倒排渲染、段级增量重上色：未建。
-- `run` 仍每帧无条件重绘；`Term::poll` 固定 16ms。
-- `HistoryZone::request_height` 以 `u16::MAX` 当哨兵；三个子区都丢弃 `on_height_changed` 的返回值。
-- `name::RESIZE` 有人喊、没人听。
-- 主题模块仍是屎山（用户明确留到最后）：三套 token 并存、注释过期、`install_dirs` 无调用者（自定义主题目录永远加载不到）。
-- session 的 rewind 账本：`Incoming::Lost` 不清账（`src/ui/session/README.md` §3 第 4 条）。
-- `src/main.rs` 仍是旧后端调用，二进制编不过，TUI 无法冒烟。
-- 本轮 contract / app 投递 / 借键 / 视口 / 折叠 / 删死代码那一批改动，用户尚未首肯。
-## 四、结案（2026-11-04）
-
-这一批 WIP 已被整条渲染链的重写取代：`render/` 整片删除，换成段—自然行—宽行与两层缓存，第二节列的遗留与待定项全部作废。越权行为本身留档不动。
+越权行为本身留档不动。
