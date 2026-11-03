@@ -107,6 +107,7 @@ impl HistoryZone {
                 self.live.tool_start(call, name, args, intent);
             }
             "tool_progress" => self.live.tool_progress(call, text),
+            "wake" => self.live.wake(text),
             "tool_end" => {
                 let ok = content.get("ok").and_then(Value::as_bool).unwrap_or(false);
                 let result = content
@@ -126,18 +127,21 @@ impl HistoryZone {
             .push(Shout::new(name::BUSY, json!({"on": true})));
     }
 
-    /// A round closed: the tail has become blocks, so the tail goes.
+    /// A round closed: the tail hands its product over and stops growing.
     fn closed(&mut self, content: &Value) {
-        self.live.clear();
         self.shouts
             .push(Shout::new(name::BUSY, json!({"on": false})));
-        let Some(ranges) = content.get("ranges").and_then(ranges_of) else {
-            return;
-        };
-        for range in ranges {
-            let [lo, hi] = range;
+        let ranges = content
+            .get("ranges")
+            .and_then(ranges_of)
+            .unwrap_or_default();
+        let handed = self.handover(&ranges);
+        if !handed {
+            self.live.clear();
+        }
+        for [lo, hi] in ranges {
             let have = (lo..=hi).all(|id| self.blocks.contains_key(&id));
-            if have {
+            if have && !handed {
                 continue;
             }
             self.outbox
@@ -163,6 +167,13 @@ impl HistoryZone {
                     .push(Shout::new(name::USAGE, json!({"used": used})));
             }
             let fresh = id > self.landed;
+            let moved = self
+                .blocks
+                .get(&id)
+                .is_some_and(|old| old.kind != block.kind || old.text != block.text);
+            if moved {
+                self.cache.drop_block(id);
+            }
             self.blocks.insert(id, block);
             if !fresh {
                 continue;

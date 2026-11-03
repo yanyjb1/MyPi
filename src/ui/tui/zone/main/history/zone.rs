@@ -351,12 +351,29 @@ impl SubZone for HistoryZone {
     }
 
     fn hear(&mut self, event: &str, content: &Value) {
-        if event == name::CWD
-            && let Some(path) = content.get("path").and_then(Value::as_str)
-            && self.cwd != path
-        {
-            self.cwd.clear();
-            self.cwd.push_str(path);
+        match event {
+            name::CWD => {
+                if let Some(path) = content.get("path").and_then(Value::as_str)
+                    && self.cwd != path
+                {
+                    self.cwd.clear();
+                    self.cwd.push_str(path);
+                }
+            }
+            name::ECHO => {
+                if let Some(text) = content.get("text").and_then(Value::as_str) {
+                    self.live.echo(text);
+                }
+            }
+            name::RETRACT => {
+                self.live.retract();
+                let reason = content
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the message never opened a round");
+                self.notice(reason.to_string(), Level::Warn, Life::Short);
+            }
+            _ => {}
         }
     }
 }

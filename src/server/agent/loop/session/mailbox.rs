@@ -1,4 +1,4 @@
-//! The session's inbound line: two queues, one mechanism.
+//! The session's inbound: one wake queue, and one user slot the front end owns.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,11 +8,10 @@ use super::book::Message;
 
 struct Inner {
     wake: VecDeque<String>,
-    user: VecDeque<Message>,
+    send: Option<Message>,
 }
 
-/// Two queues: deterministic wake text, and user messages that may be changed
-/// or taken back before the loop reads them.
+/// The wake queue and the one user message a front end may rewrite until it is taken.
 pub struct Mailbox {
     inner: Mutex<Inner>,
     cv: Condvar,
@@ -23,7 +22,7 @@ impl Mailbox {
         Self {
             inner: Mutex::new(Inner {
                 wake: VecDeque::new(),
-                user: VecDeque::new(),
+                send: None,
             }),
             cv: Condvar::new(),
         }
@@ -38,36 +37,35 @@ impl Mailbox {
         self.cv.notify_all();
     }
 
-    pub fn push_user(&self, msg: Message) {
-        self.lock().user.push_back(msg);
+    /// Overwrite the slot whole; a message always carries a body.
+    pub fn write(&self, msg: Message) {
+        self.lock().send = Some(msg);
         self.cv.notify_all();
+    }
+
+    /// The front end takes its message back.
+    pub fn del(&self) {
+        self.lock().send = None;
     }
 
     pub fn take_wake(&self) -> Option<String> {
         self.lock().wake.pop_front()
     }
 
-    pub fn take_user(&self) -> Option<Message> {
-        self.lock().user.pop_front()
+    /// One message; taking the slot is clearing it.
+    pub fn take_send(&self) -> Option<Message> {
+        self.lock().send.take()
     }
 
     pub fn has_any(&self) -> bool {
         let g = self.lock();
-        !g.wake.is_empty() || !g.user.is_empty()
+        !g.wake.is_empty() || g.send.is_some()
     }
 
-    pub fn is_empty(&self) -> bool {
-        !self.has_any()
-    }
-
-    pub fn clear_user(&self) {
-        self.lock().user.clear();
-    }
-
-    /// Wait until either queue has something or the session is gone.
+    /// Wait until either the queue or the slot has something, or the session is gone.
     pub fn wait_any(&self, gone: &AtomicBool) {
         let mut g = self.lock();
-        while g.wake.is_empty() && g.user.is_empty() && !gone.load(Ordering::Acquire) {
+        while g.wake.is_empty() && g.send.is_none() && !gone.load(Ordering::Acquire) {
             g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
         }
     }

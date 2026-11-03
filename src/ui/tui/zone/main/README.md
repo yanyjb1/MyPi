@@ -33,7 +33,8 @@ One vocabulary: `(name, content)`. A sub-zone puts events in its own `shouts`; t
 the same; `flush` hands each to the other two and repeats until the queue is dry. A shouter never
 hears its own event, and a shout raised during delivery lands on the same queue instead of nesting.
 
-Names today: `resize`, `cwd`, `usage`, `busy`, `prefill` (`zone::contract::shout::name`).
+Names today: `resize`, `cwd`, `usage`, `busy`, `prefill`, `queue`, `echo`, `retract`
+(`zone::contract::shout::name`).
 
 ### Rows
 

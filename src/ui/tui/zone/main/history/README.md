@@ -31,7 +31,13 @@ Two classes of block:
 
 ### The live tail
 
-`live::Live` holds the blocks that have no id yet and are still growing. It keeps, per block, the finished segments' natural rows and a syntax painter for the open fence. It always sits below the last slot, and it is dropped whole when a round closes.
+`live::Live` holds the blocks that have no id yet and are still growing. It keeps, per block, the finished segments' natural rows and a syntax painter for the open fence. It always sits below the last slot.
+
+A round's `wake` pieces land here one block each, so every reminder keeps its own text. A message this front end put out is echoed here too: it leads the tail, above the reply, and a `retract` takes it back.
+
+### The handover
+
+When a round closes, its structure arrives as id ranges. If the tail holds exactly as many blocks as the ranges cover, the tail hands its product over instead of being dropped: each block takes its id in order, becomes a numbered slot, and the region above never reorders. Anything the tail never carried — and the fields only the stored row has — still comes back from `call blocks`; a row that differs from the handed-over block drops that block's cached rows.
 
 ### The cache
 
@@ -66,7 +72,9 @@ The thinking chain has its own copy (`Ctrl+T`) and so do tool cards (`Ctrl+O`). 
 
 ### What it shouts
 
-`busy` (`{on}`), `usage` (`{used}` on a block row that carries a token count) and `prefill` (`{text}` after a rewind). It hears `cwd`.
+`busy` (on for any round's first piece, off when a round closes), `usage` (`{used}` on a block row
+that carries a token count) and `prefill` (`{text}` after a rewind). It hears `cwd`, `echo` and
+`retract`; the last two are the front end's own message and its withdrawal.
 
 ## 2. Design intent
 
@@ -82,7 +90,7 @@ The thinking chain has its own copy (`Ctrl+T`) and so do tool cards (`Ctrl+O`). 
 2. Tool renderers for `context`, `memo`, `kairos`, `mcp`, `alias` are the fallback card.
 3. Every visible slot's rows are cloned per frame.
 4. A block holding a table skips the parsed layer, because column widths depend on the width.
-5. `src/main.rs` still calls the old backend, so the binary does not build and this zone cannot be run.
+5. A wake reminder has no style of its own: it is drawn as a notice row.
 
 ## 4. Config fields
 

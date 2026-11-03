@@ -10,11 +10,12 @@ Public surface:
 ```text
 Loop::new(writer, settings, ask, out, config) -> Loop
 Loop::book(Birth) -> Result<SessionId>
-Loop::deliver(session, Message) -> Result<Option<TurnId>>
+Loop::deliver(session, Message) -> Result<TurnId>
 Loop::interrupt(session)
 Loop::drop(session)
 Loop::change(session, Change) -> Result<()>
-Loop::mailbox(session) -> Result<Arc<Mailbox>>
+Loop::write_mail(session, Message) -> Result<()>
+Loop::clear_mail(session) -> Result<()>
 
 Birth = { session, provider, model, system, tools, compact, meta, cwd }   // tools = names
 Message = Submit { prefix, text, suffix } | Compact { retention, focus }
@@ -30,14 +31,16 @@ so a caller names one vocabulary. `Retention` is `Chars(n)` or `Blocks(n)`.
 
 `book` only opens the session; the caller has already written the `sessions` row and resolved the
 system prompt, the tool names and the compaction instruction. It also starts the turn scheduler and
-attaches the session's job service to `Source`. `deliver` opens a turn and returns its id, or queues
-the message when the session is busy; a sub-session refuses it outright.
+attaches the session's job service to `Source`. `deliver` opens a turn and returns its id; a busy
+session and a sub-session both refuse it, nothing is queued.
 
-`Mailbox` has two queues: wake text from tool results, and user messages. Wake is deterministic and
-is written as a `wake` block; user messages may be taken back before the loop reads them. A turn
-stops when the user interrupts, or when both queues are empty and the model asks for no tools. A
-sub-session whose turn ends without `final submit` gets one more user message, up to three, before
-the turn is allowed to end.
+`Mailbox` holds a wake queue and one user slot. A wake text is written as its own `wake` block when
+the loop takes it; consecutive wake blocks are joined into one user message only when a request is
+assembled. The slot is written whole by a front end, taken by the loop at a blocking point, and
+cleared by the take; the turn it opens is named after the slot. A turn stops when the user
+interrupts, or when the wake queue is empty and the model asks for no tools. A sub-session whose
+turn ends without `final submit` gets one more user message, up to three, before the turn is
+allowed to end.
 
 `job` is the scheduler behind every background task: a per-session service, a concurrency pool, a
 cron clock, one output file per run, and a wake that starts a turn. A tool describes a job and holds

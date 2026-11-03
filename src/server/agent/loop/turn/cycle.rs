@@ -15,6 +15,7 @@ use crate::server::agent::r#loop::session::handle::Handle;
 use crate::server::agent::r#loop::session::history::Transcript;
 use crate::server::agent::r#loop::session::live::Live;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
+use crate::server::agent::request::live::{Element, Event, Stream};
 use crate::server::agent::tools::contract::call::BatchInput;
 use crate::server::agent::tools::contract::job::{JobRunner, JobSpec, Schedule};
 use crate::server::agent::tools::contract::output::Effect;
@@ -90,7 +91,7 @@ pub fn run(
             stop = Stop::User;
             break;
         }
-        drain(inner, handle, turn)?;
+        let appended = drain(inner, handle, turn)?;
         if fence.hit() {
             stop = Stop::Fence;
             break;
@@ -122,7 +123,7 @@ pub fn run(
 
         if lap.calls.is_empty() {
             blocks.flush()?;
-            if handle.mailbox.is_empty() {
+            if !appended {
                 if let Some(text) = child.as_ref().and_then(|child| child.nag()) {
                     pen::turn::append_user(
                         &inner.writer,
@@ -330,12 +331,16 @@ fn broken(inner: &Arc<Inner>, handle: &Handle, turn: i64, usage: Usage, baseline
     );
 }
 
-fn drain(inner: &Arc<Inner>, handle: &Handle, turn: i64) -> Result<()> {
+/// Take every wake text into this turn. `true` = something was appended.
+fn drain(inner: &Arc<Inner>, handle: &Handle, turn: i64) -> Result<bool> {
+    let mut appended = false;
     while let Some(text) = handle.mailbox.take_wake() {
-        pen::turn::append_wake(&inner.writer, turn, text)?;
+        pen::turn::append_wake(&inner.writer, turn, text.clone())?;
+        let _ = inner.out.send(Event {
+            session: handle.id,
+            element: Element::Stream(Stream::Wake(text)),
+        });
+        appended = true;
     }
-    while let Some(msg) = handle.mailbox.take_user() {
-        pen::turn::append_user(&inner.writer, turn, msg)?;
-    }
-    Ok(())
+    Ok(appended)
 }

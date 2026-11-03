@@ -28,4 +28,10 @@ pub mod name {
     pub const BUSY: &str = "busy";
     /// A rewind put a message back: the editor takes it. `{text}`.
     pub const PREFILL: &str = "prefill";
+    /// The pending queue changed size. `{count}`.
+    pub const QUEUE: &str = "queue";
+    /// A message the front end put out: history draws it now. `{text, prefix, suffix}`.
+    pub const ECHO: &str = "echo";
+    /// That message opened nothing: history takes the echo back. `{reason}`.
+    pub const RETRACT: &str = "retract";
 }

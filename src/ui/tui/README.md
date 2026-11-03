@@ -36,6 +36,13 @@ without hearing every text delta.
 The app hands the size to the zone it starts, and again in `local / resized` when the terminal
 changes. Nothing else carries a size; a zone keeps the last one it was given.
 
+### Busy and idle
+
+`busy` has several callers: the input zone when it puts a message out, the history zone when any
+round says anything at all. `idle` has one: the history zone, when a round closes. A zone therefore
+reads the last shout and never keeps a second opinion; a front end that guesses idle wrongly writes
+to the slot instead of submitting, and the server opens the round anyway.
+
 ### Handover
 
 A zone gives the screen up by returning `Outcome`:

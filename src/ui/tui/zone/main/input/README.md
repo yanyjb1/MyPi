@@ -23,13 +23,16 @@ finish itself.
 | `cursor_col`, `cursor_row` | the cursor inside the container, recomputed on render |
 | `statusline: StatusLine` | the deco table and the row engine |
 | `data: Data` | model, name, directory, context size and window, money, busy |
+| `queue: Queue` | sentences sent while a round was running, head first |
+| `in_flight` | the sentence a submit put out, until its reply |
+| `last_mailbox_turn` | the slot-opened turn the queue has accounted for |
 | `shouts` | events this zone put out |
 
 ### Claims
 
 Every key the editor acts on is named: `AnyChar`, `Paste`, `Enter` (plain, alt, shift), `Esc`, `Tab`,
-`Backspace`, `Delete`, the four arrow keys (plain), `Left`/`Right`/`Home`/`End` with ctrl. The
-history zone is checked first, so `Ctrl+T`, `Ctrl+O` and `Ctrl+↑↓` never reach this table.
+`Backspace`, `Delete`, the four arrow keys (plain), `Up` with alt, `Left`/`Right`/`Home`/`End` with
+ctrl. The history zone is checked first, so `Ctrl+T`, `Ctrl+O` and `Ctrl+↑↓` never reach this table.
 
 ### Editor
 
@@ -52,7 +55,10 @@ submits the line. Everything else becomes `ExitRequest::Submit`.
 
 - `Enter` submits when the box is non-empty and no round is running.
 - While a round is running and the box is non-empty, the first `Enter` interrupts; a second inside
-  the window submits.
+  the window takes the line as a message.
+- A message taken while a round is running joins the queue and is written to the server's slot; it
+  opens nothing now. A reply that opened nothing puts the text back and shouts `retract`.
+- `Alt+Up` takes the newest queued sentence back into the box, above what is already there.
 - `Esc` interrupts. A second un-lent `Esc` inside the window asks for the tree.
 - `Alt+Enter` / `Shift+Enter` insert a newline; `Ctrl+J` is the fallback.
 
@@ -61,6 +67,16 @@ submits the line. Everything else becomes `ExitRequest::Submit`.
 After every edit the zone recomputes `hang`. A fresh hang sets `pending_hire = Completion`; the main
 zone seats the desk and feeds it the editor's text, cursor and column. A hand's `Reply::Replace` is
 applied with `replace_range`.
+
+### The pending queue
+
+`queue::Queue` keeps the sentences in order and mirrors the head into the server's one slot: the
+head is written when the queue stops being empty, the next head is written when a `mailbox` turn
+starts, and clearing the last one clears the slot. `Alt+Up` pops the tail, so the head only moves
+when the queue empties.
+
+The only `busy` source that matters is the bus: history shouts `busy` when any round says anything
+and `idle` when a round closes, so a round another party opened is known too.
 
 ### The data it reads
 

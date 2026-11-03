@@ -23,7 +23,6 @@ The only vocabulary the app and the three major zones share.
 
 | method | meaning |
 |---|---|
-| `name` | the registry name |
 | `keys` | the actions it consumes |
 | `kinds` | the frame classes it handles; `local` is never listed |
 | `start` | the app gives it the screen: size and the memo |
@@ -65,7 +64,8 @@ One event a sub-zone (or the main zone) puts out: `name` and `content`. The main
 to the other two and repeats until the queue is dry; a shouter never hears its own event, and a
 shout raised while delivering lands on the same queue. Unknown names are ignored.
 
-The names in use: `resize`, `cwd` (main), `usage`, `busy`, `prefill` (history and input).
+The names in use: `resize`, `cwd` (main), `usage`, `busy`, `prefill` (history and input), `queue`,
+`echo`, `retract` (input to history and the desk).
 
 ### `Outcome`
 

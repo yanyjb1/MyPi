@@ -3,6 +3,7 @@
 
 mod ctx;
 mod editor;
+mod queue;
 mod render;
 mod route;
 mod semantics;
@@ -18,6 +19,7 @@ use crate::ui::tui::zone::{Claim, Frame, Request, Shout, SubZone, TermSize, name
 use serde_json::Value;
 
 use editor::{Editor, Effect, History};
+use queue::{Outgoing, Queue};
 use statusline::{Setup, StatusLine, StatusTheme};
 
 pub use ctx::Money;
@@ -70,6 +72,12 @@ pub struct InputZone {
     pub goal_col: Option<usize>,
     /// Exit requests, in order: taken by the main zone.
     pending_exits: Vec<ExitRequest>,
+    /// Sentences sent while a round was running, head first.
+    queue: Queue,
+    /// The sentence a submit put out, kept only until its reply says it opened nothing.
+    in_flight: Option<String>,
+    /// The last slot-opened turn this queue has accounted for.
+    last_mailbox_turn: Option<i64>,
     /// When the last un-lent Esc fired: another one inside the window opens the tree.
     esc_armed: Option<std::time::Instant>,
     /// When Enter was last pressed mid-round: another one inside the window submits.
@@ -102,6 +110,9 @@ impl Default for InputZone {
             pending_hire: None,
             goal_col: None,
             pending_exits: Vec::new(),
+            queue: Queue::default(),
+            in_flight: None,
+            last_mailbox_turn: None,
             esc_armed: None,
             enter_armed: None,
             cursor_col: geometry::BORDER_COLS as u16,
@@ -144,6 +155,14 @@ impl InputZone {
         Claim::Key(Key {
             code: KeyCode::Esc,
             mods: PLAIN,
+        }),
+        Claim::Key(Key {
+            code: KeyCode::Up,
+            mods: Mods {
+                ctrl: false,
+                alt: true,
+                shift: false,
+            },
         }),
         Claim::Key(Key {
             code: KeyCode::Tab,
@@ -334,8 +353,29 @@ impl InputZone {
                 let text = self.editor.expanded_text();
                 if text.trim().is_empty() {
                     Effect::Nothing
+                } else if self.data.busy && matches!(route::classify(&text), route::Route::Message)
+                {
+                    // A round is running: the sentence waits in the slot, in order.
+                    self.history.push(self.editor.text());
+                    self.editor.clear();
+                    self.finished = true;
+                    self_managed = true;
+                    if let Some(request) = self.queue.push(Outgoing::new(text)) {
+                        self.outbox.push(request);
+                    }
+                    self.shouts.push(Shout::new(
+                        name::QUEUE,
+                        serde_json::json!({"count": self.queue.len()}),
+                    ));
+                    Effect::Content
                 } else {
-                    self.route_out(&text);
+                    if self.route_out(&text) {
+                        self.in_flight = Some(text.clone());
+                        self.shouts.push(Shout::new(
+                            name::ECHO,
+                            serde_json::json!({"text": text, "prefix": null, "suffix": null}),
+                        ));
+                    }
                     self.history.push(self.editor.text());
                     self.editor.clear();
                     self.finished = true;
@@ -344,6 +384,26 @@ impl InputZone {
                     self.shouts
                         .push(Shout::new(name::BUSY, serde_json::json!({"on": true})));
                     Effect::Content
+                }
+            }
+            I::TakeBack => {
+                // The newest queued sentence comes back above whatever is already in the box.
+                let (taken, request) = self.queue.pop();
+                if let Some(request) = request {
+                    self.outbox.push(request);
+                }
+                self.shouts.push(Shout::new(
+                    name::QUEUE,
+                    serde_json::json!({"count": self.queue.len()}),
+                ));
+                match taken {
+                    Some(msg) => {
+                        let sep = if self.editor.is_empty() { "" } else { "\n" };
+                        self.editor
+                            .replace_range(0, 0, &format!("{}{sep}", msg.text));
+                        Effect::Content
+                    }
+                    None => Effect::Nothing,
                 }
             }
             I::ClearInput => {
@@ -369,21 +429,22 @@ impl InputZone {
         }
     }
 
-    /// One submitted line: a command the table knows, or a message.
-    fn route_out(&mut self, text: &str) {
+    /// One submitted line: a command the table knows, or a message. `true` = it leaves as a turn.
+    fn route_out(&mut self, text: &str) -> bool {
         let route::Route::Command(meta, args) = route::classify(text) else {
             self.pending_exits
                 .push(ExitRequest::Submit(text.to_string()));
-            return;
+            return true;
         };
         if self.local_command(meta, args) {
-            return;
+            return false;
         }
         if meta.name == crate::commands::Usage::META.name {
             self.pending_hire = Some(Hire::Usage);
         }
         self.pending_exits
             .push(ExitRequest::Submit(text.to_string()));
+        true
     }
 
     /// The commands this front end runs itself. `false` = not one of ours.
@@ -419,6 +480,9 @@ impl InputZone {
         self.esc_armed = None;
         self.enter_armed = None;
         self.pending_exits.clear();
+        self.queue.clear();
+        self.in_flight = None;
+        self.last_mailbox_turn = None;
     }
 
     /// What a rewind put back: the text goes in as it was, cursor at the end. An
@@ -523,7 +587,55 @@ impl InputZone {
             ("call", "usage") => {
                 self.read_usage(&frame.content);
             }
+            ("subscribe", "submit") if frame.content.get("error").is_some() => {
+                out.extend(self.refused(&frame.content));
+            }
+            ("stream", "mailbox") => {
+                out.extend(self.opened(&frame.content));
+            }
             _ => {}
+        }
+        out
+    }
+
+    /// The reply to a submit that opened nothing: the sentence comes back, and says why.
+    fn refused(&mut self, content: &Value) -> Vec<Request> {
+        let reason = content
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("the session is still in a turn")
+            .to_string();
+        self.shouts.push(Shout::new(
+            name::RETRACT,
+            serde_json::json!({"reason": reason}),
+        ));
+        if let Some(text) = self.in_flight.take() {
+            self.prefill(&text);
+        }
+        Vec::new()
+    }
+
+    /// The slot became a turn: the head left the queue, and the next one takes the slot.
+    fn opened(&mut self, content: &Value) -> Vec<Request> {
+        let Some(turn) = content.get("turn").and_then(Value::as_i64) else {
+            return Vec::new();
+        };
+        if self.last_mailbox_turn == Some(turn) {
+            return Vec::new();
+        }
+        self.last_mailbox_turn = Some(turn);
+        let (taken, request) = self.queue.took();
+        let out: Vec<Request> = request.into_iter().collect();
+        self.shouts.push(Shout::new(
+            name::QUEUE,
+            serde_json::json!({"count": self.queue.len()}),
+        ));
+        if let Some(msg) = taken {
+            self.shouts.push(Shout::new(
+                name::ECHO,
+                serde_json::json!({"text": msg.text, "prefix": msg.prefix, "suffix": msg.suffix}),
+            ));
         }
         out
     }
@@ -639,6 +751,9 @@ impl SubZone for InputZone {
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
         self.data = Data::default();
+        self.queue.clear();
+        self.in_flight = None;
+        self.last_mailbox_turn = None;
         self.outbox
             .push(Request::call("usage", serde_json::json!({})));
     }
@@ -654,6 +769,9 @@ impl SubZone for InputZone {
         self.finished = true;
         self.scroll = 0;
         self.data = Data::default();
+        self.queue.clear();
+        self.in_flight = None;
+        self.last_mailbox_turn = None;
     }
 
     fn request_height(&self, term: TermSize) -> u16 {

@@ -45,6 +45,8 @@ pub enum Intent {
     ClearInput,
     // Submit the current input.
     Submit,
+    // Take the newest queued sentence back into the box.
+    TakeBack,
     // Unrecognized; ignore.
     None,
 }
@@ -104,9 +106,11 @@ pub fn translate(key: Key) -> Intent {
                 Intent::Right
             }
         }
-        // Ctrl+arrows belong to the history zone.
+        // Ctrl+arrows belong to the history zone; Alt+Up takes a queued sentence back.
         KeyCode::Up => {
-            if ctrl {
+            if alt {
+                Intent::TakeBack
+            } else if ctrl {
                 Intent::None
             } else {
                 Intent::Up

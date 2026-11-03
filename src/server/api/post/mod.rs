@@ -6,6 +6,7 @@ pub(crate) mod delete;
 pub(crate) mod emit;
 pub(crate) mod init;
 pub(crate) mod interrupt;
+pub(crate) mod mailbox;
 pub(crate) mod name;
 pub(crate) mod rewind;
 pub(crate) mod switch;

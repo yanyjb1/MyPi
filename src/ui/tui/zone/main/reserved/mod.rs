@@ -4,7 +4,7 @@ mod hand;
 mod hands;
 mod pools;
 
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use super::desk::{Hire, Reply};
@@ -36,6 +36,8 @@ pub struct ReservedZone {
     cwd: String,
     /// The name pools, once the session has answered.
     pools: Option<Pools>,
+    /// Sentences waiting in the slot, as the input zone counts them.
+    queued: usize,
     /// The pools were asked for; one ask per attachment.
     asked: bool,
     /// Frames this zone owes the session.
@@ -91,6 +93,22 @@ impl ReservedZone {
         }
     }
 
+    /// The idle line: how many sentences wait, or one blank row.
+    fn idle_row(&self, accent: &Accent) -> Line<'static> {
+        if self.queued == 0 {
+            return Line::from("");
+        }
+        let noun = if self.queued == 1 {
+            "message"
+        } else {
+            "messages"
+        };
+        Line::from(vec![
+            accent.span(format!("{} {noun} queued", self.queued)),
+            Span::raw(", alt+up to edit."),
+        ])
+    }
+
     /// A reply the editor has to apply.
     pub fn take_reply(&mut self) -> Option<Reply> {
         self.reply.take()
@@ -122,7 +140,7 @@ impl ReservedZone {
         self.settle();
         let rows = self.want.max(IDLE_ROWS);
         let Some(who) = self.on_duty else {
-            return vec![Line::from("")];
+            return vec![self.idle_row(accent)];
         };
         self.hand(who).draw(term.cols, rows, accent)
     }
@@ -217,6 +235,12 @@ impl SubZone for ReservedZone {
 
     fn hear(&mut self, event: &str, content: &Value) {
         match event {
+            name::QUEUE => {
+                self.queued = content
+                    .get("count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default() as usize;
+            }
             name::CWD => {
                 if let Some(path) = content.get("path").and_then(Value::as_str) {
                     self.cwd.clear();

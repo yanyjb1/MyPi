@@ -6,10 +6,12 @@ use std::sync::Arc;
 use anyhow::Context;
 
 use mypi::cli::Cli;
-use mypi::ipc::endpoint::{self, Endpoint};
+use mypi::ipc::endpoint::{self, Endpoint, Kind};
 use mypi::ipc::server;
 use mypi::server::api::Api;
-use mypi::server::config::Config;
+use mypi::server::config::{
+    Config, KEY_CONFIG_SERVER_PLATFORM_IPC, KEY_CONFIG_SERVER_PLATFORM_TIMEZONE,
+};
 use mypi::server::platform::time;
 use mypi::server::storage;
 use mypi::ui::tui;
@@ -29,15 +31,13 @@ fn main() -> anyhow::Result<()> {
     }
 
     let cfg = Config::load()?;
-    let kind = cfg.app.server.platform.ipc.cost();
-    let endpoint = Endpoint::for_db(&db, kind);
+    let endpoint = Endpoint::for_db(&db, ipc_kind(&cfg));
     let file = Endpoint::file_path(&db);
     let Some(claim) = server::claim(&db)? else {
         anyhow::bail!("another mypi owns {}", db.display());
     };
-    time::init(cfg.app.server.platform.timezone.as_deref());
-    let batch = cfg.app.server.storage.batch_tools;
-    let api = Arc::new(Api::open(db.clone(), cfg, batch)?);
+    init_time(&cfg);
+    let api = Arc::new(Api::open(db.clone(), cfg)?);
     let bound = server::bind(api, &db, endpoint, claim)?;
     let mut front = std::process::Command::new(std::env::current_exe()?)
         .env("MYPI_ENDPOINT", &file)
@@ -54,16 +54,32 @@ fn run_server(db: &Path) -> anyhow::Result<()> {
     let Some(claim) = server::claim(db)? else {
         anyhow::bail!("another mypi owns {}", db.display());
     };
-    time::init(cfg.app.server.platform.timezone.as_deref());
-    let kind = cfg.app.server.platform.ipc.cost();
-    let endpoint = Endpoint::for_db(db, kind);
-    let batch = cfg.app.server.storage.batch_tools;
-    server::run(
-        Api::open(db.to_path_buf(), cfg, batch)?,
-        db,
-        endpoint,
-        claim,
-    )
+    init_time(&cfg);
+    let endpoint = Endpoint::for_db(db, ipc_kind(&cfg));
+    server::run(Api::open(db.to_path_buf(), cfg)?, db, endpoint, claim)
+}
+
+/// The endpoint kind this process asks for.
+fn ipc_kind(cfg: &Config) -> Kind {
+    match cfg
+        .get(KEY_CONFIG_SERVER_PLATFORM_IPC, None)
+        .ok()
+        .and_then(|value| value.as_text().map(str::to_string))
+        .as_deref()
+    {
+        Some("unix") => Kind::Unix,
+        Some("pipe") => Kind::Pipe,
+        _ => Kind::of_this_system(),
+    }
+}
+
+/// The time zone by name; an unset key leaves the system's.
+fn init_time(cfg: &Config) {
+    let zone = cfg
+        .get(KEY_CONFIG_SERVER_PLATFORM_TIMEZONE, None)
+        .ok()
+        .and_then(|value| value.as_text().map(str::to_string));
+    time::init(zone.as_deref());
 }
 
 /// The front end's own process, once the server is reachable.

@@ -9,14 +9,13 @@ use anyhow::{Context, Result, bail};
 
 use super::change::{self, Change};
 use super::handle::Handle;
-use super::mailbox::Mailbox;
 use super::settings::Settings;
 use crate::server::agent::r#loop::job;
 use crate::server::agent::r#loop::pen;
 use crate::server::agent::r#loop::turn;
 use crate::server::agent::r#loop::turn::ask::Ask;
 use crate::server::agent::r#loop::turn::cycle::Mode;
-use crate::server::agent::request::live::Event;
+use crate::server::agent::request::live::{Element, Event, Stream};
 use crate::server::agent::tools::contract::call::Batch;
 use crate::server::agent::tools::contract::view::Source;
 use crate::server::storage::Writer;
@@ -163,32 +162,27 @@ impl Loop {
         Ok(id)
     }
 
-    /// Deliver one message. A busy session queues it for its current turn.
-    pub fn deliver(&self, session: i64, msg: Message) -> Result<Option<i64>> {
+    /// Deliver one message: a turn opens now, or the call fails. Nothing is queued here.
+    pub fn deliver(&self, session: i64, msg: Message) -> Result<i64> {
         if Source::child(self.inner.source.as_ref(), session).is_some() {
             bail!("session {session} is a sub-session; it takes no messages");
         }
         let handle = self.handle(session)?;
         if handle.busy.load(Ordering::Acquire) {
-            if matches!(&msg, Message::Compact { .. }) {
-                bail!("session {} is already in a turn", handle.id);
-            }
-            handle.mailbox.push_user(msg);
-            return Ok(None);
+            bail!("session {} is already in a turn", handle.id);
         }
-        let start = match msg {
-            Message::Submit {
-                prefix,
-                text,
-                suffix,
-            } => pen::turn::Start::User {
-                prefix,
-                text,
-                suffix,
-            },
-            Message::Compact { retention, focus } => pen::turn::Start::Compact { retention, focus },
-        };
-        start_turn(&self.inner, &handle, start).map(Some)
+        start_turn(&self.inner, &handle, start_of(msg), false)
+    }
+
+    /// The front end's slot: written whole, taken by the loop, cleared by the front end.
+    pub fn write_mail(&self, session: i64, msg: Message) -> Result<()> {
+        self.handle(session)?.mailbox.write(msg);
+        Ok(())
+    }
+
+    pub fn clear_mail(&self, session: i64) -> Result<()> {
+        self.handle(session)?.mailbox.del();
+        Ok(())
     }
 
     pub fn interrupt(&self, session: i64) {
@@ -209,10 +203,6 @@ impl Loop {
             &self.inner.writer,
             self.inner.settings.scrooge,
         )
-    }
-
-    pub fn mailbox(&self, session: i64) -> Result<Arc<Mailbox>> {
-        Ok(self.handle(session)?.mailbox.clone())
     }
 
     /// Is this session on the table?
@@ -253,6 +243,7 @@ pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Res
             text: start,
             suffix: None,
         },
+        false,
     )?;
     Ok(handle)
 }
@@ -288,14 +279,16 @@ fn schedule(weak: Weak<Inner>, handle: Arc<Handle>) {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        let Some(start) = next_start(&handle) else {
+        let Some(next) = next_start(&handle) else {
             continue;
         };
+        let queued = next.queued();
+        let start = next.start();
         let Some(inner) = weak.upgrade() else {
             break;
         };
         if !handle.busy.load(Ordering::Acquire) {
-            if let Err(e) = start_turn(&inner, &handle, start.clone()) {
+            if let Err(e) = start_turn(&inner, &handle, start.clone(), queued) {
                 crate::server::platform::log::error(
                     "loop",
                     format!("session {}: queued mail did not start: {e:#}", handle.id),
@@ -308,7 +301,12 @@ fn schedule(weak: Weak<Inner>, handle: Arc<Handle>) {
     }
 }
 
-fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start) -> Result<i64> {
+fn start_turn(
+    inner: &Arc<Inner>,
+    handle: &Arc<Handle>,
+    start: pen::turn::Start,
+    queued: bool,
+) -> Result<i64> {
     if handle
         .busy
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -321,6 +319,10 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
         bail!("session {} is gone", handle.id);
     }
     handle.stop.store(false, Ordering::Release);
+    let wake = match &start {
+        pen::turn::Start::Wake { text } => Some(text.clone()),
+        _ => None,
+    };
     let mode = mode_of(&start);
     let live = handle.take_live(&inner.dir);
     let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
@@ -332,6 +334,15 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
             return Err(e);
         }
     };
+    if queued {
+        announce(inner, handle.id, turn);
+    }
+    if let Some(text) = wake {
+        let _ = inner.out.send(Event {
+            session: handle.id,
+            element: Element::Stream(Stream::Wake(text)),
+        });
+    }
     let inner = inner.clone();
     let thread_handle = handle.clone();
     let spawned = std::thread::Builder::new()
@@ -346,15 +357,22 @@ fn start_turn(inner: &Arc<Inner>, handle: &Arc<Handle>, start: pen::turn::Start)
                         if thread_handle.gone.load(Ordering::Acquire) {
                             break;
                         }
-                        let Some(start) = next_start(&thread_handle) else {
+                        let Some(next) = next_start(&thread_handle) else {
                             break;
                         };
+                        let queued = next.queued();
+                        let start = next.start();
                         thread_handle.stop.store(false, Ordering::Release);
                         mode = mode_of(&start);
                         let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
                         let model = Some((live.provider.clone(), live.model.clone()));
                         match pen::turn::open(&inner.writer, thread_handle.id, start, &cwd, model) {
-                            Ok(next) => current = next,
+                            Ok(next) => {
+                                if queued {
+                                    announce(&inner, thread_handle.id, next);
+                                }
+                                current = next;
+                            }
                             Err(e) => {
                                 crate::server::platform::log::error(
                                     "loop",
@@ -396,15 +414,13 @@ fn requeue(handle: &Handle, start: pen::turn::Start) {
             prefix,
             text,
             suffix,
-        } => handle.mailbox.push_user(Message::Submit {
+        } => handle.mailbox.write(Message::Submit {
             prefix,
             text,
             suffix,
         }),
         pen::turn::Start::Compact { retention, focus } => {
-            handle
-                .mailbox
-                .push_user(Message::Compact { retention, focus });
+            handle.mailbox.write(Message::Compact { retention, focus });
         }
     }
 }
@@ -419,22 +435,53 @@ fn mode_of(start: &pen::turn::Start) -> Mode {
     }
 }
 
-fn next_start(handle: &Handle) -> Option<pen::turn::Start> {
-    if let Some(text) = handle.mailbox.take_wake() {
-        return Some(pen::turn::Start::Wake { text });
-    }
-    match handle.mailbox.take_user()? {
+/// One message as the turn it opens.
+fn start_of(msg: Message) -> pen::turn::Start {
+    match msg {
         Message::Submit {
             prefix,
             text,
             suffix,
-        } => Some(pen::turn::Start::User {
+        } => pen::turn::Start::User {
             prefix,
             text,
             suffix,
-        }),
-        Message::Compact { retention, focus } => {
-            Some(pen::turn::Start::Compact { retention, focus })
+        },
+        Message::Compact { retention, focus } => pen::turn::Start::Compact { retention, focus },
+    }
+}
+
+/// Tell the api that the slot turned into this turn, so its door is named after the slot.
+fn announce(inner: &Arc<Inner>, session: i64, turn: i64) {
+    let _ = inner.out.send(Event {
+        session,
+        element: Element::Mailbox { turn },
+    });
+}
+
+/// What the scheduler takes next: a wake text, or the front end's one message.
+enum Next {
+    Wake(String),
+    Send(Message),
+}
+
+impl Next {
+    /// `true` = this came from the front end's slot.
+    fn queued(&self) -> bool {
+        matches!(self, Next::Send(_))
+    }
+
+    fn start(self) -> pen::turn::Start {
+        match self {
+            Next::Wake(text) => pen::turn::Start::Wake { text },
+            Next::Send(msg) => start_of(msg),
         }
     }
+}
+
+fn next_start(handle: &Handle) -> Option<Next> {
+    if let Some(text) = handle.mailbox.take_wake() {
+        return Some(Next::Wake(text));
+    }
+    handle.mailbox.take_send().map(Next::Send)
 }

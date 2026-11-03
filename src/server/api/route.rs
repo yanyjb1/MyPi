@@ -42,6 +42,7 @@ pub(crate) fn post(api: &Api, conn: u64, viewer: &str, frame: &Frame) -> Result<
         "switch" => post::switch::apply(api, viewer, ask),
         "delete" => post::delete::apply(api, viewer, ask),
         "interrupt" => post::interrupt::apply(api, viewer, ask),
+        "mailbox" => post::mailbox::apply(api, conn, viewer, ask),
         "rewind" => post::rewind::apply(api, viewer, ask),
         "default_model" => post::default_model::apply(api, ask),
         other => Err(Refuse::Unknown(format!("no such name: {other}"))),

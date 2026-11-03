@@ -18,6 +18,7 @@ leaves before another sits down.
 | `reply: Option<Reply>` | a replacement waiting for the input zone |
 | `cwd: String` | the workspace paths complete against |
 | `pools: Option<Pools>` | the model and profile names |
+| `queued: usize` | sentences waiting in the slot, as the input zone counts them |
 | `outbox: Vec<Request>` | frames the desk owes the session |
 
 `Hire` is `Completion` or `Usage`. `ReservedZone::CLAIMS` is empty: the desk only borrows keys
@@ -55,6 +56,9 @@ A hand also has:
 - On attach the desk asks `call pools` once and keeps the answer; the completion hand gets it.
 - Hiring the usage panel asks `call usage`; the panel decodes `groups` and keeps only what it draws.
 - The desk hears `cwd` from the bus and hands it to the hand on duty.
+- The desk hears `queue` (`{count}`) and keeps the number. Idle, that number is the one row it
+  draws: `N messages queued, alt+up to edit.`; with no hand on duty and nothing queued, the row is
+  blank. A hand on duty owns the row and hides the count.
 
 ### Lifecycle
 

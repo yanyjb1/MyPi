@@ -9,12 +9,16 @@ pub struct Event {
     pub element: Element,
 }
 
-/// The three kinds that share one channel: the stream, a notice, a tool's state.
+/// The kinds that share one channel: the stream, a notice, a tool's state, a turn opening.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Element {
     Stream(Stream),
     Notice(Notice),
     Tool(ToolEvent),
+    /// The front end's slot became this turn; the api names the frames after it.
+    Mailbox {
+        turn: i64,
+    },
 }
 
 /// One piece of the reply as it arrives, or the end of a block.
@@ -29,6 +33,8 @@ pub enum Stream {
     },
     /// One block ends here.
     Boundary,
+    /// One wake message: its own block, so each reminder keeps its own text.
+    Wake(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -30,6 +30,8 @@ struct Active {
 struct State {
     conns: HashMap<u64, Entry>,
     active: HashMap<i64, Active>,
+    /// The viewer that put a message in the slot, waiting for the turn it opens.
+    pending: HashMap<i64, String>,
     buffers: HashMap<i64, Vec<Frame>>,
 }
 
@@ -138,6 +140,7 @@ impl Relay {
         if let Some(entry) = state.conns.get_mut(&conn) {
             entry.session = Some(session);
         }
+        state.pending.remove(&session);
         state.active.insert(
             session,
             Active {
@@ -146,6 +149,20 @@ impl Relay {
                 viewer: viewer.to_string(),
             },
         );
+    }
+
+    /// Remember who wrote the slot; the turn it opens is named after the slot, nobody else.
+    pub(crate) fn note_mail(&self, conn: u64, session: i64, viewer: &str) {
+        let mut state = self.state();
+        if let Some(entry) = state.conns.get_mut(&conn) {
+            entry.session = Some(session);
+        }
+        state.pending.insert(session, viewer.to_string());
+    }
+
+    /// The slot was cleared before the loop took it: nothing is owed a turn.
+    pub(crate) fn drop_mail(&self, session: i64) {
+        self.state().pending.remove(&session);
     }
 
     /// Only the viewer that opened the turn may change the session while it runs.
@@ -176,6 +193,7 @@ impl Relay {
         let mut state = self.state();
         state.buffers.remove(&session);
         state.active.remove(&session);
+        state.pending.remove(&session);
         for entry in state.conns.values_mut() {
             if entry.session == Some(session) {
                 entry.session = None;
@@ -186,8 +204,15 @@ impl Relay {
     /// One live moment from the loop.
     fn event(&self, event: Event) {
         let session = event.session;
+        let element = match event.element {
+            Element::Mailbox { turn } => {
+                self.slot_opened(session, turn);
+                return;
+            }
+            other => other,
+        };
         let (turn, door) = self.turn_of(session);
-        match event.element {
+        match element {
             Element::Stream(stream) => {
                 let (kind, extra) = match stream {
                     Stream::Text(text) => ("text", json!({"text": text})),
@@ -196,6 +221,7 @@ impl Relay {
                         ("arguments", json!({"call_id": call_id, "text": text}))
                     }
                     Stream::Boundary => ("boundary", json!({})),
+                    Stream::Wake(text) => ("wake", json!({"text": text})),
                 };
                 self.stream(session, turn, door, kind, extra);
             }
@@ -241,7 +267,23 @@ impl Relay {
                 let payload = json!({"session": session, "level": level, "content": notice.text});
                 self.deliver(session, Frame::new("stream", "notice", payload), None);
             }
+            // Handled above: the slot opening names the turn instead of pushing a frame.
+            Element::Mailbox { .. } => {}
         }
+    }
+
+    /// The slot became a turn: the writer recorded at write time owns it, the door is the slot.
+    fn slot_opened(&self, session: i64, turn: i64) {
+        let mut state = self.state();
+        let viewer = state.pending.remove(&session).unwrap_or_default();
+        state.active.insert(
+            session,
+            Active {
+                turn,
+                opened_by: "mailbox",
+                viewer,
+            },
+        );
     }
 
     /// One piece of live output, labelled with the turn and the door that opened it.

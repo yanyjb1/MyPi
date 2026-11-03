@@ -41,11 +41,7 @@ pub(crate) fn open(
         ));
     }
     api.ensure_booked(session)?;
-    let turn = match api.ledger().deliver(session, message) {
-        Ok(Some(turn)) => turn,
-        Ok(None) => return Err(Refuse::Busy("the session is already in a turn".into())),
-        Err(e) => return Err(e.into()),
-    };
+    let turn = api.ledger().deliver(session, message)?;
     api.relay().opened(conn, session, viewer, turn, door);
     Ok(json!({"turn": turn}))
 }

@@ -17,7 +17,7 @@ session/jobs.rs         Slots (the wake router), the scheduler's values from con
 session/agent.rs        AgentRunner: books a child, waits for its turn, drops it
 session/live.rs         cwd handle, provider/model, system, tool names, compaction instruction, export dir
 session/settings.rs     fence and scrooge
-session/mailbox.rs      two queues and the wake wait
+session/mailbox.rs      the wake queue, the one user slot, the wake wait
 session/change.rs       Model and Cwd
 session/child.rs        a sub-session's draft, budget, answer path, submit flag, nudges
 session/source.rs       Source over storage's reader, plus the attached handles
@@ -43,11 +43,12 @@ half's types, re-exported from this domain's root.
 
 - `Loop::book` inserts a handle, makes the session's job service and attaches it to `Source`, then
   starts the turn scheduler. `Loop::drop` reverses all three through `unbook`.
-- `Loop::deliver` refuses a sub-session, and otherwise opens a turn through `pen::turn::open` and
-  starts `turn::cycle::run`; a busy session queues the message instead.
-- The scheduler waits on `Mailbox::wait_any`; when idle it takes the first queued item (wake first)
-  and opens a turn.
-- `turn::cycle::run` drains the mailbox, opens `Transcript`, expands the session's tool names
+- `Loop::deliver` refuses a sub-session and a busy session, and otherwise opens a turn through
+  `pen::turn::open` and starts `turn::cycle::run`.
+- `Loop::write_mail` and `Loop::clear_mail` are the slot's only writers from outside.
+- The scheduler waits on `Mailbox::wait_any`; when idle it takes a wake text first, then the slot,
+  and opens a turn. A turn the slot opens is announced on the live line so the api can name it.
+- `turn::cycle::run` takes the wake queue into the running turn, opens `Transcript`, expands the session's tool names
   through `tools::roster`, asks through `Ask::lap`, runs `Batch::run`, hands the finished calls back
   through `Ask::results`, appends the effects anchored on their result blocks, flushes the lap, and
   settles through `pen::turn::settle`.
@@ -79,7 +80,8 @@ half's types, re-exported from this domain's root.
 
 ## Callers
 
-- The API calls `Loop::book`, `deliver`, `interrupt`, `drop`, `change`, `mailbox`.
+- The API calls `Loop::book`, `deliver`, `interrupt`, `drop`, `change`, `write_mail`,
+  `clear_mail`.
 - The scheduler, turn and job threads live inside this domain.
 - The request half implements `Ask`; the tool half implements `Batch` and its ports are answered by
   `session::source` and `session::export`. Neither touches `Handle`, `Live` or `pen`.

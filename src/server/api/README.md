@@ -29,7 +29,7 @@ request without a counter. A failure is a reply whose payload is `{"error": {"co
 ### Doors
 
 Read: `init`, `blocks`, `meta`, `usage`, `todo`, `memo`, `children`, `config`, `pools`, `sessions`.
-Write: `init`, `name`, `cwd`, `switch`, `delete`, `interrupt`, `rewind`, `default_model`.
+Write: `init`, `name`, `cwd`, `switch`, `delete`, `interrupt`, `rewind`, `default_model`, `mailbox`.
 Subscribe: `watch`, `submit`, `compact`.
 
 - `init` (post) writes the `sessions` row and its `request_meta` archive in one submission, then
@@ -41,7 +41,11 @@ Subscribe: `watch`, `submit`, `compact`.
 - `usage` groups a session's turns by the `provider` and `model` each turn recorded, names each
   group by its `provider:model` address, orders the groups by their token share, and quotes each
   one with `models.yml`'s price in its own currency plus both display currencies.
-- `submit` and `compact` open a turn; a session already in a turn answers `busy`.
+- `submit` and `compact` open a turn; a session already in a turn answers `busy`. Nothing is queued
+  by the api: a front end that wants a sentence to wait writes it to `mailbox` instead.
+- `mailbox` is the session's one pending message. `text` present and non-empty writes it whole over
+  whatever was there; no `text` clears it. The loop takes it at a blocking point and opens a turn
+  named `mailbox`, exactly as a `submit` would; taking it clears it.
 - `interrupt`, `cwd`, `switch`, `delete`, `rewind` act on the running session or its rows.
 - `profile` is an argument of the write `init` and never a door of its own: a session's profile is
   fixed when it is created.
@@ -74,6 +78,7 @@ Subscribe: `watch`, `submit`, `compact`.
 | `post` | `interrupt` | `session` | — |
 | `post` | `rewind` | `session`, `turn`, `block` | `cut` |
 | `post` | `default_model` | `model` | `path` of the file written |
+| `post` | `mailbox` | `session`, `text`, `prefix`, `suffix` (all but `session` optional) | `written`: whether a body was stored |
 | `subscribe` | `watch` | `session` | — |
 | `subscribe` | `submit` | `session`, `text`, `prefix`, `suffix` | `turn` |
 | `subscribe` | `compact` | `session`, `retention` (`{"chars"}` or `{"blocks"}`), `focus` | `turn` |
@@ -105,13 +110,14 @@ api's own write doors ------------->  relay
 | round structure | `stream` | the door that opened the turn | `session`, `turn`, `ranges` |
 
 - `kind` in a live payload is one of `text`, `thinking`, `arguments`, `boundary`, `tool_start`,
-  `tool_progress`, `tool_end`.
+  `tool_progress`, `tool_end`, `wake`. A `wake` piece is one job's reminder and keeps its own block.
 - `action` in a change payload is `name`, `cwd`, `switch`, `rewind` or `delete`; the rest of the
   payload is that door's changed row.
 - A change frame skips the viewer that issued it; live output, notices and structure go to
   everyone watching.
-- The turn a live frame carries is recorded when `submit` or `compact` opens it, so the loop's
-  events need no turn of their own. A turn a job woke names `wake`.
+- The turn a live frame carries is recorded when `submit` or `compact` opens it. A turn the slot
+  opened is announced by the loop on the same channel and is recorded under the viewer that wrote
+  the slot, named `mailbox`. A turn a job woke names `wake`.
 - The buffer belongs to the session, holds everything this turn said, and is handed to a connection
   that starts watching mid-turn. It is emptied when the round structure goes out, and dropped when
   the last watcher leaves.

@@ -45,6 +45,53 @@ impl Live {
         self.open = None;
     }
 
+    /// One wake message, its own block: the text names the reminder.
+    pub fn wake(&mut self, text: &str) {
+        let mut block = blank(BlockKind::Wake, None);
+        block.text = Some(text.to_string());
+        self.open = None;
+        self.blocks.push(block);
+        self.laid.push(Segments::default());
+    }
+
+    /// A message this front end just put out: it leads the tail, above the reply.
+    pub fn echo(&mut self, text: &str) {
+        let mut block = blank(BlockKind::User, None);
+        block.text = Some(text.to_string());
+        self.blocks.insert(0, block);
+        self.laid.insert(0, Segments::default());
+        if let Some(open) = self.open.as_mut() {
+            *open += 1;
+        }
+    }
+
+    /// The echo opened nothing: the leading message goes.
+    pub fn retract(&mut self) {
+        if self
+            .blocks
+            .first()
+            .is_some_and(|b| b.kind == BlockKind::User)
+        {
+            self.blocks.remove(0);
+            self.laid.remove(0);
+            if let Some(open) = self.open.as_mut() {
+                *open = open.saturating_sub(1);
+            }
+        }
+    }
+
+    /// How many blocks the tail holds.
+    pub fn len(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// The turn is over: the blocks leave, and the rows with them.
+    pub fn take(&mut self) -> Vec<Block> {
+        self.open = None;
+        self.laid.clear();
+        std::mem::take(&mut self.blocks)
+    }
+
     pub fn arguments(&mut self, call_id: &str, piece: &str) {
         let at = self.request(call_id);
         let block = &mut self.blocks[at];
@@ -115,7 +162,10 @@ impl Live {
         match self.blocks[at].kind {
             BlockKind::ToolRequest => paint::card::node(&self.blocks[at], paired, opts, width),
             BlockKind::User => paint::user::block(&self.blocks[at], width),
-            BlockKind::Wake => vec![Row::blank()],
+            BlockKind::Wake => paint::notice::block(
+                self.blocks[at].text.as_deref().unwrap_or_default(),
+                super::local::Level::Info,
+            ),
             BlockKind::Assistant | BlockKind::Reasoning => {
                 let rows = self.text_rows(at, width);
                 if self.blocks[at].kind == BlockKind::Reasoning {
