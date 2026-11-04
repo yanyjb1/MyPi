@@ -18,7 +18,7 @@ History above, the input box below, the desk between them.
 
 - `keys()` — the union of the three sub-zones' claims, in seat order.
 - `kinds()` — all five classes: the zone receives what its children read and forwards it.
-- `start(size, memo)` — remember the size, shout `resize`, read `tree.focus` out of the memo.
+- `start(size, memo)` — remember the size, read `tree.focus` out of the memo.
 - `session(id)` — attach or detach the three children; on attach ask `call init`, `call meta` and
   the structural window.
 - `event(frame)` — keep the size on a resize, read the conversation's directory out of `call meta`
@@ -33,7 +33,7 @@ One vocabulary: `(name, content)`. A sub-zone puts events in its own `shouts`; t
 the same; `flush` hands each to the other two and repeats until the queue is dry. A shouter never
 hears its own event, and a shout raised during delivery lands on the same queue instead of nesting.
 
-Names today: `resize`, `cwd`, `usage`, `busy`, `prefill`, `queue`, `echo`, `retract`
+Names today: `cwd`, `usage`, `busy`, `prefill`, `queue`, `echo`, `retract`
 (`zone::contract::shout::name`).
 
 ### Rows
@@ -78,5 +78,5 @@ A `local / disconnected` frame becomes `Request::Quit`: no session, no screen wo
 
 ## 4. Config fields
 
-None here. The app asks the theme keys; the history zone asks its own three through `call config`
+None here. The app asks the theme keys; the history zone asks its own five through `call config`
 and the input zone asks the context window.

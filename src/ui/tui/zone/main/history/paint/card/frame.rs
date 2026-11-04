@@ -3,9 +3,9 @@
 use ratatui::style::Modifier;
 use serde_json::Value;
 
-use super::super::super::fold;
-use super::super::super::line::{Ink, Lead, Row, Run};
-use super::super::super::shape::Block;
+use super::super::super::layout::fold;
+use super::super::super::layout::line::{Ink, Lead, Row, Run};
+use super::super::super::wire::decode::Block;
 use super::super::Opts;
 use super::super::code;
 use super::{bash, edit, fallback, file, todo, web};

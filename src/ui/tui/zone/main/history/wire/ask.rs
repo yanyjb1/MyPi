@@ -2,14 +2,14 @@
 
 use serde_json::json;
 
-use super::local::SlotKind;
-use super::zone::HistoryZone;
+use super::super::local::SlotKind;
+use super::super::zone::HistoryZone;
 
 use crate::ui::tui::zone::Request;
 
 impl HistoryZone {
     /// Ask for one turn's blocks, unless they are here or already asked for.
-    pub(super) fn ask_turn(&mut self, turn: i64) {
+    pub(in crate::ui::tui::zone::main::history) fn ask_turn(&mut self, turn: i64) {
         let Some(held) = self.structure.rounds().iter().find(|t| t.id == turn) else {
             return;
         };
@@ -29,7 +29,7 @@ impl HistoryZone {
     }
 
     /// The turn a block belongs to.
-    pub(super) fn turn_of(&self, block: i64) -> Option<i64> {
+    pub(in crate::ui::tui::zone::main::history) fn turn_of(&self, block: i64) -> Option<i64> {
         self.structure
             .rounds()
             .iter()
@@ -38,8 +38,8 @@ impl HistoryZone {
     }
 
     /// Keep the anchor's own turn and its neighbours in hand.
-    pub(super) fn ensure_around(&mut self) {
-        let anchor = self.view.anchor(&self.local);
+    pub(in crate::ui::tui::zone::main::history) fn ensure_around(&mut self) {
+        let anchor = self.anchor_num();
         let Some(block) = self.local.at(anchor).and_then(|slot| match slot.kind {
             SlotKind::Block(id) => Some(id),
             _ => None,

@@ -3,7 +3,7 @@
 use ratatui::style::Modifier;
 use serde_json::Value;
 
-use super::super::super::line::{Ink, Lead, Row, Run};
+use super::super::super::layout::line::{Ink, Lead, Row, Run};
 use super::super::code;
 use super::{State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, path_meta, relativize};
 use crate::ui::tui::theme::fixed;

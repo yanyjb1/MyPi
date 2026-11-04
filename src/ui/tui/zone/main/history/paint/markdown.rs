@@ -3,7 +3,7 @@
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::Modifier;
 
-use super::super::line::{Ink, Lead, Row, Run};
+use super::super::layout::line::{Ink, Lead, Row, Run};
 use crate::ui::tui::theme::fixed;
 
 /// One segment's markdown, one row per source line. No width involved.

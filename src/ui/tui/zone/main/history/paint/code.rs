@@ -4,8 +4,8 @@ use std::sync::{LazyLock, Mutex};
 
 use syntect::parsing::{ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxSet};
 
-use super::super::line::{Ink, Lead, Row, Run};
-use super::super::segment::{Kind, Segment};
+use super::super::layout::line::{Ink, Lead, Row, Run};
+use super::super::layout::segment::{Kind, Segment};
 use crate::ui::tui::theme::fixed;
 
 const COMMENT: usize = 0;

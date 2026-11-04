@@ -119,7 +119,6 @@ impl Zone for MainZone {
 
     fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request> {
         self.size = Some(size);
-        self.shout(name::RESIZE, json!({"cols": size.cols, "rows": size.rows}));
         if let Some(focus) = memo.read("tree.focus") {
             memo.delete("tree.focus");
             if let Some((turn, block)) = focus.split_once(':')
@@ -166,7 +165,6 @@ impl Zone for MainZone {
             && let Some(size) = TermSize::of(&frame.content)
         {
             self.size = Some(size);
-            self.shout(name::RESIZE, json!({"cols": size.cols, "rows": size.rows}));
         }
         if frame.is_local() && frame.name == "disconnected" {
             return vec![Request::Quit];

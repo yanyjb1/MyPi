@@ -1,54 +1,61 @@
 # history — architecture
 
-What is here, what each file holds, who calls whom. Current state only.
+What each file holds, who calls it, and what it depends on. Current state only.
 
 ## Files
 
-| path | holds |
-|---|---|
-| `mod.rs` | the module list and the re-export |
-| `shape.rs` | `Block`, `Kind`, `Usage`: one decoded block row |
-| `local.rs` | `Local`: the numbered slots; `Level`, `Life`, `SlotKind` |
-| `segment.rs` | `split`: one block's text into segments |
-| `line.rs` | `Row`, `Run`, `Ink`, `Lead`: a finished row and its color slots |
-| `wrap.rs` | natural line → width rows |
-| `fold.rs` | a long run of rows → head, placeholder, tail |
-| `paint/` | every block kind to natural rows |
-| `paint/prose.rs` | text segments, a whole markdown text, the thinking chain |
-| `paint/markdown.rs` | headings, lists, quotes, inline emphasis |
-| `paint/code.rs` | fenced code: syntect state, one line at a time |
-| `paint/table.rs` | tables, laid out at the width |
-| `paint/card/` | tool cards: the renderer interface and one file per tool family |
-| `paint/user.rs` | the user card |
-| `paint/todo.rs` | the pinned task list |
-| `paint/notice.rs` | a notice slot |
-| `paint/opts.rs` | `Opts`: fold switches, placeholder, cwd, budget |
-| `cache/text.rs` | segment natural rows per block |
-| `cache/rows.rs` | width rows per block, with the natural-line marks |
-| `cache/store.rs` | the two layers, their keys, the block classes |
-| `live.rs` | the growing tail and its per-block segment cache |
-| `view.rs` | the sight line, the seam, the window |
-| `zone.rs` | the zone: types, keys, the `SubZone` contract |
-| `feed.rs` | frames in: pieces, closed rounds, notices, config, structure |
-| `ask.rs` | which blocks to fetch |
-| `render.rs` | one frame: cache, window, accent at the exit |
+| path | holds | outside |
+|---|---|---|
+| `mod.rs` | the module list | private |
+| `zone.rs` | `HistoryZone`, its claims, the `SubZone` implementation | public |
+| `display.rs` | `Display`, `Dir`, the window, the scroll, the focus, the align | private |
+| `prefetch.rs` | `Prefetch`, `Laid`, `Origin`, the walk outwards, the piece budget | private |
+| `local.rs` | `Local`, `Slot`, `SlotKind`, `Level`, `Life` | private |
+| `layout/` | `segment` (source to segments), `line` (`Row`, `Run`, `Ink`, `Lead`), `wrap`, `fold` | private |
+| `product/` | `Products` and the two product kinds: `markdown` (pieces), `card` (rows), `todo` (the checklist) | private |
+| `wire/` | `mod` (frame dispatch, busy and idle), `decode` (block rows), `ask` (blocks on demand), `live` (the growing tail), `transfer` (the handover) | private |
+| `paint/` | how one block is drawn: prose, code, table, notice, user, cards | private |
 
-## Who calls whom
+## What it talks to
 
-- `zone::main::zone` calls `history::HistoryZone::render_rows(width, accent)` and the `SubZone` methods.
-- `history::render` drives `view::compose`, which asks the cache for one slot's rows at a time.
-- `history::paint::card` calls `paint::prose::inline` for the prose above a tool call, and `fold::fold` for its sections.
-- `paint::code` calls nothing above it; it owns the syntect tables.
+- **Calls**: `ui::tui::zone` for the contract, `ui::tui::theme` for the fixed palette and the accent,
+  `ui::tui::TodoFold`, `ui::tui::action`.
+- **Asks the session for**: `call init`, `call blocks`, `call config`, `call usage`, `call todo` and
+  the structural window, all through `Request` values its host drains.
+- **Does not know**: the app, the socket, the database, the agent loop, the picker.
+
+## Inside
+
+```text
+HistoryZone
+ ├── blocks: BTreeMap<i64, Block>        ── what the wire sent
+ ├── local: Local                        ── the numbered slots
+ ├── live: Live                          ── the tail still growing
+ ├── products: Products                  ── block → pieces, `cacheMargin` of them
+ ├── prep: Prefetch                      ── the laid rows around the sight line
+ ├── disp: Display                       ── where the window starts
+ ├── todo_panel: TodoPanel               ── the checklist's rows
+ └── thinking / tool / fold / scroll_height / placeholder / cwd / usage
+```
+
+- `wire::mod::read_frame` decodes one frame; a closed round hands the tail over and asks for the
+  missing blocks.
+- `display::render_rows` refolds when the width moved, takes the window from `prefetch`, and puts
+  the checklist under it.
+- `prefetch` walks one piece at a time: `extend_newer` for the growing end (which re-lays the live
+  tail in place), `extend_older` for the past.
+- `product::Products` is the only place a block is turned into pieces; it keeps `cacheMargin` blocks
+  and drops the oldest admission first.
 
 ## Must stay in sync
 
-1. `line::Lead` and `wrap`: a folded row must become `Wrapped`, or the reader loses the marker.
-2. `cache::store::Class` and `render::block_rows`: a card painted as segments loses its frame.
-3. `view::Spot` and `cache::rows::Entry::row_of` / `spot_of`: the seam survives a resize only through the pair.
-4. `shape::Kind` and `paint`: a new block kind needs a painter.
-5. `feed.rs` and the config keys in `zone.rs`: one key read, one key asked for.
+1. `wire::decode::Kind` and `paint/` plus `product/`: a new block kind needs a product and a painter.
+2. `product::Piece` and `prefetch`: a new piece kind needs a way to be laid.
+3. `layout::segment::Kind` and `product::markdown`: a new segment kind needs a painter.
+4. The config key names and `zone::CONFIG_KEYS` plus `wire::mod::read_config`.
+5. `local::SlotKind` and `prefetch::piece_count` / `layer_piece`: a new slot kind needs both.
 
 ## Not wired
 
-1. The tool-specific stream animations: the running card is a static card.
-2. `next` slots render nothing and break no separator; that is intended, not a gap.
+1. A width change reaches the history zone through `assign`; the `local / resized` frame is not read.
+2. The main zone still owns the row handshake; this zone answers it.

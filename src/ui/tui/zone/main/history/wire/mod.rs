@@ -2,11 +2,12 @@
 
 use serde_json::{Value, json};
 
+use self::decode::{Block, Kind as BlockKind};
 use super::local::{Level, Life, SlotKind};
 use super::paint::todo::Task;
-use super::shape::{Block, Kind as BlockKind};
 use super::zone::HistoryZone;
 
+use crate::ui::tui::TodoFold;
 use crate::ui::tui::zone::{Frame, Request, Shout, Turns, name};
 
 impl HistoryZone {
@@ -138,6 +139,7 @@ impl HistoryZone {
         let handed = self.handover(&ranges);
         if !handed {
             self.live.clear();
+            self.prep.rows.clear();
         }
         for [lo, hi] in ranges {
             let have = (lo..=hi).all(|id| self.blocks.contains_key(&id));
@@ -172,7 +174,10 @@ impl HistoryZone {
                 .get(&id)
                 .is_some_and(|old| old.kind != block.kind || old.text != block.text);
             if moved {
-                self.cache.drop_block(id);
+                self.products.drop_block(id);
+                if let Some(num) = self.local.num_of(id) {
+                    self.forget_num(num);
+                }
             }
             self.blocks.insert(id, block);
             if !fresh {
@@ -184,7 +189,7 @@ impl HistoryZone {
             }
             self.local.kill_short_lived();
             self.local.push_now(SlotKind::Block(id));
-            self.cache.drop_block(id);
+            self.products.drop_block(id);
         }
     }
 
@@ -192,6 +197,7 @@ impl HistoryZone {
     fn take_todo(&mut self, value: &Value) {
         if value.is_null() {
             self.todo.clear();
+            self.todo_panel.changed();
             return;
         }
         let Some(items) = value.as_array() else {
@@ -206,29 +212,45 @@ impl HistoryZone {
                 })
             })
             .collect();
+        self.todo_panel.changed();
     }
 
-    /// One config answer: the three keys this zone reads.
+    /// One config answer: the keys this zone reads.
     fn read_config(&mut self, content: &Value) {
         let Some(key) = content.get("key").and_then(Value::as_str) else {
             return;
         };
         let number = content.get("value").and_then(Value::as_u64);
         match key {
-            "config.ui.tui.history.focusLine" => {
+            "config.ui.tui.zone.main.history.focusLine" => {
                 if let Some(n) = number {
-                    self.focus_line = u16::try_from(n).unwrap_or(u16::MAX);
-                    self.view.set_line(self.focus_line);
+                    self.disp.set_line(u16::try_from(n).unwrap_or(u16::MAX));
                 }
             }
-            "config.ui.tui.history.cardFoldBudget" => {
+            "config.ui.tui.zone.main.history.cardFoldBudget" => {
                 if let Some(n) = number {
                     self.fold = (n as usize).max(3);
+                    self.products.drop_fixed();
                 }
             }
-            "config.ui.tui.renderMargin" => {
+            "config.ui.tui.zone.main.history.cacheMargin" => {
                 if let Some(n) = number {
-                    self.cache.set_budget((n as usize).max(1));
+                    self.products.set_margin((n as usize).max(1));
+                }
+            }
+            "config.ui.tui.zone.main.history.scrollHeight" => {
+                if let Some(n) = number {
+                    self.scroll_height = (n as usize).max(1);
+                }
+            }
+            "config.ui.tui.zone.main.history.todoFold" => {
+                if let Some(value) = content.get("value") {
+                    self.todo_fold = match value {
+                        Value::Bool(on) => TodoFold::On(*on),
+                        Value::Number(n) => TodoFold::Capped(n.as_u64().unwrap_or(0) as usize),
+                        _ => self.todo_fold,
+                    };
+                    self.todo_panel.changed();
                 }
             }
             _ => {}
@@ -247,7 +269,7 @@ impl HistoryZone {
             && let Some(num) = self.local.num_of(block)
         {
             self.pending_focus = None;
-            self.view.focus_num(num);
+            self.focus_num(num);
         }
         self.ensure_around();
     }
@@ -269,6 +291,8 @@ impl HistoryZone {
             self.local.push_older(SlotKind::Block(*id));
         }
         self.landed = ids.last().copied().unwrap_or(0);
+        self.prep.rows.clear();
+        self.disp.follow();
     }
 
     /// Slots whose blocks the session no longer owns go, and the tail with them.
@@ -289,6 +313,7 @@ impl HistoryZone {
             self.local.truncate_now(cut as usize);
         }
         self.blocks.retain(|id, _| self.structure.owns(*id));
+        self.prep.rows.clear();
         self.landed = self.blocks.keys().next_back().copied().unwrap_or(0);
         let retyped = self
             .blocks

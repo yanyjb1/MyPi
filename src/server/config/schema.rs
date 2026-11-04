@@ -45,10 +45,11 @@ keys! {
     KEY_CONFIG_UI_TUI_THEME_GOLD = "config", "ui.tui.theme", "gold", Text, DefaultValue::Text("yellow"), "The money color.", true;
     KEY_CONFIG_UI_TUI_THEME_BLACK = "config", "ui.tui.theme", "black", Text, DefaultValue::Text("0,0,0"), "The capsule background.", true;
     KEY_CONFIG_UI_TUI_THEME_MUTED = "config", "ui.tui.theme", "muted", Text, DefaultValue::Text("darkgray"), "The secondary gray.", true;
-    KEY_CONFIG_UI_TUI_RENDER_MARGIN = "config", "ui.tui", "renderMargin", Int, DefaultValue::Int(64), "Rendered blocks kept around the viewport.", true;
-    KEY_CONFIG_UI_TUI_HISTORY_FOCUS_LINE = "config", "ui.tui.history", "focusLine", Int, DefaultValue::Int(3), "Screen row the sight line sits on, counted from the top of the history zone.", true;
-    KEY_CONFIG_UI_TUI_HISTORY_CARD_FOLD_BUDGET = "config", "ui.tui.history", "cardFoldBudget", Int, DefaultValue::Int(10), "Rows a card head or its tail may take before it folds; the fold keeps row one, the placeholder and the last eight.", true;
-    KEY_CONFIG_UI_TUI_TODO_FOLD = "config", "ui.tui", "todoFold", BoolOrInt, DefaultValue::Bool(false), "Fold the task list; true = 8 rows, N = N rows.", true;
+    KEY_CONFIG_UI_TUI_HISTORY_CACHE_MARGIN = "config", "ui.tui.zone.main.history", "cacheMargin", Int, DefaultValue::Int(64), "Blocks kept in the history zone's product layer.", true;
+    KEY_CONFIG_UI_TUI_HISTORY_FOCUS_LINE = "config", "ui.tui.zone.main.history", "focusLine", Int, DefaultValue::Int(3), "Screen row the sight line sits on, counted from the top of the history zone.", true;
+    KEY_CONFIG_UI_TUI_HISTORY_CARD_FOLD_BUDGET = "config", "ui.tui.zone.main.history", "cardFoldBudget", Int, DefaultValue::Int(10), "Rows a card head or its tail may take before it folds; the fold keeps row one, the placeholder and the last eight.", true;
+    KEY_CONFIG_UI_TUI_HISTORY_SCROLL_HEIGHT = "config", "ui.tui.zone.main.history", "scrollHeight", Int, DefaultValue::Int(10), "Screen rows one wheel notch walks.", true;
+    KEY_CONFIG_UI_TUI_HISTORY_TODO_FOLD = "config", "ui.tui.zone.main.history", "todoFold", BoolOrInt, DefaultValue::Bool(false), "Fold the task list; true = 8 rows, N = N rows.", true;
     KEY_CONFIG_UI_TUI_USAGE_ALIGN = "config", "ui.tui.usage", "align", Text, DefaultValue::Text("center"), "Where the usage panel sits: center, left or right.", true;
     KEY_CONFIG_UI_TUI_FX_USD_CNY = "config", "ui.tui.fx", "usdCny", Float, DefaultValue::Float(6.0), "1 USD in CNY, for display only.", true;
 

@@ -2,10 +2,11 @@
 
 use ratatui::style::Modifier;
 
-use super::super::line::{Ink, Lead, Row};
-use super::super::segment::{self, Kind};
-use super::super::wrap;
+use super::super::layout::line::{Ink, Lead, Row};
+use super::super::layout::segment::{self, Kind};
+use super::super::layout::wrap;
 use super::{code, markdown, table};
+
 use crate::ui::tui::theme::fixed;
 
 /// One text segment's natural rows, width-free.
@@ -13,7 +14,7 @@ pub(crate) fn text(seg: &segment::Segment) -> Vec<Row> {
     markdown::rows(&seg.source)
 }
 
-/// A whole markdown text laid out at this width.
+/// A whole markdown text laid out at this width, for the blocks that are drawn whole.
 pub(crate) fn inline(text: &str, width: usize) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::new();
     for seg in segment::split(text) {

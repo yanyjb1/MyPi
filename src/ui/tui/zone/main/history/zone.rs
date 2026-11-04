@@ -4,12 +4,13 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde_json::Value;
 
-use super::cache::Cache;
-use super::live::Live;
+use super::display::{Dir, Display};
 use super::local::{Level, Life, Local, SlotKind};
 use super::paint::todo::Task;
-use super::shape::Block;
-use super::view::{Dir, Viewport};
+use super::prefetch::Prefetch;
+use super::product::{Products, TodoPanel};
+use super::wire::decode::Block;
+use super::wire::live::Live;
 
 use crate::ui::tui::TodoFold;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
@@ -107,17 +108,22 @@ const KINDS: &[Kind] = &[Kind::Call, Kind::Stream, Kind::Notice];
 /// The sight line until the config answers.
 const DEFAULT_FOCUS_LINE: u16 = 3;
 
-/// Rendered blocks kept in the cache until the config answers.
-pub(super) const DEFAULT_MARGIN: usize = 64;
+/// Blocks kept in the product layer until the config answers.
+const DEFAULT_MARGIN: usize = 64;
 
 /// Rows a card head or tail may take until the config answers.
-pub(super) const DEFAULT_FOLD: usize = 10;
+const DEFAULT_FOLD: usize = 10;
+
+/// Rows one wheel notch walks until the config answers.
+const DEFAULT_SCROLL: usize = 10;
 
 /// The config keys this zone asks for once per attachment.
 const CONFIG_KEYS: &[&str] = &[
-    "config.ui.tui.history.focusLine",
-    "config.ui.tui.history.cardFoldBudget",
-    "config.ui.tui.renderMargin",
+    "config.ui.tui.zone.main.history.focusLine",
+    "config.ui.tui.zone.main.history.cardFoldBudget",
+    "config.ui.tui.zone.main.history.cacheMargin",
+    "config.ui.tui.zone.main.history.scrollHeight",
+    "config.ui.tui.zone.main.history.todoFold",
 ];
 
 /// The chat history: what the reader sees of the conversation.
@@ -134,8 +140,14 @@ pub struct HistoryZone {
     pub(super) local: Local,
     /// The tail still growing.
     pub(super) live: Live,
-    pub(super) view: Viewport,
-    pub(super) cache: Cache,
+    /// The product layer: a block to pieces, kept by block.
+    pub(super) products: Products,
+    /// The prefetch layer: the laid rows around the sight line.
+    pub(super) prep: Prefetch,
+    /// The display layer: the window and the scroll.
+    pub(super) disp: Display,
+    /// The checklist's own product.
+    pub(super) todo_panel: TodoPanel,
     /// The model's checklist, as the session replays it.
     pub(super) todo: Vec<Task>,
     pub(super) todo_fold: TodoFold,
@@ -144,14 +156,12 @@ pub struct HistoryZone {
     /// Tool exchanges' own copy.
     pub(super) tool: bool,
     pub(super) placeholder: String,
-    /// Rows between the sight line and the top of the zone.
-    pub(super) focus_line: u16,
     /// Rows a card head or a card tail may take before it folds.
     pub(super) fold: usize,
+    /// Screen rows one wheel notch walks.
+    pub(super) scroll_height: usize,
     /// Where the tools ran, for shortening paths.
     pub(super) cwd: String,
-    /// Rows the main zone handed down.
-    pub(super) rows: u16,
     /// The last context size shouted, so one number is not repeated every frame.
     pub(super) usage: u64,
     /// A fresh attach lays the structure out again.
@@ -173,30 +183,40 @@ impl Default for HistoryZone {
             landed: 0,
             local: Local::default(),
             live: Live::default(),
-            view: Viewport::default(),
-            cache: Cache::default(),
+            products: Products::default(),
+            prep: Prefetch::default(),
+            disp: Display::default(),
+            todo_panel: TodoPanel::default(),
             todo: Vec::new(),
             todo_fold: TodoFold::default(),
             thinking: false,
             tool: false,
             placeholder: "thinking…".to_string(),
-            focus_line: DEFAULT_FOCUS_LINE,
             fold: DEFAULT_FOLD,
+            scroll_height: DEFAULT_SCROLL,
             cwd: String::new(),
-            rows: 0,
             usage: 0,
             needs_layout: false,
             pending_focus: None,
             outbox: Vec::new(),
             shouts: Vec::new(),
         };
-        zone.view.set_line(DEFAULT_FOCUS_LINE);
-        zone.cache.set_budget(DEFAULT_MARGIN);
+        zone.disp.set_line(DEFAULT_FOCUS_LINE);
+        zone.products.set_margin(DEFAULT_MARGIN);
         zone
     }
 }
 
 impl HistoryZone {
+    /// How far one wheel notch walks.
+    fn walk(&self, shift: bool) -> usize {
+        if shift {
+            usize::from(self.disp.rows())
+        } else {
+            self.scroll_height.max(1)
+        }
+    }
+
     /// A line this front end has to say, on its own slot.
     pub fn notice(&mut self, text: String, level: Level, life: Life) {
         self.local.kill_short_lived();
@@ -206,7 +226,7 @@ impl HistoryZone {
     /// Put a block under the sight line. The spot waits for the block's slot.
     pub fn focus(&mut self, turn: i64, block: i64) {
         match self.local.num_of(block) {
-            Some(num) => self.view.focus_num(num),
+            Some(num) => self.focus_num(num),
             None => {
                 self.pending_focus = Some((turn, block));
                 self.ask_turn(turn);
@@ -222,12 +242,14 @@ impl HistoryZone {
     /// The local section goes, and the rows, the task list and the tail with it.
     pub(super) fn destroy(&mut self) {
         self.local.clear();
-        self.cache.clear();
+        self.products.clear();
+        self.prep.rows.clear();
         self.blocks.clear();
         self.asking.clear();
         self.live.clear();
         self.todo.clear();
-        self.view.follow();
+        self.todo_panel.changed();
+        self.disp.follow();
         self.landed = 0;
         self.usage = 0;
         self.needs_layout = false;
@@ -256,50 +278,53 @@ impl SubZone for HistoryZone {
     fn deliver_action(&mut self, action: &Action) -> bool {
         match action {
             Action::ScrollUp { shift } => {
-                self.scroll(Dir::Older, *shift);
+                self.scroll(Dir::Older, self.walk(*shift));
                 true
             }
             Action::ScrollDown { shift } => {
-                self.scroll(Dir::Newer, *shift);
+                self.scroll(Dir::Newer, self.walk(*shift));
                 true
             }
             Action::Paste(_) => false,
             Action::Key(key) => match key.code {
                 KeyCode::Char('t') if key.mods.ctrl => {
                     self.thinking = !self.thinking;
-                    self.cache.clear();
+                    self.products.clear();
+                    self.prep.rows.clear();
                     true
                 }
                 KeyCode::Char('o') if key.mods.ctrl => {
                     self.tool = !self.tool;
-                    self.cache.clear();
+                    self.products.drop_fixed();
                     true
                 }
                 KeyCode::Up if key.mods.ctrl => {
-                    self.view.step(&self.local, Dir::Older);
+                    self.step(Dir::Older);
                     self.ensure_around();
                     true
                 }
                 KeyCode::Down if key.mods.ctrl => {
-                    self.view.step(&self.local, Dir::Newer);
+                    self.step(Dir::Newer);
                     self.ensure_around();
                     true
                 }
                 KeyCode::PageUp if key.mods.ctrl => {
-                    self.view.first(&self.local);
+                    self.first();
                     self.ensure_around();
                     true
                 }
                 KeyCode::PageDown if key.mods.ctrl => {
-                    self.view.follow();
+                    self.disp.follow();
                     true
                 }
                 KeyCode::PageUp => {
-                    self.scroll(Dir::Older, true);
+                    let rows = usize::from(self.disp.rows());
+                    self.scroll(Dir::Older, rows);
                     true
                 }
                 KeyCode::PageDown => {
-                    self.scroll(Dir::Newer, true);
+                    let rows = usize::from(self.disp.rows());
+                    self.scroll(Dir::Newer, rows);
                     true
                 }
                 KeyCode::Home if key.mods.ctrl && key.mods.shift => {
@@ -318,7 +343,7 @@ impl SubZone for HistoryZone {
     fn attach(&mut self, _session: i64, _size: TermSize) {
         self.destroy();
         self.needs_layout = true;
-        self.view.follow();
+        self.disp.follow();
         for key in CONFIG_KEYS {
             self.outbox
                 .push(Request::call("config", serde_json::json!({"key": key})));
@@ -337,8 +362,12 @@ impl SubZone for HistoryZone {
         u16::MAX
     }
 
-    fn assign(&mut self, _term: TermSize, rows: u16) {
+    fn assign(&mut self, term: TermSize, rows: u16) {
         self.resize(rows);
+        let width = usize::from(term.cols.max(1));
+        if self.prep.width != width {
+            self.refold(width);
+        }
     }
 
     fn on_height_changed(&mut self, rows: u16) -> bool {

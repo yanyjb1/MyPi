@@ -1,7 +1,7 @@
 //! Matched by the window width, so the layout is computed at use time.
 
-use super::super::line::{Lead, Row, Run};
-use super::super::segment::{Kind, Segment};
+use super::super::layout::line::{Lead, Row, Run};
+use super::super::layout::segment::{Kind, Segment};
 use crate::ui::tui::text::{char_width, display_width};
 use crate::ui::tui::theme::fixed;
 

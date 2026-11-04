@@ -1,9 +1,9 @@
 //! The tail that is still growing: upstream's live pieces, gathered into blocks.
 
-use super::line::{Lead, Row};
-use super::paint::{self, Opts};
-use super::segment::{self, Kind};
-use super::shape::{Block, Kind as BlockKind, Usage};
+use super::super::layout::line::{Lead, Row};
+use super::super::layout::segment::{self, Kind};
+use super::super::paint::{self, Opts};
+use super::decode::{Block, Kind as BlockKind, Usage};
 
 /// One block's finished segments: source length in, natural rows out.
 #[derive(Default)]
@@ -85,6 +85,11 @@ impl Live {
         self.blocks.len()
     }
 
+    /// Nothing is growing.
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+
     /// The turn is over: the blocks leave, and the rows with them.
     pub fn take(&mut self) -> Vec<Block> {
         self.open = None;
@@ -164,7 +169,7 @@ impl Live {
             BlockKind::User => paint::user::block(&self.blocks[at], width),
             BlockKind::Wake => paint::notice::block(
                 self.blocks[at].text.as_deref().unwrap_or_default(),
-                super::local::Level::Info,
+                super::super::local::Level::Info,
             ),
             BlockKind::Assistant | BlockKind::Reasoning => {
                 let rows = self.text_rows(at, width);
@@ -196,18 +201,18 @@ impl Live {
             let open = index == last && !closed(seg);
             if !open {
                 let rows = self.closed_rows(at, index, seg, width);
-                out.extend(super::wrap::rows(rows, width));
+                out.extend(super::super::layout::wrap::rows(rows, width));
                 continue;
             }
             if seg.kind == Kind::Code {
                 let rows = self.fence_rows(at, seg);
-                out.extend(super::wrap::rows(rows, width));
+                out.extend(super::super::layout::wrap::rows(rows, width));
             } else {
                 let rows = match seg.kind {
                     Kind::Table => paint::table::rows(seg, width),
                     _ => paint::prose::text(seg),
                 };
-                out.extend(super::wrap::rows(rows, width));
+                out.extend(super::super::layout::wrap::rows(rows, width));
             }
         }
         out
@@ -254,7 +259,7 @@ impl Live {
             fed: 0,
             rows: vec![Row::of(
                 Lead::First,
-                vec![super::line::Run::fixed(
+                vec![super::super::layout::line::Run::fixed(
                     opener,
                     crate::ui::tui::theme::fixed::MD_CODE_BLOCK_BORDER,
                 )],

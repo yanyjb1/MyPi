@@ -1,6 +1,6 @@
 //! web: a fetch's facts and body, or a search's query and hits.
 
-use super::super::super::line::Row;
+use super::super::super::layout::line::Row;
 use super::{
     Section, ToolBlock, ToolOutcome, ToolRenderer, arg_bool, arg_str, fact, head_preview,
     non_empty_lines, non_empty_text_lines, one_line, search_hits, short_url, truncate,

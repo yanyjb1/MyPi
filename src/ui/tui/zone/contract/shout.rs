@@ -18,8 +18,6 @@ impl Shout {
 
 /// The names this front end shouts today.
 pub mod name {
-    /// The main zone: the terminal changed. `{cols, rows}`.
-    pub const RESIZE: &str = "resize";
     /// The main zone: the conversation's working directory. `{path, temporary}`.
     pub const CWD: &str = "cwd";
     /// History: the last request's context size. `{used}`.

@@ -12,7 +12,7 @@
 
 ### 待设计
 
-- wake 提醒的样式。现在一条 wake 一个块、一条一个 `stream` 帧，画成一行 notice（`live.rs` 的 Wake 分支）。
+- wake 提醒的样式。现在一条 wake 一个块、一条一个 `stream` 帧，画成一行 notice（`wire/live.rs` 的 Wake 分支）。
 - 每类工具的流式动画。历史区只提供位置，运行中的卡片已在。
 
 ### 其余
@@ -21,12 +21,10 @@
 - `/usage` 面板的横向对齐没有读者。
 - 补全的 pools 拿到一次就不再刷新。
 - 行级流式增量：现在按段增量（闭合段缓存、开段重算），段内还没到「只动新那一行」。
-- 表格块跳过解析层（列宽依赖宽度），resize 时整块重排。
 - 转交的兜底：尾块数与结构区间数对不上时，退回「清空可变区 + `call blocks` 重取」，会闪一帧。
 
 ## 三、机制层的小坑
 
-- `name::RESIZE` 有人喊没人听：三个子区都不处理，尺寸实际走 `deliver_event` 的参数。
 - 行高握手（`request_height` / `assign` / `on_height_changed`）挂在通用 `SubZone` 契约上，是主区的私事。
 - `HistoryZone::request_height` 用 `u16::MAX` 当哨兵。
 - 三个子区都丢弃 `on_height_changed` 的返回值。

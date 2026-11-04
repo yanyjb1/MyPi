@@ -1,6 +1,6 @@
 //! bash: the command, then its output.
 
-use super::super::super::line::{Lead, Row, Run};
+use super::super::super::layout::line::{Lead, Row, Run};
 use super::super::code;
 use super::{ToolBlock, ToolRenderer, arg_str};
 use crate::ui::tui::theme::fixed;

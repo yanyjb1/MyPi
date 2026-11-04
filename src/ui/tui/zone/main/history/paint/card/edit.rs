@@ -5,7 +5,7 @@ use std::ops::Range;
 use ratatui::style::Modifier;
 use serde_json::Value;
 
-use super::super::super::line::{Ink, Lead, Row, Run};
+use super::super::super::layout::line::{Ink, Lead, Row, Run};
 use super::super::code;
 use super::{
     Section, ToolBlock, ToolOutcome, ToolRenderer, ToolView, arg_str, output_lines, path_meta,

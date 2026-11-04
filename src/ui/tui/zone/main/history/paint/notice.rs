@@ -1,6 +1,6 @@
 //! A notice row: severity picks the color, nothing else.
 
-use super::super::line::{Ink, Lead, Row};
+use super::super::layout::line::{Ink, Lead, Row};
 use super::super::local::Level;
 use crate::ui::tui::theme::fixed;
 

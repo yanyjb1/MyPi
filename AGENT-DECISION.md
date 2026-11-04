@@ -1,8 +1,8 @@
 # AGENT-DECISION
 
 本文件只保留仍然有效、且会影响下一步改造的决策。storage、loop、request、tools 四域已定型，
-不再重复；现状与设计见各域的 `README.md` 与 `ARCHITECTURE.md`。api 的接线已落成，见
-`src/server/api/README.md` 与 `src/server/api/ARCHITECTURE.md`；剩下的只有 ui 与 main 的接线。
+不再重复；现状与设计见各域的 `README.md` 与 `ARCHITECTURE.md`。api 与 ui 的接线都已落成，
+见各自的 `README.md` 与 `ARCHITECTURE.md`；根目录 `todo.md` 记剩下的活。
 
 ## config / api
 

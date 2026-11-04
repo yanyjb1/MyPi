@@ -97,7 +97,8 @@ This domain owns the keys below; consumers ask it for values.
 | `config.server.platform` | `timezone`, `stamp.*`, `ipc` |
 | `config.server` | `pruneOnRewind` |
 | `config.ui` | `session.preloadCache`, `placeholder.*` |
-| `config.tui` | `theme.*`, `renderMargin`, `todoFold`, `usage.align`, `fx.usdCny` |
+| `config.ui.tui` | `theme.*`, `usage.align`, `fx.usdCny` |
+| `config.ui.tui.zone.main.history` | `cacheMargin`, `focusLine`, `cardFoldBudget`, `scrollHeight`, `todoFold` |
 | `models.provider.<name>` | `baseUrl`, `api`, `apiKey`, `authHeader`, `models` |
 | `models.model.<provider>:<id>` | `id`, `name`, `contextWindow`, `maxOutputTokens`, `currency`, `cost.*` |
 

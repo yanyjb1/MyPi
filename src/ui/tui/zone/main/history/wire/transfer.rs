@@ -1,7 +1,7 @@
 //! The handover: the growing tail's blocks become numbered slots of the finished region.
 
-use super::local::SlotKind;
-use super::zone::HistoryZone;
+use super::super::local::SlotKind;
+use super::super::zone::HistoryZone;
 
 impl HistoryZone {
     /// The round's structure arrived: give the tail its numbers. `true` = the tail was handed over.
@@ -14,6 +14,7 @@ impl HistoryZone {
             return false;
         }
         let blocks = self.live.take();
+        self.prep.rows.clear();
         self.local.kill_short_lived();
         for (index, (id, mut block)) in ids.into_iter().zip(blocks).enumerate() {
             block.id = id;

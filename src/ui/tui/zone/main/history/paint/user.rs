@@ -2,8 +2,8 @@
 
 use ratatui::style::Color;
 
-use super::super::line::{Ink, Lead, Row, Run};
-use super::super::shape::Block;
+use super::super::layout::line::{Ink, Lead, Row, Run};
+use super::super::wire::decode::Block;
 use super::prose;
 use crate::ui::tui::theme::fixed;
 

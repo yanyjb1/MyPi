@@ -1,6 +1,6 @@
 //! The task list, pinned under the transcript.
 
-use super::super::line::{Ink, Lead, Row, Run};
+use super::super::layout::line::{Ink, Lead, Row, Run};
 use crate::ui::tui::TodoFold;
 use crate::ui::tui::text::glyphs::{TODO_DONE, TODO_PENDING};
 use crate::ui::tui::theme::fixed;
