@@ -2,6 +2,8 @@
 
 use std::sync::mpsc::Sender;
 
+use super::message::Usage;
+
 /// One live moment, addressed to one session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
@@ -24,17 +26,48 @@ pub enum Element {
 /// One piece of the reply as it arrives, or the end of a block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stream {
-    Text(String),
-    Thinking(String),
+    Text {
+        text: String,
+        usage: Option<Usage>,
+    },
+    Thinking {
+        text: String,
+        usage: Option<Usage>,
+    },
     /// Tool arguments, fragment by fragment; the call id is the only label they need.
     Arguments {
         call_id: String,
         text: String,
+        usage: Option<Usage>,
     },
     /// One block ends here.
     Boundary,
     /// One wake message: its own block, so each reminder keeps its own text.
     Wake(String),
+}
+
+impl Stream {
+    pub fn text(text: impl Into<String>) -> Stream {
+        Stream::Text {
+            text: text.into(),
+            usage: None,
+        }
+    }
+
+    pub fn thinking(text: impl Into<String>) -> Stream {
+        Stream::Thinking {
+            text: text.into(),
+            usage: None,
+        }
+    }
+
+    pub fn arguments(call_id: impl Into<String>, text: impl Into<String>) -> Stream {
+        Stream::Arguments {
+            call_id: call_id.into(),
+            text: text.into(),
+            usage: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

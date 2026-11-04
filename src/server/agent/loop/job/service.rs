@@ -9,7 +9,7 @@ use super::cron::Cron;
 use super::job::{Id, Job, ScheduleEntry, Spec, State, TaskState};
 use super::output::OutputDir;
 use super::scheduler;
-use super::wake::{self, WakeSink};
+use super::wake::WakeSink;
 use crate::server::agent::tools::contract::job as port;
 use crate::server::platform::time;
 
@@ -212,7 +212,7 @@ impl port::JobHost for JobService {
         Ok(text)
     }
 
-    fn cancel(&self, id: &str, notify: bool) -> Result<String> {
+    fn cancel(&self, id: &str) -> Result<String> {
         let id = parse_id(id)?;
         let mut st = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         match id {
@@ -235,9 +235,6 @@ impl port::JobHost for JobService {
                 task.state = TaskState::Canceled;
                 task.ended = Some(time::unix_now());
             }
-        }
-        if notify {
-            st.pending_wakes.push(wake::canceled(id));
         }
         drop(st);
         self.inner.bell.1.notify_all();
@@ -272,6 +269,7 @@ impl JobService {
         Ok(port::Receipt {
             id: id.to_string(),
             text: format!("{id} created"),
+            at: None,
         })
     }
 
@@ -291,6 +289,7 @@ impl JobService {
         Ok(port::Receipt {
             id: id.to_string(),
             text: format!("{id} created for {}", stamp(at)),
+            at: Some(stamp(at)),
         })
     }
 
@@ -320,6 +319,7 @@ impl JobService {
         Ok(port::Receipt {
             id: Id::Schedule(sid).to_string(),
             text: format!("s{sid} created for {}", stamp(next)),
+            at: Some(stamp(next)),
         })
     }
 

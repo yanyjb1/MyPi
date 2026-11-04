@@ -2,11 +2,10 @@
 
 pub mod anthropic;
 pub mod blocks;
-pub mod completion;
-pub mod deepseek;
-pub mod responses;
+pub mod openai;
 pub mod sse;
 pub mod stitch;
+pub mod stream;
 
 use std::fmt;
 use std::io::BufRead;
@@ -50,9 +49,9 @@ impl ProtocolId {
     /// Build one protocol for one endpoint. Compatibility is settled here, once.
     pub fn build(self, base_url: &str, model: &str) -> Box<dyn Protocol> {
         match self {
-            Self::Completion => Box::new(completion::Completion::new(base_url, model)),
-            Self::Deepseek => Box::new(deepseek::Deepseek::new()),
-            Self::Responses => Box::new(responses::Responses::new()),
+            Self::Completion => Box::new(openai::completion::Completion::new(base_url, model)),
+            Self::Deepseek => Box::new(openai::deepseek::Deepseek::new()),
+            Self::Responses => Box::new(openai::responses::Responses::new()),
             Self::Anthropic => Box::new(anthropic::Messages::new()),
         }
     }

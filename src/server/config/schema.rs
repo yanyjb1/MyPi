@@ -6,7 +6,6 @@ const NO_ARGS: &[&str] = &[];
 
 pub(crate) const STREAMING: &[&str] = &["immediate", "buffered"];
 pub(crate) const IPC_KINDS: &[&str] = &["os", "unix", "pipe"];
-pub(crate) const USAGE_ALIGN: &[&str] = &["center", "left", "right"];
 
 keys! {
     KEY_CONFIG_SERVER_API_DEFAULT_MODEL = "config", "server.api", "defaultModel", Text, DefaultValue::Null, "Model requests use unless the session says otherwise.", true;
@@ -40,17 +39,11 @@ keys! {
     KEY_CONFIG_UI_PLACEHOLDER_EMPTY_REPLY = "config", "ui.placeholder", "emptyReply", Text, DefaultValue::Text("SYSTEM: (no reply body — empty response)"), "Words for an assistant reply that arrived empty.", true;
     KEY_CONFIG_UI_PLACEHOLDER_INTERRUPTED = "config", "ui.placeholder", "interrupted", Text, DefaultValue::Text("SYSTEM: UserInterrupted."), "Words for a round the user interrupted.", true;
     KEY_CONFIG_UI_PLACEHOLDER_COPIED_TO_CLIPBOARD = "config", "ui.placeholder", "copiedToClipboard", Text, DefaultValue::Text("SYSTEM: that message is on your clipboard."), "Words for a message copied by a rewind.", true;
-    KEY_CONFIG_UI_TUI_THEME_NAME = "config", "ui.tui.theme", "name", Text, DefaultValue::Null, "JSON theme name; fills the four colors when set.", true;
-    KEY_CONFIG_UI_TUI_THEME_ACCENT = "config", "ui.tui.theme", "accent", Text, DefaultValue::Text("green"), "Borders, model name and used context.", true;
-    KEY_CONFIG_UI_TUI_THEME_GOLD = "config", "ui.tui.theme", "gold", Text, DefaultValue::Text("yellow"), "The money color.", true;
-    KEY_CONFIG_UI_TUI_THEME_BLACK = "config", "ui.tui.theme", "black", Text, DefaultValue::Text("0,0,0"), "The capsule background.", true;
-    KEY_CONFIG_UI_TUI_THEME_MUTED = "config", "ui.tui.theme", "muted", Text, DefaultValue::Text("darkgray"), "The secondary gray.", true;
     KEY_CONFIG_UI_TUI_HISTORY_CACHE_MARGIN = "config", "ui.tui.zone.main.history", "cacheMargin", Int, DefaultValue::Int(64), "Blocks kept in the history zone's product layer.", true;
     KEY_CONFIG_UI_TUI_HISTORY_FOCUS_LINE = "config", "ui.tui.zone.main.history", "focusLine", Int, DefaultValue::Int(3), "Screen row the sight line sits on, counted from the top of the history zone.", true;
     KEY_CONFIG_UI_TUI_HISTORY_CARD_FOLD_BUDGET = "config", "ui.tui.zone.main.history", "cardFoldBudget", Int, DefaultValue::Int(10), "Rows a card head or its tail may take before it folds; the fold keeps row one, the placeholder and the last eight.", true;
     KEY_CONFIG_UI_TUI_HISTORY_SCROLL_HEIGHT = "config", "ui.tui.zone.main.history", "scrollHeight", Int, DefaultValue::Int(10), "Screen rows one wheel notch walks.", true;
     KEY_CONFIG_UI_TUI_HISTORY_TODO_FOLD = "config", "ui.tui.zone.main.history", "todoFold", BoolOrInt, DefaultValue::Bool(false), "Fold the task list; true = 8 rows, N = N rows.", true;
-    KEY_CONFIG_UI_TUI_USAGE_ALIGN = "config", "ui.tui.usage", "align", Text, DefaultValue::Text("center"), "Where the usage panel sits: center, left or right.", true;
     KEY_CONFIG_UI_TUI_FX_USD_CNY = "config", "ui.tui.fx", "usdCny", Float, DefaultValue::Float(6.0), "1 USD in CNY, for display only.", true;
 
     PATTERN_MODELS_PROVIDER_BASE_URL = "models", "provider.<name>", "baseUrl", Text, DefaultValue::Null, "Request root; must be http(s).", true;

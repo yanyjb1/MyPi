@@ -72,6 +72,5 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
 /// One line for a history listing: where the session moved to.
 fn summary(call: &CallRecord) -> String {
-    let path = summary::field(call, "path").unwrap_or_default();
-    summary::clip(&format!("-> {path}"), 96)
+    summary::clip(&summary::field(call, "path").unwrap_or_default(), 96)
 }

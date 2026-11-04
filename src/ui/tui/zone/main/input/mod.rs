@@ -13,6 +13,7 @@ pub use ctx::{Ctx, Data};
 
 use super::desk::{Hire, Reply};
 use super::geometry;
+use super::pane::Pane;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
 use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::{Claim, Frame, Request, Shout, SubZone, TermSize, name};
@@ -774,19 +775,6 @@ impl SubZone for InputZone {
         self.last_mailbox_turn = None;
     }
 
-    fn request_height(&self, term: TermSize) -> u16 {
-        self.request_height_for(self.wrapped_for(term).len(), term.rows)
-    }
-
-    fn assign(&mut self, term: TermSize, rows: u16) {
-        self.term = term;
-        self.rows = rows;
-    }
-
-    fn on_height_changed(&mut self, _rows: u16) -> bool {
-        false
-    }
-
     fn take_shouts(&mut self) -> Vec<Shout> {
         std::mem::take(&mut self.shouts)
     }
@@ -821,6 +809,17 @@ impl SubZone for InputZone {
             }
             _ => {}
         }
+    }
+}
+
+impl Pane for InputZone {
+    fn request_height(&self, term: TermSize) -> u16 {
+        self.request_height_for(self.wrapped_for(term).len(), term.rows)
+    }
+
+    fn assign(&mut self, term: TermSize, rows: u16) {
+        self.term = term;
+        self.rows = rows;
     }
 }
 

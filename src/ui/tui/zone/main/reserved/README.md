@@ -66,7 +66,7 @@ A hand also has:
   calls `arrived`, and feeds the hand the workspace and pools it already knows.
 - `settle()` drops a hand whose `stays()` is false and takes the report of a fresh hand once
   `ready()` is true.
-- `request_height` returns the frozen report's rows, or `IDLE_ROWS`.
+- `pane::Pane`'s `request_height` returns the frozen report's rows, or `IDLE_ROWS`.
 - `assign` records the allocated rows, at least `IDLE_ROWS`.
 - `borrowed` returns the report's keys.
 - `deliver_action` passes a key to the hand and stores any reply.
@@ -94,4 +94,4 @@ A hand also has:
 
 | key | use |
 |---|---|
-| `config.ui.tui.theme` | the panel's and the popup's colors |
+None: the palette is fixed and the accent comes from the app.

@@ -72,15 +72,15 @@ tool; no tool declares it.
 | `write` | `path` req, `content` req |
 | `cd` | `path` req |
 | `bash` | `command` req |
-| `alias` | `op` req (`add`/`list`/`remove`), `name`, `command` |
-| `kairos` | `op` req (`now`/`after`/`every`/`list`/`status`/`result`/`cancel`), `type` (`command`/`text`), `content`, `timeout`, `delay`, `expr`, `count`, `id`, `notify` |
+| `alias` | `op` req (`add`/`list`/`del`), `name`, `command` |
+| `kairos` | `op` req (`now`/`after`/`every`/`list`/`status`/`result`/`cancel`), `type` (`command`/`text`), `content`, `timeout`, `delay`, `expr`, `count`, `id` |
 | `task` | `template` req, `vars`, `cwd`, `maxToolCalls`, `name` |
-| `final` | `op` req (`write`/`edit`/`mass_edit`/`read`/`submit`), `content`, `old`, `new`, `edits` |
+| `final` | `op` req (`write`/`edit`/`read`/`submit`), `content`, `old`, `new`, `edits` |
 | `mcp` | `op` req (`list`/`call`), `server`, `tool`, `args` |
 | `web` | `op` req (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`net`/`screenshot`), `url`, `raw`, `query`, `provider` req, `page`, `selector`, `value`, `filter`, `max`, `full_page` |
 | `memo` | `op` req (`add`/`mod`/`del`/`show`/`history`/`list`), `scope` (`current`/`global`, default `current`), `name`, `content` |
 | `todo` | `op` req (`set`/`tick`/`view`), `items` (the whole list), `ids` (item numbers, 1-based), `done` (default true) |
-| `context` | `op` req (`query`/`show`), `anchor`, `direction` (`back`/`forward`), `limit` (default 3), `tool` (a name or `all`, default `bash`), `ids` |
+| `context` | `op` req (`query`/`show`), `anchor`, `direction` (`before`/`after`), `limit` (default 3), `tool` (a name or `all`, default `bash`), `ids` |
 
 `provider` is required on `web`: one search runs against exactly one provider, so a call that
 names none is refused rather than spread across several tabs.
@@ -182,12 +182,27 @@ guard belongs to the unix shells only; `pwsh` and `niu` run the line as written.
 
 ### context
 
-- `query` needs `anchor` and `direction`; `tool` is one name or `all`. Every line is the block, the
-  tool, ok or failed, and that tool's own summary.
-- `show` returns the request row and the result row whole, one JSON line each.
-- Past ten listing lines, or past three shown blocks, the text lands in `Export::dir()` and the
-  reply names the file; the name is built from the parameters, so the same query overwrites its
-  own file.
+- `query` needs `anchor` and `direction`; `tool` is one name or `all`. The answer is a JSON array of
+  `{id, tool, ok, summary}`, one element per recorded call.
+- `show` answers a JSON array of `{id, request, result}`; request and result are the stored text
+  parsed back into JSON, `null` when the block carries none.
+- Past ten rows, or past three shown blocks, the text lands in `Export::dir()` and the reply names
+  the file; the name is built from the parameters, so the same query overwrites its own file. The
+  memo still carries every row.
+
+### Query answers and summaries
+
+The tools that read history answer JSON, and the same value rides along as the memo: `context`
+`query`/`show`, `memo` `show`/`history`/`list`, `alias` `list`, `kairos`
+`now`/`after`/`every`/`list`/`status`, `mcp` `list`. The front end draws what the memo carries and
+does not parse the text.
+
+Every tool declares `summary`, one line that names the call in a history listing. It carries only
+the least that locates the call: the path for `read`, `write`, `edit` and `cd`, the truncated
+command for `bash`, the name and command for `alias add`, the operation for the tools whose
+parameters are the interesting part (`memo`, `todo`, `context`, `kairos`, `mcp`, `final`), the
+template and its answer name for `task`. `web` has none yet, so `context query` falls back to the
+call's clipped arguments for it.
 
 ### edit's memo
 

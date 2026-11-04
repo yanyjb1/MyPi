@@ -1,7 +1,7 @@
 //! DeepSeek: its own body and its own decode. No compatibility table is shared with completions.
 
 use std::io::BufRead;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use serde_json::{Map, Value, json};
@@ -12,8 +12,8 @@ use crate::server::agent::request::message::{
     AssistantMessage, DEFAULT_EMPTY_REPLY, INTERRUPTED_REPLY, Usage, WireMessage,
 };
 use crate::server::agent::request::protocol::blocks;
-use crate::server::agent::request::protocol::sse::{self, Frame};
 use crate::server::agent::request::protocol::stitch::Calls;
+use crate::server::agent::request::protocol::stream::{self, Budget};
 use crate::server::agent::request::protocol::{
     Endpoint, Output, Protocol, ProtocolRequest, WireRequest,
 };
@@ -74,46 +74,17 @@ impl Protocol for Deepseek {
         let mut content = String::new();
         let mut reasoning = String::new();
         let mut usage = Usage::default();
-        let mut interrupted = false;
         let mut calls = Calls::default();
-        let mut buf: Vec<u8> = Vec::new();
 
-        loop {
-            match sse::read(reader.as_mut(), &mut buf) {
-                Ok(0) => {
-                    interrupted = cancel.load(Ordering::Relaxed);
-                    break;
-                }
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                    if cancel.load(Ordering::Relaxed) {
-                        interrupted = true;
-                        break;
-                    }
-                    continue;
-                }
-                Err(e) => {
-                    if cancel.load(Ordering::Relaxed) {
-                        interrupted = true;
-                        break;
-                    }
-                    return Err(e.into());
-                }
-            }
-
-            let payload = match sse::frame(&String::from_utf8_lossy(&buf))? {
-                Frame::Skip => continue,
-                Frame::Done => break,
-                Frame::Payload(p) => p,
-            };
-            let chunk: Value = serde_json::from_str(&payload)?;
+        let end = stream::data(reader.as_mut(), cancel, Budget::default(), |payload| {
+            let chunk: Value = serde_json::from_str(payload)?;
 
             if let Some(u) = chunk.get("usage").filter(|v| !v.is_null()) {
                 usage = read_usage(u);
             }
 
             let Some(choice) = chunk.get("choices").and_then(|c| c.get(0)) else {
-                continue;
+                return Ok(true);
             };
             let delta = &choice["delta"];
 
@@ -121,21 +92,20 @@ impl Protocol for Deepseek {
                 && !piece.is_empty()
             {
                 reasoning.push_str(piece);
-                out.stream(Stream::Thinking(piece.to_string()));
+                out.stream(Stream::thinking(piece.to_string()));
             }
             if let Some(piece) = delta.get("content").and_then(Value::as_str)
                 && !piece.is_empty()
             {
                 content.push_str(piece);
-                out.stream(Stream::Text(piece.to_string()));
+                out.stream(Stream::text(piece.to_string()));
             }
             calls.feed(delta, &mut |call_id, text| {
-                out.stream(Stream::Arguments {
-                    call_id: call_id.to_string(),
-                    text: text.to_string(),
-                });
+                out.stream(Stream::arguments(call_id.to_string(), text.to_string()));
             });
-        }
+            Ok(true)
+        })?;
+        let interrupted = end == stream::End::Canceled;
 
         let placed = calls.finish();
         if !reasoning.is_empty() {

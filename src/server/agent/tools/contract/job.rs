@@ -64,6 +64,8 @@ impl JobOutcome {
 pub struct Receipt {
     pub id: String,
     pub text: String,
+    /// The next scheduled local time, absent when the task starts at once.
+    pub at: Option<String>,
 }
 
 /// One row of the session's task list.
@@ -93,7 +95,7 @@ pub trait JobHost: Send + Sync {
     fn list(&self) -> Vec<Row>;
     fn status(&self, id: &str) -> Result<Status>;
     fn result(&self, id: &str) -> Result<String>;
-    fn cancel(&self, id: &str, notify: bool) -> Result<String>;
+    fn cancel(&self, id: &str) -> Result<String>;
 }
 
 /// Where one command's output goes while it runs.

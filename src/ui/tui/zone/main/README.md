@@ -69,8 +69,6 @@ A `local / disconnected` frame becomes `Request::Quit`: no session, no screen wo
 
 ## 3. Unresolved
 
-1. The row handshake (`request_height` / `assign` / `on_height_changed`) still lives on `SubZone`;
-   it is the main zone's private business.
 2. The usage gauge's denominator costs one `call config` per model; a missing answer leaves the
    gauge hidden.
 3. A rewind's prefill is guessed: history shouts the newest user block it still owns.

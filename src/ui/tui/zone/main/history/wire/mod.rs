@@ -1,5 +1,10 @@
 //! Frames in: pieces, closed rounds, notices, config answers, structure.
 
+pub(crate) mod ask;
+pub(crate) mod decode;
+pub(crate) mod live;
+mod transfer;
+
 use serde_json::{Value, json};
 
 use self::decode::{Block, Kind as BlockKind};
@@ -90,6 +95,16 @@ impl HistoryZone {
             .get("call_id")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if let Some(usage) = content.get("usage").filter(|v| !v.is_null()) {
+            let prompt = usage.get("prompt").and_then(Value::as_u64).unwrap_or(0);
+            let completion = usage.get("completion").and_then(Value::as_u64).unwrap_or(0);
+            let used = prompt + completion;
+            if prompt > 0 && used != self.usage {
+                self.usage = used;
+                self.shouts
+                    .push(Shout::new(name::USAGE, json!({"used": used})));
+            }
+        }
         match kind {
             "text" => self.live.text(text),
             "thinking" => self.live.thinking(text),
@@ -143,7 +158,7 @@ impl HistoryZone {
         }
         for [lo, hi] in ranges {
             let have = (lo..=hi).all(|id| self.blocks.contains_key(&id));
-            if have && !handed {
+            if have {
                 continue;
             }
             self.outbox

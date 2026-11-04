@@ -58,12 +58,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     )))
 }
 
-/// One line for a history listing: which file, how many bytes.
+/// One line for a history listing: which file.
 fn summary(call: &CallRecord) -> String {
-    let path = summary::field(call, "path").unwrap_or_default();
-    let bytes = serde_json::from_str::<serde_json::Value>(&call.args)
-        .ok()
-        .and_then(|v| v.get("content")?.as_str().map(str::len))
-        .unwrap_or(0);
-    summary::clip(&format!("{path} ({bytes} bytes)"), 96)
+    summary::clip(&summary::field(call, "path").unwrap_or_default(), 96)
 }

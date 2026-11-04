@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::ipc::contract::Frame;
 use crate::server::agent::r#loop::{Element, Event, NoticeLevel, Stream, ToolEvent};
+use crate::server::agent::request::message::Usage;
 use crate::server::storage::{Structure, Writer};
 
 /// One connection's outbound end and what it currently follows.
@@ -215,11 +216,20 @@ impl Relay {
         match element {
             Element::Stream(stream) => {
                 let (kind, extra) = match stream {
-                    Stream::Text(text) => ("text", json!({"text": text})),
-                    Stream::Thinking(text) => ("thinking", json!({"text": text})),
-                    Stream::Arguments { call_id, text } => {
-                        ("arguments", json!({"call_id": call_id, "text": text}))
+                    Stream::Text { text, usage } => {
+                        ("text", json!({"text": text, "usage": bill(usage)}))
                     }
+                    Stream::Thinking { text, usage } => {
+                        ("thinking", json!({"text": text, "usage": bill(usage)}))
+                    }
+                    Stream::Arguments {
+                        call_id,
+                        text,
+                        usage,
+                    } => (
+                        "arguments",
+                        json!({"call_id": call_id, "text": text, "usage": bill(usage)}),
+                    ),
                     Stream::Boundary => ("boundary", json!({})),
                     Stream::Wake(text) => ("wake", json!({"text": text})),
                 };
@@ -354,6 +364,20 @@ impl Relay {
 
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// One request's bill as a frame carries it; `null` when the piece carries none.
+fn bill(usage: Option<Usage>) -> Value {
+    match usage {
+        Some(u) => json!({
+            "prompt": u.prompt,
+            "completion": u.completion,
+            "cached": u.cached,
+            "cache_write": u.cache_write,
+            "reasoning": u.reasoning,
+        }),
+        None => Value::Null,
     }
 }
 

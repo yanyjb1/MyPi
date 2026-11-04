@@ -152,7 +152,7 @@ fn flush_numbered(numbered: &mut Vec<(usize, String)>, out: &mut Vec<Row>) {
     }
 }
 
-fn write_preview(b: &ToolBlock<'_>) -> Vec<Row> {
+pub(crate) fn write_preview(b: &ToolBlock<'_>) -> Vec<Row> {
     let content = arg_str(b.args, "content").unwrap_or_default();
     if content.is_empty() {
         return Vec::new();

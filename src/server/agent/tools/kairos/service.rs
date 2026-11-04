@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
+use serde_json::{Value, json};
 
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::job::{JobHost, JobRunner, JobSpec, Schedule, Status};
@@ -12,7 +13,7 @@ use crate::server::agent::tools::spec::Args;
 use super::command::{Command, CommandRunner};
 use super::duration::parse as parse_duration;
 use super::text::TextRunner;
-use super::{CONTENT, COUNT, DELAY, EXPR, ID, NOTIFY, OP, TIMEOUT, TYPE};
+use super::{CONTENT, COUNT, DELAY, EXPR, ID, OP, TIMEOUT, TYPE};
 
 pub(crate) fn run(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     let jobs = env
@@ -20,18 +21,18 @@ pub(crate) fn run(env: &mut Env, args: &Args) -> Result<ToolOutput> {
         .jobs(env.session)
         .ok_or_else(|| anyhow::anyhow!("`kairos` is unavailable in this session"))?;
     let op = args.choice(OP)?;
-    let text = match op.as_str() {
+    match op.as_str() {
         "now" => {
             let kind = args.choice(TYPE)?;
             if kind != "command" {
                 bail!("`text` runs on `after` or `every` only; `now` has nothing to wait for");
             }
-            start(env, jobs.as_ref(), args, &kind, Schedule::Now)?
+            start(env, jobs.as_ref(), args, &kind, Schedule::Now)
         }
         "after" => {
             let delay = parse_duration(&args.str(DELAY)?)?;
             let kind = args.choice(TYPE)?;
-            start(env, jobs.as_ref(), args, &kind, Schedule::After(delay))?
+            start(env, jobs.as_ref(), args, &kind, Schedule::After(delay))
         }
         "every" => {
             let expr = args.str(EXPR)?;
@@ -43,15 +44,14 @@ pub(crate) fn run(env: &mut Env, args: &Args) -> Result<ToolOutput> {
                 args,
                 &kind,
                 Schedule::Every { expr, count },
-            )?
+            )
         }
-        "list" => list(jobs.as_ref()),
-        "status" => render_status(&jobs.status(&args.str(ID)?)?),
-        "result" => jobs.result(&args.str(ID)?)?,
-        "cancel" => jobs.cancel(&args.str(ID)?, args.flag(NOTIFY)?)?,
+        "list" => Ok(list(jobs.as_ref())),
+        "status" => Ok(status(&jobs.status(&args.str(ID)?)?)),
+        "result" => Ok(ToolOutput::text(jobs.result(&args.str(ID)?)?)),
+        "cancel" => Ok(ToolOutput::text(jobs.cancel(&args.str(ID)?)?)),
         _ => unreachable!(),
-    };
-    Ok(ToolOutput::text(text))
+    }
 }
 
 fn start(
@@ -60,7 +60,7 @@ fn start(
     args: &Args,
     kind: &str,
     schedule: Schedule,
-) -> Result<String> {
+) -> Result<ToolOutput> {
     let spec = match kind {
         "command" => {
             let content = args.str(CONTENT)?;
@@ -93,7 +93,12 @@ fn start(
         },
         _ => unreachable!(),
     };
-    Ok(jobs.start(spec)?.text)
+    let receipt = jobs.start(spec)?;
+    Ok(memo(serde_json::json!({
+        "id": &receipt.id,
+        "kind": kind,
+        "at": receipt.at,
+    })))
 }
 
 fn timeout(args: &Args) -> Result<Option<std::time::Duration>> {
@@ -110,41 +115,39 @@ fn count(args: &Args) -> Result<Option<u32>> {
     }
 }
 
-fn list(jobs: &dyn JobHost) -> String {
-    let rows = jobs.list();
-    if rows.is_empty() {
-        return "no jobs".to_string();
-    }
-    rows.into_iter()
-        .map(|row| format!("{} {} {} {}B", row.id, row.kind, row.state, row.bytes))
-        .collect::<Vec<_>>()
-        .join("\n")
+fn list(jobs: &dyn JobHost) -> ToolOutput {
+    let rows: Vec<Value> = jobs
+        .list()
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": &row.id,
+                "kind": &row.kind,
+                "state": &row.state,
+                "bytes": row.bytes,
+            })
+        })
+        .collect();
+    memo(Value::Array(rows))
 }
 
-fn render_status(status: &Status) -> String {
-    let mut text = format!("{} {}", status.id, status.state);
-    if let Some(exit) = status.exit {
-        text.push_str(&format!(", exit {exit}"));
-    }
-    if status.duration > 0 {
-        text.push_str(&format!(", {}s", status.duration));
-    }
-    if status.bytes > 0 {
-        text.push_str(&format!(", {} bytes", status.bytes));
-    }
-    if status.truncated {
-        text.push_str(", truncated");
-    }
-    if let Some(next) = status.next {
-        text.push_str(&format!(", next {}", stamp(next)));
-    }
-    if let Some(remaining) = status.remaining {
-        text.push_str(&format!(", remaining {remaining}"));
-    }
-    if status.skipped > 0 {
-        text.push_str(&format!(", skipped {}", status.skipped));
-    }
-    text
+fn status(status: &Status) -> ToolOutput {
+    memo(json!({
+        "id": &status.id,
+        "state": &status.state,
+        "exit": status.exit,
+        "duration": status.duration,
+        "bytes": status.bytes,
+        "truncated": status.truncated,
+        "next": status.next.map(stamp),
+        "remaining": status.remaining,
+        "skipped": status.skipped,
+    }))
+}
+
+fn memo(value: Value) -> ToolOutput {
+    let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+    ToolOutput::with_memo(text, value)
 }
 
 fn stamp(unix: i64) -> String {

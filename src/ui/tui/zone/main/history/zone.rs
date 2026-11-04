@@ -12,6 +12,7 @@ use super::product::{Products, TodoPanel};
 use super::wire::decode::Block;
 use super::wire::live::Live;
 
+use super::super::pane::Pane;
 use crate::ui::tui::TodoFold;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
 use crate::ui::tui::zone::{Claim, Frame, Kind, Request, Shout, SubZone, TermSize, Turns, name};
@@ -358,23 +359,6 @@ impl SubZone for HistoryZone {
         self.apply_structure(snapshot);
     }
 
-    fn request_height(&self, _term: TermSize) -> u16 {
-        u16::MAX
-    }
-
-    fn assign(&mut self, term: TermSize, rows: u16) {
-        self.resize(rows);
-        let width = usize::from(term.cols.max(1));
-        if self.prep.width != width {
-            self.refold(width);
-        }
-    }
-
-    fn on_height_changed(&mut self, rows: u16) -> bool {
-        self.resize(rows);
-        true
-    }
-
     fn take_shouts(&mut self) -> Vec<Shout> {
         std::mem::take(&mut self.shouts)
     }
@@ -404,5 +388,19 @@ impl SubZone for HistoryZone {
             }
             _ => {}
         }
+    }
+}
+
+impl Pane for HistoryZone {
+    fn assign(&mut self, term: TermSize, rows: u16) {
+        self.resize(rows);
+        let width = usize::from(term.cols.max(1));
+        if self.prep.width != width {
+            self.refold(width);
+        }
+    }
+
+    fn on_height_changed(&mut self, rows: u16) {
+        self.resize(rows);
     }
 }

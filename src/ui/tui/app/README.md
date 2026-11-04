@@ -22,10 +22,9 @@ The front end's centre: the registry, the display ledger, and the only exit to t
 
 ### Boot
 
-1. Ask the five palette keys (see `THEME_KEYS` in `app.rs`) through `call config`.
-2. If the startup names a session, attach it: `session.attach`, `subscribe watch`, broadcast
+1. If the startup names a session, attach it: `session.attach`, `subscribe watch`, broadcast
    `session(Some(id))` to the zone that shows, land what it asks for.
-3. Start the first zone: `start(size, &memo)`, land its requests.
+2. Start the first zone: `start(size, &memo)`, land its requests.
 
 The memo carries the launch directory (`cwd`) for the picker; `attach` and `detach` reset the
 memo but always write it back.
@@ -78,7 +77,5 @@ starts it. `Outcome::Quit` empties the owner and marks the app finished.
 
 ## 4. Config fields
 
-| key | use |
-|---|---|
-| `config.ui.tui.theme.name` | the JSON theme to load |
-| `config.ui.tui.theme.accent` / `.gold` / `.black` / `.muted` | colour overrides |
+None. The palette is fixed and the accent is picked at startup (`Accent::pick()`), changed with
+its own key at run time.

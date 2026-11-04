@@ -8,6 +8,7 @@ mod history;
 mod input;
 mod keys;
 mod num;
+mod pane;
 mod reserved;
 mod zone;
 

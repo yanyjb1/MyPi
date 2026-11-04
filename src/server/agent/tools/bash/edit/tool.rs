@@ -199,21 +199,7 @@ fn numbered(first: usize, lines: &[String]) -> Vec<Value> {
         .collect()
 }
 
-/// One line for a history listing: which file, and which lines when the call names them.
+/// One line for a history listing: which file.
 fn summary(call: &CallRecord) -> String {
-    let path = summary::field(call, "path").unwrap_or_default();
-    match edited_lines(call) {
-        Some(lines) => summary::clip(&format!("{path} lines {lines}"), 96),
-        None => summary::clip(&path, 96),
-    }
-}
-
-/// The line numbers a `mass` call replaces, in order.
-fn edited_lines(call: &CallRecord) -> Option<String> {
-    let args: Value = serde_json::from_str(&call.args).ok()?;
-    let mut lines = Vec::new();
-    for entry in args.get("edits")?.as_array()? {
-        lines.push(entry.get("line")?.as_i64()?.to_string());
-    }
-    (!lines.is_empty()).then(|| lines.join(","))
+    summary::clip(&summary::field(call, "path").unwrap_or_default(), 96)
 }

@@ -27,6 +27,11 @@ pub(crate) fn rows(seg: &Segment, width: usize) -> Vec<Row> {
     out
 }
 
+/// One table built from cells, laid at a card's inner width.
+pub(crate) fn cells(header: Vec<String>, body: Vec<Vec<String>>, width: usize) -> Vec<Row> {
+    layout(&Table { header, body }, width)
+}
+
 struct Table {
     header: Vec<String>,
     body: Vec<Vec<String>>,

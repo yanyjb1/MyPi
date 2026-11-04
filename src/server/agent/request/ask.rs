@@ -266,6 +266,26 @@ impl<'a> Forward<'a> {
         }
     }
 
+    /// The bill rides an increment of the kind the block it was written on carries.
+    fn bill(&self, block: &Block, usage: Usage) {
+        let piece = match block.kind {
+            Kind::Assistant => Stream::Text {
+                text: String::new(),
+                usage: Some(usage),
+            },
+            Kind::Reasoning => Stream::Thinking {
+                text: String::new(),
+                usage: Some(usage),
+            },
+            _ => Stream::Arguments {
+                call_id: block.call_id.clone().unwrap_or_default(),
+                text: String::new(),
+                usage: Some(usage),
+            },
+        };
+        self.line.stream(piece);
+    }
+
     fn land(&mut self, mut block: Block) -> Result<()> {
         block.ts = self.ts.clone();
         self.sink.land(block, None)
@@ -276,6 +296,7 @@ impl<'a> Forward<'a> {
         self.flush();
         if let Some(mut block) = self.pending.take() {
             block.usage = Some(usage);
+            self.bill(&block, usage);
             if let Err(e) = self.land(block)
                 && self.failure.is_none()
             {
@@ -347,18 +368,47 @@ fn coalesce(pieces: Vec<Stream>) -> Vec<Stream> {
     let mut out: Vec<Stream> = Vec::with_capacity(pieces.len());
     for piece in pieces {
         match (out.last_mut(), piece) {
-            (Some(Stream::Text(held)), Stream::Text(more)) => held.push_str(&more),
-            (Some(Stream::Thinking(held)), Stream::Thinking(more)) => held.push_str(&more),
+            (
+                Some(Stream::Text { text: held, usage }),
+                Stream::Text {
+                    text: more,
+                    usage: bill,
+                },
+            ) => {
+                held.push_str(&more);
+                if bill.is_some() {
+                    *usage = bill;
+                }
+            }
+            (
+                Some(Stream::Thinking { text: held, usage }),
+                Stream::Thinking {
+                    text: more,
+                    usage: bill,
+                },
+            ) => {
+                held.push_str(&more);
+                if bill.is_some() {
+                    *usage = bill;
+                }
+            }
             (
                 Some(Stream::Arguments {
                     call_id: held_id,
                     text: held,
+                    usage,
                 }),
                 Stream::Arguments {
                     call_id,
                     text: more,
+                    usage: bill,
                 },
-            ) if *held_id == call_id => held.push_str(&more),
+            ) if *held_id == call_id => {
+                held.push_str(&more);
+                if bill.is_some() {
+                    *usage = bill;
+                }
+            }
             (_, piece) => out.push(piece),
         }
     }

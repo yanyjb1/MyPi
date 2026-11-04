@@ -22,6 +22,23 @@ const TABLE: &[(Seat, &[Claim])] = &[
     (Seat::Reserved, super::reserved::ReservedZone::CLAIMS),
 ];
 
+/// Panics when two seats claim the same input: the three sub-zones are one zone.
+pub fn check() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        for (i, (seat, claims)) in TABLE.iter().enumerate() {
+            for (other, theirs) in TABLE.iter().skip(i + 1) {
+                for claim in claims.iter() {
+                    assert!(
+                        !theirs.iter().any(|held| held == claim),
+                        "{seat:?} and {other:?} claim the same input"
+                    );
+                }
+            }
+        }
+    });
+}
+
 /// Who claims this action: borrowed rows first, then the static table.
 pub fn resolve(a: &Action, borrowed: &Borrowed) -> Option<Seat> {
     borrowed.resolve(a).or_else(|| {

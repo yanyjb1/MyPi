@@ -111,6 +111,8 @@ api's own write doors ------------->  relay
 
 - `kind` in a live payload is one of `text`, `thinking`, `arguments`, `boundary`, `tool_start`,
   `tool_progress`, `tool_end`, `wake`. A `wake` piece is one job's reminder and keeps its own block.
+- `text`, `thinking` and `arguments` carry `usage`: the bill of the request that just ended, on the
+  one piece the decoder wrote it onto; `null` on every other piece.
 - `action` in a change payload is `name`, `cwd`, `switch`, `rewind` or `delete`; the rest of the
   payload is that door's changed row.
 - A change frame skips the viewer that issued it; live output, notices and structure go to

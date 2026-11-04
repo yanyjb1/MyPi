@@ -108,8 +108,8 @@ impl Source for Db {
         let ranges = ranges(&reader, session)?;
         let anchor = anchor_block(&reader, anchor)?;
         let ranges = match direction {
-            Direction::Back => clip(ranges, ..anchor),
-            Direction::Forward => clip(ranges, anchor + 1..),
+            Direction::Before => clip(ranges, ..anchor),
+            Direction::After => clip(ranges, anchor + 1..),
         };
         let mut filter = vec![
             Cond::Eq("kind", Val::Text("tool_request".to_string())),
@@ -121,8 +121,8 @@ impl Source for Db {
             filter.push(Cond::Eq("name", Val::Text(tool.to_string())));
         }
         let order = match direction {
-            Direction::Back => Order::Desc,
-            Direction::Forward => Order::Asc,
+            Direction::Before => Order::Desc,
+            Direction::After => Order::Asc,
         };
         let requests = reader.query(
             &Query::new(Sheet::Blocks)

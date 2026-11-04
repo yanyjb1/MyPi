@@ -79,26 +79,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     Ok(ToolOutput::with_memo(text, memo))
 }
 
-/// One line for a history listing: the operation and what it touched.
+/// One line for a history listing: the operation only.
 fn summary(call: &CallRecord) -> String {
-    let op = summary::field(call, "op").unwrap_or_default();
-    match summary::field(call, "items") {
-        Some(_) => summary::clip(&format!("{op} list"), 96),
-        None => summary::clip(&format!("{op} {}", numbers_of(call)), 96),
-    }
-}
-
-/// The item numbers a `tick` call names, for the summary.
-fn numbers_of(call: &CallRecord) -> String {
-    let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.args) else {
-        return String::new();
-    };
-    let Some(ids) = args.get("ids").and_then(|v| v.as_array()) else {
-        return String::new();
-    };
-    ids.iter()
-        .filter_map(|v| v.as_i64())
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join(" ")
+    summary::clip(&summary::field(call, "op").unwrap_or_default(), 96)
 }

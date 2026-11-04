@@ -38,7 +38,7 @@ pub trait Hand {
         true
     }
 
-    /// One bus event. Unknown names are ignored.
+    /// One bus event.
     fn on_event(&mut self, _event: &str, _content: &Value) {}
 
     /// The workspace a path completes against.

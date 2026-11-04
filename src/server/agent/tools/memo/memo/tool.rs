@@ -1,6 +1,7 @@
 //! The `memo` tool: named notes. Reads both scopes; writes current only.
 
 use anyhow::{Result, anyhow};
+use serde_json::{Value, json};
 
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::{Effect, MemoOp, ToolOutput};
@@ -109,7 +110,8 @@ fn read(env: &Env, scope: MemoScope, op: &str, args: &Args) -> Result<ToolOutput
         .source
         .memo(env.session)
         .read(env.session, scope, read_op, name.as_deref())?;
-    Ok(ToolOutput::text(render(view)))
+    let (text, memo) = render(view);
+    Ok(ToolOutput::with_memo(text, memo))
 }
 
 fn name(raw: String) -> Result<String> {
@@ -120,25 +122,25 @@ fn name(raw: String) -> Result<String> {
     Ok(name.to_string())
 }
 
-fn render(memo: MemoView) -> String {
-    match memo {
-        MemoView::Names(names) if names.is_empty() => "(no memos)".to_string(),
-        MemoView::Names(names) => names.join("\n"),
-        MemoView::Content(content) => content,
-        MemoView::History(versions) if versions.is_empty() => "(no history)".to_string(),
-        MemoView::History(versions) => versions
-            .into_iter()
-            .map(|version| format!("{} {}\n{}", version.id, version.ts, version.content))
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-    }
+/// A read answers compact JSON; the text is that JSON, pretty-printed.
+fn render(memo: MemoView) -> (String, Value) {
+    let value = match memo {
+        MemoView::Names(names) => json!(names),
+        MemoView::Content(content) => json!({ "content": content }),
+        MemoView::History(versions) => Value::Array(
+            versions
+                .into_iter()
+                .map(|version| {
+                    json!({ "id": version.id, "ts": version.ts, "content": version.content })
+                })
+                .collect(),
+        ),
+    };
+    let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+    (text, value)
 }
 
-/// One line for a history listing: the operation and the memo it touched.
+/// One line for a history listing: the operation only.
 fn summary(call: &CallRecord) -> String {
-    let op = summary::field(call, "op").unwrap_or_default();
-    match summary::field(call, "name") {
-        Some(name) => summary::clip(&format!("{op} {name}"), 96),
-        None => summary::clip(&op, 96),
-    }
+    summary::clip(&summary::field(call, "op").unwrap_or_default(), 96)
 }

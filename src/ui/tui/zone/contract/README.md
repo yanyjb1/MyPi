@@ -36,8 +36,8 @@ The only vocabulary the app and the three major zones share.
 ### `SubZone`
 
 `claims`, `kinds`, `deliver_event(frame, size)`, `deliver_action(action)`, `attach(session,
-size)`, `detach`, `borrowed`, `request_height`, `assign`, `on_height_changed`, `structure`,
-`take_shouts`, `hear`. `Main` is the only host.
+size)`, `detach`, `borrowed`, `structure`, `take_shouts`, `hear`. `Main` is the only host. Rows
+are `Main`'s own business: `main::pane::Pane` takes the ask, the grant and the broadcast.
 
 ### `Kind`
 
@@ -62,7 +62,7 @@ lifts `stream / notice` out of `Stream`. `local` returns `None`: it is delivered
 
 One event a sub-zone (or the main zone) puts out: `name` and `content`. The main zone delivers it
 to the other two and repeats until the queue is dry; a shouter never hears its own event, and a
-shout raised while delivering lands on the same queue. Unknown names are ignored.
+shout raised while delivering lands on the same queue.
 
 The names in use: `cwd` (main), `usage`, `busy`, `prefill` (history and input), `queue`,
 `echo`, `retract` (input to history and the desk).
@@ -82,10 +82,8 @@ The names in use: `cwd` (main), `usage`, `busy`, `prefill` (history and input), 
 
 ## 3. Unresolved
 
-1. Duplicate claims are not rejected at compile time; the app resolves one action to one zone by
-   table order.
-2. `SubZone` still carries `request_height`/`assign`/`on_height_changed`: the row handshake is
-   `Main`'s private business and is not in this contract's final shape.
+1. Two major zones may claim the same input: only one of them shows, and the app gives an action
+   to that one, and only when it declared the claim.
 
 ## 4. Config fields
 

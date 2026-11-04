@@ -87,8 +87,8 @@ gives the money. The bus gives `used`, `busy` and `prefill`.
 
 ### Height and rendering
 
-`request_height` wraps the text at the inner width, adds one row, and caps the result at one fifth
-of the terminal, at least two rows. `render_rows` wraps again, locates the cursor, adjusts the
+`pane::Pane`'s `request_height` wraps the text at the inner width, adds one row, and caps the
+result at one fifth of the terminal, at least two rows. `render_rows` wraps again, locates the cursor, adjusts the
 scroll with minimal movement, renders the statusline, then draws the container.
 
 ### Statusline
@@ -125,5 +125,5 @@ One row, exactly the terminal width. The deco table is `activity`, `model`, `cwd
 
 | key | use |
 |---|---|
-| `config.ui.tui.theme` | statusline, editor, and border colors |
+| `models.model.<address>.contextWindow` | the usage gauge's denominator |
 | `models.model.<address>.contextWindow` | the gauge's denominator |

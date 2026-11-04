@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use super::desk::{Hire, Reply};
+use super::pane::Pane;
 use crate::ui::tui::action::Action;
 use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::SubZone;
@@ -221,18 +222,6 @@ impl SubZone for ReservedZone {
         self.asked = false;
     }
 
-    fn request_height(&self, _term: TermSize) -> u16 {
-        self.report.map(|r| r.rows).unwrap_or(IDLE_ROWS)
-    }
-
-    fn assign(&mut self, _term: TermSize, rows: u16) {
-        self.want = rows.max(IDLE_ROWS);
-    }
-
-    fn on_height_changed(&mut self, _rows: u16) -> bool {
-        false
-    }
-
     fn hear(&mut self, event: &str, content: &Value) {
         match event {
             name::QUEUE => {
@@ -257,5 +246,15 @@ impl SubZone for ReservedZone {
                 }
             }
         }
+    }
+}
+
+impl Pane for ReservedZone {
+    fn request_height(&self, _term: TermSize) -> u16 {
+        self.report.map(|r| r.rows).unwrap_or(IDLE_ROWS)
+    }
+
+    fn assign(&mut self, _term: TermSize, rows: u16) {
+        self.want = rows.max(IDLE_ROWS);
     }
 }

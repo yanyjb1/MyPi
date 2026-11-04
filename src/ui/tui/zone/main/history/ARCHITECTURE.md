@@ -15,6 +15,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `product/` | `Products` and the two product kinds: `markdown` (pieces), `card` (rows), `todo` (the checklist) | private |
 | `wire/` | `mod` (frame dispatch, busy and idle), `decode` (block rows), `ask` (blocks on demand), `live` (the growing tail), `transfer` (the handover) | private |
 | `paint/` | how one block is drawn: prose, code, table, notice, user, cards | private |
+| `paint/card/` | `frame` (the renderer contract, dispatch, the card frame), one file per tool family: `bash`, `edit`, `file`, `todo`, `web`, `alias`, `memo`, `context`, `kairos`, `mcp`, `task`, `draft`, `fallback`, and `tree` for the branch rows | private |
 
 ## What it talks to
 
@@ -54,8 +55,10 @@ HistoryZone
 3. `layout::segment::Kind` and `product::markdown`: a new segment kind needs a painter.
 4. The config key names and `zone::CONFIG_KEYS` plus `wire::mod::read_config`.
 5. `local::SlotKind` and `prefetch::piece_count` / `layer_piece`: a new slot kind needs both.
+6. A tool's memo shape and its `paint/card/` file: the renderer draws what the memo carries, and
+   falls back to the result text only when the memo is absent.
 
 ## Not wired
 
 1. A width change reaches the history zone through `assign`; the `local / resized` frame is not read.
-2. The main zone still owns the row handshake; this zone answers it.
+2. The main zone owns the rows; this zone answers `main::pane::Pane`.

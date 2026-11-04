@@ -118,6 +118,7 @@ impl Zone for MainZone {
     }
 
     fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request> {
+        super::keys::check();
         self.size = Some(size);
         if let Some(focus) = memo.read("tree.focus") {
             memo.delete("tree.focus");

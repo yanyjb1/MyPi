@@ -35,12 +35,11 @@ fields.
 
 ## Must stay in sync
 
-1. `THEME_KEYS` and the server's `config.ui.tui.theme.*` schema.
-2. `Kind::of` and the upstream frame names it classifies.
-3. `App::boot` order and the zone that shows: attach first, start second.
-4. `with_session` and the doors that do not take a session (`config`, `pools`, `sessions`).
-5. `create`'s payload and api's `post init` arguments.
-6. `Startup` and the CLI's launch parameters.
+1. `Kind::of` and the upstream frame names it classifies.
+2. `App::boot` order and the zone that shows: attach first, start second.
+3. `with_session` and the doors that do not take a session (`config`, `pools`, `sessions`).
+4. `create`'s payload and api's `post init` arguments.
+5. `Startup` and the CLI's launch parameters.
 
 ## Not wired
 

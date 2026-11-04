@@ -5,7 +5,9 @@ use anyhow::Result;
 use crate::server::agent::tools::bash::edit;
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::ToolOutput;
+use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
+use crate::server::agent::tools::summary;
 
 use super::answer;
 
@@ -23,7 +25,7 @@ const RECORD: &[Param] = &[
 pub(crate) const PARAMS: &[Param] = &[
     Param::req(
         "op",
-        Kind::Choice(&["write", "edit", "mass_edit", "read", "submit"]),
+        Kind::Choice(&["write", "edit", "read", "submit"]),
         "The draft operation.",
     ),
     Param::opt("content", Kind::Text, "Full draft for `write`."),
@@ -32,7 +34,7 @@ pub(crate) const PARAMS: &[Param] = &[
     Param::opt(
         "edits",
         Kind::Table(RECORD),
-        "Line replacements for `mass_edit`.",
+        "Line replacements for `edit`.",
     ),
 ];
 
@@ -42,7 +44,7 @@ pub(crate) const TOOL: Tool = Tool {
             task; it must be the only call in its message.",
     params: PARAMS,
     run,
-    summary: None,
+    summary: Some(summary),
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
@@ -57,18 +59,19 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
             Ok(ToolOutput::text("draft written"))
         }
         "edit" => {
-            let (text, _, message) =
-                edit::exact_text(&draft.read()?, &args.str(OLD)?, &args.str(NEW)?)?;
-            draft.write(&text)?;
-            Ok(ToolOutput::text(message))
-        }
-        "mass_edit" => {
             let rows = args.table(EDITS)?;
-            let mut edits = Vec::with_capacity(rows.len());
-            for row in &rows {
-                edits.push((row.line(0)?, row.str(1)?));
-            }
-            let (text, _, message) = edit::mass_text(&draft.read()?, &edits)?;
+            let (text, _, message) = if rows.is_empty() {
+                match (args.opt_str(OLD)?, args.opt_str(NEW)?) {
+                    (Some(old), Some(new)) => edit::exact_text(&draft.read()?, &old, &new)?,
+                    _ => anyhow::bail!("edit needs old/new or edits"),
+                }
+            } else {
+                let mut edits = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    edits.push((row.line(0)?, row.str(1)?));
+                }
+                edit::mass_text(&draft.read()?, &edits)?
+            };
             draft.write(&text)?;
             Ok(ToolOutput::text(message))
         }
@@ -93,4 +96,10 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         }
         _ => unreachable!(),
     }
+}
+
+/// One line for a history listing: the operation.
+fn summary(call: &CallRecord) -> String {
+    let op = summary::field(call, "op").unwrap_or_default();
+    summary::clip(&op, 96)
 }

@@ -70,20 +70,11 @@ pub trait SubZone {
         &[]
     }
 
-    /// Rows this sub-zone needs, given the terminal size.
-    fn request_height(&self, term: TermSize) -> u16;
-
-    /// Rows the host allocated, plus the terminal size.
-    fn assign(&mut self, term: TermSize, rows: u16);
-
-    /// The host's row broadcast. `true` = consumed.
-    fn on_height_changed(&mut self, rows: u16) -> bool;
-
     /// Events this sub-zone put out since the last call, oldest first.
     fn take_shouts(&mut self) -> Vec<Shout> {
         Vec::new()
     }
 
-    /// One event another party put out. Unknown names are ignored.
+    /// One event another party put out.
     fn hear(&mut self, _name: &str, _content: &Value) {}
 }

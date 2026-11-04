@@ -63,7 +63,7 @@ pub enum MemoOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AliasOp {
     Add,
-    Remove,
+    Delete,
 }
 
 /// A tool's return, before the front door turns it into a result.

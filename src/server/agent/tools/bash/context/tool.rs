@@ -1,6 +1,7 @@
-//! The `context` tool: query the calls this session recorded, or show whole rows by block number.
+//! The `context` tool: query the calls this session recorded, or show a call's request and result by block number.
 
 use anyhow::{Context as _, Result, anyhow};
+use serde_json::{Value, json};
 
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::ToolOutput;
@@ -34,7 +35,7 @@ const PARAMS: &[Param] = &[
     ),
     Param::opt(
         "direction",
-        Kind::Choice(&["back", "forward"]),
+        Kind::Choice(&["before", "after"]),
         "query: which way from the anchor.",
     ),
     Param::df(
@@ -56,9 +57,9 @@ pub(crate) const TOOL: Tool = Tool {
     name: "context",
     about: "Look at what this session has already recorded; nothing is executed. `query` walks the calls\n\
             around an anchor — an artifact reference `#<ref>` or a block number — in one direction, for one\n\
-            tool or all of them, and answers one line per call: block, tool, ok, summary. `show` returns the\n\
-            whole request and result rows as JSON for the block numbers given. A listing past ten lines, and a\n\
-            `show` past three block numbers, is written to a file and the reply names that file.",
+            tool or all of them, and answers one JSON row per call: id, tool, ok, summary. `show` answers each\n\
+            block's request arguments and result as JSON. A listing past ten calls, and a `show` past three\n\
+            block numbers, is written to a file and the reply names that file.",
     params: PARAMS,
     run,
     summary: Some(summary),
@@ -76,8 +77,8 @@ fn query(env: &Env, args: &Args) -> Result<ToolOutput> {
     let anchor = args.str(ANCHOR)?.trim().to_owned();
     anyhow::ensure!(!anchor.is_empty(), "`anchor` must not be empty");
     let direction = match args.choice(DIRECTION)?.as_str() {
-        "back" => Direction::Back,
-        _ => Direction::Forward,
+        "before" => Direction::Before,
+        _ => Direction::After,
     };
     let limit = args.int(LIMIT)?.max(1) as usize;
     let tool = args.str(TOOL_PARAM)?;
@@ -94,10 +95,10 @@ fn query(env: &Env, args: &Args) -> Result<ToolOutput> {
         )));
     }
 
-    let lines: Vec<String> = records.iter().map(render).collect();
-    let text = lines.join("\n");
-    if lines.len() <= INLINE_LINES {
-        return Ok(ToolOutput::text(text));
+    let memo = Value::Array(records.iter().map(listing_row).collect());
+    let text = serde_json::to_string_pretty(&memo)?;
+    if records.len() <= INLINE_LINES {
+        return Ok(ToolOutput::with_memo(text, memo));
     }
     let file = name(&[
         "query",
@@ -107,54 +108,62 @@ fn query(env: &Env, args: &Args) -> Result<ToolOutput> {
         &tool,
     ]);
     let path = spill(env, &file, &text)?;
-    Ok(ToolOutput::text(format!(
-        "written: {} ({} calls, {})",
-        path.display(),
-        records.len(),
-        block_range(&records)
-    )))
+    Ok(ToolOutput::with_memo(
+        format!(
+            "written: {} ({} calls, {})",
+            path.display(),
+            records.len(),
+            block_range(&records)
+        ),
+        memo,
+    ))
 }
 
 fn show(env: &Env, args: &Args) -> Result<ToolOutput> {
     let ids = block_ids(args)?;
     anyhow::ensure!(!ids.is_empty(), "`ids` is required by `show`");
 
-    let mut lines = Vec::with_capacity(ids.len() * 2);
+    let mut rows = Vec::with_capacity(ids.len());
     for id in &ids {
-        match env.source.block(env.session, *id)? {
-            Some(pair) => {
-                lines.push(format!("{id} request: {}", one_line(&pair.request)));
-                let result = pair
-                    .result
-                    .map_or_else(|| "(none recorded)".to_string(), |v| one_line(&v));
-                lines.push(format!("{id} result: {result}"));
-            }
-            None => lines.push(format!("{id} (no such block in this session)")),
-        }
+        rows.push(match env.source.block(env.session, *id)? {
+            Some(pair) => json!({
+                "id": id,
+                "request": parsed(pair.request.get("args")),
+                "result": parsed(pair.result.as_ref().and_then(|row| row.get("result"))),
+            }),
+            None => json!({ "id": id, "request": null, "result": null }),
+        });
     }
 
-    let text = lines.join("\n");
+    let memo = Value::Array(rows);
+    let text = serde_json::to_string_pretty(&memo)?;
     if ids.len() <= INLINE_BLOCKS {
-        return Ok(ToolOutput::text(text));
+        return Ok(ToolOutput::with_memo(text, memo));
     }
     let joined = ids.iter().map(i64::to_string).collect::<Vec<_>>().join("-");
     let path = spill(env, &name(&["show", &joined]), &text)?;
-    Ok(ToolOutput::text(format!(
-        "written: {} ({} blocks)",
-        path.display(),
-        ids.len()
-    )))
+    Ok(ToolOutput::with_memo(
+        format!("written: {} ({} blocks)", path.display(), ids.len()),
+        memo,
+    ))
 }
 
-/// One listing line: block number, tool, verdict, summary.
-fn render(record: &CallRecord) -> String {
-    format!(
-        "{} {} {}: {}",
-        record.block,
-        record.tool,
-        if record.ok { "ok" } else { "failed" },
-        summary_of(record)
-    )
+/// One listing row: block number, tool, verdict, summary.
+fn listing_row(record: &CallRecord) -> Value {
+    json!({
+        "id": record.block,
+        "tool": &record.tool,
+        "ok": record.ok,
+        "summary": summary_of(record),
+    })
+}
+
+/// A stored text field as JSON when it parses, else as the text itself.
+fn parsed(text: Option<&Value>) -> Value {
+    match text.and_then(Value::as_str) {
+        Some(text) => serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.into())),
+        None => Value::Null,
+    }
 }
 
 /// The tool's own summary; a tool without one falls back to its arguments.
@@ -174,14 +183,9 @@ fn block_range(records: &[CallRecord]) -> String {
 
 fn direction_name(direction: Direction) -> &'static str {
     match direction {
-        Direction::Back => "back",
-        Direction::Forward => "forward",
+        Direction::Before => "before",
+        Direction::After => "after",
     }
-}
-
-/// One JSON row on one line.
-fn one_line(value: &serde_json::Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Block numbers as given: integers, or their decimal spelling.
@@ -228,29 +232,7 @@ fn spill(env: &Env, file: &str, text: &str) -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
-/// One line for a history listing: the operation and what it looked at.
+/// One line for a history listing: the operation.
 fn summary(call: &CallRecord) -> String {
-    let op = summary::field(call, "op").unwrap_or_default();
-    if op == "show" {
-        return summary::clip(&format!("show {}", block_list(call)), 96);
-    }
-    let tool = summary::field(call, "tool").unwrap_or_else(|| "bash".to_string());
-    let direction = summary::field(call, "direction").unwrap_or_default();
-    let anchor = summary::field(call, "anchor").unwrap_or_default();
-    summary::clip(&format!("query {tool} {direction} from {anchor}"), 96)
-}
-
-fn block_list(call: &CallRecord) -> String {
-    let args: serde_json::Value = match serde_json::from_str(&call.args) {
-        Ok(args) => args,
-        Err(_) => return String::new(),
-    };
-    let Some(ids) = args.get("ids").and_then(|v| v.as_array()) else {
-        return String::new();
-    };
-    ids.iter()
-        .filter_map(|v| v.as_i64())
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join(" ")
+    summary::field(call, "op").unwrap_or_default()
 }

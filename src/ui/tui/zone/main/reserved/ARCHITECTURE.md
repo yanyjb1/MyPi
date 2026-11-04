@@ -15,7 +15,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 ## What it exposes
 
 Through `SubZone`: `claims`, `kinds`, `borrowed`, `deliver_event`, `deliver_action`, `attach`,
-`detach`, `request_height`, `assign`, `on_height_changed`, `hear`.
+`detach`, `hear`, plus `super::pane::Pane`'s `request_height` and `assign`.
 
 To `Main`: `hire`, `text`, `col`, `take_reply`, `take_requests`, `render_rows`.
 

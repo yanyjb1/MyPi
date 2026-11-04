@@ -1,8 +1,8 @@
-//! Server-sent events, line by line. Pure mechanics: no protocol knowledge.
+//! `data:` frames: the payload, the end marker, or nothing.
 
 use anyhow::Result;
 
-use super::super::retry::Failure;
+use crate::server::agent::request::retry::Failure;
 
 /// What one line turned out to be.
 pub enum Frame {
@@ -12,12 +12,6 @@ pub enum Frame {
     Done,
     /// A blank line, a comment, an `event:` line: nothing a payload reader cares about.
     Skip,
-}
-
-/// Read one raw line.
-pub fn read(reader: &mut dyn std::io::BufRead, buf: &mut Vec<u8>) -> std::io::Result<usize> {
-    buf.clear();
-    reader.read_until(b'\n', buf)
 }
 
 /// Classify one line. A worker failure travels inside the stream, so it surfaces here.

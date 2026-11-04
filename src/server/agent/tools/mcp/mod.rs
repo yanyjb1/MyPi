@@ -6,13 +6,15 @@ mod stdio;
 pub(crate) mod sync;
 
 use anyhow::{Result, anyhow, bail};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::contract::env::Env;
 use super::contract::output::ToolOutput;
+use super::contract::view::CallRecord;
 use super::spec::{Args, Kind, Param, Tool, ToolProgress};
+use super::summary;
 
-use bridge::{McpBridge, McpContent, McpResult, ToolInfo};
+use bridge::{McpBridge, McpContent, McpResult};
 
 const PARAMS: &[Param] = &[
     Param::req(
@@ -30,7 +32,7 @@ pub const TOOL: Tool = Tool {
     about: "MCP: list configured servers and tools, or call one tool.",
     params: PARAMS,
     run,
-    summary: None,
+    summary: Some(summary),
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
@@ -46,42 +48,35 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 }
 
 fn list(bridge: &dyn McpBridge, server: Option<String>) -> Result<ToolOutput> {
-    if let Some(server) = server.filter(|server| !server.trim().is_empty()) {
-        return Ok(ToolOutput::text(server_block(
-            &server,
-            &bridge.tools(&server)?,
-        )));
-    }
-    let servers = bridge.servers();
-    if servers.is_empty() {
-        return Ok(ToolOutput::text("(no MCP servers configured)"));
-    }
-    let mut out = String::new();
-    for server in servers {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        match bridge.tools(&server.name) {
-            Ok(tools) => out.push_str(&server_block(&server.name, &tools)),
-            Err(error) => out.push_str(&format!("server: {}\n  (error: {error:#})", server.name)),
+    let mut entries = Vec::new();
+    match server.filter(|server| !server.trim().is_empty()) {
+        Some(server) => entries.push(server_json(bridge, &server)),
+        None => {
+            for server in bridge.servers() {
+                entries.push(server_json(bridge, &server.name));
+            }
         }
     }
-    Ok(ToolOutput::text(out))
+    let memo = Value::Array(entries);
+    let text = serde_json::to_string_pretty(&memo)?;
+    Ok(ToolOutput::with_memo(text, memo))
 }
 
-fn server_block(server: &str, tools: &[ToolInfo]) -> String {
-    let mut out = format!("server: {server}");
-    if tools.is_empty() {
-        out.push_str("\n  (no tools)");
-        return out;
+fn server_json(bridge: &dyn McpBridge, server: &str) -> Value {
+    match bridge.tools(server) {
+        Ok(tools) => json!({
+            "server": server,
+            "tools": tools
+                .iter()
+                .map(|tool| json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "required": tool.required,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        Err(error) => json!({"server": server, "error": format!("{error:#}")}),
     }
-    for tool in tools {
-        out.push_str(&format!("\n  {} — {}", tool.name, tool.description));
-        if !tool.required.is_empty() {
-            out.push_str(&format!(" [required: {}]", tool.required.join(", ")));
-        }
-    }
-    out
 }
 
 fn call(bridge: &dyn McpBridge, args: &Args) -> Result<ToolOutput> {
@@ -127,4 +122,10 @@ fn render(result: &McpResult) -> String {
         }
     }
     out
+}
+
+/// One line for a history listing: the operation.
+fn summary(call: &CallRecord) -> String {
+    let op = summary::field(call, "op").unwrap_or_default();
+    summary::clip(&op, 96)
 }

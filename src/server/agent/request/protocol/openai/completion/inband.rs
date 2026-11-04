@@ -26,9 +26,9 @@ pub(crate) trait Scanner: Send {
 
 /// Pick a scanner for this host. `None` = nothing to parse (the structured fields are there).
 pub(crate) fn scanner_for(
-    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::openai::completion::compat::Resolved,
 ) -> Option<Box<dyn Scanner>> {
-    use crate::server::agent::request::protocol::completion::compat::MarkupHealing;
+    use crate::server::agent::request::protocol::openai::completion::compat::MarkupHealing;
     match compat.stream_markup_healing_pattern? {
         MarkupHealing::Kimi => Some(Box::new(KimiScanner::new())),
         MarkupHealing::Dsml => Some(Box::new(XmlScanner::new())),

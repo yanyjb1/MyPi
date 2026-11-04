@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -13,8 +13,8 @@ use crate::server::agent::request::message::{
     AssistantMessage, ContentPart, DEFAULT_EMPTY_REPLY, INTERRUPTED_REPLY, ToolDef, Usage,
     UserContent, WireCall, WireMessage,
 };
-use crate::server::agent::request::protocol::anthropic::stream::read_event;
 use crate::server::agent::request::protocol::blocks;
+use crate::server::agent::request::protocol::stream;
 use crate::server::agent::request::protocol::{
     Endpoint, Output, Protocol, ProtocolRequest, WireRequest,
 };
@@ -193,15 +193,10 @@ fn decode(
     let mut chunks: BTreeMap<u64, Chunk> = BTreeMap::new();
     let mut order: Vec<u64> = Vec::new();
     let mut usage = Usage::default();
-    let mut interrupted = false;
 
-    while let Some(event) = read_event(reader.as_mut())? {
-        if cancel.load(Ordering::Relaxed) {
-            interrupted = true;
-            break;
-        }
+    let end = stream::events(reader.as_mut(), cancel, |event| {
         let Ok(data) = serde_json::from_str::<Value>(&event.data) else {
-            continue;
+            return Ok(true);
         };
         let kind = event
             .event
@@ -217,7 +212,7 @@ fn decode(
             "content_block_start" => {
                 let index = data.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let Some(block) = data.get("content_block") else {
-                    continue;
+                    return Ok(true);
                 };
                 let mut chunk = Chunk::default();
                 match block.get("type").and_then(|v| v.as_str()).unwrap_or("") {
@@ -236,7 +231,7 @@ fn decode(
                             .unwrap_or("")
                             .to_string();
                     }
-                    _ => continue,
+                    _ => return Ok(true),
                 }
                 if !chunks.contains_key(&index) {
                     order.push(index);
@@ -246,10 +241,10 @@ fn decode(
             "content_block_delta" => {
                 let index = data.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let Some(chunk) = chunks.get_mut(&index) else {
-                    continue;
+                    return Ok(true);
                 };
                 let Some(delta) = data.get("delta") else {
-                    continue;
+                    return Ok(true);
                 };
                 let piece = delta
                     .get("text")
@@ -258,20 +253,17 @@ fn decode(
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 if piece.is_empty() {
-                    continue;
+                    return Ok(true);
                 }
                 chunk.text.push_str(piece);
                 match chunk.role {
                     Role::Tool => {
                         chunk.args.push_str(piece);
                         let id = chunk.id.clone();
-                        out.stream(Stream::Arguments {
-                            call_id: id,
-                            text: piece.to_string(),
-                        });
+                        out.stream(Stream::arguments(id, piece.to_string()));
                     }
-                    Role::Thinking => out.stream(Stream::Thinking(piece.to_string())),
-                    Role::Text => out.stream(Stream::Text(piece.to_string())),
+                    Role::Thinking => out.stream(Stream::thinking(piece.to_string())),
+                    Role::Text => out.stream(Stream::text(piece.to_string())),
                 }
             }
             "message_delta" => {
@@ -284,10 +276,12 @@ fn decode(
                 }
             }
             "error" => anyhow::bail!("anthropic stream failed: {}", event.data),
-            "message_stop" => break,
+            "message_stop" => return Ok(false),
             _ => {}
         }
-    }
+        Ok(true)
+    })?;
+    let interrupted = end == stream::End::Canceled;
 
     let mut content = String::new();
     let mut reasoning = String::new();

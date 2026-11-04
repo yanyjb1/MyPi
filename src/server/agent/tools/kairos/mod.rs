@@ -4,7 +4,9 @@ use anyhow::Result;
 
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::ToolOutput;
+use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
+use crate::server::agent::tools::summary;
 
 mod command;
 mod duration;
@@ -19,7 +21,6 @@ pub(crate) const DELAY: usize = 4;
 pub(crate) const EXPR: usize = 5;
 pub(crate) const COUNT: usize = 6;
 pub(crate) const ID: usize = 7;
-pub(crate) const NOTIFY: usize = 8;
 
 pub(crate) const PARAMS: &[Param] = &[
     Param::req(
@@ -46,12 +47,6 @@ pub(crate) const PARAMS: &[Param] = &[
         "3",
     ),
     Param::opt("id", Kind::Text, "Task, schedule, or run id."),
-    Param::df(
-        "notify",
-        Kind::Flag,
-        "Wake when `cancel` removes a task.",
-        "false",
-    ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
@@ -62,9 +57,14 @@ pub(crate) const TOOL: Tool = Tool {
             and `result` hands back what it left. Subagents cannot use this tool.",
     params: PARAMS,
     run,
-    summary: None,
+    summary: Some(summary),
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
     service::run(env, args)
+}
+
+/// One line for a history listing: the operation.
+fn summary(call: &CallRecord) -> String {
+    summary::field(call, "op").unwrap_or_default()
 }

@@ -1,8 +1,8 @@
 //! Row arbitration, the row broadcast, and the cursor's terminal position.
 
 use super::geometry;
+use super::pane::Pane;
 use super::zone::MainZone;
-use crate::ui::tui::zone::SubZone;
 
 /// Blank row between history and the block below it.
 pub const HISTORY_GAP: u16 = 1;
@@ -75,7 +75,7 @@ pub fn settle(zone: &mut MainZone) {
 /// The row broadcast: the arbitration result, to every subscriber.
 pub fn broadcast(zone: &mut MainZone) {
     let h = zone.heights;
-    let _ = zone.history.on_height_changed(h.history);
-    let _ = zone.input.on_height_changed(h.input);
-    let _ = zone.reserved.on_height_changed(h.reserved);
+    zone.history.on_height_changed(h.history);
+    zone.input.on_height_changed(h.input);
+    zone.reserved.on_height_changed(h.reserved);
 }

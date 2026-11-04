@@ -101,8 +101,8 @@ pub enum MemoView {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
-    Back,
-    Forward,
+    Before,
+    After,
 }
 
 /// One call, as history queries hand it over.

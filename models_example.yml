@@ -27,12 +27,11 @@
 
 # ---- Providers -----------------------------------------------------------
 # Every provider says: baseUrl, api, api_key, models.
-#   `api` picks the wire protocol. Only `openai-completions` (OpenAI's
-#   chat/completions wire format) is implemented; aliases `openai` and
-#   `openai-chat-completions` are accepted. Anything else fails at startup on
-#   purpose — an unknown protocol that silently sent requests would fail as
+#   `api` picks the wire protocol: `openai-completion`, `openai-responses`,
+#   `openai-deepseek` or `anthropic-messages`. Anything else fails at startup
+#   on purpose — an unknown protocol that silently sent requests would fail as
 #   "the model is misbehaving".
-#   Omit it and you get `openai-completions`.
+#   Omit it and you get `openai-completion`.
 # baseUrl may be written `base_url` — both spellings are accepted.
 # api_key: literal string, or a ${ENV_VAR} reference (resolved at load).
 #
@@ -105,7 +104,7 @@
 providers:
   local:
     baseUrl: http://127.0.0.1:1/v1
-    api: openai-completions          # the only protocol implemented today
+    api: openai-completion           # the completion dialect
     apiKey: ""                       # empty = no auth header
     # Models this provider serves — nested, ids are provider-internal.
     models:

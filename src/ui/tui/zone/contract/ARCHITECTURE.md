@@ -40,4 +40,3 @@ What each file holds and who names it. Current state only.
 ## Not wired
 
 1. Duplicate claims are not rejected at boot.
-2. `SubZone`'s row handshake is provisional.

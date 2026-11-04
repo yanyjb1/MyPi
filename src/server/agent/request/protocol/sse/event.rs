@@ -1,13 +1,16 @@
+//! `event:` + `data:` frames: the form one provider's stream speaks.
+
 use std::io::BufRead;
 
 use anyhow::Result;
 
-pub(crate) struct SseEvent {
+pub struct SseEvent {
     pub event: Option<String>,
     pub data: String,
 }
 
-pub(crate) fn read_event(reader: &mut dyn BufRead) -> Result<Option<SseEvent>> {
+/// The next event, or `None` at the end of the stream.
+pub fn read_event(reader: &mut dyn BufRead) -> Result<Option<SseEvent>> {
     let mut event = None;
     let mut data = String::new();
     let mut line = String::new();

@@ -66,12 +66,33 @@ dead short-lived notice: no rows, no gap, no budget).
 `wire::live::Live` holds the blocks that have no id yet and are still growing; the prefetch layer
 treats it as the piece right after the newest slot, and re-lays it in place whenever it grows.
 
+### Tool cards
+
+A tool block becomes either a card or a one-line form; `card::node` decides by tool name.
+
+| form | tools |
+|---|---|
+| card | `bash`, `edit`, `write`, `todo`, `web`, `context`, `memo`, `mcp call`, `kairos result`, `final` |
+| one line | `read`, `cd`, `alias`, `task`, `kairos` (every op but `result`), `mcp list`, `final submit` |
+
+A card is a frame: a top edge carrying the header (`status glyph`, bold tool name, then the title
+the renderer names), one section per call body and per result, and a bottom edge. The tail is a
+table when the tool answers rows: `card::Context`, `card::Memo` and the rest lay their table with
+`paint::table::cells` at the card's inner width.
+
+A one-line form is the status glyph, a bold label, and the values the call carried; `alias list`,
+`kairos list`, `mcp list` and `task` add `tree` rows under it (`|-- ` for a middle entry, `'-- `
+for the last, the spine under a non-last entry).
+
+Renderers read the result's memo, not its text: a renderer with no memo falls back to the same
+result text every tool prints.
+
 ### The handover
 
 When a round closes, its structure arrives as id ranges. If the tail holds exactly as many blocks as
 the ranges cover, the tail hands its product over instead of being dropped: each block takes its id
-in order and becomes a numbered slot. Anything the tail never carried still comes back from
-`call blocks`; a row that differs from the handed-over block drops that block's product.
+in order and becomes a numbered slot. Ranges the tail did not cover come back from `call blocks`; a
+row that differs from the handed-over block drops that block's product.
 
 ### Keys
 
@@ -87,9 +108,9 @@ in order and becomes a numbered slot. Anything the tail never carried still come
 
 ### What it shouts
 
-`busy` (on for any round's piece, off when a round closes), `usage` (`{used}` on a block row that
-carries a token count) and `prefill` (`{text}` after a rewind). It hears `cwd`, `echo` and `retract`;
-the last two are the front end's own message and its withdrawal.
+`busy` (on for any round's piece, off when a round closes), `usage` (`{used}` on the increment that
+carries a request's bill) and `prefill` (`{text}` after a rewind). It hears `cwd`, `echo` and
+`retract`; the last two are the front end's own message and its withdrawal.
 
 ## 2. Design intent
 
@@ -106,12 +127,10 @@ the last two are the front end's own message and its withdrawal.
 ## 3. Unresolved
 
 1. Streaming animations per tool: only the finished layout exists.
-2. Tool renderers for `context`, `memo`, `kairos`, `mcp`, `alias`, `task`, `final` are the fallback
-   card.
+2. `web` still falls back to the fallback card.
 3. Every visible row is cloned into a ratatui `Line` per frame.
 4. A wake reminder has no style of its own: it is drawn as a notice row.
-5. The row handshake (`request_height` / `assign` / `on_height_changed`) still lives on `SubZone`;
-   it is the main zone's private business.
+6. Consecutive `read` calls are not folded into one tree: the paint path draws one block at a time.
 
 ## 4. Config fields
 

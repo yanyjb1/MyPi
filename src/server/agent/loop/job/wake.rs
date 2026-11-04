@@ -41,7 +41,3 @@ pub(crate) fn job_status(
 pub(crate) fn skipped(id: Id, reason: &str, skipped: u32) -> String {
     format!("{id} skipped ({reason}), {skipped} times so far")
 }
-
-pub(crate) fn canceled(id: Id) -> String {
-    format!("{id} canceled")
-}

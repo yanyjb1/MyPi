@@ -8,7 +8,9 @@ use super::super::super::layout::line::{Ink, Lead, Row, Run};
 use super::super::super::wire::decode::Block;
 use super::super::Opts;
 use super::super::code;
-use super::{bash, edit, fallback, file, todo, web};
+use super::{
+    alias, bash, context, draft, edit, fallback, file, kairos, mcp, memo, task, todo, web,
+};
 use crate::ui::tui::text::{display_width, glyphs as g, take_width};
 use crate::ui::tui::theme::fixed;
 
@@ -39,12 +41,39 @@ pub fn node(block: &Block, paired: Option<&Block>, opts: &Opts, width: usize) ->
         });
         return out;
     }
+    if name == "alias" {
+        out.extend(alias::block(args, outcome));
+        return out;
+    }
+    if name == "task" {
+        out.extend(task::block(args, outcome, opts.cwd));
+        return out;
+    }
+    if name == "kairos"
+        && let Some(rows) = kairos::inline(args, outcome)
+    {
+        out.extend(rows);
+        return out;
+    }
+    if name == "mcp"
+        && let Some(rows) = mcp::inline(args, outcome)
+    {
+        out.extend(rows);
+        return out;
+    }
+    if name == "final"
+        && let Some(rows) = draft::inline(args, outcome)
+    {
+        out.extend(rows);
+        return out;
+    }
     out.extend(card(
         ToolBlock {
             name,
             args,
             result: outcome,
             expanded: opts.tool,
+            width,
         },
         block.ok.is_none(),
         opts.fold,
@@ -105,9 +134,15 @@ pub(crate) struct ToolBlock<'a> {
     pub args: &'a str,
     pub result: Option<ToolOutcome<'a>>,
     pub expanded: bool,
+    pub width: usize,
 }
 
 impl ToolBlock<'_> {
+    /// The columns a row may take inside the frame.
+    pub(crate) fn inner_width(&self) -> usize {
+        self.width.saturating_sub(4)
+    }
+
     fn renderer(&self) -> &'static dyn ToolRenderer {
         renderer_for(self.name)
     }
@@ -126,10 +161,18 @@ impl ToolBlock<'_> {
 
     fn header(&self) -> Row {
         let state = self.state();
+        let shown = self
+            .renderer()
+            .label(self)
+            .unwrap_or_else(|| self.name.to_string());
         let mut runs = vec![
             Run::with(state.glyph(), Some(state.glyph_ink()), Modifier::empty()),
-            Run::fixed(format!(" {}", self.name), fixed::TOOL_TITLE).bold(),
+            Run::fixed(format!(" {shown}"), fixed::TOOL_TITLE).bold(),
         ];
+        if let Some(title) = self.renderer().title(self) {
+            runs.push(Run::fixed(format!(": {title}"), fixed::MUTED));
+            return Row::of(Lead::None, runs);
+        }
         if let Some(d) = description(self.args) {
             runs.push(Run::fixed(format!(": {d}"), fixed::MUTED));
         }
@@ -236,6 +279,16 @@ impl State {
 
 /// What one tool family draws for the call and for the result.
 pub(crate) trait ToolRenderer {
+    /// The name shown in the header, when it is not the tool's own.
+    fn label(&self, _b: &ToolBlock<'_>) -> Option<String> {
+        None
+    }
+
+    /// The text after the header's colon, when the card names it itself.
+    fn title(&self, _b: &ToolBlock<'_>) -> Option<String> {
+        None
+    }
+
     fn meta(&self, _b: &ToolBlock<'_>) -> Vec<String> {
         Vec::new()
     }
@@ -266,8 +319,38 @@ fn renderer_for(name: &str) -> &'static dyn ToolRenderer {
         "read" | "write" | "cd" => &file::FileTools,
         "todo" => &todo::Todo,
         "web" => &web::Web,
+        "context" => &context::Context,
+        "memo" => &memo::Memo,
+        "mcp" => &mcp::Call,
+        "kairos" => &kairos::Payload,
+        "final" => &draft::Draft,
         _ => &fallback::Fallback,
     }
+}
+
+/// The status glyph and a bold title, for the one-line forms.
+pub(crate) fn head(state: State, label: &str) -> Vec<Run> {
+    vec![
+        Run::with(state.glyph(), Some(state.glyph_ink()), Modifier::empty()),
+        Run::fixed(format!(" {label}"), fixed::TOOL_TITLE).bold(),
+    ]
+}
+
+/// The failure text under a one-line form, indented.
+pub(crate) fn error_lines(result: Option<ToolOutcome<'_>>) -> Vec<Row> {
+    let Some(o) = result.filter(|o| !o.ok) else {
+        return Vec::new();
+    };
+    o.text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            Row::of(
+                Lead::None,
+                vec![Run::fixed(format!("  {line}"), fixed::ERR)],
+            )
+        })
+        .collect()
 }
 
 /// The result text a diff-carrying edit replaces; a plain line otherwise.
@@ -470,6 +553,17 @@ pub(crate) fn arg_bool(args: &str, key: &str) -> Option<bool> {
 pub(crate) fn arg_str(args: &str, key: &str) -> Option<String> {
     let v: Value = serde_json::from_str(args).ok()?;
     Some(v.get(key)?.as_str()?.to_string())
+}
+
+/// One argument as text: strings bare, numbers and flags spelled out.
+pub(crate) fn arg_scalar(args: &str, key: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(args).ok()?;
+    let value = v.get(key)?;
+    Some(match value {
+        Value::String(text) => text.clone(),
+        Value::Null => return None,
+        other => other.to_string(),
+    })
 }
 
 fn format_duration(ms: u64) -> String {

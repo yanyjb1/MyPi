@@ -7,7 +7,9 @@ use anyhow::{Result, bail};
 
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::{Effect, ToolOutput};
+use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
+use crate::server::agent::tools::summary;
 
 use super::answer;
 use super::template;
@@ -53,7 +55,7 @@ pub(crate) const TOOL: Tool = Tool {
             `task`: the tool cannot be handed down, so a template's tool list must not name it.",
     params: PARAMS,
     run,
-    summary: None,
+    summary: Some(summary),
 };
 
 /// What every child is told before its template body.
@@ -126,4 +128,11 @@ fn vars(args: &Args) -> Result<BTreeMap<String, String>> {
         out.insert(name.clone(), text.to_string());
     }
     Ok(out)
+}
+
+/// One line for a history listing: the template and the answer file's name.
+fn summary(call: &CallRecord) -> String {
+    let template = summary::field(call, "template").unwrap_or_default();
+    let name = summary::field(call, "name").unwrap_or_else(|| template::stem(&template));
+    summary::clip(&format!("{template} -> {name}"), 96)
 }

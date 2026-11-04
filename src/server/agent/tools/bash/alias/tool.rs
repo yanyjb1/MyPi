@@ -1,6 +1,7 @@
 //! The `alias` tool: name a shell command for later calls.
 
 use anyhow::{Result, anyhow};
+use serde_json::{Value, json};
 
 use super::super::bash::guard;
 use crate::server::agent::tools::contract::env::Env;
@@ -16,8 +17,8 @@ const COMMAND: usize = 2;
 const PARAMS: &[Param] = &[
     Param::req(
         "op",
-        Kind::Choice(&["add", "list", "remove"]),
-        "add: define an alias; list: show current aliases; remove: delete one.",
+        Kind::Choice(&["add", "list", "del"]),
+        "add: define an alias; list: show current aliases; del: delete one.",
     ),
     Param::opt("name", Kind::Text, "Alias name."),
     Param::opt(
@@ -29,7 +30,7 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "alias",
-    about: "Maintain shell aliases. An alias expands only the first token, only once, and only before the guard. It cannot contain variables, functions, or newlines. `add` and `remove` take effect for later bash calls in this round.",
+    about: "Maintain shell aliases. An alias expands only the first token, only once, and only before the guard. It cannot contain variables, functions, or newlines. `add` and `del` take effect for later bash calls in this round.",
     params: PARAMS,
     run,
     summary: Some(summary),
@@ -38,8 +39,8 @@ pub(crate) const TOOL: Tool = Tool {
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
     match args.choice(OP)?.as_str() {
         "add" => add(env, args),
-        "list" => Ok(ToolOutput::text(list(env))),
-        "remove" => remove(env, args),
+        "list" => Ok(list(env)),
+        "del" => del(env, args),
         other => Err(anyhow!("unknown alias op `{other}`")),
     }
 }
@@ -67,15 +68,15 @@ fn add(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     }))
 }
 
-fn remove(env: &mut Env, args: &Args) -> Result<ToolOutput> {
+fn del(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     let name = alias_name(args)?;
     anyhow::ensure!(
         env.aliases.remove(&name).is_some(),
         "no alias named `{name}`"
     );
     Ok(
-        ToolOutput::text(format!("alias removed: {name}")).effect(Effect::Alias {
-            op: AliasOp::Remove,
+        ToolOutput::text(format!("alias deleted: {name}")).effect(Effect::Alias {
+            op: AliasOp::Delete,
             name,
             command: None,
             ts: String::new(),
@@ -83,15 +84,15 @@ fn remove(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     )
 }
 
-fn list(env: &Env) -> String {
-    if env.aliases.is_empty() {
-        return "(no aliases)".to_string();
-    }
-    env.aliases
+fn list(env: &Env) -> ToolOutput {
+    let rows: Vec<Value> = env
+        .aliases
         .iter()
-        .map(|(name, command)| format!("{name} = {command}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|(name, command)| json!({ "name": name, "command": command }))
+        .collect();
+    let memo = Value::Array(rows);
+    let text = serde_json::to_string_pretty(&memo).unwrap_or_default();
+    ToolOutput::with_memo(text, memo)
 }
 
 /// The classifier's verdict on a command that will later be run as written: a blocked command is
@@ -128,11 +129,13 @@ fn alias_name(args: &Args) -> Result<String> {
     Ok(name)
 }
 
-/// One line for a history listing: the operation and the name.
+/// One line for a history listing: the op, plus the name and command it carries.
 fn summary(call: &CallRecord) -> String {
     let op = summary::field(call, "op").unwrap_or_default();
-    match summary::field(call, "name") {
-        Some(name) => summary::clip(&format!("{op} {name}"), 96),
-        None => summary::clip(&op, 96),
+    let name = summary::field(call, "name").unwrap_or_default();
+    match (op.as_str(), summary::field(call, "command")) {
+        ("add", Some(command)) => summary::clip(&format!("{name} => {command}"), 96),
+        ("del", _) => summary::clip(&format!("del {name}"), 96),
+        _ => summary::clip(&op, 96),
     }
 }

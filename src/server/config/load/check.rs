@@ -8,7 +8,7 @@ use super::super::registry::{self, Value};
 use super::super::schema::{
     IPC_KINDS, KEY_CONFIG_SERVER_API_DEFAULT_MODEL, KEY_CONFIG_SERVER_PLATFORM_IPC,
     KEY_CONFIG_SERVER_PRUNE_ON_REWIND, KEY_CONFIG_SERVER_REQUEST_STREAMING,
-    KEY_CONFIG_SERVER_STORAGE_BATCH_TOOLS, KEY_CONFIG_UI_TUI_USAGE_ALIGN, STREAMING, USAGE_ALIGN,
+    KEY_CONFIG_SERVER_STORAGE_BATCH_TOOLS, STREAMING,
 };
 
 pub(super) fn walk_unknown(
@@ -91,20 +91,6 @@ pub(super) fn check(
         values.insert(
             KEY_CONFIG_SERVER_PLATFORM_IPC,
             Value::Text(IPC_KINDS[0].to_string()),
-        );
-    }
-    if let Some(Value::Text(align)) = values.get(KEY_CONFIG_UI_TUI_USAGE_ALIGN).cloned()
-        && !USAGE_ALIGN.contains(&align.as_str())
-    {
-        notices.push(warn(
-            KEY_CONFIG_UI_TUI_USAGE_ALIGN,
-            "(merged)",
-            "unknown alignment",
-            USAGE_ALIGN[0],
-        ));
-        values.insert(
-            KEY_CONFIG_UI_TUI_USAGE_ALIGN,
-            Value::Text(USAGE_ALIGN[0].to_string()),
         );
     }
     if let Some(Value::Text(address)) = values.get(KEY_CONFIG_SERVER_API_DEFAULT_MODEL).cloned()

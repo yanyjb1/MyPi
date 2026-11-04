@@ -69,7 +69,7 @@ impl Protocol for Completion {
         out: &mut dyn Output,
         cancel: &AtomicBool,
     ) -> Result<AssistantMessage> {
-        protocol::completion::stream::decode(reader, &self.compat, out, cancel)
+        protocol::openai::completion::stream::decode(reader, &self.compat, out, cancel)
     }
 }
 
@@ -81,10 +81,10 @@ pub(crate) fn body_json(
     stream: bool,
     messages: &serde_json::Value,
     tools: &serde_json::Value,
-    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::openai::completion::compat::Resolved,
     session_id: Option<&str>,
 ) -> serde_json::Value {
-    use crate::server::agent::request::protocol::completion::compat::{
+    use crate::server::agent::request::protocol::openai::completion::compat::{
         ReasoningDisableMode, ThinkingFormat,
     };
     use serde_json::{Map, Value, json};
@@ -156,7 +156,7 @@ pub(crate) fn body_json(
         // `strict: true` is not just "add a field": it requires `additionalProperties: false` on every
         // object and every `properties` key in `required`; missing either is a 400.
         if compat.supports_strict_mode
-            && compat.tool_strict_mode == crate::server::agent::request::protocol::completion::compat::ToolStrictMode::AllStrict
+            && compat.tool_strict_mode == crate::server::agent::request::protocol::openai::completion::compat::ToolStrictMode::AllStrict
             && let Some(arr) = wire_tools.as_array_mut()
         {
             for tool in arr {
@@ -432,7 +432,7 @@ pub(crate) fn body_json(
 /// default, opened switch by switch. Also fixes tool-result `name` and tool-call ids.
 pub(crate) fn messages_to_wire(
     messages: &[crate::server::agent::request::message::WireMessage],
-    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::openai::completion::compat::Resolved,
 ) -> serde_json::Value {
     use serde_json::{Value, json};
 
@@ -567,7 +567,7 @@ pub(crate) fn messages_to_wire(
 /// **before** the cache breakpoint.
 fn maybe_patch_images(
     messages: &mut [serde_json::Value],
-    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::openai::completion::compat::Resolved,
 ) {
     use serde_json::json;
 
@@ -606,9 +606,9 @@ fn maybe_patch_images(
 /// content. Off by default — writing a cache costs extra, so only someone who knows why turns it on.
 fn maybe_add_anthropic_cache_control(
     messages: &mut [serde_json::Value],
-    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::openai::completion::compat::Resolved,
 ) {
-    use crate::server::agent::request::protocol::completion::compat::CacheControlFormat;
+    use crate::server::agent::request::protocol::openai::completion::compat::CacheControlFormat;
     use serde_json::json;
 
     if compat.cache_control_format != Some(CacheControlFormat::Anthropic) {
@@ -644,7 +644,7 @@ fn patch_assistant(
     obj: &mut serde_json::Map<String, serde_json::Value>,
     reasoning: Option<&str>,
     has_tool_calls: bool,
-    compat: &crate::server::agent::request::protocol::completion::compat::Resolved,
+    compat: &crate::server::agent::request::protocol::openai::completion::compat::Resolved,
 ) {
     use serde_json::json;
 
@@ -677,7 +677,7 @@ fn patch_assistant(
     let by_all = compat.requires_reasoning_content_for_all_assistant_turns;
     let by_cache = compat.resend_reasoning_content;
     let by_dialect = compat.thinking_format
-        == crate::server::agent::request::protocol::completion::compat::ThinkingFormat::Zai;
+        == crate::server::agent::request::protocol::openai::completion::compat::ThinkingFormat::Zai;
     if !(by_tools || by_all || by_cache || by_dialect) {
         return;
     }

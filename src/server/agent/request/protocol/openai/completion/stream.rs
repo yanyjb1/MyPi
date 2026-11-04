@@ -1,8 +1,8 @@
 //! Chat Completions: SSE deltas in, pieces and blocks out.
 
 use std::io::BufRead;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use serde::Deserialize;
@@ -15,11 +15,11 @@ use crate::server::agent::request::message::{
 };
 use crate::server::agent::request::protocol::Output;
 use crate::server::agent::request::protocol::blocks;
-use crate::server::agent::request::protocol::completion::compat::Resolved;
-use crate::server::agent::request::protocol::completion::inband::{ScanEvent, scanner_for};
-use crate::server::agent::request::protocol::completion::markup::TemplateMarkupFilter;
-use crate::server::agent::request::protocol::sse::{self, Frame};
+use crate::server::agent::request::protocol::openai::completion::compat::Resolved;
+use crate::server::agent::request::protocol::openai::completion::inband::{ScanEvent, scanner_for};
+use crate::server::agent::request::protocol::openai::completion::markup::TemplateMarkupFilter;
 use crate::server::agent::request::protocol::stitch::Calls;
+use crate::server::agent::request::protocol::stream::{self, Budget};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ApiUsage {
@@ -111,66 +111,21 @@ pub(crate) fn decode(
     let mut content_filter = TemplateMarkupFilter::for_compat(compat);
     let mut reasoning_filter = TemplateMarkupFilter::for_compat(compat);
     let mut usage = Usage::default();
-    let mut interrupted = false;
     let mut calls = Calls::default();
 
-    let mut buf: Vec<u8> = Vec::new();
-    let started = Instant::now();
-    let first_budget = compat
-        .stream_first_event_timeout_ms
-        .filter(|ms| *ms > 0)
-        .map(Duration::from_millis);
-    let mut got_first = false;
-    let idle_budget = compat
-        .stream_idle_timeout_ms
-        .filter(|ms| *ms > 0)
-        .map(Duration::from_millis);
-    let mut last_event = Instant::now();
+    let budget = Budget {
+        first: compat
+            .stream_first_event_timeout_ms
+            .filter(|ms| *ms > 0)
+            .map(Duration::from_millis),
+        idle: compat
+            .stream_idle_timeout_ms
+            .filter(|ms| *ms > 0)
+            .map(Duration::from_millis),
+    };
 
-    loop {
-        match sse::read(reader.as_mut(), &mut buf) {
-            Ok(0) => {
-                interrupted = cancel.load(Ordering::Relaxed);
-                break;
-            }
-            Ok(_) => {}
-            Err(e) if is_timeout(&e) => {
-                if cancel.load(Ordering::Relaxed) {
-                    interrupted = true;
-                    break;
-                }
-                if !got_first
-                    && let Some(budget) = first_budget
-                    && started.elapsed() > budget
-                {
-                    anyhow::bail!("no first event from upstream within {budget:?}");
-                }
-                if got_first
-                    && let Some(budget) = idle_budget
-                    && last_event.elapsed() > budget
-                {
-                    anyhow::bail!("no new event from upstream within {budget:?}");
-                }
-                continue;
-            }
-            Err(e) => {
-                if cancel.load(Ordering::Relaxed) {
-                    interrupted = true;
-                    break;
-                }
-                return Err(e).context("stream read interrupted");
-            }
-        }
-
-        let payload = match sse::frame(&String::from_utf8_lossy(&buf))? {
-            Frame::Skip => continue,
-            Frame::Done => break,
-            Frame::Payload(p) => p,
-        };
-        got_first = true;
-        last_event = Instant::now();
-
-        let chunk: Value = serde_json::from_str(&payload)
+    let end = stream::data(reader.as_mut(), cancel, budget, |payload| {
+        let chunk: Value = serde_json::from_str(payload)
             .with_context(|| format!("malformed stream chunk: {payload}"))?;
 
         if let Some(u) = chunk.get("usage").filter(|v| !v.is_null())
@@ -180,7 +135,7 @@ pub(crate) fn decode(
         }
 
         let Some(choice) = chunk.get("choices").and_then(|c| c.get(0)) else {
-            continue;
+            return Ok(true);
         };
         let delta = &choice["delta"];
 
@@ -203,7 +158,7 @@ pub(crate) fn decode(
             reasoning_filter.feed(&fresh, &mut emitted);
             if !emitted.is_empty() {
                 reasoning.push_str(&emitted);
-                out.stream(Stream::Thinking(emitted));
+                out.stream(Stream::thinking(emitted));
             }
             break;
         }
@@ -222,11 +177,11 @@ pub(crate) fn decode(
                             match event {
                                 ScanEvent::Text(t) => {
                                     content.push_str(&t);
-                                    out.stream(Stream::Text(t));
+                                    out.stream(Stream::text(t));
                                 }
                                 ScanEvent::Thinking(t) => {
                                     reasoning.push_str(&t);
-                                    out.stream(Stream::Thinking(t));
+                                    out.stream(Stream::thinking(t));
                                 }
                                 ScanEvent::ToolCall { name, arguments } => {
                                     if !structured {
@@ -242,33 +197,32 @@ pub(crate) fn decode(
                     }
                     None => {
                         content.push_str(&emitted);
-                        out.stream(Stream::Text(emitted));
+                        out.stream(Stream::text(emitted));
                     }
                 }
             }
         }
 
         calls.feed(delta, &mut |call_id, text| {
-            out.stream(Stream::Arguments {
-                call_id: call_id.to_string(),
-                text: text.to_string(),
-            });
+            out.stream(Stream::arguments(call_id.to_string(), text.to_string()));
         });
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             finish = Some(reason.to_string());
         }
-    }
+        Ok(true)
+    })?;
+    let interrupted = end == stream::End::Canceled;
 
     if !interrupted && let Some(scanner) = scanner.as_mut() {
         for event in scanner.flush() {
             match event {
                 ScanEvent::Text(t) => {
                     content.push_str(&t);
-                    out.stream(Stream::Text(t));
+                    out.stream(Stream::text(t));
                 }
                 ScanEvent::Thinking(t) => {
                     reasoning.push_str(&t);
-                    out.stream(Stream::Thinking(t));
+                    out.stream(Stream::thinking(t));
                 }
                 ScanEvent::ToolCall { name, arguments } => healed.push(WireCall::new(
                     format!("call_healed_{}", healed.len()),
@@ -284,13 +238,13 @@ pub(crate) fn decode(
         content_filter.flush(&mut tail);
         if !tail.is_empty() {
             content.push_str(&tail);
-            out.stream(Stream::Text(tail));
+            out.stream(Stream::text(tail));
         }
         let mut thinking = String::new();
         reasoning_filter.flush(&mut thinking);
         if !thinking.is_empty() {
             reasoning.push_str(&thinking);
-            out.stream(Stream::Thinking(thinking));
+            out.stream(Stream::thinking(thinking));
         }
     }
 
@@ -335,8 +289,4 @@ pub(crate) fn decode(
         reasoning: (!reasoning.is_empty()).then_some(reasoning),
         interrupted,
     })
-}
-
-fn is_timeout(e: &std::io::Error) -> bool {
-    e.kind() == std::io::ErrorKind::TimedOut
 }

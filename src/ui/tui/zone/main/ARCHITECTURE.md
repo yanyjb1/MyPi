@@ -12,6 +12,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `dispatch.rs` | key routing, the exits that become requests or a handover | private |
 | `desk.rs` | `Hire`, `Reply` — what the input asks for and what a hand hands back | private |
 | `keys.rs` | `Seat`, `matches`, the static table, `Borrowed` | private |
+| `pane.rs` | `Pane`: the row ask, grant and broadcast a sub-zone answers | private |
 | `geometry.rs` | input container height, scroll, cursor clamping | private |
 | `num/` | compact, exact, and money formatting | private |
 | `history/` | `HistoryZone` | private |
@@ -53,12 +54,11 @@ MainZone
 
 1. `shout::name` and the children that shout or hear each name.
 2. `Hire` and the desk's hand table.
-3. `arbitrate` and the three children's `request_height` / `assign`.
+3. `arbitrate` and the three children's `pane::Pane`: `request_height` / `assign` / `on_height_changed`.
 4. `keys::TABLE` and the children's own claims (`CLAIMS` on each type).
 5. `dispatch` and every `ExitRequest`.
+6. `keys::check` and the three `CLAIMS` lists: two sub-zones may not claim the same input.
 
 ## Not wired
 
 1. `run` still draws every frame whether or not anything arrived.
-2. The desk's usage alignment is not read from config.
-3. Duplicate claims are resolved by table order, not rejected.

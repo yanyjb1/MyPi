@@ -16,12 +16,12 @@
 | `retry.rs` | policy, failure classes, the notice one failure produces |
 | `protocol/mod.rs` | `ProtocolId`, `Protocol`, `Endpoint`, `ProtocolRequest`, `WireRequest`, `Output` |
 | `protocol/blocks.rs` | block constructors |
-| `protocol/sse.rs` | server-sent-event lines and the worker's error line |
+| `protocol/sse/` | `read` (one raw line), `frame` (`data:` frames and the worker's error line), `event` (`event:` + `data:` frames) |
+| `protocol/stream.rs` | the stream loop: cancel, the silent-connection budgets, `data:` or `event:` frames, how it ended |
 | `protocol/stitch.rs` | tool calls stitched out of stream deltas |
-| `protocol/completion/` | the OpenAI-compatible line: body, decode, its own compatibility table, the text-embedded call scanner, the template-markup filter |
-| `protocol/deepseek/` | the DeepSeek line: its own body and decode, no compatibility table |
-| `protocol/responses/` | the Responses line |
-| `protocol/anthropic/` | the Messages line and its event reader |
+| `protocol/openai/` | the OpenAI family: `completion`, `responses`, `deepseek`, each with its own body and decode |
+| `protocol/openai/completion/` | the completion dialect: its compatibility table, the text-embedded call scanner, the template-markup filter |
+| `protocol/anthropic/` | the Messages line |
 | `transport/mod.rs` | `Provider`, and sending one call to either the worker or a direct connection |
 | `transport/client.rs` | one provider connection: retry loop, cancellation, worker slot |
 | `transport/worker.rs` | the long-lived HTTP subprocess and its line protocol |
