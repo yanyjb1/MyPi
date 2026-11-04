@@ -63,7 +63,7 @@ Two kinds of color, nothing between them:
 | kind | where it comes from |
 |---|---|
 | accent | one color, picked at startup, replaced on rename, carried by a `local / accent` frame |
-| fixed | `theme::fixed`, constants taken from the old bundled theme |
+| fixed | `theme::fixed`, constants that never change |
 
 The accent is worn by exactly five things: a running tool card's border, the input box's top and
 bottom edges, the user card's left bar, the statusline capsule and model name, and the tree's user

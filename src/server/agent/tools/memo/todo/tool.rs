@@ -46,7 +46,7 @@ pub(crate) const TOOL: Tool = Tool {
             `tick` takes. Numbers are positions, 1-based; an unknown number fails the call and changes nothing.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

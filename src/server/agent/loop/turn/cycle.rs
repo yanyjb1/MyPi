@@ -36,7 +36,7 @@ pub enum Mode {
     },
 }
 
-pub fn run(
+pub(crate) fn run(
     inner: &Arc<Inner>,
     handle: &Arc<Handle>,
     turn: i64,

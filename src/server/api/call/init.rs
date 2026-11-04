@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::server::api::{Api, Refuse};
 use crate::server::storage::Reader;
 
-const LATEST: usize = 64;
+const LATEST: usize = 32;
 
 pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     let reader = Reader::open(api.db())?;

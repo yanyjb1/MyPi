@@ -55,8 +55,8 @@ HistoryZone
 3. `layout::segment::Kind` and `product::markdown`: a new segment kind needs a painter.
 4. The config key names and `zone::CONFIG_KEYS` plus `wire::mod::read_config`.
 5. `local::SlotKind` and `prefetch::piece_count` / `layer_piece`: a new slot kind needs both.
-6. A tool's memo shape and its `paint/card/` file: the renderer draws what the memo carries, and
-   falls back to the result text only when the memo is absent.
+6. A tool's memo shape and its `paint/card/` file: the renderer draws what the memo carries, or the
+   result text when the tool hands back no memo.
 
 ## Not wired
 

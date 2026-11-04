@@ -27,7 +27,7 @@ pub(crate) const TOOL: Tool = Tool {
             whole text, so `grep x #3xl` searches it; a token that names nothing stays literal text.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

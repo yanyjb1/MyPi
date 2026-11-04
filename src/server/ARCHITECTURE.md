@@ -65,7 +65,6 @@ pair (`ipc/README.md`, `ipc/ARCHITECTURE.md`).
 
 ## Not wired yet
 
-1. The front end: `src/main.rs` connects and stops with a message (第 8 条).
-2. Windows: the named pipe is unwritten and several places are unix-shaped (第 16 条, 第 40 条).
+1. Windows: the named pipe is unwritten and several places are unix-shaped (第 16 条, 第 40 条).
 
 Each domain's own `ARCHITECTURE.md` carries its share of the rest.

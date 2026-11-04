@@ -62,7 +62,7 @@ pub(crate) const TOOL: Tool = Tool {
             block numbers, is written to a file and the reply names that file.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
@@ -166,10 +166,10 @@ fn parsed(text: Option<&Value>) -> Value {
     }
 }
 
-/// The tool's own summary; a tool without one falls back to its arguments.
+/// The tool's own summary; a name the table no longer holds shows its arguments.
 fn summary_of(record: &CallRecord) -> String {
-    match registry::spec(&record.tool).and_then(|tool| tool.summary) {
-        Some(summary) => summary(record),
+    match registry::spec(&record.tool) {
+        Some(tool) => (tool.summary)(record),
         None => summary::clip(&record.args, 96),
     }
 }

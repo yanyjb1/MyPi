@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 #[derive(Debug, Clone)]
 pub(crate) struct Hit {
     pub title: String,
@@ -33,15 +31,4 @@ pub(crate) fn dedup_key(url: &str) -> String {
         }
         Err(_) => url.to_string(),
     }
-}
-
-pub(crate) fn take_unique(hits: Vec<Hit>) -> Vec<Hit> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::with_capacity(hits.len());
-    for hit in hits {
-        if seen.insert(dedup_key(&hit.url)) {
-            out.push(hit);
-        }
-    }
-    out
 }

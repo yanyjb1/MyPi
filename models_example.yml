@@ -160,4 +160,3 @@ providers:
 
 # ---- What NOT to put here ------------------------------------------------
 # default:      -> belongs in config.yaml (mypi writes it there; see /model)
-# theme:        -> belongs in config.yaml

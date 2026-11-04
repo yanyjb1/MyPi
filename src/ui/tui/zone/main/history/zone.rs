@@ -277,7 +277,7 @@ impl SubZone for HistoryZone {
     }
 
     fn deliver_action(&mut self, action: &Action) -> bool {
-        match action {
+        let handled = match action {
             Action::ScrollUp { shift } => {
                 self.scroll(Dir::Older, self.walk(*shift));
                 true
@@ -301,17 +301,14 @@ impl SubZone for HistoryZone {
                 }
                 KeyCode::Up if key.mods.ctrl => {
                     self.step(Dir::Older);
-                    self.ensure_around();
                     true
                 }
                 KeyCode::Down if key.mods.ctrl => {
                     self.step(Dir::Newer);
-                    self.ensure_around();
                     true
                 }
                 KeyCode::PageUp if key.mods.ctrl => {
                     self.first();
-                    self.ensure_around();
                     true
                 }
                 KeyCode::PageDown if key.mods.ctrl => {
@@ -338,7 +335,11 @@ impl SubZone for HistoryZone {
                 }
                 _ => false,
             },
+        };
+        if handled {
+            self.ensure_around();
         }
+        handled
     }
 
     fn attach(&mut self, _session: i64, _size: TermSize) {

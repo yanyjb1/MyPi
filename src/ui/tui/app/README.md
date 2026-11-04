@@ -14,7 +14,6 @@ The front end's centre: the registry, the display ledger, and the only exit to t
 | `memo: Memo` | what one zone leaves for the next |
 | `size: TermSize` | the last size handed down |
 | `attached: Option<i64>` | the session the zones were last told about |
-| `theme: ThemeConfig`, `palette_seen` | the palette being assembled from `call config` answers |
 | `told: Vec<Option<i64>>` | the session each zone has last been told about |
 | `cwd`, `model` | what a new session is created with |
 | `waiting` | a message sent before the session row existed |
@@ -63,19 +62,18 @@ starts it. `Outcome::Quit` empties the owner and marks the app finished.
 
 - **One handle.** The session lives here and nowhere else; zones produce requests, the app lands
   them.
-- **No payload knowledge.** `kind` picks the route; `content` is never read except for the five
-  palette answers, which are this layer's own configuration.
+- **No payload knowledge.** `kind` picks the route; `content` is read only for the terminal size,
+  a create's reply, and the rename that re-picks the accent.
 - **Declaration, not inspection.** What a zone hears is what it declared.
 - **The memo is a transaction.** It exists between one handover and the next, and attach/detach
   clears it.
 
 ## 3. Unresolved
 
-1. A second palette ask (after the first) is unanswered; the palette is fixed at boot.
-2. One waiting message at a time: a second submit before the row lands replaces the first.
-3. The draft carries no name or profile; both are sent as `null`.
+1. One waiting message at a time: a second submit before the row lands replaces the first.
+2. The draft carries no name or profile; both are sent as `null`.
 
 ## 4. Config fields
 
-None. The palette is fixed and the accent is picked at startup (`Accent::pick()`), changed with
-its own key at run time.
+None. The palette is fixed; the accent is picked at startup (`Accent::pick()`) and re-picked on a
+rename.

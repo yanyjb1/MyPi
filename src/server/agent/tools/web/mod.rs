@@ -4,7 +4,9 @@ use anyhow::Result;
 
 use super::contract::env::Env;
 use super::contract::output::ToolOutput;
+use super::contract::view::CallRecord;
 use super::spec::{Args, Kind, Param, Tool, ToolProgress};
+use super::summary;
 
 const OP: usize = 0;
 const URL: usize = 1;
@@ -97,7 +99,7 @@ pub(crate) const TOOL: Tool = Tool {
             `screenshot` writes a PNG under the system temp directory.",
     params: PARAMS,
     run,
-    summary: None,
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
@@ -122,4 +124,25 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     };
     let text = crate::web::run(&a, env.session)?;
     Ok(ToolOutput::text(text))
+}
+
+/// One line for a history listing: the operation and the argument that locates it.
+fn summary(call: &CallRecord) -> String {
+    let op = summary::field(call, "op").unwrap_or_default();
+    let at = match op.as_str() {
+        "read" => summary::field(call, "url").unwrap_or_else(|| "page".to_string()),
+        "open" => summary::field(call, "url").unwrap_or_default(),
+        "search" => summary::field(call, "query").unwrap_or_default(),
+        "click" | "fill" | "press" | "select" => {
+            summary::field(call, "selector").unwrap_or_default()
+        }
+        "eval" => summary::field(call, "value").unwrap_or_default(),
+        "net" => summary::field(call, "filter").unwrap_or_else(|| "all".to_string()),
+        _ => String::new(),
+    };
+    if at.trim().is_empty() {
+        summary::clip(&op, 96)
+    } else {
+        summary::clip(&format!("{op} {at}"), 96)
+    }
 }

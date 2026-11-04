@@ -60,7 +60,7 @@ Subscribe: `watch`, `submit`, `compact`.
 |---|---|---|---|
 | `register` | `hello` | `viewer` | an empty `opened` frame |
 | `register` | `bye` | — | nothing |
-| `call` | `init` | `session` | `structure` (`turn` + `ranges` per round), `blocks` (newest 64, whole rows), `todo` (the list, or null) |
+| `call` | `init` | `session` | `structure` (`turn` + `ranges` per round), `blocks` (newest 32, whole rows), `todo` (the list, or null) |
 | `call` | `blocks` | `session`, `ranges` | `blocks`, whole rows, in request order |
 | `call` | `meta` | `session` | the session row |
 | `call` | `usage` | `session` | session totals, `cache_hit_rate`, and `groups` by `provider:model` |

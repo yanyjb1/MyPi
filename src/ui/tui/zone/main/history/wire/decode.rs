@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-/// What a block is. The wire's `type` column, in this front end's words.
+/// What a block is. The wire's `kind` field, in this front end's words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     User,
@@ -67,7 +67,7 @@ impl Block {
     /// Decode one row. An unknown `type` is a row this front end cannot draw.
     pub fn of(row: &Value) -> Option<Block> {
         let id = row.get("id")?.as_i64()?;
-        let kind = Kind::of(row.get("type")?.as_str()?)?;
+        let kind = Kind::of(row.get("kind")?.as_str()?)?;
         Some(Block {
             id,
             kind,

@@ -53,6 +53,5 @@
 
 ## Not wired
 
-- The loop does not implement `History` or `BlockSink` yet.
 - `--http-worker` has no entry point in `main.rs` or `cli.rs`, so the worker never starts and every
   call goes direct; cancellation then only takes effect between chunks.

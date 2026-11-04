@@ -32,7 +32,7 @@ pub const TOOL: Tool = Tool {
     about: "MCP: list configured servers and tools, or call one tool.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

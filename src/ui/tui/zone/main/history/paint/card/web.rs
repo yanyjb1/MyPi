@@ -1,49 +1,123 @@
-//! web: a fetch's facts and body, or a search's query and hits.
+//! web: `search` and `net` as cards, every other operation as one line.
 
-use super::super::super::layout::line::Row;
+use serde_json::Value;
+
+use super::super::super::layout::line::{Lead, Row, Run};
+use super::super::table;
+use super::tree;
 use super::{
-    Section, ToolBlock, ToolOutcome, ToolRenderer, arg_bool, arg_str, fact, head_preview,
-    non_empty_lines, non_empty_text_lines, one_line, search_hits, short_url, truncate,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_bool, arg_str, error_lines, head,
+    non_empty_lines, one_line, short_url, truncate,
 };
+use crate::ui::tui::text::{display_width, glyphs as g};
+use crate::ui::tui::theme::fixed;
+
+/// The one-line form; `search` and `net` keep a card.
+pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<Row>> {
+    let op = op_of(args);
+    if op == "search" || op == "net" {
+        return None;
+    }
+    let state = State::of(result);
+    let mut runs = head(state, &label_of(&op));
+    let mut meta: Vec<String> = Vec::new();
+    let mut values: Vec<String> = Vec::new();
+    match op.as_str() {
+        "read" => {
+            let target = arg_str(args, "url")
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| short_url(&u))
+                .unwrap_or_else(|| "page".to_string());
+            values.push(target);
+            if arg_bool(args, "raw") == Some(true) {
+                meta.push("raw".to_string());
+            }
+            if let Some(o) = result.filter(|o| o.ok) {
+                meta.push(format!("{} lines", non_empty_lines(o.text)));
+            }
+        }
+        "open" => {
+            if let Some(u) = arg_str(args, "url").filter(|u| !u.trim().is_empty()) {
+                values.push(short_url(&u));
+            }
+        }
+        "click" | "fill" | "press" | "select" => {
+            if let Some(sel) = arg_str(args, "selector").filter(|s| !s.trim().is_empty()) {
+                values.push(truncate(&one_line(&sel), 48));
+            }
+        }
+        "scroll" => {
+            values.push(format!(
+                "{}px",
+                value_of(args, "value").unwrap_or_else(|| "600".to_string())
+            ));
+        }
+        "eval" => {
+            if let Some(expr) = value_of(args, "value").filter(|v| !v.trim().is_empty()) {
+                values.push(truncate(&one_line(&expr), 48));
+            }
+        }
+        "screenshot" => {
+            if arg_bool(args, "full_page") == Some(true) {
+                meta.push("full page".to_string());
+            }
+            if let Some(o) = result.filter(|o| o.ok)
+                && let Some(path) = o.text.split(" -> ").nth(1)
+            {
+                values.push(truncate(&one_line(path), 60));
+            }
+        }
+        other if !other.is_empty() => values.push(other.to_string()),
+        _ => {}
+    }
+    if !values.is_empty() {
+        runs.push(Run::fixed(format!(" {}", values.join(" ")), fixed::MUTED));
+    }
+    for m in meta {
+        runs.push(Run::fixed(format!(" {} {m}", g::SEP), fixed::DIM));
+    }
+    let mut out = vec![Row::of(Lead::None, runs)];
+    out.extend(error_lines(result));
+    Some(out)
+}
 
 pub(crate) struct Web;
 
 impl ToolRenderer for Web {
-    fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
-        let mut out = Vec::new();
-        match arg_str(b.args, "op").as_deref().unwrap_or_default() {
-            "read" => {
-                if let Some(u) = arg_str(b.args, "url").filter(|u| !u.trim().is_empty()) {
-                    out.push(short_url(&u));
-                }
-                if arg_bool(b.args, "raw") == Some(true) {
-                    out.push("raw".into());
-                }
-            }
-            "search" => {
-                if let Some(q) = arg_str(b.args, "query").filter(|q| !q.trim().is_empty()) {
-                    out.push(truncate(&one_line(&q), 60));
-                }
-            }
-            op if !op.is_empty() => {
-                for key in ["url", "path", "selector"] {
-                    if let Some(v) = arg_str(b.args, key).filter(|v| !v.trim().is_empty()) {
-                        out.push(truncate(&one_line(&v), 50));
-                        break;
-                    }
-                }
-            }
-            _ => {}
+    fn label(&self, b: &ToolBlock<'_>) -> Option<String> {
+        match op_of(b.args).as_str() {
+            "search" => Some("Web Search".to_string()),
+            "net" => Some("Web Net".to_string()),
+            _ => None,
         }
-        out
     }
 
-    fn result_measure(&self, o: ToolOutcome<'_>) -> Option<String> {
-        let hits = search_hits(o.text);
-        if hits > 0 {
-            return Some(format!("{hits} results"));
+    fn title(&self, b: &ToolBlock<'_>) -> Option<String> {
+        let text = b.result.map(|o| o.text).unwrap_or_default();
+        match op_of(b.args).as_str() {
+            "search" => {
+                let mut parts: Vec<String> = Vec::new();
+                if let Some(q) = arg_str(b.args, "query").filter(|q| !q.trim().is_empty()) {
+                    parts.push(truncate(&one_line(&q), 60));
+                }
+                if let Some(p) = arg_str(b.args, "provider").filter(|p| !p.trim().is_empty()) {
+                    parts.push(p);
+                }
+                let count = hits(text).len();
+                if count > 0 {
+                    parts.push(format!("{count} results"));
+                }
+                (!parts.is_empty()).then(|| parts.join(" · "))
+            }
+            "net" => {
+                let filter = arg_str(b.args, "filter")
+                    .filter(|f| !f.trim().is_empty())
+                    .unwrap_or_else(|| "all".to_string());
+                let count = net_rows(text).len();
+                Some(format!("{filter} · {count} requests"))
+            }
+            _ => None,
         }
-        (non_empty_lines(o.text) > 1).then(|| format!("{} lines", non_empty_lines(o.text)))
     }
 
     fn call_body(&self, _b: &ToolBlock<'_>) -> Vec<Row> {
@@ -51,56 +125,119 @@ impl ToolRenderer for Web {
     }
 
     fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
-        match arg_str(b.args, "op").as_deref().unwrap_or_default() {
-            "read" => fetch_sections(b, o.text),
-            "search" => search_sections(b, o.text),
-            _ => vec![Section {
+        if !o.ok {
+            return vec![Section {
                 label: None,
-                lines: head_preview(&non_empty_text_lines(o.text)),
-            }],
+                lines: error_lines(Some(o)),
+            }];
         }
+        let lines = match op_of(b.args).as_str() {
+            "search" => search_lines(hits(o.text), b.inner_width()),
+            "net" => table::cells(net_header(), net_rows(o.text), b.inner_width()),
+            _ => Vec::new(),
+        };
+        vec![Section { label: None, lines }]
     }
 }
 
-fn fetch_sections(b: &ToolBlock<'_>, text: &str) -> Vec<Section> {
-    let url = arg_str(b.args, "url").unwrap_or_default();
-    let raw = arg_bool(b.args, "raw") == Some(true);
-    let lines = non_empty_text_lines(text);
-    let chars = text.trim().chars().count();
-
-    let mut meta: Vec<Row> = Vec::new();
-    if !url.trim().is_empty() {
-        meta.push(fact("URL: ", &truncate(&one_line(&url), 80)));
-    }
-    meta.push(fact("Mode: ", if raw { "raw HTML" } else { "markdown" }));
-    meta.push(fact("Lines: ", &lines.len().to_string()));
-    meta.push(fact("Chars: ", &chars.to_string()));
-
-    vec![
-        Section {
-            label: Some("metadata"),
-            lines: meta,
-        },
-        Section {
-            label: Some("content"),
-            lines: head_preview(&lines),
-        },
-    ]
+fn op_of(args: &str) -> String {
+    arg_str(args, "op").unwrap_or_default()
 }
 
-fn search_sections(b: &ToolBlock<'_>, text: &str) -> Vec<Section> {
-    let query = arg_str(b.args, "query").unwrap_or_default();
-    let lines = non_empty_text_lines(text);
+fn label_of(op: &str) -> String {
+    let mut chars = op.chars();
+    match chars.next() {
+        Some(c) => format!("Web {}{}", c.to_uppercase(), chars.as_str()),
+        None => "Web".to_string(),
+    }
+}
+
+/// A scalar argument spelled out, strings or numbers.
+fn value_of(args: &str, key: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(args).ok()?;
+    match v.get(key)? {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// A hit's title and URL, in the text `web search` prints.
+fn hits(text: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = text.lines().collect();
     let mut out = Vec::new();
-    if !query.trim().is_empty() {
-        out.push(Section {
-            label: None,
-            lines: vec![fact("Query: ", &one_line(&query))],
-        });
+    for (at, line) in lines.iter().enumerate() {
+        let Some(title) = numbered(line) else {
+            continue;
+        };
+        let url = lines[at + 1..]
+            .iter()
+            .take_while(|next| numbered(next).is_none())
+            .map(|next| next.trim())
+            .find(|next| next.starts_with("http"))
+            .unwrap_or_default();
+        out.push((title, url.to_string()));
     }
-    out.push(Section {
-        label: Some("results"),
-        lines: head_preview(&lines),
-    });
     out
+}
+
+/// The text of a `N. text` line; a line without a number answers nothing.
+fn numbered(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 || !trimmed[digits..].starts_with(". ") {
+        return None;
+    }
+    Some(trimmed[digits + 2..].to_string())
+}
+
+fn domain_of(url: &str) -> String {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let host = rest.split('/').next().unwrap_or_default();
+    host.strip_prefix("www.").unwrap_or(host).to_string()
+}
+
+/// One branch per hit: the title, then the domain it came from.
+fn search_lines(hits: Vec<(String, String)>, inner: usize) -> Vec<Row> {
+    let last = hits.len().saturating_sub(1);
+    hits.iter()
+        .enumerate()
+        .map(|(at, (title, url))| {
+            let domain = domain_of(url);
+            let tail = if domain.is_empty() {
+                String::new()
+            } else {
+                format!(" ({domain})")
+            };
+            let budget = inner.saturating_sub(4 + display_width(&tail) + 1).max(12);
+            let mut runs = vec![Run::fixed(truncate(title, budget), fixed::TOOL_OUTPUT)];
+            if !tail.is_empty() {
+                runs.push(tree::value(tail));
+            }
+            tree::entry(at == last, runs)
+        })
+        .collect()
+}
+
+fn net_header() -> Vec<String> {
+    vec!["type".to_string(), "url".to_string(), "ms".to_string()]
+}
+
+/// The rows `web net` prints: `[type] url (ms)`.
+fn net_rows(text: &str) -> Vec<Vec<String>> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix('[')?;
+            let (kind, rest) = rest.split_once("] ")?;
+            let (url, ms) = rest.rsplit_once(" (")?;
+            Some(vec![
+                kind.to_string(),
+                url.to_string(),
+                ms.trim_end_matches(')').to_string(),
+            ])
+        })
+        .collect()
 }

@@ -25,7 +25,7 @@ pub(crate) const TOOL: Tool = Tool {
             confirm with `pwd` or `ls`.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 /// Change footing. It may stand in the workspace, home or temp; never a system directory

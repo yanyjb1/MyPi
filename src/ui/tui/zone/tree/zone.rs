@@ -31,7 +31,7 @@ pub struct Node {
 impl Node {
     fn of(row: &Value) -> Option<(i64, Node)> {
         let id = row.get("id")?.as_i64()?;
-        let kind = short_kind(row.get("type")?.as_str()?);
+        let kind = short_kind(row.get("kind")?.as_str()?);
         let body = match kind {
             "user" => row
                 .get("content")

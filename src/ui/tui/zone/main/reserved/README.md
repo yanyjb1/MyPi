@@ -85,10 +85,9 @@ A hand also has:
 
 ## 3. Unresolved
 
-1. `/usage`'s horizontal alignment has no reader: the panel draws the full width.
-2. The completion popup's anchor column is pushed after the first draw; the first frame of a hire
+1. The completion popup's anchor column is pushed after the first draw; the first frame of a hire
    draws at column zero.
-3. A failed `call pools` leaves completion without model or profile names.
+2. A failed `call pools` leaves completion without model or profile names.
 
 ## 4. Config fields
 

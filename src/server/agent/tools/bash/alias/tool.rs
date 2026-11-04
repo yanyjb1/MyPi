@@ -33,7 +33,7 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Maintain shell aliases. An alias expands only the first token, only once, and only before the guard. It cannot contain variables, functions, or newlines. `add` and `del` take effect for later bash calls in this round.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

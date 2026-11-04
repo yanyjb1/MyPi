@@ -7,7 +7,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | file | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list and the re-exports | public |
-| `app.rs` | `App`, `Input`, `THEME_KEYS`, boot, delivery, landing, handover, palette | public |
+| `app.rs` | `App`, `Input`, `Accent`, boot, delivery, landing, handover | public |
 | `lifecycle.rs` | `attach`, `detach` | public |
 | `startup.rs` | `Startup` and its three constructors | public |
 
@@ -22,7 +22,7 @@ What is here, what each file holds, who calls whom. Current state only.
 
 - `ui::session::Session`, and `zone::{Frame, Turns}` for what it hands down.
 - `zone::{Kind, Claim, Memo, Outcome, Request, TermSize, Zone, ZoneId}`.
-- `theme::init_from_config` once the palette answers are in.
+- `theme::Accent` for the one live color.
 
 ## What calls it
 
@@ -43,5 +43,4 @@ fields.
 
 ## Not wired
 
-1. A refused palette key leaves the palette at the bundled default; there is no retry.
-2. A refused `post init` drops the waiting message; the reader has to type it again.
+1. A refused `post init` drops the waiting message; the reader has to type it again.

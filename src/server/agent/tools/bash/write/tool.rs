@@ -27,7 +27,7 @@ pub(crate) const TOOL: Tool = Tool {
             parent directory is refused. NEVER create documentation or emojis unless asked.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 /// Write the whole file, **overwriting** an existing one. The counterpart of `edit`: `edit` refuses

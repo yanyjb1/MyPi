@@ -68,12 +68,13 @@ treats it as the piece right after the newest slot, and re-lays it in place when
 
 ### Tool cards
 
-A tool block becomes either a card or a one-line form; `card::node` decides by tool name.
+A tool block becomes either a card or a one-line form; `card::node` decides by tool name, and by
+operation for `web`.
 
 | form | tools |
 |---|---|
-| card | `bash`, `edit`, `write`, `todo`, `web`, `context`, `memo`, `mcp call`, `kairos result`, `final` |
-| one line | `read`, `cd`, `alias`, `task`, `kairos` (every op but `result`), `mcp list`, `final submit` |
+| card | `bash`, `edit`, `write`, `todo`, `web search`, `web net`, `context`, `memo`, `mcp call`, `kairos result`, `final` |
+| one line | `read`, `cd`, `alias`, `task`, `kairos` (every op but `result`), `mcp list`, `final submit`, every `web` op but `search` and `net` |
 
 A card is a frame: a top edge carrying the header (`status glyph`, bold tool name, then the title
 the renderer names), one section per call body and per result, and a bottom edge. The tail is a
@@ -84,8 +85,8 @@ A one-line form is the status glyph, a bold label, and the values the call carri
 `kairos list`, `mcp list` and `task` add `tree` rows under it (`|-- ` for a middle entry, `'-- `
 for the last, the spine under a non-last entry).
 
-Renderers read the result's memo, not its text: a renderer with no memo falls back to the same
-result text every tool prints.
+Renderers read the result's memo, which is the structured form of an answer. A tool that hands back
+no memo (`web`) prints text its renderer parses instead.
 
 ### The handover
 
@@ -127,10 +128,9 @@ carries a request's bill) and `prefill` (`{text}` after a rewind). It hears `cwd
 ## 3. Unresolved
 
 1. Streaming animations per tool: only the finished layout exists.
-2. `web` still falls back to the fallback card.
-3. Every visible row is cloned into a ratatui `Line` per frame.
-4. A wake reminder has no style of its own: it is drawn as a notice row.
-6. Consecutive `read` calls are not folded into one tree: the paint path draws one block at a time.
+2. Every visible row is cloned into a ratatui `Line` per frame.
+3. A wake reminder has no style of its own: it is drawn as a notice row.
+4. Consecutive `read` calls are not folded into one tree: the paint path draws one block at a time.
 
 ## 4. Config fields
 

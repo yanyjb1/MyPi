@@ -69,12 +69,12 @@ A `local / disconnected` frame becomes `Request::Quit`: no session, no screen wo
 
 ## 3. Unresolved
 
-2. The usage gauge's denominator costs one `call config` per model; a missing answer leaves the
+1. The usage gauge's denominator costs one `call config` per model; a missing answer leaves the
    gauge hidden.
-3. A rewind's prefill is guessed: history shouts the newest user block it still owns.
-4. Terminal-too-small behaviour is clamping, not a designed degradation.
+2. A rewind's prefill is guessed: history shouts the newest user block it still owns.
+3. Terminal-too-small behaviour is clamping, not a designed degradation.
 
 ## 4. Config fields
 
-None here. The app asks the theme keys; the history zone asks its own five through `call config`
-and the input zone asks the context window.
+None here. The history zone asks its own five through `call config`, and the input zone asks the
+context window.

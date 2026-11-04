@@ -197,12 +197,13 @@ The tools that read history answer JSON, and the same value rides along as the m
 `now`/`after`/`every`/`list`/`status`, `mcp` `list`. The front end draws what the memo carries and
 does not parse the text.
 
-Every tool declares `summary`, one line that names the call in a history listing. It carries only
-the least that locates the call: the path for `read`, `write`, `edit` and `cd`, the truncated
-command for `bash`, the name and command for `alias add`, the operation for the tools whose
-parameters are the interesting part (`memo`, `todo`, `context`, `kairos`, `mcp`, `final`), the
-template and its answer name for `task`. `web` has none yet, so `context query` falls back to the
-call's clipped arguments for it.
+Every tool declares `summary`, one line that names the call in a history listing; the field is not
+optional, so no tool joins the table without one. It carries only the least that locates the call:
+the path for `read`, `write`, `edit` and `cd`, the truncated command for `bash`, the name and
+command for `alias add`, the operation for the tools whose parameters are the interesting part
+(`memo`, `todo`, `context`, `kairos`, `mcp`, `final`), the template and its answer name for `task`,
+and for `web` the operation plus the argument it names: URL, query, selector, expression or filter.
+A tool name the table no longer holds shows its clipped arguments.
 
 ### edit's memo
 

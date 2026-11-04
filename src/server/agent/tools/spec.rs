@@ -374,8 +374,8 @@ pub struct Tool {
     pub params: &'static [Param],
     /// The one entry point.
     pub run: Run,
-    /// The history summary; absent means the front door's default.
-    pub summary: Option<Summary>,
+    /// The history summary; one per tool, no fallback.
+    pub summary: Summary,
 }
 
 impl Tool {

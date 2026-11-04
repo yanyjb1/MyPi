@@ -67,6 +67,12 @@ pub fn node(block: &Block, paired: Option<&Block>, opts: &Opts, width: usize) ->
         out.extend(rows);
         return out;
     }
+    if name == "web"
+        && let Some(rows) = web::inline(args, outcome)
+    {
+        out.extend(rows);
+        return out;
+    }
     out.extend(card(
         ToolBlock {
             name,
@@ -410,36 +416,6 @@ pub(crate) fn output_lines(text: &str) -> Vec<Row> {
         .collect()
 }
 
-/// Non-empty lines, or the placeholder.
-pub(crate) fn head_preview(lines: &[String]) -> Vec<Row> {
-    if lines.is_empty() {
-        return vec![Row::of(
-            Lead::None,
-            vec![Run::fixed("(no content)", fixed::MUTED)],
-        )];
-    }
-    lines
-        .iter()
-        .map(|line| {
-            Row::of(
-                Lead::None,
-                vec![Run::fixed(line.clone(), fixed::TOOL_OUTPUT)],
-            )
-        })
-        .collect()
-}
-
-/// A muted label followed by its value.
-pub(crate) fn fact(label: &str, value: &str) -> Row {
-    Row::of(
-        Lead::None,
-        vec![
-            Run::fixed(label, fixed::MUTED),
-            Run::fixed(value.to_string(), fixed::TOOL_OUTPUT),
-        ],
-    )
-}
-
 /// The call as JSON, or as written when it does not parse.
 pub(crate) fn default_call(name: &str, args: &str) -> Vec<Row> {
     match serde_json::from_str::<Value>(args) {
@@ -494,16 +470,6 @@ pub(crate) fn non_empty_text_lines(text: &str) -> Vec<String> {
         .filter(|l| !l.trim().is_empty())
         .map(String::from)
         .collect()
-}
-
-pub(crate) fn search_hits(text: &str) -> usize {
-    text.lines()
-        .filter(|l| {
-            let l = l.trim_start();
-            let digits: String = l.chars().take_while(char::is_ascii_digit).collect();
-            !digits.is_empty() && l[digits.len()..].starts_with(". ")
-        })
-        .count()
 }
 
 pub(crate) fn short_url(url: &str) -> String {

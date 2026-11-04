@@ -57,7 +57,7 @@ pub(crate) const TOOL: Tool = Tool {
             and `result` hands back what it left. Subagents cannot use this tool.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

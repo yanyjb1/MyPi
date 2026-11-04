@@ -29,10 +29,11 @@ impl HistoryZone {
                 self.outbox.push(Request::Structure);
             }
             ("call", "blocks") => {
-                self.asking.clear();
                 if let Some(rows) = frame.content.get("blocks") {
                     self.take_blocks(rows);
                 }
+                self.asking
+                    .retain(|[lo, hi]| !(*lo..=*hi).all(|id| self.blocks.contains_key(&id)));
             }
             ("call", "config") => self.read_config(&frame.content),
             ("call", "todo") => {
@@ -184,11 +185,12 @@ impl HistoryZone {
                     .push(Shout::new(name::USAGE, json!({"used": used})));
             }
             let fresh = id > self.landed;
+            let absent = !self.blocks.contains_key(&id);
             let moved = self
                 .blocks
                 .get(&id)
                 .is_some_and(|old| old.kind != block.kind || old.text != block.text);
-            if moved {
+            if absent || moved {
                 self.products.drop_block(id);
                 if let Some(num) = self.local.num_of(id) {
                     self.forget_num(num);

@@ -46,7 +46,7 @@ pub(crate) const TOOL: Tool = Tool {
             `add` creates, `mod` appends a version, `del` removes every version.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

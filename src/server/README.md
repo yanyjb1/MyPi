@@ -76,12 +76,11 @@ end, and the server never has to know a screen's width.
 
 ## 3. Open questions
 
-1. **No front end is wired yet.** `src/main.rs` connects and stops with a message (第 8 条).
-2. **Windows.** The named pipe is unwritten and several places are unix-shaped (第 16 条, 第 40 条).
-3. **Nothing reconnects** after the server dies (第 42 条), and **a front end cannot read the
+1. **Windows.** The named pipe is unwritten and several places are unix-shaped (第 16 条, 第 40 条).
+2. **Nothing reconnects** after the server dies (第 42 条), and **a front end cannot read the
    server's log** (第 41 条).
-4. **The config is read once, at startup** — no hot reload yet (第 20 条).
-5. **One-shot commands bypass the wire** (`mypi --sessions` opens its own read connection).
+3. **The config is read once, at startup** — no hot reload yet (第 20 条).
+4. **One-shot commands bypass the wire** (`mypi --sessions` opens its own read connection).
 
 Each domain's own list (its README's §3) carries the rest.
 

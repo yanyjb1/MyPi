@@ -55,7 +55,7 @@ pub(crate) const TOOL: Tool = Tool {
             `task`: the tool cannot be handed down, so a template's tool list must not name it.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 /// What every child is told before its template body.

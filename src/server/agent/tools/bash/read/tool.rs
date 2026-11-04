@@ -35,7 +35,7 @@ pub(crate) const TOOL: Tool = Tool {
             Past the line cap the output stops early and its footer names the offset to continue from.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 /// Read a file, with line numbers, so later turns can cite exact lines. **Capped on purpose**:

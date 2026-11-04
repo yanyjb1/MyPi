@@ -49,7 +49,7 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Edit one file. `type: exact` replaces one run of text and requires `old` to match the file character for character exactly once. `type: mass` replaces whole lines by number and requires a non-empty `edits`. The other group's fields are rejected. Only files inside the workspace and the temp directory.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

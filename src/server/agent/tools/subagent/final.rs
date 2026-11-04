@@ -44,7 +44,7 @@ pub(crate) const TOOL: Tool = Tool {
             task; it must be the only call in its message.",
     params: PARAMS,
     run,
-    summary: Some(summary),
+    summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {

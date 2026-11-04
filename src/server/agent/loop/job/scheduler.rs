@@ -319,7 +319,6 @@ pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Arc<(Mutex<()>, Condvar)>,
             let duration = task.duration();
             let bytes = task.bytes;
             let truncated = task.truncated;
-            drop(task);
             if needs_slot {
                 st.running = st.running.saturating_sub(1);
             }
