@@ -100,6 +100,13 @@ impl HistoryZone {
         todo_panel.rows(todo, *todo_fold, width, budget).to_vec()
     }
 
+    /// Scrolling presupposes a run that at least fills the window.
+    fn scrollable(&mut self) -> bool {
+        let body = usize::from(self.disp.rows()).max(1);
+        let _ = self.settle_window(body);
+        self.prep.rows.len() >= body
+    }
+
     /// Where the window starts this frame.
     fn settle_window(&mut self, body: usize) -> usize {
         let body = body.max(1);
@@ -107,24 +114,33 @@ impl HistoryZone {
         match self.disp.top() {
             None => {
                 while self.extend_newer() {}
+                while self.prep.rows.len() < body && self.extend_older() {}
                 self.prep.rows.len().saturating_sub(body)
             }
             Some(at) => {
-                let top = match self.prep.rows.iter().position(|laid| laid.at == at) {
-                    Some(index) => index,
-                    None => {
-                        self.lay_from(at);
-                        0
-                    }
-                };
+                if !self.prep.rows.iter().any(|laid| laid.at == at) {
+                    self.lay_from(at);
+                }
+                while self.prep.rows.len() < body && self.extend_older() {}
+                let top = self
+                    .prep
+                    .rows
+                    .iter()
+                    .position(|laid| laid.at == at)
+                    .unwrap_or(0);
                 while self.prep.rows.len() < top + body && self.extend_newer() {}
-                top.min(self.prep.rows.len().saturating_sub(1))
+                // The window never starts past the row that still fills it from below.
+                top.min(self.prep.rows.len().saturating_sub(body))
             }
         }
     }
 
-    /// One scroll: screen rows, or a whole page. Reaching the end follows again.
+    /// One scroll: screen rows, or a whole page. Nothing moves unless the run is taller than
+    /// the window, and the bottom sticks.
     pub(super) fn scroll(&mut self, dir: Dir, rows: usize) {
+        if !self.scrollable() {
+            return;
+        }
         let body = usize::from(self.disp.rows()).max(1);
         let cur = self.settle_window(body) as i64;
         let step = rows.max(1) as i64;
@@ -132,6 +148,7 @@ impl HistoryZone {
             Dir::Older => cur - step,
             Dir::Newer => cur + step,
         };
+        let mut grew_older = false;
         while want < 0 {
             let before = self.prep.rows.len();
             if !self.extend_older() {
@@ -143,7 +160,12 @@ impl HistoryZone {
                 want = 0;
                 break;
             }
+            grew_older = true;
             want += added;
+        }
+        if dir == Dir::Older && !grew_older && cur == 0 {
+            // Nothing above and the window already starts there: nothing moves.
+            return;
         }
         let mut stuck = false;
         while want as usize >= self.prep.rows.len() {
@@ -152,11 +174,12 @@ impl HistoryZone {
                 break;
             }
         }
-        if dir == Dir::Newer && stuck {
+        let last_top = self.prep.rows.len().saturating_sub(body);
+        if dir == Dir::Newer && (stuck || want as usize >= last_top) {
             self.disp.follow();
             return;
         }
-        let index = (want.max(0) as usize).min(self.prep.rows.len().saturating_sub(1));
+        let index = (want.max(0) as usize).min(last_top);
         if let Some(laid) = self.prep.rows.get(index) {
             let at = laid.at;
             self.disp.set_top(Some(at));
@@ -165,6 +188,9 @@ impl HistoryZone {
 
     /// One whole slot older or newer.
     pub(super) fn step(&mut self, dir: Dir) {
+        if !self.scrollable() {
+            return;
+        }
         let from = self
             .disp
             .top()
@@ -228,6 +254,9 @@ impl HistoryZone {
 
     /// The oldest slot under the sight line.
     pub(super) fn first(&mut self) {
+        if !self.scrollable() {
+            return;
+        }
         let Some(num) = self.local.oldest() else {
             return;
         };
@@ -236,6 +265,9 @@ impl HistoryZone {
 
     /// Put the sight line on the first or last block of the anchor's turn.
     pub(super) fn align(&mut self, last: bool) {
+        if !self.scrollable() {
+            return;
+        }
         let anchor = self.anchor_num();
         let Some(id) = self.local.at(anchor).and_then(|slot| match slot.kind {
             SlotKind::Block(id) => Some(id),

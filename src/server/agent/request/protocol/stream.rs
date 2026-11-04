@@ -39,6 +39,8 @@ pub fn data(
     let started = Instant::now();
     let mut last = Instant::now();
     let mut got_first = false;
+    let first = budget.first.unwrap_or(SILENCE);
+    let idle = budget.idle.unwrap_or(SILENCE);
     loop {
         match sse::read(reader, &mut buf) {
             Ok(0) => {
@@ -48,22 +50,16 @@ pub fn data(
                     End::Eof
                 });
             }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            Ok(_) => last = Instant::now(),
+            Err(e) if silent_io(&e) => {
                 if cancel.load(Ordering::Relaxed) {
                     return Ok(End::Canceled);
                 }
-                if !got_first
-                    && let Some(budget) = budget.first
-                    && started.elapsed() > budget
-                {
-                    anyhow::bail!("no first event from upstream within {budget:?}");
+                if !got_first && started.elapsed() > first {
+                    anyhow::bail!("no first event from upstream within {first:?}");
                 }
-                if got_first
-                    && let Some(budget) = budget.idle
-                    && last.elapsed() > budget
-                {
-                    anyhow::bail!("no new event from upstream within {budget:?}");
+                if got_first && last.elapsed() > idle {
+                    anyhow::bail!("no new event from upstream within {idle:?}");
                 }
                 continue;
             }
@@ -81,11 +77,28 @@ pub fn data(
             Frame::Payload(payload) => payload,
         };
         got_first = true;
-        last = Instant::now();
         if !take(&payload)? {
             return Ok(End::Done);
         }
     }
+}
+
+/// The longest a provider may stay silent when it names no budget of its own.
+const SILENCE: Duration = Duration::from_secs(600);
+
+/// A read that timed out is not a failure: the reader polls so cancellation stays possible.
+fn silent_io(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::TimedOut || e.to_string().contains("timeout")
+}
+
+/// The same test through an `anyhow` chain: a wrapped timeout is still a timeout.
+fn silent(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(silent_io)
+            || cause.to_string().contains("timeout")
+    })
 }
 
 /// Read `event:` / `data:` frames until the stream ends; `take` returns `false` to stop reading.
@@ -94,7 +107,20 @@ pub fn events(
     cancel: &AtomicBool,
     mut take: impl FnMut(&SseEvent) -> anyhow::Result<bool>,
 ) -> anyhow::Result<End> {
-    while let Some(event) = sse::read_event(reader)? {
+    loop {
+        let event = match sse::read_event(reader) {
+            Ok(event) => event,
+            Err(e) if silent(&e) => {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(End::Canceled);
+                }
+                continue;
+            }
+            Err(e) => return Err(e).context("stream read interrupted"),
+        };
+        let Some(event) = event else {
+            break;
+        };
         if cancel.load(Ordering::Relaxed) {
             return Ok(End::Canceled);
         }

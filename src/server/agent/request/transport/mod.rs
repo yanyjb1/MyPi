@@ -3,7 +3,9 @@
 pub mod client;
 pub mod worker;
 
-use std::io::BufRead;
+use std::io::{BufRead, Read};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 
@@ -62,7 +64,79 @@ pub(crate) fn send(client: &Client, wire: &WireRequest) -> Result<Box<dyn BufRea
             .unwrap_or_else(|_| String::new());
         return Err(anyhow::Error::new(Failure::Http { status, body }));
     }
-    Ok(Box::new(std::io::BufReader::new(
-        resp.into_body().into_reader(),
-    )))
+    let error = Arc::new(Mutex::new(None::<String>));
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let mut body = resp.into_body().into_reader();
+    let why = error.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match body.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if let Ok(mut slot) = why.lock() {
+                        *slot = Some(format!("{e:#}"));
+                    }
+                    break;
+                }
+            }
+        }
+    });
+    Ok(Box::new(std::io::BufReader::new(LineReader {
+        rx,
+        pending: Vec::new(),
+        eof: false,
+        error,
+    })))
+}
+
+/// How long one read waits before reporting silence; the decoder owns the real deadline.
+const POLL: Duration = Duration::from_secs(1);
+
+/// A body read on its own thread, handed over one whole line at a time.
+///
+/// A poll that finds half a line keeps it and reports silence, so no layer above ever sees a
+/// split line, and a stream's only deadline is the decoder's silence budget.
+pub(crate) struct LineReader {
+    rx: mpsc::Receiver<Vec<u8>>,
+    pending: Vec<u8>,
+    eof: bool,
+    error: Arc<Mutex<Option<String>>>,
+}
+
+impl std::io::Read for LineReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        while !self.pending.contains(&b'\n') && !self.eof {
+            match self.rx.recv_timeout(POLL) {
+                Ok(chunk) => self.pending.extend_from_slice(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "no line yet",
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.eof = true;
+                }
+            }
+        }
+        if self.eof
+            && let Ok(mut slot) = self.error.lock()
+            && let Some(text) = slot.take()
+        {
+            return Err(std::io::Error::other(text));
+        }
+        if self.pending.is_empty() {
+            return Ok(0);
+        }
+        let n = out.len().min(self.pending.len());
+        out[..n].copy_from_slice(&self.pending[..n]);
+        self.pending.drain(..n);
+        Ok(n)
+    }
 }

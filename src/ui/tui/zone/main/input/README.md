@@ -24,7 +24,7 @@ finish itself.
 | `statusline: StatusLine` | the deco table and the row engine |
 | `data: Data` | model, name, directory, context size and window, money, busy |
 | `queue: Queue` | sentences sent while a round was running, head first |
-| `in_flight` | the sentence a submit put out, until its reply |
+| `in_flight` | the sentence a submit put out, until the door answers |
 | `last_mailbox_turn` | the slot-opened turn the queue has accounted for |
 | `shouts` | events this zone put out |
 
@@ -48,14 +48,19 @@ A paste longer than the collapse thresholds becomes one marker; the marker is re
 `route::classify` uses the shared command table: a known command becomes `Command(meta, args)`,
 anything else `Message`.
 
-Local commands: `/q` → quit, `/resume` → the picker, `/new` → reset. `/usage` hires the panel and
-submits the line. Everything else becomes `ExitRequest::Submit`.
+Local commands stay here: `/q` quits at once, `/resume` opens the picker, `/new` resets, `/usage`
+hires the panel. Every other command becomes one door call (`command::frame`): `/name` → `post
+name`, `/cdp` → `post cwd`, `/switch` → `post switch`, `/model` → `post default_model`, `/profile`
+→ `post profile` or a session created for it, `/delete` → `post delete`, `/compact` → `subscribe
+compact`. A required argument that is missing leaves the line in the box and sends nothing. Only a
+plain message leaves as `ExitRequest::Submit`.
 
 ### Submit, interrupt, Esc
 
 - `Enter` submits when the box is non-empty and no round is running.
-- While a round is running and the box is non-empty, the first `Enter` interrupts; a second inside
-  the window takes the line as a message.
+- While a round is running and the box holds a **message**, the first `Enter` interrupts; a second
+  inside the window takes the line as a message. A command skips that step: it executes at once, and
+  the server decides whether this connection may write.
 - A message taken while a round is running joins the queue and is written to the server's slot; it
   opens nothing now. A reply that opened nothing puts the text back and shouts `retract`.
 - `Alt+Up` takes the newest queued sentence back into the box, above what is already there.

@@ -1,6 +1,7 @@
 //! The input zone: editor, history, statusline, submit, command routing.
 //! It does not know what sits above it; it only knows when it lent its keys away.
 
+mod command;
 mod ctx;
 mod editor;
 mod queue;
@@ -335,9 +336,16 @@ impl InputZone {
                 Effect::Content
             }
             I::Submit => {
-                // A live round with text in the box: the first Enter interrupts, a second
-                // one inside the window submits.
-                if self.data.busy && !self.editor.is_empty() {
+                // What leaves is the **expanded** text: folded pastes live in the
+                // editor's store, which `clear()` below drops.
+                let text = self.editor.expanded_text();
+                let route = route::classify(&text);
+                // A live round with a message in the box: the first Enter interrupts, a second
+                // one inside the window sends it to the slot. A command never interrupts.
+                if self.data.busy
+                    && !text.trim().is_empty()
+                    && matches!(route, route::Route::Message)
+                {
                     let now = std::time::Instant::now();
                     let again = self
                         .enter_armed
@@ -349,13 +357,25 @@ impl InputZone {
                         return true;
                     }
                 }
-                // What leaves is the **expanded** text: folded pastes live in the
-                // editor's store, which `clear()` below drops.
-                let text = self.editor.expanded_text();
                 if text.trim().is_empty() {
                     Effect::Nothing
-                } else if self.data.busy && matches!(route::classify(&text), route::Route::Message)
-                {
+                } else if let route::Route::Command(meta, args) = route {
+                    let request = command::frame(meta, args);
+                    let sent = request.is_some();
+                    if let Some(request) = request {
+                        self.outbox.push(request);
+                    }
+                    let sent = sent || self.local_command(meta, args);
+                    if !sent {
+                        // A required argument is missing: the line stays where it can be fixed.
+                        return true;
+                    }
+                    self.history.push(self.editor.text());
+                    self.editor.clear();
+                    self.finished = true;
+                    self_managed = true;
+                    Effect::Content
+                } else if self.data.busy {
                     // A round is running: the sentence waits in the slot, in order.
                     self.history.push(self.editor.text());
                     self.editor.clear();
@@ -370,13 +390,12 @@ impl InputZone {
                     ));
                     Effect::Content
                 } else {
-                    if self.route_out(&text) {
-                        self.in_flight = Some(text.clone());
-                        self.shouts.push(Shout::new(
-                            name::ECHO,
-                            serde_json::json!({"text": text, "prefix": null, "suffix": null}),
-                        ));
-                    }
+                    self.route_out(&text);
+                    self.in_flight = Some(text.clone());
+                    self.shouts.push(Shout::new(
+                        name::ECHO,
+                        serde_json::json!({"text": text, "prefix": null, "suffix": null}),
+                    ));
                     self.history.push(self.editor.text());
                     self.editor.clear();
                     self.finished = true;
@@ -430,25 +449,13 @@ impl InputZone {
         }
     }
 
-    /// One submitted line: a command the table knows, or a message. `true` = it leaves as a turn.
-    fn route_out(&mut self, text: &str) -> bool {
-        let route::Route::Command(meta, args) = route::classify(text) else {
-            self.pending_exits
-                .push(ExitRequest::Submit(text.to_string()));
-            return true;
-        };
-        if self.local_command(meta, args) {
-            return false;
-        }
-        if meta.name == crate::commands::Usage::META.name {
-            self.pending_hire = Some(Hire::Usage);
-        }
+    /// A message line leaves as a turn.
+    fn route_out(&mut self, text: &str) {
         self.pending_exits
             .push(ExitRequest::Submit(text.to_string()));
-        true
     }
 
-    /// The commands this front end runs itself. `false` = not one of ours.
+    /// The commands this front end runs itself. `false` = a server door takes it.
     fn local_command(&mut self, meta: &'static crate::commands::CommandMeta, _args: &str) -> bool {
         if meta.name == crate::commands::Quit::META.name {
             self.pending_exits.push(ExitRequest::Quit);
@@ -460,6 +467,10 @@ impl InputZone {
         }
         if meta.name == crate::commands::New::META.name {
             self.pending_exits.push(ExitRequest::New);
+            return true;
+        }
+        if meta.name == crate::commands::Usage::META.name {
+            self.pending_hire = Some(Hire::Usage);
             return true;
         }
         false
@@ -550,7 +561,33 @@ impl InputZone {
             || word.starts_with("~/")
             || (word.starts_with('/') && word.chars().count() > 1)
             || (word.contains('/') && ascii_head);
-        self.hang = spaced && !word.is_empty() && (is_command || is_path);
+        let argument = self.command_argument(&chars, cursor, start);
+        self.hang = argument || (spaced && !word.is_empty() && (is_command || is_path));
+    }
+
+    /// Whether the cursor sits in an argument position that has candidates.
+    fn command_argument(&self, chars: &[char], cursor: usize, start: usize) -> bool {
+        let before: String = chars[..cursor].iter().collect();
+        let words: Vec<&str> = before.split_whitespace().collect();
+        let ends_space = before.chars().last().is_some_and(char::is_whitespace);
+        let index = match ends_space {
+            true => words.len(),
+            false => words.len().saturating_sub(1),
+        };
+        if index == 0 || start == 0 {
+            return false;
+        }
+        let Some(meta) = words.first().and_then(|name| crate::commands::lookup(name)) else {
+            return false;
+        };
+        matches!(
+            meta.arg(index - 1),
+            Some(
+                crate::commands::Arg::Path
+                    | crate::commands::Arg::Model
+                    | crate::commands::Arg::Profile
+            )
+        )
     }
 
     /// The statusline's own reading of an event.
@@ -588,8 +625,12 @@ impl InputZone {
             ("call", "usage") => {
                 self.read_usage(&frame.content);
             }
-            ("subscribe", "submit") if frame.content.get("error").is_some() => {
-                out.extend(self.refused(&frame.content));
+            ("subscribe", "submit") => {
+                if frame.content.get("error").is_some() {
+                    out.extend(self.refused(&frame.content));
+                } else {
+                    self.in_flight = None;
+                }
             }
             ("stream", "mailbox") => {
                 out.extend(self.opened(&frame.content));

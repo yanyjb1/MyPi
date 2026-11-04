@@ -38,6 +38,7 @@ pub(crate) fn post(api: &Api, conn: u64, viewer: &str, frame: &Frame) -> Result<
     match frame.name.as_str() {
         "init" => post::init::apply(api, conn, viewer, ask),
         "name" => post::name::apply(api, viewer, ask),
+        "profile" => post::profile::apply(api, viewer, ask),
         "cwd" => post::cwd::apply(api, viewer, ask),
         "switch" => post::switch::apply(api, viewer, ask),
         "delete" => post::delete::apply(api, viewer, ask),

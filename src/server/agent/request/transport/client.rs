@@ -222,7 +222,9 @@ fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_response(Some(timeout))
-        .timeout_recv_body(Some(Duration::from_secs(1)))
+        // No total budget for a body: one lap may run as long as the model keeps talking, and
+        // only the decoder's silence budget may end a stream.
+        .timeout_recv_body(None)
         .http_status_as_error(false)
         .build()
         .into()

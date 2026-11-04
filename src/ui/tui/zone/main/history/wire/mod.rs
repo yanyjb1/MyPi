@@ -329,9 +329,17 @@ impl HistoryZone {
         if cut >= 0 {
             self.local.truncate_now(cut as usize);
         }
+        let dropped = self
+            .blocks
+            .values()
+            .filter(|block| !self.structure.owns(block.id))
+            .count();
         self.blocks.retain(|id, _| self.structure.owns(*id));
         self.prep.rows.clear();
         self.landed = self.blocks.keys().next_back().copied().unwrap_or(0);
+        if dropped == 0 {
+            return;
+        }
         let retyped = self
             .blocks
             .values()

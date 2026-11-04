@@ -236,7 +236,7 @@ impl App {
                 if kind == Kind::Subscribe && name == "submit" && self.session.attached().is_none()
                 {
                     self.waiting = Some(content);
-                    self.create();
+                    self.create(None);
                     return;
                 }
                 let content = with_session(content, self.session.attached());
@@ -245,7 +245,19 @@ impl App {
             Request::Attach(id) => self.attach(id),
             Request::Detach => self.detach(),
             Request::Structure => self.structure(),
+            Request::Create { profile } => self.profile(profile),
             Request::Quit => self.settle(Outcome::Quit),
+        }
+    }
+
+    /// A profile before the first message: open the row with it, or change the empty one.
+    fn profile(&mut self, profile: Option<String>) {
+        match (self.session.attached(), profile) {
+            (Some(_), Some(name)) => {
+                self.land(Request::post("profile", json!({"name": name})));
+            }
+            (Some(_), None) => {}
+            (None, profile) => self.create(profile),
         }
     }
 
@@ -255,8 +267,8 @@ impl App {
         self.memo.write("cwd", &self.cwd.to_string_lossy());
     }
 
-    /// Create the session a waiting message needs.
-    fn create(&mut self) {
+    /// Create the session a waiting message needs; a first command may name its profile.
+    fn create(&mut self, profile: Option<String>) {
         let model = self.model.as_ref().map(|id| {
             json!({
                 "provider": id.provider,
@@ -267,7 +279,7 @@ impl App {
             "cwd": self.cwd.to_string_lossy(),
             "name": Value::Null,
             "model": model,
-            "profile": Value::Null,
+            "profile": profile,
         });
         self.session.send("post", "init", content, true);
     }

@@ -41,6 +41,10 @@ Notice = { level, text }
 
 `ToolEvent` belongs to the loop.
 
+A stream has no total budget: one lap runs as long as the model keeps talking. The reader polls
+once a second so cancellation and silence stay visible, and a stream ends only when no line has
+arrived for the provider's silence budget, or 600 s when the provider names none.
+
 The history read port has two queries: `turns(session)` — from the newest compaction marker on, in
 list order, each turn carrying its interval list (a turn has several when other sessions wrote
 between its batches) and its messages keyed by block id; and `holder(reference)` — the content hash that already

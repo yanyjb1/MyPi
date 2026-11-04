@@ -15,7 +15,7 @@ use crate::server::agent::r#loop::session::handle::Handle;
 use crate::server::agent::r#loop::session::history::Transcript;
 use crate::server::agent::r#loop::session::live::Live;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
-use crate::server::agent::request::live::{Element, Event, Stream};
+use crate::server::agent::request::live::{Element, Event, Notice, NoticeLevel, Stream};
 use crate::server::agent::tools::contract::call::BatchInput;
 use crate::server::agent::tools::contract::job::{JobRunner, JobSpec, Schedule};
 use crate::server::agent::tools::contract::output::Effect;
@@ -59,7 +59,7 @@ pub(crate) fn run(
         }) {
             Ok(reply) => reply,
             Err(e) => {
-                broken(inner, handle, turn, Usage::default(), None);
+                broken(inner, handle, turn, Usage::default(), None, &e);
                 return Err(e);
             }
         };
@@ -111,7 +111,7 @@ pub(crate) fn run(
         }) {
             Ok(lap) => lap,
             Err(e) => {
-                broken(inner, handle, turn, usage, baseline);
+                broken(inner, handle, turn, usage, baseline, &e);
                 return Err(e);
             }
         };
@@ -154,7 +154,7 @@ pub(crate) fn run(
         let results = match inner.batch.run(input) {
             Ok(results) => results,
             Err(e) => {
-                broken(inner, handle, turn, usage, baseline);
+                broken(inner, handle, turn, usage, baseline, &e);
                 return Err(e);
             }
         };
@@ -165,7 +165,7 @@ pub(crate) fn run(
             results: results.iter().map(report).collect(),
         };
         if let Err(e) = inner.ask.results(reported, &*blocks) {
-            broken(inner, handle, turn, usage, baseline);
+            broken(inner, handle, turn, usage, baseline, &e);
             return Err(e);
         }
         let (children, deletes) = effects(&blocks, &results, live)?;
@@ -320,7 +320,21 @@ fn report(result: &ToolResult) -> Reported {
     }
 }
 
-fn broken(inner: &Arc<Inner>, handle: &Handle, turn: i64, usage: Usage, baseline: Option<u64>) {
+fn broken(
+    inner: &Arc<Inner>,
+    handle: &Handle,
+    turn: i64,
+    usage: Usage,
+    baseline: Option<u64>,
+    why: &anyhow::Error,
+) {
+    let _ = inner.out.send(Event {
+        session: handle.id,
+        element: Element::Notice(Notice {
+            level: NoticeLevel::Error,
+            text: format!("the turn broke: {why:#}"),
+        }),
+    });
     let _ = pen::turn::settle(
         &inner.writer,
         turn,

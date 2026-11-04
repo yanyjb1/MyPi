@@ -27,6 +27,9 @@ pub enum Request {
     Detach,
     /// The structural window, as it stands.
     Structure,
+    /// A profile chosen before any message: the session is created for it, or changed if it
+    /// already exists without a turn.
+    Create { profile: Option<String> },
     /// Nobody shows any more: the app ends the loop.
     Quit,
 }
@@ -57,5 +60,9 @@ impl Request {
             content,
             answer: true,
         }
+    }
+
+    pub fn create(profile: Option<String>) -> Request {
+        Request::Create { profile }
     }
 }

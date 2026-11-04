@@ -72,6 +72,7 @@ Subscribe: `watch`, `submit`, `compact`.
 | `call` | `sessions` | `under` (optional directory) | `rows`: main sessions, newest first, each carrying `first_user`, `bytes`, `last_ts`, `memos` |
 | `post` | `init` | `cwd`, `name`, `model`, `profile` | `session` |
 | `post` | `name` | `session`, `name` | — |
+| `post` | `profile` | `session`, `name` | — (memory only; before the first message) |
 | `post` | `cwd` | `session`, `path` | — |
 | `post` | `switch` | `session`, `model` | — |
 | `post` | `delete` | `session` | — |

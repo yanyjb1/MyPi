@@ -45,6 +45,10 @@ A scroll moves the start of the window by `scrollHeight` screen rows, or by a fu
 Rows already laid are reused; only the rows that walk past either end are laid. A scroll towards the
 newest content that runs out of content goes back to following.
 
+A window is filled before it is placed: a run shorter than the screen is extended towards the older
+content until the screen has its rows, and the start never moves past `rows - screen rows`, so blank
+rows never come after the newest row. A run shorter than the screen keeps its first row at the top.
+
 The sight line (`focusLine`, default 3) is where a block's head is put when the reader asks for one,
 and where the anchor for "keep this turn's neighbours in hand" is read.
 
