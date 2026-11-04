@@ -2,6 +2,8 @@
 
 ## 1. Design / Schema
 
+The decisions behind the three layers are recorded in `docs/display-design.md`.
+
 ### Three layers
 
 | layer | holds | depends on |
