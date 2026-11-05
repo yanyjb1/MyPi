@@ -14,6 +14,17 @@ use crate::ui::tui::zone::{
     Frame, Kind, Memo, ModelId, Outcome, Request, Round, TermSize, Turns, Zone, ZoneId, matches,
 };
 
+/// A usable launch directory: the home directory and its parent are not workspaces, so a launch
+/// there lands in the temp dir instead.
+fn workspace(dir: PathBuf) -> PathBuf {
+    use crate::server::platform::env;
+    let home = env::home();
+    let barred = home.as_ref().is_some_and(|home| {
+        dir == *home || home.parent().is_some_and(|parent| dir.as_path() == parent)
+    });
+    if barred { env::temp_dir() } else { dir }
+}
+
 /// One thing the loop hands the app.
 pub enum Input {
     /// The user did something.
@@ -33,7 +44,7 @@ pub struct App {
     /// The one color the input zone and the running cards wear.
     accent: Accent,
     /// The directory a new session is created in.
-    cwd: PathBuf,
+    pub(super) cwd: PathBuf,
     /// `--model`: the model a new session is created with; `None` = the configured default.
     model: Option<ModelId>,
     /// `/profile` before any session: the name travels with the row that opens.
@@ -62,7 +73,7 @@ impl App {
             size,
             attached: None,
             accent: Accent::pick(),
-            cwd: startup.cwd,
+            cwd: workspace(startup.cwd),
             model: startup.model,
             profile: None,
             waiting: None,

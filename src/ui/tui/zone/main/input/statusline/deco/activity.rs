@@ -20,8 +20,11 @@ pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
 }
 
 impl Deco for Activity {
-    fn on_event(&mut self, _event: &str, _content: &Value, _ctx: &Ctx) {
-        self.frame = (self.frame + 1) % SPINNER.len();
+    /// One live increment = one frame. The glyph only shows while the session is busy.
+    fn on_event(&mut self, event: &str, _content: &Value, _ctx: &Ctx) {
+        if event == crate::ui::tui::zone::name::TICK {
+            self.frame = (self.frame + 1) % SPINNER.len();
+        }
     }
 
     fn render(&self, t: &StatusTheme, _budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {

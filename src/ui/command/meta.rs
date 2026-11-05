@@ -53,7 +53,10 @@ pub fn lookup<'a>(table: &'a [CommandMeta], name: &str) -> Option<&'a CommandMet
 }
 
 /// Split one line into a known command and its argument text.
-pub fn split<'a>(table: &'a [CommandMeta], input: &str) -> Option<(&'a CommandMeta, &str)> {
+pub fn split<'t, 'i>(
+    table: &'t [CommandMeta],
+    input: &'i str,
+) -> Option<(&'t CommandMeta, &'i str)> {
     let input = input.trim();
     let rest = input.strip_prefix('/')?;
     if rest.is_empty() {

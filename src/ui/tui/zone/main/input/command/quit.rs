@@ -1,6 +1,6 @@
 //! `/q` — leave.
 
-use crate::ui::command::{Arg, CommandMeta};
+use crate::ui::command::CommandMeta;
 use crate::ui::tui::zone::main::input::ExitRequest;
 
 use super::{Call, Done};

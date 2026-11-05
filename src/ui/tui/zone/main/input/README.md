@@ -102,6 +102,13 @@ scroll with minimal movement, renders the statusline, then draws the container.
 One row, exactly the terminal width. The deco table is `activity`, `model`, `cwd`, `git`, `cost`,
 `usage`, `session`. Each deco reads the zone's `Data`; none of them can act.
 
+`Data` is filled from three places. The conversation row gives the name and the model address;
+`models.model.<address>.{name, contextWindow, currency, cost.*}` answers give the model pill, the
+gauge's denominator and the unit prices. `call usage` gives the stored cost, which replaces the
+base; `bill` shouts from history add this turn's own price on top, computed with those unit prices.
+The gauge's numerator is the last request's `prompt + completion`, taken from the same `usage`
+shout. `activity` steps one glyph per `tick` shout, so the spinner tracks real increments.
+
 ### Invariants
 
 1. The input zone never receives a key a hand has borrowed.
@@ -123,13 +130,15 @@ One row, exactly the terminal width. The deco table is `activity`, `model`, `cwd
 ## 3. Unresolved
 
 1. `Ctrl+C` clears the draft; its final meaning is undecided.
-2. The git scan interval has no config key; `Setup` defaults to three seconds.
-3. The usage gauge is hidden until both its numbers arrive.
-4. Terminal-too-small behaviour is a clamped container.
+2. The usage gauge is hidden until both its numbers arrive.
+3. Terminal-too-small behaviour is a clamped container.
 
 ## 4. Config fields
 
 | key | use |
 |---|---|
+| `models.model.<address>.name` | the model pill's text |
 | `models.model.<address>.contextWindow` | the usage gauge's denominator |
-| `models.model.<address>.contextWindow` | the gauge's denominator |
+| `models.model.<address>.currency` | the cost pill's symbol |
+| `models.model.<address>.cost.{input,output,cacheRead,cacheWrite}` | what this turn's bills cost |
+| `config.ui.tui.zone.main.input.deco.gitScanInterval` | seconds between git scans |

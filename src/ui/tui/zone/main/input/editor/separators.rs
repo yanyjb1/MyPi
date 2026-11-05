@@ -1,7 +1,7 @@
 //! The block separator set: the one definition of where a word ends.
 //!
-//! Word delete, word motion and the completion trigger walk all stop here, so `src/main.rs`
-//! and `a-b_c.tar.gz` are one block each.
+//! Word delete and word motion walk stop here, so a path loses one segment at a time;
+//! the completion trigger scans whole non-space runs instead.
 
 use std::collections::HashSet;
 
@@ -13,12 +13,12 @@ pub struct SeparatorTable {
 
 impl Default for SeparatorTable {
     fn default() -> Self {
-        // Whitespace, CJK punctuation, and Latin punctuation; `./\-_` are connectors.
+        // Whitespace, CJK punctuation, and Latin punctuation; `.\-_` are connectors.
         let hard: &[char] = &[
             ' ', '\t', '\n', '\r', ',', ';', ':', '!', '?', '\'', '"', '(', ')', '[', ']', '{',
-            '}', '<', '>', '|', '&', '%', '$', '#', '@', '=', '+', '*', '^', '`', '，', '。', '、',
-            '；', '：', '？', '！', '“', '”', '‘', '’', '（', '）', '【', '】', '《', '》', '「',
-            '」', '『', '』', '—', '…', '·', '～',
+            '}', '<', '>', '|', '&', '%', '$', '#', '@', '=', '+', '*', '^', '`', '/', '，', '。',
+            '、', '；', '：', '？', '！', '“', '”', '‘', '’', '（', '）', '【', '】', '《', '》',
+            '「', '」', '『', '』', '—', '…', '·', '～',
         ];
         Self {
             hard: hard.iter().copied().collect(),

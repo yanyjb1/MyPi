@@ -1,7 +1,7 @@
 //! Zones and paths: what the file tools, `bash` and `cd` may touch. One criterion: the session
 //! workspace plus the system temp dir (rationale in `src/server/agent/README.md`).
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _, Result, anyhow};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
@@ -109,6 +109,56 @@ pub(crate) fn canonicalize_lenient(p: &std::path::Path) -> std::path::PathBuf {
             _ => return p.to_path_buf(),
         }
     }
+}
+
+/// A directory the session may stand in: it exists, it is a directory, and it sits inside the
+/// session root, the home directory or the temp dir. The home directory itself is never one.
+pub fn resolve_cwd(
+    root: &std::path::Path,
+    cwd: &std::path::Path,
+    raw: &str,
+) -> Result<std::path::PathBuf> {
+    anyhow::ensure!(!raw.trim().is_empty(), "empty path");
+    let raw = raw.trim();
+    let home = crate::server::platform::env::home();
+    let target = match raw.strip_prefix('~') {
+        Some(rest) => home
+            .clone()
+            .unwrap_or_default()
+            .join(rest.trim_start_matches('/')),
+        None => std::path::PathBuf::from(raw),
+    };
+    let target = if target.is_absolute() {
+        target
+    } else {
+        cwd.join(target)
+    };
+    let real = target
+        .canonicalize()
+        .with_context(|| format!("no such dir: {raw}"))?;
+    anyhow::ensure!(real.is_dir(), "not a directory: {raw}");
+
+    let mut zones = vec![canonicalize_lenient(root)];
+    if let Some(home) = &home {
+        zones.push(canonicalize_lenient(home));
+    }
+    zones.push(canonicalize_lenient(
+        &crate::server::platform::env::temp_dir(),
+    ));
+    anyhow::ensure!(
+        zones
+            .iter()
+            .any(|zone| !zone.as_os_str().is_empty() && real.starts_with(zone)),
+        "denied: {} is outside the workspace, the home directory and the temp dir",
+        real.display()
+    );
+    if let Some(home) = &home {
+        anyhow::ensure!(
+            real != canonicalize_lenient(home),
+            "denied: the home directory itself is not a workspace"
+        );
+    }
+    Ok(real)
 }
 
 /// The zones **file tools** may touch: the session workspace plus the system temp dir. `bash`'s

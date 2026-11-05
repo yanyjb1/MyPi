@@ -24,10 +24,11 @@ impl Pools {
                         let name = row.get("name").and_then(Value::as_str).unwrap_or("");
                         let id = row.get("id").and_then(Value::as_str).unwrap_or("");
                         Some(Candidate {
+                            // The row is read for its name; the id is only a fallback.
                             detail: if name.is_empty() {
                                 id.to_string()
                             } else {
-                                format!("{name} ({id})")
+                                name.to_string()
                             },
                             value,
                         })

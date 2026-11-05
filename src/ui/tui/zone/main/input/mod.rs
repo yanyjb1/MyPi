@@ -24,7 +24,7 @@ use editor::{Editor, Effect, History};
 use queue::{Outgoing, Queue};
 use statusline::{Setup, StatusLine, StatusTheme};
 
-pub use ctx::Money;
+pub use ctx::{Bill, Prices};
 
 /// What the editor declares when it cannot act on its own.
 ///
@@ -37,6 +37,12 @@ const PLAIN: Mods = Mods {
     alt: false,
     shift: false,
 };
+
+/// The git segment's scan interval, in seconds.
+const GIT_SCAN_KEY: &str = "config.ui.tui.zone.main.input.deco.gitScanInterval";
+
+/// The model a draft opens with; a session row overrides it once there is one.
+const DEFAULT_MODEL_KEY: &str = "config.server.api.defaultModel";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitRequest {
@@ -90,6 +96,10 @@ pub struct InputZone {
     pub cursor_row: u16,
     /// The statusline: the top edge of the container and its own deco table.
     pub statusline: StatusLine,
+    /// What the decos were built with; the git scan interval lands here once.
+    setup: Setup,
+    /// The startup questions were asked; one answer per run is enough.
+    booted: bool,
     /// The terminal size from this round's arbitration.
     term: TermSize,
     /// What the parts read.
@@ -120,6 +130,8 @@ impl Default for InputZone {
             cursor_col: geometry::BORDER_COLS as u16,
             cursor_row: 1,
             statusline: StatusLine::new(&Setup::default()),
+            setup: Setup::default(),
+            booted: false,
             term: TermSize { cols: 80, rows: 24 },
             data: Data::default(),
             shouts: Vec::new(),
@@ -236,6 +248,27 @@ impl InputZone {
         }),
     ];
 
+    /// Drop one session's readings; the workspace stays: it is where the app runs.
+    fn restart_data(&mut self) {
+        let cwd = std::mem::take(&mut self.data.cwd);
+        self.data = Data::default();
+        self.data.cwd = cwd;
+    }
+
+    /// First frame: the two facts a draft can ask for on its own.
+    pub fn boot(&mut self) {
+        if self.booted {
+            return;
+        }
+        self.booted = true;
+        self.outbox.push(Request::Config {
+            key: GIT_SCAN_KEY.to_string(),
+        });
+        self.outbox.push(Request::Config {
+            key: DEFAULT_MODEL_KEY.to_string(),
+        });
+    }
+
     /// The hand the editor asked for, if it asked this frame.
     pub fn take_hire(&mut self) -> Option<Hire> {
         self.pending_hire.take()
@@ -254,11 +287,6 @@ impl InputZone {
     /// The editor's text and where the cursor sits in it.
     pub fn draft(&self) -> (String, usize) {
         (self.editor.text(), self.editor.cursor())
-    }
-
-    /// Whether the conversation already knows this directory.
-    pub fn knows_cwd(&self, path: &str) -> bool {
-        self.data.cwd == path
     }
 
     /// The height it asks for: content rows, capped at a share of the terminal.
@@ -366,7 +394,10 @@ impl InputZone {
                         attached: self.data.attached,
                     };
                     match command::run(meta, &call) {
-                        command::Done::Intent(request) => self.outbox.push(request),
+                        command::Done::Intent(request) => {
+                            self.note_intent(&request);
+                            self.outbox.push(request);
+                        }
                         command::Done::Exit(exit) => self.pending_exits.push(exit),
                         command::Done::Hire(who) => self.pending_hire = Some(who),
                         command::Done::Profile(profile) => {
@@ -533,8 +564,10 @@ impl InputZone {
         let cursor = self.editor.cursor();
         let chars: Vec<char> = text.chars().collect();
         let cursor = cursor.min(chars.len());
+        // The trigger word is the whole non-space run: `src/main.rs` is one word here, even
+        // though word delete stops at the slash.
         let mut start = cursor;
-        while start > 0 && !self.editor.separators.is_hard(chars[start - 1]) {
+        while start > 0 && !chars[start - 1].is_whitespace() {
             start -= 1;
         }
         let word: String = chars[start..cursor].iter().collect();
@@ -552,6 +585,25 @@ impl InputZone {
             || (word.contains('/') && ascii_head);
         let argument = self.command_argument(&chars, cursor, start);
         self.hang = argument || (spaced && !word.is_empty() && (is_command || is_path));
+    }
+
+    /// A write the user just asked for: the widgets follow the address it already names.
+    fn note_intent(&mut self, request: &Request) {
+        if let Request::SwitchModel(id) = request {
+            let address = format!("{}:{}", id.provider, id.model);
+            let mut out = Vec::new();
+            self.model_address(address, &mut out);
+            self.outbox.extend(out);
+        }
+    }
+
+    /// An edit landed: the word decides whether the completion hand is wanted.
+    fn edited(&mut self, consumed: bool) -> bool {
+        self.refresh_hang();
+        if self.hang {
+            self.pending_hire = Some(Hire::Completion);
+        }
+        consumed
     }
 
     /// Whether the cursor sits in an argument position that has candidates.
@@ -602,13 +654,14 @@ impl InputZone {
                 }
             }
             ("call", "config") => {
-                let key = frame.content.get("key").and_then(Value::as_str);
-                if key.is_some_and(|key| key.ends_with(".contextWindow")) {
-                    self.data.limit = frame
-                        .content
-                        .get("value")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
+                self.read_config(&frame.content);
+            }
+            ("post", "cwd") => {
+                self.read_cwd(&frame.content);
+            }
+            ("post", "switch") => {
+                if frame.content.get("error").is_some() {
+                    out.push(Request::Meta);
                 }
             }
             ("call", "usage") => {
@@ -671,7 +724,7 @@ impl InputZone {
         out
     }
 
-    /// The session row: model, name, and the window its model has.
+    /// The session row: name, and the model its widgets follow.
     fn read_meta(&mut self, row: &Value, out: &mut Vec<Request>) {
         if let Some(name) = row.get("name").and_then(Value::as_str) {
             self.data.name = Some(name.to_string());
@@ -683,15 +736,121 @@ impl InputZone {
             return;
         };
         let address = format!("{provider}:{model}");
-        if self.data.model.as_deref() == Some(address.as_str()) {
+        if self.data.address.as_deref() == Some(address.as_str()) {
             return;
         }
-        self.data.model = Some(address.clone());
-        let key = format!("models.model.{address}.contextWindow");
-        out.push(Request::Config { key });
+        self.model_address(address, out);
     }
 
-    /// The bill: one currency, the model's own.
+    /// One model's facts, all through the config door: name, window, currency, unit prices.
+    fn model_address(&mut self, address: String, out: &mut Vec<Request>) {
+        self.data.address = Some(address.clone());
+        self.data.model = None;
+        self.data.limit = 0;
+        self.data.prices = None;
+        for field in [
+            "name",
+            "contextWindow",
+            "currency",
+            "cost.input",
+            "cost.output",
+            "cost.cacheRead",
+            "cost.cacheWrite",
+        ] {
+            out.push(Request::Config {
+                key: format!("models.model.{address}.{field}"),
+            });
+        }
+    }
+
+    /// One config answer: the statusline's own keys, and the running model's facts.
+    fn read_config(&mut self, content: &Value) {
+        let Some(key) = content.get("key").and_then(Value::as_str) else {
+            return;
+        };
+        let value = content.get("value");
+        if key == DEFAULT_MODEL_KEY {
+            if self.data.address.is_none()
+                && let Some(address) = value
+                    .and_then(Value::as_str)
+                    .filter(|address| !address.is_empty())
+            {
+                let mut out = Vec::new();
+                self.model_address(address.to_string(), &mut out);
+                self.outbox.extend(out);
+            }
+            return;
+        }
+        if let Some(rest) = key.strip_prefix("models.model.") {
+            self.read_model_key(rest, value);
+            return;
+        }
+        if key.ends_with(".deco.gitScanInterval")
+            && let Some(seconds) = value.and_then(Value::as_u64)
+        {
+            let interval = std::time::Duration::from_secs(seconds.max(1));
+            if interval != self.setup.git_scan {
+                self.setup.git_scan = interval;
+                self.statusline = StatusLine::new(&self.setup);
+                // The fresh decos were built after the workspace arrived: hand it over again.
+                if !self.data.cwd.is_empty() {
+                    let content = serde_json::json!({"path": self.data.cwd});
+                    self.notify(crate::ui::tui::zone::name::CWD, &content);
+                }
+            }
+        }
+    }
+
+    /// `<address>.<field>`, the address itself holding no dot.
+    fn read_model_key(&mut self, rest: &str, value: Option<&Value>) {
+        const FIELDS: [&str; 7] = [
+            "cost.cacheWrite",
+            "cost.cacheRead",
+            "cost.output",
+            "cost.input",
+            "contextWindow",
+            "currency",
+            "name",
+        ];
+        let Some(field) = FIELDS
+            .iter()
+            .find(|field| rest.ends_with(&format!(".{field}")))
+            .copied()
+        else {
+            return;
+        };
+        let address = rest.strip_suffix(&format!(".{field}")).unwrap_or_default();
+        if self.data.address.as_deref() != Some(address) {
+            return;
+        }
+        let number = value.and_then(Value::as_f64).unwrap_or(0.0);
+        match field {
+            "name" => {
+                self.data.model = value.and_then(Value::as_str).map(str::to_string);
+            }
+            "contextWindow" => {
+                self.data.limit = value.and_then(Value::as_u64).unwrap_or(0);
+            }
+            "currency" => {
+                self.data.money.symbol = match value.and_then(Value::as_str) {
+                    Some("CNY") => "¥".to_string(),
+                    Some("USD") => "$".to_string(),
+                    _ => String::new(),
+                };
+            }
+            other => {
+                let prices = self.data.prices.get_or_insert_with(Prices::default);
+                match other {
+                    "cost.input" => prices.input = number,
+                    "cost.output" => prices.output = number,
+                    "cost.cacheRead" => prices.cache_read = number,
+                    _ => prices.cache_write = number,
+                }
+            }
+        }
+    }
+
+    /// The bill: one currency, the model's own. A stored total replaces what was counted.
     fn read_usage(&mut self, content: &Value) {
         let Some(groups) = content.get("groups").and_then(Value::as_array) else {
             return;
@@ -709,14 +868,32 @@ impl InputZone {
             }
             total += price.get("total").and_then(Value::as_f64).unwrap_or(0.0);
         }
-        self.data.money = Money {
-            total,
-            symbol: match currency.as_str() {
+        self.data.money.base = total;
+        self.data.money.live = 0.0;
+        if !currency.is_empty() {
+            self.data.money.symbol = match currency.as_str() {
                 "CNY" => "¥".to_string(),
                 "USD" => "$".to_string(),
-                _ => String::new(),
-            },
+                _ => self.data.money.symbol.clone(),
+            };
+        }
+    }
+
+    /// The write landed: the workspace is the one the server resolved, and everyone hears it.
+    fn read_cwd(&mut self, content: &Value) {
+        if content.get("error").is_some() {
+            return;
+        }
+        let Some(path) = content.get("cwd").and_then(Value::as_str) else {
+            return;
         };
+        self.data.cwd.clear();
+        self.data.cwd.push_str(path);
+        self.data.temporary = false;
+        self.shouts.push(Shout::new(
+            name::CWD,
+            serde_json::json!({"path": path, "temporary": false}),
+        ));
     }
 }
 
@@ -776,17 +953,8 @@ impl SubZone for InputZone {
         self.edited(consumed)
     }
 
-    /// An edit landed: the word decides whether the completion hand is wanted.
-    fn edited(&mut self, consumed: bool) -> bool {
-        self.refresh_hang();
-        if self.hang {
-            self.pending_hire = Some(Hire::Completion);
-        }
-        consumed
-    }
-
     fn attach(&mut self, _session: i64, _size: TermSize) {
-        self.data = Data::default();
+        self.restart_data();
         self.data.attached = true;
         self.queue.clear();
         self.in_flight = None;
@@ -804,10 +972,13 @@ impl SubZone for InputZone {
         self.history.exit();
         self.finished = true;
         self.scroll = 0;
-        self.data = Data::default();
+        self.restart_data();
         self.queue.clear();
         self.in_flight = None;
         self.last_mailbox_turn = None;
+        self.outbox.push(Request::Config {
+            key: DEFAULT_MODEL_KEY.to_string(),
+        });
     }
 
     fn take_shouts(&mut self) -> Vec<Shout> {
@@ -820,6 +991,9 @@ impl SubZone for InputZone {
                 if let Some(path) = content.get("path").and_then(Value::as_str) {
                     self.data.cwd.clear();
                     self.data.cwd.push_str(path);
+                    if let Some(temporary) = content.get("temporary").and_then(Value::as_bool) {
+                        self.data.temporary = temporary;
+                    }
                     self.notify(event, content);
                 }
             }
@@ -827,6 +1001,26 @@ impl SubZone for InputZone {
                 if let Some(used) = content.get("used").and_then(Value::as_u64) {
                     self.data.used = used;
                 }
+            }
+            name::BILL => {
+                if let Some(prices) = self.data.prices.as_ref() {
+                    let bill = Bill {
+                        prompt: content.get("prompt").and_then(Value::as_u64).unwrap_or(0),
+                        completion: content
+                            .get("completion")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                        cached: content.get("cached").and_then(Value::as_u64).unwrap_or(0),
+                        cache_write: content
+                            .get("cache_write")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                    };
+                    self.data.money.live += prices.bill(&bill);
+                }
+            }
+            name::TICK => {
+                self.notify(event, content);
             }
             name::PREFILL => {
                 if let Some(text) = content.get("text").and_then(Value::as_str) {

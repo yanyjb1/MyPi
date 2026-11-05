@@ -102,6 +102,8 @@ pub struct Found {
     pub from: usize,
     /// Candidates for it.
     pub items: Vec<Completion>,
+    /// Every candidate this level could offer, before the word filters it.
+    pub total: usize,
     /// The candidates are names from the pools, not paths or command names.
     pub names: bool,
 }
@@ -115,6 +117,7 @@ pub fn suggest(line: &str, cursor: usize, look: &Look, scan: &mut Scan) -> Found
             word: String::new(),
             from: 0,
             items: Vec::new(),
+            total: 0,
             names: false,
         };
     }
@@ -122,15 +125,17 @@ pub fn suggest(line: &str, cursor: usize, look: &Look, scan: &mut Scan) -> Found
     let word = word_before(&before).to_string();
     let from = before.chars().count() - word.chars().count();
     // A command line: the input starts with `/` and the cursor is on its first line.
-    let (items, names) = if chars[0] == '/' && !before.contains('\n') {
+    let (items, names, total) = if chars[0] == '/' && !before.contains('\n') {
         command_line(&before, &word, look, scan)
     } else {
-        (path_items(&word, look, scan), false)
+        let (items, total) = path_items(&word, look, scan, false);
+        (items, false, total)
     };
     Found {
         word,
         from,
         items,
+        total,
         names,
     }
 }
@@ -147,7 +152,13 @@ fn word_before(before: &str) -> &str {
 }
 
 /// A line that starts with `/`: the command name first, then its argument positions.
-fn command_line(before: &str, word: &str, look: &Look, scan: &mut Scan) -> (Vec<Completion>, bool) {
+/// Returns the matches, whether they are names, and the level's whole list size.
+fn command_line(
+    before: &str,
+    word: &str,
+    look: &Look,
+    scan: &mut Scan,
+) -> (Vec<Completion>, bool, usize) {
     let complete: Vec<&str> = before.split_whitespace().collect();
     let ends_space = before.chars().last().is_some_and(|c| c.is_whitespace());
     let index = if ends_space {
@@ -156,17 +167,34 @@ fn command_line(before: &str, word: &str, look: &Look, scan: &mut Scan) -> (Vec<
         complete.len().saturating_sub(1)
     };
     if index == 0 {
-        return (command_items(word), false);
+        return (command_items(word), false, command_total());
     }
     let Some(meta) = complete.first().and_then(|name| command::lookup(name)) else {
-        return (Vec::new(), false);
+        return (Vec::new(), false, 0);
     };
     match meta.arg(index - 1) {
-        Some(Arg::Model) => (name_items(pools(look, true), word), true),
-        Some(Arg::Profile) => (name_items(pools(look, false), word), true),
-        Some(Arg::Path) => (path_items(word, look, scan), false),
-        Some(Arg::Number | Arg::Text) | None => (Vec::new(), false),
+        Some(Arg::Model) => {
+            let names = pools(look, true);
+            (name_items(names, word), true, names.len())
+        }
+        Some(Arg::Profile) => {
+            let names = pools(look, false);
+            (name_items(names, word), true, names.len())
+        }
+        Some(Arg::Path) => {
+            let (items, total) = path_items(word, look, scan, true);
+            (items, false, total)
+        }
+        Some(Arg::Number | Arg::Text) | None => (Vec::new(), false, 0),
     }
+}
+
+/// Every name a command line could offer at its first level.
+fn command_total() -> usize {
+    command::TABLE
+        .iter()
+        .map(|meta| 1 + meta.aliases.len())
+        .sum()
 }
 
 /// The two name pools, or an empty run when the server has not answered yet.
@@ -239,10 +267,11 @@ fn name_items(names: &[Candidate], word: &str) -> Vec<Completion> {
     out.into_iter().map(|(_, c)| c).collect()
 }
 
-/// Paths under the word's directory. Nothing when the word asks for no path.
-fn path_items(word: &str, look: &Look, scan: &mut Scan) -> Vec<Completion> {
-    if !path_trigger(word, look, scan) {
-        return Vec::new();
+/// Paths under the word's directory. `forced` is a path argument position: an empty word
+/// lists the workspace, anywhere else an unasked word offers nothing.
+fn path_items(word: &str, look: &Look, scan: &mut Scan, forced: bool) -> (Vec<Completion>, usize) {
+    if !forced && !path_trigger(word, look, scan) {
+        return (Vec::new(), 0);
     }
     let (dir_part, prefix) = match word.rfind('/') {
         Some(i) => (&word[..=i], &word[i + 1..]),
@@ -259,7 +288,9 @@ fn path_items(word: &str, look: &Look, scan: &mut Scan) -> Vec<Completion> {
         }
     };
     let mut out: Vec<(Rank, Completion)> = Vec::new();
+    let mut total = 0usize;
     for entry in scan.entries(&real) {
+        total += 1;
         let Some((rank, hits)) = matches(prefix, entry.name.as_str(), true) else {
             continue;
         };
@@ -277,7 +308,7 @@ fn path_items(word: &str, look: &Look, scan: &mut Scan) -> Vec<Completion> {
         ));
     }
     out.sort_by_key(|(rank, _)| *rank);
-    out.into_iter().map(|(_, c)| c).collect()
+    (out.into_iter().map(|(_, c)| c).collect(), total)
 }
 
 /// Whether a path completion was asked for: `./`, `../`, `~/`, a `/`-rooted word
@@ -501,12 +532,10 @@ impl CompletionPopup {
         }
     }
 
-    /// Open showing `items`, replacing the `from..to` segment.
-    pub fn open(&mut self, items: Vec<Completion>, from: usize, to: usize) {
-        // A fresh session locks the height; filtering and descending reuse it.
-        let locked = self
-            .locked_height
-            .unwrap_or_else(|| items.len().min(MAX_VISIBLE));
+    /// Open showing `items`, replacing the `from..to` segment. `total` is the level's whole
+    /// list: a fresh completion locks that height and keeps it until it closes.
+    pub fn open(&mut self, items: Vec<Completion>, from: usize, to: usize, total: usize) {
+        let locked = self.locked_height.unwrap_or(total.clamp(1, MAX_VISIBLE));
         // The same batch keeps the highlight; a different batch starts at the top.
         let same = self.items.len() == items.len()
             && self

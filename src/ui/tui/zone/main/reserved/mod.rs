@@ -33,7 +33,7 @@ pub struct ReservedZone {
     want: u16,
     /// A reply for the editor, waiting for the zone to take it.
     reply: Option<Reply>,
-    /// The workspace, as the conversation reports it.
+    /// The workspace: the launch directory until a conversation reports its own.
     cwd: String,
     /// Sentences waiting in the slot, as the input zone counts them.
     queued: usize,
@@ -189,7 +189,6 @@ impl SubZone for ReservedZone {
     }
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
-        self.cwd.clear();
         self.on_duty = None;
         self.report = None;
         self.reply = None;
@@ -204,7 +203,6 @@ impl SubZone for ReservedZone {
         self.report = None;
         self.reply = None;
         self.want = 0;
-        self.cwd.clear();
     }
 
     fn hear(&mut self, event: &str, content: &Value) {

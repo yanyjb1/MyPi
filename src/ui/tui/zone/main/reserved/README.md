@@ -69,7 +69,8 @@ A hand also has:
 - `assign` records the allocated rows, at least `IDLE_ROWS`.
 - `borrowed` returns the report's keys.
 - `deliver_action` passes a key to the hand and stores any reply.
-- `detach` calls `left()`, then clears the seat, report, reply, rows and workspace.
+- `detach` calls `left()`, then clears the seat, report, reply and rows; the workspace stays,
+  being where the app runs rather than a row's field.
 
 ## 2. Design intent
 
@@ -83,7 +84,10 @@ A hand also has:
   character and typing the level again reopens the same popup; Esc is the only thing that keeps one
   word closed, and it is spent as soon as the word changes.
 - **Names are asked on every hire.** The completion hand holds the seat until the answer lands, so
-  the frozen height is the popup's real one; a hand that is merely dismissed leaves at once.
+  the popup opens with its height already fixed; a hand that is merely dismissed leaves at once.
+- **The height counts the level, not the word.** A completion locks the row count of the level it
+  opened on — the whole command table, one directory's entries, the whole name pool — and keeps it
+  through every later level of the same completion, so narrowing the word never resizes the strip.
 - **Data flows down.** The desk owns the workspace; a hand is handed it, never
   reads them from a global.
 

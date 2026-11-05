@@ -6,6 +6,9 @@ use super::super::theme::{Slot, StatusTheme};
 use super::super::{Deco, Setup};
 use crate::ui::tui::zone::main::input::Ctx;
 
+/// What the pill says before a session has a name.
+const NAMELESS: &str = "MyPi";
+
 #[derive(Debug, Default)]
 pub struct Session;
 
@@ -15,9 +18,7 @@ pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
 
 impl Deco for Session {
     fn render(&self, t: &StatusTheme, _budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
-        let Some(name) = ctx.data.name.as_deref() else {
-            return Vec::new();
-        };
+        let name = ctx.data.name.as_deref().unwrap_or(NAMELESS);
         vec![t.capsule(name.to_string(), t.get(Slot::Accent))]
     }
 }

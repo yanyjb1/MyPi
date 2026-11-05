@@ -85,6 +85,9 @@ tool; no tool declares it.
 `provider` is required on `web`: one search runs against exactly one provider, so a call that
 names none is refused rather than spread across several tabs.
 
+`cd` lands its result with `memo {kind: "cwd", path, from}`: the history card relativizes from it
+and the front end marks the directory as a temporary move.
+
 ### ToolOutput
 
 ```text

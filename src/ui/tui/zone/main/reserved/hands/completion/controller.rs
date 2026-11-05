@@ -53,11 +53,9 @@ impl CompletionController {
         self.names
     }
 
-    /// The rows the popup claims while open.
+    /// The height this completion locked, from its first level's whole list.
     pub fn reserved_height(&self) -> Option<usize> {
-        self.popup
-            .locked_height()
-            .or(Some(self.popup.items().len()))
+        self.popup.locked_height()
     }
 
     /// Recompute candidates for the word the cursor is in.
@@ -86,7 +84,8 @@ impl CompletionController {
         if found.items.is_empty() || leaf(&found.items, &found.word, found.from == 0) {
             self.close();
         } else {
-            self.popup.open(found.items, found.from, cx.cursor);
+            self.popup
+                .open(found.items, found.from, cx.cursor, found.total);
         }
     }
 
@@ -138,13 +137,13 @@ impl Default for CompletionController {
     }
 }
 
-/// A completion that is done: a single candidate with nothing left to add, or an
-/// exact command name at the start of the line (Enter submits in one step).
+/// A completion that is done: one candidate already spells the word, or the word names a
+/// command that takes no argument. A directory's `/` is decoration: losing it ends the word.
 fn leaf(items: &[Completion], word: &str, at_line_start: bool) -> bool {
-    if items.len() != 1 {
-        return false;
+    if items.iter().any(|c| c.insert.trim_end_matches('/') == word) {
+        return true;
     }
-    items[0].insert == word || (at_line_start && command::lookup(word).is_some())
+    at_line_start && command::lookup(word).is_some_and(|meta| meta.args.is_empty())
 }
 
 /// The completion hand: the reserved zone hires it, it borrows the popup's keys.

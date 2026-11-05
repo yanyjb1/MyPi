@@ -9,6 +9,9 @@ impl App {
             return;
         }
         self.session.attach(id);
+        // A resumed conversation stands where it was started, whatever row it carried.
+        let cwd = self.cwd.to_string_lossy().to_string();
+        self.session.set_cwd(&cwd);
         self.session.watch(id);
         self.attached = Some(id);
         self.reset_memo();

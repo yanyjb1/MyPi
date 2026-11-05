@@ -87,11 +87,15 @@ pub fn render(
         // for out of the two columns to the left of it.
         let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
         spans.push(Span::raw(" ".repeat(anchor_col.saturating_sub(MARKER_W))));
-        spans.push(Span::raw(if selected { "> " } else { "  " }));
+        spans.push(if selected {
+            accent.span("> ")
+        } else {
+            Span::raw("  ")
+        });
 
         // The name is drawn as a run of spans: matched characters accent, the rest
         // in normal foreground, so the list shows why each candidate is in it.
-        spans.extend(name_spans(kind, name, hits, is_dir, accent));
+        spans.extend(name_spans(kind, name, hits, is_dir, selected, accent));
 
         if !detail.is_empty() {
             let pad = name_col.saturating_sub(crate::ui::tui::text::display_width(name));
@@ -119,6 +123,8 @@ pub fn render(
 // - `Plain` (paths, profile names, model ids): only the matched characters are
 //   accent. Here the list is long and unsorted-by-relevance, so showing which
 //   characters matched is what tells the user why a row is in it.
+// The highlighted row is the exception: the whole name wears the accent, so the
+// selection reads as one piece instead of a marker plus a scattered match.
 //
 // `hits` are char indices into `name`. A directory's trailing `/` is never
 // accented under the `Plain` rule: the matcher never looked at it, so accenting
@@ -128,9 +134,10 @@ fn name_spans(
     name: &str,
     hits: &[usize],
     is_dir: bool,
+    selected: bool,
     accent: &Accent,
 ) -> Vec<ratatui::text::Span<'static>> {
-    if kind == CandidateKind::Command {
+    if kind == CandidateKind::Command || selected {
         return vec![accent.span(name)];
     }
     let chars: Vec<char> = name.chars().collect();

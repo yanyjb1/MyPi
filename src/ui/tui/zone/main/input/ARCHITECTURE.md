@@ -20,7 +20,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 Through `SubZone`: `claims`, `kinds`, `deliver_event`, `deliver_action`, `attach`, `detach`,
 `take_shouts`, `hear`, plus `super::pane::Pane`'s `request_height` and `assign`.
 
-To `Main`: `take_hire`, `take_exits`, `draft`, `knows_cwd`, `apply_reply`, `clear`, `render_rows`,
+To `Main`: `take_hire`, `take_exits`, `draft`, `apply_reply`, `clear`, `render_rows`,
 `cursor_row`, `cursor_col`, `editor`, `statusline`.
 
 ## What it calls
@@ -53,8 +53,8 @@ InputZone
 - `deliver_action` applies the intent, then re-reads `hang`; a word in range hires completion. A
   command answers with one `Done`: an intent, an exit, a hire, a picked profile, a hint, or `Hold`.
 - `deliver_event` decodes only the frames it named: `call meta`, `call config`, `call usage`,
-  `stream change`.
-- `hear` takes `cwd`, `usage`, `busy`, `prefill`; the statusline hears the rest.
+  `post cwd`, `post switch`, `stream change`.
+- `hear` takes `cwd`, `usage`, `bill`, `tick`, `busy`, `prefill`; the statusline hears the rest.
 
 ## Must stay in sync
 

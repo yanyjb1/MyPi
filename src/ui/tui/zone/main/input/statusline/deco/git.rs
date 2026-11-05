@@ -24,6 +24,8 @@ pub struct Git {
     dir: Arc<Mutex<PathBuf>>,
     /// A tool finished, or the workspace moved.
     dirty: Arc<AtomicBool>,
+    /// One scan landed: `None` now means "not a repository", not "not looked yet".
+    scanned: Arc<AtomicBool>,
 }
 
 pub(super) fn make(setup: &Setup) -> Box<dyn Deco> {
@@ -35,11 +37,17 @@ impl Git {
         let status = Arc::new(Mutex::new(None));
         let dir = Arc::new(Mutex::new(PathBuf::new()));
         let dirty = Arc::new(AtomicBool::new(false));
-        let (s, d, w) = (status.clone(), dir.clone(), dirty.clone());
+        let scanned = Arc::new(AtomicBool::new(false));
+        let (s, d, w, seen) = (status.clone(), dir.clone(), dirty.clone(), scanned.clone());
         std::thread::spawn(move || {
+            let mut last: Option<std::time::Instant> = None;
             loop {
-                std::thread::sleep(interval);
+                std::thread::sleep(Duration::from_millis(50));
                 if !w.load(Ordering::Relaxed) {
+                    continue;
+                }
+                // The first look is immediate; after that one scan per interval.
+                if last.is_some_and(|at| at.elapsed() < interval) {
                     continue;
                 }
                 let path = d.lock().map(|p| p.clone()).unwrap_or_default();
@@ -49,10 +57,17 @@ impl Git {
                 if let Ok(mut slot) = s.lock() {
                     *slot = snap;
                 }
+                seen.store(true, Ordering::Relaxed);
+                last = Some(std::time::Instant::now());
                 w.store(false, Ordering::Relaxed);
             }
         });
-        Self { status, dir, dirty }
+        Self {
+            status,
+            dir,
+            dirty,
+            scanned,
+        }
     }
 
     /// Aim the scan at another directory and schedule a look.
@@ -80,12 +95,16 @@ impl Deco for Git {
         }
     }
 
-    fn render(&self, t: &StatusTheme, budget: Option<usize>, _ctx: &Ctx) -> Vec<Span<'static>> {
+    fn render(&self, t: &StatusTheme, budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
         let Ok(slot) = self.status.lock() else {
             return Vec::new();
         };
         let Some(g) = slot.as_ref() else {
-            return Vec::new();
+            // Before the first scan a mark stands in; a directory with no repository stays blank.
+            if ctx.data.cwd.is_empty() || self.scanned.load(Ordering::Relaxed) {
+                return Vec::new();
+            }
+            return vec![t.capsule("@ ?", t.get(Slot::Muted))];
         };
         // Under 16 cells the branch stands alone, counts dropped.
         let branch_only = budget.is_some_and(|w| w < 16);

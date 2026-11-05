@@ -32,6 +32,8 @@ pub struct MainZone {
     pub(super) accent: crate::ui::tui::theme::Accent,
     /// Events this zone itself put out, not yet on the bus.
     shouts: Vec<Shout>,
+    /// The directory the conversation row last named; a temporary `cd` never touches it.
+    session_cwd: Option<String>,
 }
 
 impl MainZone {
@@ -97,10 +99,11 @@ impl MainZone {
         let Some(path) = row.get("cwd").and_then(Value::as_str) else {
             return;
         };
-        if self.input.knows_cwd(path) {
+        if self.session_cwd.as_deref() == Some(path) {
             return;
         }
-        self.shout(name::CWD, json!({"path": path}));
+        self.session_cwd = Some(path.to_string());
+        self.shout(name::CWD, json!({"path": path, "temporary": false}));
     }
 }
 
@@ -120,6 +123,11 @@ impl Zone for MainZone {
     fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request> {
         super::keys::check();
         self.size = Some(size);
+        if let Some(cwd) = memo.read("cwd") {
+            let content = json!({"path": cwd});
+            self.input.hear(name::CWD, &content);
+            self.reserved.hear(name::CWD, &content);
+        }
         if let Some(focus) = memo.read("tree.focus") {
             memo.delete("tree.focus");
             if let Some((turn, block)) = focus.split_once(':')
@@ -128,12 +136,16 @@ impl Zone for MainZone {
                 self.history.focus(turn, block);
             }
         }
+        self.input.boot();
         self.flush();
-        vec![Request::Structure]
+        let mut requests = vec![Request::Structure];
+        requests.extend(self.input.take_requests());
+        requests
     }
 
     fn session(&mut self, id: Option<i64>) -> Vec<Request> {
         let size = self.term();
+        self.session_cwd = None;
         match id {
             Some(id) => {
                 self.history.attach(id, size);
@@ -254,7 +266,7 @@ impl MainZone {
         }
     }
 
-    /// The editor asked for a hand: seat it, and feed it the text it missed.
+    /// The editor asked for a hand: seat it, feed it the text, and let it leave if it is done.
     fn deliver_hires(&mut self) {
         self.seat_hand();
         if let Some(reply) = self.reserved.take_reply() {
@@ -264,6 +276,9 @@ impl MainZone {
         self.seat_hand();
         let (text, cursor) = self.input.draft();
         self.reserved.text(&text, cursor);
+        // A hand whose word is finished goes at once, and its borrowed keys with it.
+        self.reserved.settle();
+        self.sync_borrowed();
     }
 
     /// One pending hire, if the editor asked for one.
@@ -272,8 +287,5 @@ impl MainZone {
             return;
         };
         self.reserved.hire(who);
-        self.sync_borrowed();
-        let (text, cursor) = self.input.draft();
-        self.reserved.text(&text, cursor);
     }
 }

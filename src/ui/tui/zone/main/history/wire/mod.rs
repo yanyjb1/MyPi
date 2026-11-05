@@ -100,6 +100,18 @@ impl HistoryZone {
             let prompt = usage.get("prompt").and_then(Value::as_u64).unwrap_or(0);
             let completion = usage.get("completion").and_then(Value::as_u64).unwrap_or(0);
             let used = prompt + completion;
+            if prompt > 0 {
+                // Every request is paid for, even when the context size repeats.
+                self.shouts.push(Shout::new(
+                    name::BILL,
+                    json!({
+                        "prompt": prompt,
+                        "completion": completion,
+                        "cached": usage.get("cached").and_then(Value::as_u64).unwrap_or(0),
+                        "cache_write": usage.get("cache_write").and_then(Value::as_u64).unwrap_or(0),
+                    }),
+                ));
+            }
             if prompt > 0 && used != self.usage {
                 self.usage = used;
                 self.shouts
@@ -136,12 +148,35 @@ impl HistoryZone {
                     .get("duration_ms")
                     .and_then(Value::as_i64)
                     .unwrap_or(0);
+                if ok {
+                    self.moved(memo);
+                }
                 self.live.tool_end(call, ok, result, memo, took);
             }
             _ => {}
         }
         self.shouts
             .push(Shout::new(name::BUSY, json!({"on": true})));
+        self.shouts.push(Shout::new(name::TICK, json!({})));
+    }
+
+    /// A tool that moved the session: the cards after it relativize from the new directory.
+    fn moved(&mut self, memo: Option<&str>) {
+        let Some(memo) = memo.and_then(|memo| serde_json::from_str::<Value>(memo).ok()) else {
+            return;
+        };
+        if memo.get("kind").and_then(Value::as_str) != Some("cwd") {
+            return;
+        }
+        let Some(path) = memo.get("path").and_then(Value::as_str) else {
+            return;
+        };
+        self.cwd.clear();
+        self.cwd.push_str(path);
+        self.shouts.push(Shout::new(
+            name::CWD,
+            json!({"path": path, "temporary": true}),
+        ));
     }
 
     /// A round closed: the tail hands its product over and stops growing.

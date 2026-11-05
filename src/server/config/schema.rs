@@ -45,6 +45,7 @@ keys! {
     KEY_CONFIG_UI_TUI_HISTORY_SCROLL_HEIGHT = "config", "ui.tui.zone.main.history", "scrollHeight", Int, DefaultValue::Int(10), "Screen rows one wheel notch walks.", true;
     KEY_CONFIG_UI_TUI_HISTORY_TODO_FOLD = "config", "ui.tui.zone.main.history", "todoFold", BoolOrInt, DefaultValue::Bool(false), "Fold the task list; true = 8 rows, N = N rows.", true;
     KEY_CONFIG_UI_TUI_FX_USD_CNY = "config", "ui.tui.fx", "usdCny", Float, DefaultValue::Float(6.0), "1 USD in CNY, for display only.", true;
+    KEY_CONFIG_UI_TUI_DECO_GIT_SCAN = "config", "ui.tui.zone.main.input.deco", "gitScanInterval", Int, DefaultValue::Int(3), "Seconds between git scans of the workspace.", true;
 
     PATTERN_MODELS_PROVIDER_BASE_URL = "models", "provider.<name>", "baseUrl", Text, DefaultValue::Null, "Request root; must be http(s).", true;
     PATTERN_MODELS_PROVIDER_API = "models", "provider.<name>", "api", Text, DefaultValue::Null, "Wire protocol name; the legal set comes from req.", true;

@@ -50,7 +50,7 @@ Subscribe: `watch`, `submit`, `compact`.
   `interrupt` is silent: it stops what runs, and an idle session hears nothing.
 - A refusal the user can actually cause is said in the session's own stream — one `stream notice`
   frame — instead of only in the answer the front end may drop. Today that is `delete` on a busy
-  session.
+  session and `cwd` on a path that does not exist or is not a workspace.
 - `profile` is an argument of the write `init` and never a door of its own: a session's profile is
   fixed when it is created.
 - A child session takes no messages: `submit` and `compact` answer `permission_denied` for one.
@@ -76,7 +76,7 @@ Subscribe: `watch`, `submit`, `compact`.
 | `call` | `sessions` | `under` (optional directory) | `rows`: main sessions, newest first, each carrying `first_user`, `bytes`, `last_ts`, `memos` |
 | `post` | `init` | `cwd`, `name`, `model`, `profile` | `session` |
 | `post` | `name` | `session`, `name` | — |
-| `post` | `cwd` | `session`, `path` | — |
+| `post` | `cwd` | `session`, `path` | `cwd` (resolved) |
 | `post` | `switch` | `session`, `model` | — |
 | `post` | `delete` | `session` | — |
 | `post` | `interrupt` | `session` | — |

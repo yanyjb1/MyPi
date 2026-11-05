@@ -15,9 +15,7 @@ pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
 
 impl Deco for Cost {
     fn render(&self, t: &StatusTheme, _budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
-        let Some(text) = ctx.data.money.text() else {
-            return Vec::new();
-        };
-        vec![t.capsule(text, t.get(Slot::Gold))]
+        // The price pill never hides: zero is a fact, and a missing one reads as zero.
+        vec![t.capsule(ctx.data.money.text(), t.get(Slot::Gold))]
     }
 }

@@ -42,25 +42,29 @@ pub(crate) fn apply(handle: &Handle, change: Change, writer: &Writer, scrooge: b
             })?;
         }
         Change::Cwd(path) => {
+            let root = handle.birth().cwd.clone().unwrap_or_default();
+            let mut live = handle.live.lock().unwrap_or_else(|e| e.into_inner());
+            let base = match live.as_ref() {
+                Some(live) => live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone(),
+                None => root.clone(),
+            };
+            let real = crate::server::agent::tools::workspace::resolve_cwd(
+                &root,
+                &base,
+                &path.to_string_lossy(),
+            )?;
+            if let Some(live) = live.as_mut() {
+                *live.cwd.write().unwrap_or_else(|e| e.into_inner()) = real.clone();
+            }
+            drop(live);
             {
                 let mut birth = handle.birth.lock().unwrap_or_else(|e| e.into_inner());
-                birth.cwd = Some(path.clone());
-            }
-            if let Some(live) = handle
-                .live
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_mut()
-            {
-                live.cwd
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone_from(&path);
+                birth.cwd = Some(real.clone());
             }
             writer.push(Submit {
                 rows: vec![Row::MoveCwd {
                     session: handle.id,
-                    cwd: path.to_string_lossy().into_owned(),
+                    cwd: real.to_string_lossy().into_owned(),
                 }],
             })?;
         }
