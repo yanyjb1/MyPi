@@ -30,8 +30,11 @@ fn main() -> anyhow::Result<()> {
     if let Some(file) = std::env::var_os("MYPI_ENDPOINT") {
         return front_end(PathBuf::from(file), &cli);
     }
-    if let Ok(endpoint) = endpoint::read(&Endpoint::file_path(&db)) {
-        return front_end_with(endpoint, &cli);
+    // A leftover endpoint file whose server is gone is no reason to refuse to start.
+    if let Ok(endpoint) = endpoint::read(&Endpoint::file_path(&db))
+        && let Ok(session) = mypi::ui::session::Session::connect(endpoint)
+    {
+        return run(session, &cli);
     }
 
     let cfg = Config::load()?;
@@ -43,7 +46,9 @@ fn main() -> anyhow::Result<()> {
     init_time(&cfg);
     let api = Arc::new(Api::open(db.clone(), cfg)?);
     let bound = server::bind(api, &db, endpoint, claim)?;
+    // The front end is this same executable: its own flags must survive the spawn.
     let mut front = std::process::Command::new(std::env::current_exe()?)
+        .args(std::env::args().skip(1))
         .env("MYPI_ENDPOINT", &file)
         .spawn()
         .context("cannot start the front end")?;
@@ -90,12 +95,13 @@ fn init_time(cfg: &Config) {
 fn front_end(file: PathBuf, cli: &Cli) -> anyhow::Result<()> {
     let endpoint =
         endpoint::read(&file).with_context(|| format!("cannot read {}", file.display()))?;
-    front_end_with(endpoint, cli)
+    let session = mypi::ui::session::Session::connect(endpoint)?;
+    run(session, cli)
 }
 
-fn front_end_with(endpoint: Endpoint, cli: &Cli) -> anyhow::Result<()> {
+/// The front end on an open connection: read the launch directory, pick the first zone, go.
+fn run(session: mypi::ui::session::Session, cli: &Cli) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().context("cannot read the current directory")?;
-    let session = mypi::ui::session::Session::connect(endpoint)?;
     let model = cli.model.as_deref().and_then(model_id);
     let startup = if let Some(id) = cli.attach {
         tui::app::Startup::attach(cwd, id, model)

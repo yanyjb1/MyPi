@@ -3,7 +3,7 @@
 use super::super::layout::line::{Lead, Row};
 use super::super::layout::segment::{self, Kind};
 use super::super::paint::{self, Opts};
-use super::decode::{Block, Kind as BlockKind, Usage};
+use super::decode::{Block, Kind as BlockKind};
 
 /// One block's finished segments: source length in, natural rows out.
 #[derive(Default)]
@@ -356,6 +356,5 @@ fn blank(kind: BlockKind, call_id: Option<&str>) -> Block {
         result: None,
         memo: None,
         duration_ms: 0,
-        usage: Usage::default(),
     }
 }

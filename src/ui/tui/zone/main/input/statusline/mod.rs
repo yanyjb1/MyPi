@@ -6,7 +6,6 @@ mod theme;
 
 pub use theme::StatusTheme;
 
-use std::time::Duration;
 
 use ratatui::text::Line;
 
@@ -50,28 +49,16 @@ pub struct Entry {
     /// Omission priority: higher survives longer.
     pub priority: u8,
     /// Builds it.
-    pub make: fn(&Setup) -> Box<dyn Deco>,
-}
-
-/// What a deco may read before the first frame.
-#[derive(Debug, Clone)]
-pub struct Setup {
-    /// `config.ui.tui.zone.main.input.deco.gitScanInterval`, this until then.
-    pub git_scan: Duration,
-}
-
-impl Default for Setup {
-    fn default() -> Self {
-        Self {
-            git_scan: deco::git::DEFAULT_SCAN,
-        }
-    }
+    pub make: fn() -> Box<dyn Deco>,
 }
 
 /// What a deco does. Where it sits and what it costs live in its [`Entry`].
 pub trait Deco {
     /// One bus event; ignore the ones you do not care about.
     fn on_event(&mut self, _event: &str, _content: &Value, _ctx: &Ctx) {}
+
+    /// One frame: this is where a deco with work of its own decides it is due.
+    fn tick(&mut self, _ctx: &Ctx) {}
 
     /// `budget` is `None` while measuring (return the narrowest form), else the
     /// cells allocated. An empty run hides the deco and its connector.
@@ -90,10 +77,10 @@ pub struct StatusLine {
 
 impl StatusLine {
     /// Build the standard row.
-    pub fn new(setup: &Setup) -> Self {
+    pub fn new() -> Self {
         let mut rows: Vec<(&'static Entry, Box<dyn Deco>)> = deco::ROW
             .iter()
-            .map(|entry| (entry, (entry.make)(setup)))
+            .map(|entry| (entry, (entry.make)()))
             .collect();
         rows.sort_by_key(|(entry, _)| (entry.side.rank(), entry.order));
         Self { rows }
@@ -103,6 +90,13 @@ impl StatusLine {
     pub fn on_event(&mut self, event: &str, content: &Value, ctx: &Ctx) {
         for (_, deco) in &mut self.rows {
             deco.on_event(event, content, ctx);
+        }
+    }
+
+    /// One frame for every deco: whoever has work of its own runs it here.
+    pub fn tick(&mut self, ctx: &Ctx) {
+        for (_, deco) in &mut self.rows {
+            deco.tick(ctx);
         }
     }
 

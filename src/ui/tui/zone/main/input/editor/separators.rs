@@ -1,11 +1,11 @@
 //! The block separator set: the one definition of where a word ends.
 //!
-//! Word delete and word motion walk stop here, so a path loses one segment at a time;
-//! the completion trigger scans whole non-space runs instead.
+//! Word delete and word motion stop here, so a path loses one segment at a time; the
+//! completion trigger looks at whole non-space runs instead.
 
 use std::collections::HashSet;
 
-/// The block boundary set, shared by the editor and the completion trigger.
+/// The block boundary set, for word delete and word motion.
 #[derive(Debug, Clone)]
 pub struct SeparatorTable {
     hard: HashSet<char>,

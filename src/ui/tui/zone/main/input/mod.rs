@@ -10,7 +10,7 @@ mod route;
 mod semantics;
 mod statusline;
 
-pub use ctx::{Ctx, Data};
+pub use ctx::{Context, Currency, Ctx, Data};
 
 use super::desk::{Hire, Reply};
 use super::geometry;
@@ -22,9 +22,7 @@ use serde_json::Value;
 
 use editor::{Editor, Effect, History};
 use queue::{Outgoing, Queue};
-use statusline::{Setup, StatusLine, StatusTheme};
-
-pub use ctx::{Bill, Prices};
+use statusline::{StatusLine, StatusTheme};
 
 /// What the editor declares when it cannot act on its own.
 ///
@@ -40,6 +38,9 @@ const PLAIN: Mods = Mods {
 
 /// The git segment's scan interval, in seconds.
 const GIT_SCAN_KEY: &str = "config.ui.tui.zone.main.input.deco.gitScanInterval";
+
+/// The currency the cost pill counts in.
+const FX_CURRENCY_KEY: &str = "config.ui.tui.fx.currency";
 
 /// The model a draft opens with; a session row overrides it once there is one.
 const DEFAULT_MODEL_KEY: &str = "config.server.api.defaultModel";
@@ -96,14 +97,14 @@ pub struct InputZone {
     pub cursor_row: u16,
     /// The statusline: the top edge of the container and its own deco table.
     pub statusline: StatusLine,
-    /// What the decos were built with; the git scan interval lands here once.
-    setup: Setup,
     /// The startup questions were asked; one answer per run is enough.
     booted: bool,
     /// The terminal size from this round's arbitration.
     term: TermSize,
     /// What the parts read.
     data: Data,
+    /// The workspace to go back to if a `/cdp` is refused.
+    cwd_before: Option<(String, bool)>,
     /// Events this zone puts out.
     shouts: Vec<Shout>,
     /// Frames this zone owes the session.
@@ -129,11 +130,11 @@ impl Default for InputZone {
             enter_armed: None,
             cursor_col: geometry::BORDER_COLS as u16,
             cursor_row: 1,
-            statusline: StatusLine::new(&Setup::default()),
-            setup: Setup::default(),
+            statusline: StatusLine::new(),
             booted: false,
             term: TermSize { cols: 80, rows: 24 },
             data: Data::default(),
+            cwd_before: None,
             shouts: Vec::new(),
             outbox: Vec::new(),
         }
@@ -248,25 +249,29 @@ impl InputZone {
         }),
     ];
 
-    /// Drop one session's readings; the workspace stays: it is where the app runs.
+    /// Drop one session's readings. What the process owns stays: the workspace, the git
+    /// scan interval and the display currency outlive any one conversation.
     fn restart_data(&mut self) {
         let cwd = std::mem::take(&mut self.data.cwd);
+        let git_scan = self.data.git_scan;
+        let currency = self.data.money.currency;
         self.data = Data::default();
         self.data.cwd = cwd;
+        self.data.git_scan = git_scan;
+        self.data.money.currency = currency;
     }
 
-    /// First frame: the two facts a draft can ask for on its own.
+    /// First frame: the process-wide facts a draft can ask for on its own.
     pub fn boot(&mut self) {
         if self.booted {
             return;
         }
         self.booted = true;
-        self.outbox.push(Request::Config {
-            key: GIT_SCAN_KEY.to_string(),
-        });
-        self.outbox.push(Request::Config {
-            key: DEFAULT_MODEL_KEY.to_string(),
-        });
+        for key in [GIT_SCAN_KEY, FX_CURRENCY_KEY, DEFAULT_MODEL_KEY] {
+            self.outbox.push(Request::Config {
+                key: key.to_string(),
+            });
+        }
     }
 
     /// The hand the editor asked for, if it asked this frame.
@@ -555,45 +560,37 @@ impl InputZone {
         }
     }
 
-    /// Whether the cursor sits in a completion trigger word, from the editor's own
-    /// text. Triggers: a `/` as the input's first character; or a word preceded by a
-    /// space that starts with `./`, `../`, `~/`, a `/` plus one more character, or a
-    /// leading path segment followed by `/`.
+    /// Whether the cursor sits in a completion trigger: the one rule lives in `command::wants`.
     fn refresh_hang(&mut self) {
         let text = self.editor.text();
         let cursor = self.editor.cursor();
-        let chars: Vec<char> = text.chars().collect();
-        let cursor = cursor.min(chars.len());
-        // The trigger word is the whole non-space run: `src/main.rs` is one word here, even
-        // though word delete stops at the slash.
-        let mut start = cursor;
-        while start > 0 && !chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        let word: String = chars[start..cursor].iter().collect();
-        let spaced = start == 0 || chars[start - 1] == ' ';
-        let is_command = start == 0 && word.starts_with('/');
-        let head = word.split('/').next().unwrap_or("");
-        let ascii_head = !head.is_empty()
-            && head
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
-        let is_path = word.starts_with("./")
-            || word.starts_with("../")
-            || word.starts_with("~/")
-            || (word.starts_with('/') && word.chars().count() > 1)
-            || (word.contains('/') && ascii_head);
-        let argument = self.command_argument(&chars, cursor, start);
-        self.hang = argument || (spaced && !word.is_empty() && (is_command || is_path));
+        let before: String = text.chars().take(cursor).collect();
+        let (_, word) = crate::ui::command::word(&text, cursor);
+        self.hang = command::wants(&before, &word);
     }
 
-    /// A write the user just asked for: the widgets follow the address it already names.
+    /// A write the user just asked for: the widgets follow it at once, and the receipt has
+    /// the last word. A refused move puts the old workspace back.
     fn note_intent(&mut self, request: &Request) {
-        if let Request::SwitchModel(id) = request {
-            let address = format!("{}:{}", id.provider, id.model);
-            let mut out = Vec::new();
-            self.model_address(address, &mut out);
-            self.outbox.extend(out);
+        match request {
+            Request::SwitchModel(id) => {
+                let address = format!("{}:{}", id.provider, id.model);
+                let mut out = Vec::new();
+                self.model(&address, &mut out);
+                self.outbox.extend(out);
+            }
+            Request::SetCwd(path) => {
+                let target = if std::path::Path::new(path).is_absolute() {
+                    std::path::PathBuf::from(path)
+                } else {
+                    std::path::Path::new(&self.data.cwd).join(path)
+                };
+                let target = target.canonicalize().unwrap_or(target);
+                self.cwd_before = Some((self.data.cwd.clone(), self.data.temporary));
+                self.data.cwd = target.to_string_lossy().into_owned();
+                self.data.temporary = false;
+            }
+            _ => {}
         }
     }
 
@@ -606,39 +603,10 @@ impl InputZone {
         consumed
     }
 
-    /// Whether the cursor sits in an argument position that has candidates.
-    fn command_argument(&self, chars: &[char], cursor: usize, start: usize) -> bool {
-        let before: String = chars[..cursor].iter().collect();
-        let words: Vec<&str> = before.split_whitespace().collect();
-        let ends_space = before.chars().last().is_some_and(char::is_whitespace);
-        let index = match ends_space {
-            true => words.len(),
-            false => words.len().saturating_sub(1),
-        };
-        if index == 0 || start == 0 {
-            return false;
-        }
-        let Some(meta) = words.first().and_then(|name| command::lookup(name)) else {
-            return false;
-        };
-        matches!(
-            meta.arg(index - 1),
-            Some(
-                crate::ui::command::Arg::Path
-                    | crate::ui::command::Arg::Model
-                    | crate::ui::command::Arg::Profile
-            )
-        )
-    }
-
     /// The statusline's own reading of an event.
     fn notify(&mut self, event: &str, content: &Value) {
         let ctx = Ctx { data: &self.data };
         self.statusline.on_event(event, content, &ctx);
-    }
-
-    fn ctx(&self) -> Ctx<'_> {
-        Ctx { data: &self.data }
     }
 
     /// One frame answer the zone reads for itself.
@@ -739,28 +707,17 @@ impl InputZone {
         if self.data.address.as_deref() == Some(address.as_str()) {
             return;
         }
-        self.model_address(address, out);
+        self.model(&address, out);
     }
 
-    /// One model's facts, all through the config door: name, window, currency, unit prices.
-    fn model_address(&mut self, address: String, out: &mut Vec<Request>) {
-        self.data.address = Some(address.clone());
+    /// The model whose facts the widgets follow: one ask, answered as a whole entry.
+    fn model(&mut self, address: &str, out: &mut Vec<Request>) {
+        self.data.address = Some(address.to_string());
         self.data.model = None;
         self.data.limit = 0;
-        self.data.prices = None;
-        for field in [
-            "name",
-            "contextWindow",
-            "currency",
-            "cost.input",
-            "cost.output",
-            "cost.cacheRead",
-            "cost.cacheWrite",
-        ] {
-            out.push(Request::Config {
-                key: format!("models.model.{address}.{field}"),
-            });
-        }
+        out.push(Request::Config {
+            key: format!("models.model.{address}"),
+        });
     }
 
     /// One config answer: the statusline's own keys, and the running model's facts.
@@ -776,124 +733,77 @@ impl InputZone {
                     .filter(|address| !address.is_empty())
             {
                 let mut out = Vec::new();
-                self.model_address(address.to_string(), &mut out);
+                self.model(address, &mut out);
                 self.outbox.extend(out);
             }
             return;
         }
-        if let Some(rest) = key.strip_prefix("models.model.") {
-            self.read_model_key(rest, value);
+        if key == FX_CURRENCY_KEY {
+            if let Some(name) = value.and_then(Value::as_str)
+                && let Some(currency) = Currency::parse(name)
+            {
+                self.data.money.currency = currency;
+            }
             return;
         }
-        if key.ends_with(".deco.gitScanInterval")
-            && let Some(seconds) = value.and_then(Value::as_u64)
-        {
-            let interval = std::time::Duration::from_secs(seconds.max(1));
-            if interval != self.setup.git_scan {
-                self.setup.git_scan = interval;
-                self.statusline = StatusLine::new(&self.setup);
-                // The fresh decos were built after the workspace arrived: hand it over again.
-                if !self.data.cwd.is_empty() {
-                    let content = serde_json::json!({"path": self.data.cwd});
-                    self.notify(crate::ui::tui::zone::name::CWD, &content);
-                }
+        if key == GIT_SCAN_KEY {
+            if let Some(seconds) = value.and_then(Value::as_u64) {
+                self.data.git_scan = Some(std::time::Duration::from_secs(seconds.max(1)));
             }
+            return;
+        }
+        if let Some(address) = key.strip_prefix("models.model.") {
+            self.read_model(address, value);
         }
     }
 
-    /// `<address>.<field>`, the address itself holding no dot.
-    fn read_model_key(&mut self, rest: &str, value: Option<&Value>) {
-        const FIELDS: [&str; 7] = [
-            "cost.cacheWrite",
-            "cost.cacheRead",
-            "cost.output",
-            "cost.input",
-            "contextWindow",
-            "currency",
-            "name",
-        ];
-        let Some(field) = FIELDS
-            .iter()
-            .find(|field| rest.ends_with(&format!(".{field}")))
-            .copied()
-        else {
-            return;
-        };
-        let address = rest.strip_suffix(&format!(".{field}")).unwrap_or_default();
+    /// The model's entry: the pill's text and the gauge's denominator.
+    fn read_model(&mut self, address: &str, value: Option<&Value>) {
         if self.data.address.as_deref() != Some(address) {
             return;
         }
-        let number = value.and_then(Value::as_f64).unwrap_or(0.0);
-        match field {
-            "name" => {
-                self.data.model = value.and_then(Value::as_str).map(str::to_string);
-            }
-            "contextWindow" => {
-                self.data.limit = value.and_then(Value::as_u64).unwrap_or(0);
-            }
-            "currency" => {
-                self.data.money.symbol = match value.and_then(Value::as_str) {
-                    Some("CNY") => "¥".to_string(),
-                    Some("USD") => "$".to_string(),
-                    _ => String::new(),
-                };
-            }
-            other => {
-                let prices = self.data.prices.get_or_insert_with(Prices::default);
-                match other {
-                    "cost.input" => prices.input = number,
-                    "cost.output" => prices.output = number,
-                    "cost.cacheRead" => prices.cache_read = number,
-                    _ => prices.cache_write = number,
-                }
-            }
-        }
-    }
-
-    /// The bill: one currency, the model's own. A stored total replaces what was counted.
-    fn read_usage(&mut self, content: &Value) {
-        let Some(groups) = content.get("groups").and_then(Value::as_array) else {
+        let Some(entry) = value else {
             return;
         };
-        let mut total = 0.0;
-        let mut currency = String::new();
-        for group in groups {
-            let Some(price) = group.get("price") else {
-                continue;
-            };
-            if currency.is_empty()
-                && let Some(name) = price.get("currency").and_then(Value::as_str)
-            {
-                currency = name.to_string();
-            }
-            total += price.get("total").and_then(Value::as_f64).unwrap_or(0.0);
-        }
-        self.data.money.base = total;
-        self.data.money.live = 0.0;
-        if !currency.is_empty() {
-            self.data.money.symbol = match currency.as_str() {
-                "CNY" => "¥".to_string(),
-                "USD" => "$".to_string(),
-                _ => self.data.money.symbol.clone(),
-            };
-        }
+        self.data.model = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        self.data.limit = entry
+            .get("contextWindow")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+    }
+
+    /// What the session has cost, and where its context stands. Both are the server's to say.
+    fn read_usage(&mut self, content: &Value) {
+        let number = |key: &str| content.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+        self.data.money.cny = number("cny");
+        self.data.money.usd = number("usd");
+        self.data.context = Context {
+            tokens: content.get("context").and_then(Value::as_u64),
+            estimated: content.get("estimated").and_then(Value::as_bool).unwrap_or(false),
+        };
+        self.data.baseline = content.get("baseline_prompt").and_then(Value::as_u64);
     }
 
     /// The write landed: the workspace is the one the server resolved, and everyone hears it.
     fn read_cwd(&mut self, content: &Value) {
         if content.get("error").is_some() {
+            // The move was refused: the optimistic text never happened.
+            if let Some((cwd, temporary)) = self.cwd_before.take() {
+                self.data.cwd = cwd;
+                self.data.temporary = temporary;
+            }
             return;
         }
         let Some(path) = content.get("cwd").and_then(Value::as_str) else {
             return;
         };
-        self.data.cwd.clear();
-        self.data.cwd.push_str(path);
-        self.data.temporary = false;
-        self.shouts.push(Shout::new(
-            name::CWD,
-            serde_json::json!({"path": path, "temporary": false}),
-        ));
+        self.cwd_before = None;
+        let content = serde_json::json!({ "path": path, "temporary": false });
+        self.hear(name::CWD, &content);
+        self.shouts.push(Shout::new(name::CWD, content));
     }
 }
 
@@ -955,6 +865,7 @@ impl SubZone for InputZone {
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
         self.restart_data();
+        self.cwd_before = None;
         self.data.attached = true;
         self.queue.clear();
         self.in_flight = None;
@@ -968,6 +879,7 @@ impl SubZone for InputZone {
         self.hang = false;
         self.esc_armed = None;
         self.enter_armed = None;
+        self.cwd_before = None;
         self.editor.clear();
         self.history.exit();
         self.finished = true;
@@ -998,26 +910,8 @@ impl SubZone for InputZone {
                 }
             }
             name::USAGE => {
-                if let Some(used) = content.get("used").and_then(Value::as_u64) {
-                    self.data.used = used;
-                }
-            }
-            name::BILL => {
-                if let Some(prices) = self.data.prices.as_ref() {
-                    let bill = Bill {
-                        prompt: content.get("prompt").and_then(Value::as_u64).unwrap_or(0),
-                        completion: content
-                            .get("completion")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0),
-                        cached: content.get("cached").and_then(Value::as_u64).unwrap_or(0),
-                        cache_write: content
-                            .get("cache_write")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0),
-                    };
-                    self.data.money.live += prices.bill(&bill);
-                }
+                // A request landed: the answer is the server's to give, live figures and all.
+                self.outbox.push(Request::Usage);
             }
             name::TICK => {
                 self.notify(event, content);
@@ -1075,7 +969,9 @@ impl InputZone {
         self.scroll =
             geometry::adjust_scroll(self.scroll, wrapped.len(), container_rows, cursor_row);
         let status_line = {
-            let ctx = self.ctx();
+            let ctx = Ctx { data: &self.data };
+            // One frame each: a deco with work of its own does it here, inside the frame.
+            self.statusline.tick(&ctx);
             self.statusline
                 .render(&StatusTheme::new(*accent), term_w, &ctx)
         };

@@ -20,10 +20,11 @@
 # tokens each request used (input / output / cache hits); mypi multiplies
 # those counts by the unit prices YOU write here. Fill in your vendor's
 # price sheet:
-#   - unit prices are per 1M tokens, in the vendor's native currency
-#     (`currency` only picks the display symbol ¥/$ — no conversion);
-#   - all-zero cost = no price sheet for this model = the statusline
-#     hides the spend column entirely.
+#   - unit prices are per 1M tokens, in the currency `currency` names; that
+#     field says what YOUR numbers mean, nothing about how they are shown;
+#   - the display currency and the rate are config.yaml's business:
+#     `ui.tui.fx.currency` (CNY or USD) and `ui.tui.fx.usdCny`;
+#   - all-zero cost = no price sheet for this model: the pill reads 0.00.
 
 # ---- Providers -----------------------------------------------------------
 # Every provider says: baseUrl, api, api_key, models.
@@ -110,8 +111,8 @@ providers:
     models:
       - id: local:my-model           # model id sent to the server
         name: My Model               # display name (statusline); falls back to id
-        contextWindow: 131072        # statusline ctx-gauge denominator
-        maxOutputTokens: 8192        # optional: actual max_tokens per request
+        contextWindow: 131072        # required: the ctx gauge's denominator
+        maxOutputTokens: 8192        # required: actual max_tokens per request
         currency: Usd
         cost:
           input: 0.20
@@ -148,9 +149,8 @@ providers:
       - id: vendor-a/model-x
         name: Model X
         contextWindow: 131072
-        # maxOutputTokens omitted -> conservative 4096
-        # No price sheet for this vendor -> leave all zeros: the
-        # statusline hides the spend column for this model.
+        # maxOutputTokens omitted -> the process refuses to start.
+        # No price sheet for this vendor -> leave all zeros: the pill reads 0.00.
         currency: Cny
         cost:
           input: 0.0

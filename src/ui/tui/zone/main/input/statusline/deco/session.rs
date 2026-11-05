@@ -3,7 +3,7 @@
 use ratatui::text::Span;
 
 use super::super::theme::{Slot, StatusTheme};
-use super::super::{Deco, Setup};
+use super::super::Deco;
 use crate::ui::tui::zone::main::input::Ctx;
 
 /// What the pill says before a session has a name.
@@ -12,7 +12,7 @@ const NAMELESS: &str = "MyPi";
 #[derive(Debug, Default)]
 pub struct Session;
 
-pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
+pub(super) fn make() -> Box<dyn Deco> {
     Box::new(Session::default())
 }
 

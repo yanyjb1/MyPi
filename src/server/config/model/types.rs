@@ -41,9 +41,9 @@ impl Currency {
     }
 
     pub(super) fn parse(raw: &str) -> Option<Self> {
-        match raw {
-            "CNY" => Some(Currency::CNY),
-            "USD" => Some(Currency::USD),
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "cny" | "rmb" => Some(Currency::CNY),
+            "usd" => Some(Currency::USD),
             _ => None,
         }
     }

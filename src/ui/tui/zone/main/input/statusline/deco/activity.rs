@@ -4,7 +4,7 @@ use ratatui::text::Span;
 use serde_json::Value;
 
 use super::super::theme::{Slot, StatusTheme};
-use super::super::{Deco, Setup};
+use super::super::Deco;
 use crate::ui::tui::zone::main::input::Ctx;
 
 /// Animation frames.
@@ -15,7 +15,7 @@ pub struct Activity {
     frame: usize,
 }
 
-pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
+pub(super) fn make() -> Box<dyn Deco> {
     Box::new(Activity::default())
 }
 

@@ -111,20 +111,16 @@ pub(crate) fn canonicalize_lenient(p: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
-/// A directory the session may stand in: it exists, it is a directory, and it sits inside the
-/// session root, the home directory or the temp dir. The home directory itself is never one.
-pub fn resolve_cwd(
-    root: &std::path::Path,
-    cwd: &std::path::Path,
-    raw: &str,
-) -> Result<std::path::PathBuf> {
+/// A directory the session may stand in: it exists, it is a directory, and
+/// [`may_stand_in`] allows it.
+pub fn resolve_cwd(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBuf> {
     anyhow::ensure!(!raw.trim().is_empty(), "empty path");
     let raw = raw.trim();
     let home = crate::server::platform::env::home();
     let target = match raw.strip_prefix('~') {
         Some(rest) => home
-            .clone()
-            .unwrap_or_default()
+            .as_ref()
+            .context("no home directory to expand `~` into")?
             .join(rest.trim_start_matches('/')),
         None => std::path::PathBuf::from(raw),
     };
@@ -137,35 +133,45 @@ pub fn resolve_cwd(
         .canonicalize()
         .with_context(|| format!("no such dir: {raw}"))?;
     anyhow::ensure!(real.is_dir(), "not a directory: {raw}");
+    may_stand_in(&real, home.as_deref())?;
+    Ok(real)
+}
 
-    let mut zones = vec![canonicalize_lenient(root)];
-    if let Some(home) = &home {
-        zones.push(canonicalize_lenient(home));
+/// Where a session may stand: not the filesystem root, not a top-level directory (`/tmp`
+/// excepted), not the home directory itself, and nowhere under a system interface. Everything
+/// deeper is fair ground.
+fn may_stand_in(real: &std::path::Path, home: Option<&std::path::Path>) -> Result<()> {
+    anyhow::ensure!(!real.as_os_str().is_empty(), "denied: that is no directory");
+    let temp = canonicalize_lenient(&crate::server::platform::env::temp_dir());
+    if !temp.as_os_str().is_empty() && real.starts_with(&temp) {
+        return Ok(());
     }
-    zones.push(canonicalize_lenient(
-        &crate::server::platform::env::temp_dir(),
-    ));
+    for barred in ["/proc", "/sys", "/dev"] {
+        anyhow::ensure!(
+            !real.starts_with(barred),
+            "denied: {barred} is a system interface, not a workspace"
+        );
+    }
     anyhow::ensure!(
-        zones
-            .iter()
-            .any(|zone| !zone.as_os_str().is_empty() && real.starts_with(zone)),
-        "denied: {} is outside the workspace, the home directory and the temp dir",
+        real.components().count() >= 3,
+        "denied: {} is a top-level directory; stand in one of its children",
         real.display()
     );
-    if let Some(home) = &home {
+    if let Some(home) = home {
+        let home = canonicalize_lenient(home);
         anyhow::ensure!(
-            real != canonicalize_lenient(home),
+            home.as_os_str().is_empty() || real != home,
             "denied: the home directory itself is not a workspace"
         );
     }
-    Ok(real)
+    Ok(())
 }
 
 /// The zones **file tools** may touch: the session workspace plus the system temp dir. `bash`'s
 /// delete rule reads the same two, so "inside" has one definition.
 pub fn licensed_zones(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut zones = vec![canonicalize_lenient(root)];
-    let tmp = std::env::temp_dir();
+    let tmp = crate::server::platform::env::temp_dir();
     zones.push(canonicalize_lenient(&tmp));
     zones.dedup();
     zones
@@ -186,7 +192,10 @@ fn resolve_path(
         cwd.join(p)
     };
     let real = canonicalize_lenient(&p);
-    if !zones.iter().any(|z| real.starts_with(z)) {
+    if !zones
+        .iter()
+        .any(|z| !z.as_os_str().is_empty() && real.starts_with(z))
+    {
         anyhow::bail!(
             "denied: {} is outside the workspace ({}) and the temp dir — \
              file tools read and write only those two places",

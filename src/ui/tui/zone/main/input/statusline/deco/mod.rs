@@ -53,13 +53,14 @@ pub const ROW: &[Entry] = &[
     Entry {
         side: Side::Flex,
         order: 10,
-        priority: PRIORITY_BASE,
+        // The bar yields before the name does.
+        priority: 95,
         make: usage::make,
     },
     Entry {
         side: Side::Right,
         order: 0,
-        priority: 60,
+        priority: PRIORITY_BASE,
         make: session::make,
     },
 ];

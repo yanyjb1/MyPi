@@ -87,15 +87,17 @@ and `idle` when a structural snapshot lands, so a round another party opened is 
 ### The data it reads
 
 `call meta` and `stream change` name the model, the session's name and (through the bus) the
-directory. A model the zone has not seen makes it ask `call config` for
-`models.model.<address>.contextWindow`; the answer is the usage gauge's denominator. `call usage`
-gives the money. The bus gives `used`, `busy` and `prefill`.
+directory. A model the zone has not seen makes it ask `call config` for `models.model.<address>`,
+which answers the whole entry; the pill takes the name, the gauge the window. `call usage` is the
+one answer for money and context, asked at attach, at every round's end and after each request;
+the request's cost and the context it carried are the server's to compute, live turn included.
+The bus gives `busy` and `prefill`.
 
 ### Height and rendering
 
 `pane::Pane`'s `request_height` wraps the text at the inner width, adds one row, and caps the
 result at one fifth of the terminal, at least two rows. `render_rows` wraps again, locates the cursor, adjusts the
-scroll with minimal movement, renders the statusline, then draws the container.
+scroll with minimal movement, ticks the statusline, then draws the container.
 
 ### Statusline
 
@@ -103,11 +105,13 @@ One row, exactly the terminal width. The deco table is `activity`, `model`, `cwd
 `usage`, `session`. Each deco reads the zone's `Data`; none of them can act.
 
 `Data` is filled from three places. The conversation row gives the name and the model address;
-`models.model.<address>.{name, contextWindow, currency, cost.*}` answers give the model pill, the
-gauge's denominator and the unit prices. `call usage` gives the stored cost, which replaces the
-base; `bill` shouts from history add this turn's own price on top, computed with those unit prices.
-The gauge's numerator is the last request's `prompt + completion`, taken from the same `usage`
-shout. `activity` steps one glyph per `tick` shout, so the spinner tracks real increments.
+the `models.model.<address>` answer gives the model pill and the gauge's denominator; `call usage`
+gives the cost in both currencies and where the context stands. The display currency comes from
+`config.ui.tui.fx.currency`, never from a model. The gauge's first cell is its marker: `-` for a
+measured count, `~` for an estimate (before the first request, and between a compaction and the
+request that follows it). `activity` steps one glyph per `tick` shout, so the spinner tracks real
+increments. `git` scans on its own frame tick: the first frame at once, then once per configured
+interval, and once more whenever a round moved the tree.
 
 ### Invariants
 
@@ -130,15 +134,14 @@ shout. `activity` steps one glyph per `tick` shout, so the spinner tracks real i
 ## 3. Unresolved
 
 1. `Ctrl+C` clears the draft; its final meaning is undecided.
-2. The usage gauge is hidden until both its numbers arrive.
+2. The usage gauge is hidden until the model's window is known; a count with no window draws no bar.
 3. Terminal-too-small behaviour is a clamped container.
 
 ## 4. Config fields
 
 | key | use |
 |---|---|
-| `models.model.<address>.name` | the model pill's text |
-| `models.model.<address>.contextWindow` | the usage gauge's denominator |
-| `models.model.<address>.currency` | the cost pill's symbol |
-| `models.model.<address>.cost.{input,output,cacheRead,cacheWrite}` | what this turn's bills cost |
+| `models.model.<address>` | the whole entry: the model pill's text and the gauge's denominator |
+| `config.ui.tui.fx.currency` | the currency the cost pill counts in (`CNY` / `USD`) |
 | `config.ui.tui.zone.main.input.deco.gitScanInterval` | seconds between git scans |
+| `config.server.api.defaultModel` | the model a draft opens with |

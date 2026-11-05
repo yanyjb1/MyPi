@@ -7,7 +7,7 @@ use super::{Call, Done};
 
 pub const META: CommandMeta = CommandMeta {
     name: "/cdp",
-    aliases: &["/cd"],
+    aliases: &[],
     args: &[Arg::Path],
     detail: "切换工作目录（持久化，后续相对路径以它为准）",
 };

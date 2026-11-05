@@ -1,107 +1,84 @@
 //! The git segment — `@ <branch>`, `?N` unstaged, `+N` staged.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::text::Span;
-
 use serde_json::Value;
 
 use crate::git::GitStatus;
-
 use crate::ui::tui::zone::main::input::Ctx;
 use crate::ui::tui::zone::main::input::statusline::theme::{Slot, StatusTheme};
-use crate::ui::tui::zone::main::input::statusline::{Deco, Setup};
+use crate::ui::tui::zone::main::input::statusline::Deco;
 
-/// Fallback scan interval: `config.ui.tui.zone.main.input.deco.gitScanInterval`.
+/// Until the config answers: `config.ui.tui.zone.main.input.deco.gitScanInterval`.
 pub const DEFAULT_SCAN: Duration = Duration::from_secs(3);
 
-/// The segment's background thread scans on its own; the render reads a slot.
+/// The segment scans on its own schedule, one frame at a time; the render reads what landed.
 pub struct Git {
-    status: Arc<Mutex<Option<GitStatus>>>,
-    dir: Arc<Mutex<PathBuf>>,
-    /// A tool finished, or the workspace moved.
-    dirty: Arc<AtomicBool>,
-    /// One scan landed: `None` now means "not a repository", not "not looked yet".
-    scanned: Arc<AtomicBool>,
+    status: Option<GitStatus>,
+    /// Where the last scan looked.
+    dir: PathBuf,
+    /// When it landed; `None` = the first look has not happened yet.
+    at: Option<Instant>,
+    /// A tool finished or the workspace moved: look again on the next frame.
+    dirty: bool,
+    /// A scan landed: `None` then means "not a repository", not "not looked yet".
+    scanned: bool,
 }
 
-pub(super) fn make(setup: &Setup) -> Box<dyn Deco> {
-    Box::new(Git::new(setup.git_scan))
+pub(super) fn make() -> Box<dyn Deco> {
+    Box::new(Git::new())
 }
 
 impl Git {
-    pub fn new(interval: Duration) -> Self {
-        let status = Arc::new(Mutex::new(None));
-        let dir = Arc::new(Mutex::new(PathBuf::new()));
-        let dirty = Arc::new(AtomicBool::new(false));
-        let scanned = Arc::new(AtomicBool::new(false));
-        let (s, d, w, seen) = (status.clone(), dir.clone(), dirty.clone(), scanned.clone());
-        std::thread::spawn(move || {
-            let mut last: Option<std::time::Instant> = None;
-            loop {
-                std::thread::sleep(Duration::from_millis(50));
-                if !w.load(Ordering::Relaxed) {
-                    continue;
-                }
-                // The first look is immediate; after that one scan per interval.
-                if last.is_some_and(|at| at.elapsed() < interval) {
-                    continue;
-                }
-                let path = d.lock().map(|p| p.clone()).unwrap_or_default();
-                let snap = (!path.as_os_str().is_empty())
-                    .then(|| crate::git::snapshot(&path))
-                    .flatten();
-                if let Ok(mut slot) = s.lock() {
-                    *slot = snap;
-                }
-                seen.store(true, Ordering::Relaxed);
-                last = Some(std::time::Instant::now());
-                w.store(false, Ordering::Relaxed);
-            }
-        });
+    pub fn new() -> Self {
         Self {
-            status,
-            dir,
-            dirty,
-            scanned,
+            status: None,
+            dir: PathBuf::new(),
+            at: None,
+            dirty: false,
+            scanned: false,
         }
-    }
-
-    /// Aim the scan at another directory and schedule a look.
-    fn set_dir(&self, dir: PathBuf) {
-        if let Ok(mut slot) = self.dir.lock() {
-            *slot = dir;
-        }
-        self.dirty.store(true, Ordering::Relaxed);
     }
 }
 
 impl Deco for Git {
-    fn on_event(&mut self, event: &str, _content: &Value, ctx: &Ctx) {
-        // The workspace comes from the zone's data; a temporary `cd` does not move it.
-        if !ctx.data.temporary && !ctx.data.cwd.is_empty() {
-            let dir = PathBuf::from(&ctx.data.cwd);
-            let moved = self.dir.lock().map(|p| *p != dir).unwrap_or(false);
-            if moved {
-                self.set_dir(dir);
-            }
+    /// The first frame scans at once; after that one scan per configured interval, and one
+    /// more whenever a round moved the tree.
+    fn tick(&mut self, ctx: &Ctx) {
+        if ctx.data.cwd.is_empty() {
+            return;
         }
+        let dir = PathBuf::from(&ctx.data.cwd);
+        if dir != self.dir {
+            self.dir = dir;
+            self.status = None;
+            self.scanned = false;
+            self.dirty = true;
+        }
+        let interval = ctx.data.git_scan.unwrap_or(DEFAULT_SCAN);
+        let due = self.at.is_none_or(|at| at.elapsed() >= interval);
+        if !due && !self.dirty {
+            return;
+        }
+        self.status = crate::git::snapshot(&self.dir);
+        self.at = Some(Instant::now());
+        self.scanned = true;
+        self.dirty = false;
+    }
+
+    fn on_event(&mut self, event: &str, _content: &Value, _ctx: &Ctx) {
         // A round moved: tools ran, the tree may have changed.
         if event == crate::ui::tui::zone::name::BUSY {
-            self.dirty.store(true, Ordering::Relaxed);
+            self.dirty = true;
         }
     }
 
     fn render(&self, t: &StatusTheme, budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
-        let Ok(slot) = self.status.lock() else {
-            return Vec::new();
-        };
-        let Some(g) = slot.as_ref() else {
+        let Some(g) = self.status.as_ref() else {
             // Before the first scan a mark stands in; a directory with no repository stays blank.
-            if ctx.data.cwd.is_empty() || self.scanned.load(Ordering::Relaxed) {
+            if ctx.data.cwd.is_empty() || self.scanned {
                 return Vec::new();
             }
             return vec![t.capsule("@ ?", t.get(Slot::Muted))];

@@ -52,6 +52,34 @@ pub fn lookup<'a>(table: &'a [CommandMeta], name: &str) -> Option<&'a CommandMet
         .find(|c| same(c.name, name) || c.aliases.iter().any(|a| same(a, name)))
 }
 
+/// The word the cursor sits in: where it starts (char index) and what it holds.
+///
+/// A word is a run of non-space characters, so `src/main.rs` is one word here even though
+/// word delete stops at the slash.
+pub fn word(line: &str, cursor: usize) -> (usize, String) {
+    let chars: Vec<char> = line.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let mut start = cursor;
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    (start, chars[start..cursor].iter().collect())
+}
+
+/// The index of the word being typed on a line split by whitespace.
+pub fn word_index(before: &str) -> usize {
+    let words = before.split_whitespace().count();
+    match before.chars().last() {
+        Some(last) if last.is_whitespace() => words,
+        _ => words.saturating_sub(1),
+    }
+}
+
+/// A word shaped like a path: anything holding a slash except the bare root.
+pub fn path_shaped(word: &str) -> bool {
+    word.contains('/') && word != "/"
+}
+
 /// Split one line into a known command and its argument text.
 pub fn split<'t, 'i>(
     table: &'t [CommandMeta],

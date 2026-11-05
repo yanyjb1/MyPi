@@ -40,7 +40,16 @@ Subscribe: `watch`, `submit`, `compact`.
 - `todo` answers the whole list `Loop::todo` replayed from the session's own `todo` calls.
 - `usage` groups a session's turns by the `provider` and `model` each turn recorded, names each
   group by its `provider:model` address, orders the groups by their token share, and quotes each
-  one with `models.yml`'s price in its own currency plus both display currencies.
+  one with `models.yml`'s price in its own currency plus both display currencies. It is live by
+  default: the running turn's partial usage comes from the loop's memory and is priced at the model
+  in use, so one answer serves the cost pill, the usage panel and the context gauge.
+- `usage` also answers where the context stands. While a turn runs, that is the last lap's prompt
+  plus its completion; idle, it is the newest turn that measured one. A compaction is the exception:
+  the next prompt is the summary plus the retained tail, so `usage` estimates it from the truncation
+  point — `context` is the summary's completion plus each cut turn's own added tokens weighted by
+  how much of its intervals the tail kept, plus the archive's floor — and says so with `estimated`.
+  `baseline_prompt` is that floor: the smallest prompt this session's request archive ever carried,
+  which is what a front end shows before the first request lands.
 - `submit` and `compact` open a turn; a session already in a turn answers `busy`. Nothing is queued
   by the api: a front end that wants a sentence to wait writes it to `mailbox` instead.
 - `mailbox` is the session's one pending message. `text` present and non-empty writes it whole over
@@ -67,11 +76,11 @@ Subscribe: `watch`, `submit`, `compact`.
 | `call` | `init` | `session` | `structure` (`turn` + `ranges` per round), `blocks` (newest 32, whole rows), `todo` (the list, or null) |
 | `call` | `blocks` | `session`, `ranges` | `blocks`, whole rows, in request order |
 | `call` | `meta` | `session` | the session row |
-| `call` | `usage` | `session` | session totals, `cache_hit_rate`, and `groups` by `provider:model` |
+| `call` | `usage` | `session` | session totals, `cache_hit_rate`, `cny`, `usd`, `context`, `estimated`, `baseline_prompt`, and `groups` by `provider:model` |
 | `call` | `todo` | `session` | the replayed list, `[{"text", "done"}]` |
 | `call` | `memo` | `session` (current only), `op`, `scope`, `name` | `names`, or `content`, or `history` |
 | `call` | `children` | `session` | `rows`, each a child session's `id` and `anchor` |
-| `call` | `config` | `key` | the value |
+| `call` | `config` | `key` | the value; a bare `models.model.<address>` answers the whole entry |
 | `call` | `pools` | — | `models`, `profiles` |
 | `call` | `sessions` | `under` (optional directory) | `rows`: main sessions, newest first, each carrying `first_user`, `bytes`, `last_ts`, `memos` |
 | `post` | `init` | `cwd`, `name`, `model`, `profile` | `session` |
@@ -170,6 +179,7 @@ brought onto its own exit.
 | `config.server.agent.loop.scrooge` | true refuses a mid-session model change |
 | `config.server.storage.batchTools` | unused: the writer commits one submission at a time |
 | `config.ui.tui.fx.usdCny` | the display rate `usage` quotes in |
+| `config.ui.tui.fx.currency` | `CNY` or `USD`: the side of the rate a front end counts in |
 | `models.*` | the model table: caps, prices, the default model |
 
 Every model must declare `maxOutputTokens`; a table without it is not a legal configuration and the

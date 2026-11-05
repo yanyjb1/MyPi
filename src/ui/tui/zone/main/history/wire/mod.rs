@@ -98,24 +98,9 @@ impl HistoryZone {
             .unwrap_or_default();
         if let Some(usage) = content.get("usage").filter(|v| !v.is_null()) {
             let prompt = usage.get("prompt").and_then(Value::as_u64).unwrap_or(0);
-            let completion = usage.get("completion").and_then(Value::as_u64).unwrap_or(0);
-            let used = prompt + completion;
             if prompt > 0 {
-                // Every request is paid for, even when the context size repeats.
-                self.shouts.push(Shout::new(
-                    name::BILL,
-                    json!({
-                        "prompt": prompt,
-                        "completion": completion,
-                        "cached": usage.get("cached").and_then(Value::as_u64).unwrap_or(0),
-                        "cache_write": usage.get("cache_write").and_then(Value::as_u64).unwrap_or(0),
-                    }),
-                ));
-            }
-            if prompt > 0 && used != self.usage {
-                self.usage = used;
-                self.shouts
-                    .push(Shout::new(name::USAGE, json!({"used": used})));
+                // A request landed: the front end asks the server for cost and context.
+                self.shouts.push(Shout::new(name::USAGE, json!({})));
             }
         }
         match kind {
@@ -212,12 +197,6 @@ impl HistoryZone {
                 continue;
             };
             let id = block.id;
-            let used = block.usage.context();
-            if block.usage.prompt > 0 && used != self.usage {
-                self.usage = used;
-                self.shouts
-                    .push(Shout::new(name::USAGE, json!({"used": used})));
-            }
             let fresh = id > self.landed;
             let absent = !self.blocks.contains_key(&id);
             let moved = self

@@ -34,6 +34,4 @@ pub mod name {
     pub const RETRACT: &str = "retract";
     /// History: one live increment arrived. No content; the spinner steps on it.
     pub const TICK: &str = "tick";
-    /// History: one request's bill, `{prompt, completion, cached, cache_write}`.
-    pub const BILL: &str = "bill";
 }

@@ -1,4 +1,4 @@
-//! `cwd` — the working directory: resolved and licensed here, announced once it lands.
+//! `cwd` — the working directory: resolved and licensed here, answered as it landed.
 
 use std::path::PathBuf;
 
@@ -8,7 +8,6 @@ use serde_json::{Value, json};
 use crate::server::agent::r#loop::{Change, NoticeLevel};
 use crate::server::api::route::{i64_of, str_of};
 use crate::server::api::{Api, Refuse};
-use crate::server::storage::Reader;
 
 use super::emit;
 
@@ -17,19 +16,20 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
     let path = str_of(ask, "path")?;
     emit::require_writer(api, viewer, session)?;
     api.ensure_booked(session)?;
-    if let Err(e) = api
+    let landed = match api
         .ledger()
         .change(session, Change::Cwd(PathBuf::from(path)))
     {
-        let text = format!("{e:#}");
-        api.relay()
-            .notice(session, NoticeLevel::Error, text.clone());
-        return Err(Refuse::Bad(text));
-    }
+        Ok(landed) => landed,
+        Err(e) => {
+            let text = format!("{e:#}");
+            api.relay().notice(session, NoticeLevel::Error, text.clone());
+            return Err(Refuse::Bad(text));
+        }
+    };
     emit::changed(api, viewer, session, "cwd")?;
-    let cwd = Reader::open(api.db())?
-        .session(session)?
-        .and_then(|row| row["cwd"].as_str().map(str::to_string))
+    let cwd = landed
+        .map(|real| real.to_string_lossy().into_owned())
         .unwrap_or_default();
-    Ok(json!({"cwd": cwd}))
+    Ok(json!({ "cwd": cwd }))
 }

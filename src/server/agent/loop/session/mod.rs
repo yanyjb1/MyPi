@@ -13,6 +13,7 @@ pub mod source;
 
 pub use crate::server::agent::request::contract::Transport;
 pub use book::{Birth, Loop, Message, Retention};
+pub use handle::Partial;
 pub use change::Change;
 pub use mailbox::Mailbox;
 pub use settings::Settings;

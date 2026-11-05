@@ -2,4 +2,4 @@
 
 mod meta;
 
-pub use meta::{Arg, Candidate, CommandMeta, lookup, split, valid};
+pub use meta::{Arg, Candidate, CommandMeta, lookup, path_shaped, split, valid, word, word_index};

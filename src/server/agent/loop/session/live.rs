@@ -16,7 +16,7 @@ pub struct Live {
     pub tools: Vec<String>,
     /// The compaction instruction template; it comes from the profile the caller resolved.
     pub compact: String,
-    /// Where the session started; it never moves.
+    /// The launch directory the front end handed `init`; this process never moves it.
     pub root: PathBuf,
     /// The working directory handle: `cd` writes it, every batch reads it.
     pub cwd: Cwd,
@@ -26,11 +26,8 @@ pub struct Live {
 
 impl Live {
     pub fn new(birth: &Birth, dir: &Path) -> Self {
-        let root = birth
-            .cwd
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default();
+        // The launch directory comes from the front end; this half never guesses one.
+        let root = birth.cwd.clone().unwrap_or_default();
         Self {
             provider: birth.provider.clone(),
             model: birth.model.clone(),

@@ -1,42 +1,59 @@
-//! The usage gauge — `>----8%----:1M`. The row's flexible deco.
+//! The usage gauge — `>-8.3%--:1M`. The row's flexible deco.
+//!
+//! The first cell is the marker: `-` when the count was measured, `~` when it was estimated
+//! (before the first request, and between a compaction and the request that follows it).
 
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
 use super::super::theme::{Slot, StatusTheme};
-use super::super::{Deco, Setup};
+use super::super::Deco;
 use crate::ui::tui::zone::main::input::Ctx;
 
 #[derive(Debug, Default)]
 pub struct Usage;
 
-pub(super) fn make(_: &Setup) -> Box<dyn Deco> {
-    Box::new(Usage::default())
+pub(super) fn make() -> Box<dyn Deco> {
+    Box::new(Usage)
 }
 
 impl Deco for Usage {
     fn render(&self, t: &StatusTheme, budget: Option<usize>, ctx: &Ctx) -> Vec<Span<'static>> {
+        // A measured count wins; before one lands, the archive's floor stands in, marked;
+        // before either, the bar is a placeholder that reads zero rather than vanishing.
+        let (now, estimated) = if let Some(tokens) = ctx.data.context.tokens {
+            (tokens, ctx.data.context.estimated)
+        } else if let Some(floor) = ctx.data.baseline {
+            (floor, true)
+        } else {
+            (0, false)
+        };
         let limit = ctx.data.limit;
-        if limit == 0 {
-            return Vec::new();
-        }
-        let now = ctx.data.used.min(limit);
-        let pct = ((now as f64 / limit as f64 * 100.0).round() as u64).min(100);
-        let pct_txt = format!("{pct}%");
-        let denom = format!(":{}", fmt_tokens(limit));
+        let pct = if limit > 0 {
+            (now.min(limit) as f64 / limit as f64 * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        let pct_txt = format!("{pct:.1}%");
+        // An unconfigured window still gets a denominator slot: `?` is a fact too.
+        let denom = match limit {
+            0 => ":?".to_string(),
+            limit => format!(":{}", fmt_tokens(limit)),
+        };
         // Cells outside the overhead belong to the dashes.
         let overhead = 1 + pct_txt.width() + denom.width();
         let cells = budget.unwrap_or(overhead + 8).max(overhead + 1);
         let dash_w = cells - overhead;
         // The percentage sits between the dashes: accent counts the used share,
-        // plain the rest. At 0% the first accent cell stays.
+        // plain the rest. At zero the first accent cell stays.
         let used = (pct as usize * dash_w / 100).min(dash_w);
         let used = if dash_w > 0 { used.max(1) } else { 0 };
         let plain_rest = dash_w - used;
 
         let mut out = vec![t.fg(">", Slot::Accent)];
         if used > 0 {
-            out.push(t.fg("-".repeat(used), Slot::Accent));
+            let mark = if estimated { "~" } else { "-" };
+            out.push(t.fg(format!("{mark}{}", "-".repeat(used - 1)), Slot::Accent));
         }
         out.push(t.fg(pct_txt, Slot::Accent));
         if plain_rest > 0 {

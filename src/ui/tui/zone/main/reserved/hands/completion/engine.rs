@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::super::super::pools::Pools;
-use crate::ui::command::{Arg, Candidate};
+use crate::ui::command::{Arg, Candidate, path_shaped, word, word_index};
 use crate::ui::tui::zone::main::input::command;
 
 /// How many candidates the popup shows at most.
@@ -122,8 +122,7 @@ pub fn suggest(line: &str, cursor: usize, look: &Look, scan: &mut Scan) -> Found
         };
     }
     let before: String = chars[..cursor].iter().collect();
-    let word = word_before(&before).to_string();
-    let from = before.chars().count() - word.chars().count();
+    let (from, word) = word(line, cursor);
     // A command line: the input starts with `/` and the cursor is on its first line.
     let (items, names, total) = if chars[0] == '/' && !before.contains('\n') {
         command_line(&before, &word, look, scan)
@@ -140,17 +139,6 @@ pub fn suggest(line: &str, cursor: usize, look: &Look, scan: &mut Scan) -> Found
     }
 }
 
-/// The word the cursor sits in: the trailing non-whitespace run of `before`.
-fn word_before(before: &str) -> &str {
-    let start = before
-        .char_indices()
-        .rev()
-        .find(|(_, c)| c.is_whitespace())
-        .map(|(i, c)| i + c.len_utf8())
-        .unwrap_or(0);
-    &before[start..]
-}
-
 /// A line that starts with `/`: the command name first, then its argument positions.
 /// Returns the matches, whether they are names, and the level's whole list size.
 fn command_line(
@@ -159,17 +147,11 @@ fn command_line(
     look: &Look,
     scan: &mut Scan,
 ) -> (Vec<Completion>, bool, usize) {
-    let complete: Vec<&str> = before.split_whitespace().collect();
-    let ends_space = before.chars().last().is_some_and(|c| c.is_whitespace());
-    let index = if ends_space {
-        complete.len()
-    } else {
-        complete.len().saturating_sub(1)
-    };
+    let index = word_index(before);
     if index == 0 {
         return (command_items(word), false, command_total());
     }
-    let Some(meta) = complete.first().and_then(|name| command::lookup(name)) else {
+    let Some(meta) = before.split_whitespace().next().and_then(|name| command::lookup(name)) else {
         return (Vec::new(), false, 0);
     };
     match meta.arg(index - 1) {
@@ -268,9 +250,9 @@ fn name_items(names: &[Candidate], word: &str) -> Vec<Completion> {
 }
 
 /// Paths under the word's directory. `forced` is a path argument position: an empty word
-/// lists the workspace, anywhere else an unasked word offers nothing.
+/// lists the workspace, anywhere else only a path-shaped word offers anything.
 fn path_items(word: &str, look: &Look, scan: &mut Scan, forced: bool) -> (Vec<Completion>, usize) {
-    if !forced && !path_trigger(word, look, scan) {
+    if !forced && !path_shaped(word) {
         return (Vec::new(), 0);
     }
     let (dir_part, prefix) = match word.rfind('/') {
@@ -309,26 +291,6 @@ fn path_items(word: &str, look: &Look, scan: &mut Scan, forced: bool) -> (Vec<Co
     }
     out.sort_by_key(|(rank, _)| *rank);
     (out.into_iter().map(|(_, c)| c).collect(), total)
-}
-
-/// Whether a path completion was asked for: `./`, `../`, `~/`, a `/`-rooted word
-/// longer than the slash, or a first segment that names a directory of the workspace.
-fn path_trigger(word: &str, look: &Look, scan: &mut Scan) -> bool {
-    if word.starts_with("./") || word.starts_with("../") || word.starts_with("~/") {
-        return true;
-    }
-    if word.starts_with('/') {
-        return word.chars().count() > 1;
-    }
-    match word.split_once('/') {
-        Some((first, _)) if !first.is_empty() => {
-            let dir = look.cwd.to_path_buf();
-            scan.entries(&dir)
-                .iter()
-                .any(|e| e.is_dir && e.name == first)
-        }
-        _ => false,
-    }
 }
 
 /// Expand a leading `~` to the home directory. For lookups only: what goes back
@@ -412,16 +374,14 @@ fn is_bag_match(needle: &str, hay: &str) -> Option<Vec<usize>> {
 
 /// The column the candidate list aligns to: right after the last `/` of the word.
 pub fn anchor_column(text: &str, cursor: usize, cursor_col: usize) -> usize {
-    let chars: Vec<char> = text.chars().collect();
-    let cursor = cursor.min(chars.len());
-    let before: String = chars[..cursor].iter().collect();
-    let word = word_before(&before);
-    if chars.first() == Some(&'/') && !before.contains('\n') {
-        return cursor_col.saturating_sub(crate::ui::tui::text::display_width(word));
+    let before: String = text.chars().take(cursor).collect();
+    let (_, word) = word(text, cursor);
+    if text.starts_with('/') && !before.contains('\n') {
+        return cursor_col.saturating_sub(crate::ui::tui::text::display_width(&word));
     }
     let segment = match word.rfind('/') {
         Some(i) => &word[i + 1..],
-        None => word,
+        None => word.as_str(),
     };
     cursor_col.saturating_sub(crate::ui::tui::text::display_width(segment))
 }

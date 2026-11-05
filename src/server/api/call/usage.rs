@@ -1,4 +1,7 @@
-//! `usage` — tokens per model, the cache-hit share, and the price of each.
+//! `usage` — tokens per model, the cache-hit share, what it cost, and where the context stands.
+//!
+//! Answers the whole session by default; the running turn's part arrives from the loop's memory,
+//! so a front end can ask once per lap and always read the truth as of that moment.
 
 use std::collections::BTreeMap;
 
@@ -9,6 +12,8 @@ use crate::server::api::{Api, Refuse};
 use crate::server::config::ResolvedModel;
 use crate::server::storage::Reader;
 
+use super::estimate;
+
 #[derive(Default)]
 struct Tally {
     rounds: i64,
@@ -18,10 +23,23 @@ struct Tally {
     written: i64,
 }
 
+/// One group's bill, in the model's own currency and in both display currencies.
+struct Quote {
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_write: f64,
+    total: f64,
+    cny: f64,
+    usd: f64,
+    currency: &'static str,
+}
+
 pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     let reader = Reader::open(api.db())?;
     let turns = reader.turns(session)?;
-    drop(reader);
+    let list = reader.list(session)?;
+    let baseline = baseline_prompt(&reader, session);
 
     let mut groups: BTreeMap<String, Tally> = BTreeMap::new();
     for turn in &turns {
@@ -37,6 +55,18 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
         tally.written += turn["cache_write_tokens"].as_i64().unwrap_or(0);
     }
 
+    // The running turn is not stored yet: its laps arrive here, priced at the model in use.
+    let running = api.ledger().running(session);
+    if let Some(partial) = &running
+        && let Some((provider, model)) = api.ledger().model_of(session)
+    {
+        let tally = groups.entry(format!("{provider}:{model}")).or_default();
+        tally.prompt += partial.usage.prompt as i64;
+        tally.completion += partial.usage.completion as i64;
+        tally.cached += partial.usage.cached as i64;
+        tally.written += partial.usage.cache_write as i64;
+    }
+
     let cfg = api.cfg();
     let fx = cfg
         .get_json("config.ui.tui.fx.usdCny", None)
@@ -44,10 +74,13 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
         .and_then(|value| value.as_f64())
         .filter(|rate| *rate > 0.0)
         .unwrap_or(6.0);
+
     let mut prompt = 0i64;
     let mut completion = 0i64;
     let mut cached = 0i64;
     let mut written = 0i64;
+    let mut cny = 0.0;
+    let mut usd = 0.0;
     for tally in groups.values() {
         prompt += tally.prompt;
         completion += tally.completion;
@@ -58,9 +91,11 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     let mut rows: Vec<Value> = Vec::with_capacity(groups.len());
     for (address, tally) in &groups {
         let (provider, model) = address.split_once(':').unwrap_or(("", address));
-        let price = cfg
-            .model_by_id(address)
-            .map(|resolved| quote(&resolved, tally, fx));
+        let quote = cfg.model_by_id(address).map(|resolved| quote(&resolved, tally, fx));
+        if let Some(quote) = &quote {
+            cny += quote.cny;
+            usd += quote.usd;
+        }
         rows.push(json!({
             "address": address,
             "provider": provider,
@@ -71,7 +106,16 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
             "cached_tokens": tally.cached,
             "cache_write_tokens": tally.written,
             "share": share(tally.prompt + tally.completion, total),
-            "price": price,
+            "price": quote.map(|quote| json!({
+                "currency": quote.currency,
+                "input": quote.input,
+                "output": quote.output,
+                "cache_read": quote.cache_read,
+                "cache_write": quote.cache_write,
+                "total": quote.total,
+                "cny": quote.cny,
+                "usd": quote.usd,
+            })),
         }));
     }
     rows.sort_by(|left, right| {
@@ -81,6 +125,8 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    let (context, estimated) = estimate::context(&turns, &list, &running, baseline);
+
     Ok(json!({
         "prompt_tokens": prompt,
         "completion_tokens": completion,
@@ -88,12 +134,23 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
         "cache_write_tokens": written,
         "total_tokens": total,
         "cache_hit_rate": share(cached, total),
+        "cny": cny,
+        "usd": usd,
+        "context": context,
+        "estimated": estimated,
+        "baseline_prompt": baseline,
         "groups": rows,
     }))
 }
 
+/// The smallest context this session's request archive ever carried; `None` until one is known.
+pub(crate) fn baseline_prompt(reader: &Reader, session: i64) -> Option<u64> {
+    let meta = reader.session(session).ok()??["meta"].as_i64()?;
+    reader.request(meta).ok()??["baseline_prompt"].as_u64()
+}
+
 /// What one group cost, in the model's own currency and in both display currencies.
-fn quote(model: &ResolvedModel, tally: &Tally, fx: f64) -> Value {
+fn quote(model: &ResolvedModel, tally: &Tally, fx: f64) -> Quote {
     let per_million = |tokens: i64, price: f64| tokens as f64 / 1_000_000.0 * price;
     let cost = model.entry.cost;
     let input = per_million(tally.prompt, cost.input);
@@ -105,16 +162,16 @@ fn quote(model: &ResolvedModel, tally: &Tally, fx: f64) -> Value {
         crate::server::config::Currency::CNY => (total, total / fx),
         crate::server::config::Currency::USD => (total * fx, total),
     };
-    json!({
-        "currency": model.entry.currency.as_str(),
-        "input": input,
-        "output": output,
-        "cache_read": read,
-        "cache_write": write,
-        "total": total,
-        "cny": cny,
-        "usd": usd,
-    })
+    Quote {
+        input,
+        output,
+        cache_read: read,
+        cache_write: write,
+        total,
+        cny,
+        usd,
+        currency: model.entry.currency.as_str(),
+    }
 }
 
 fn share(part: i64, whole: i64) -> f64 {

@@ -164,7 +164,10 @@ impl Zone for MainZone {
                 self.reserved.detach();
                 self.keys.clear();
                 self.flush();
-                Vec::new()
+                let mut requests = self.history.take_requests();
+                requests.extend(self.reserved.take_requests());
+                requests.extend(self.input.take_requests());
+                requests
             }
         }
     }

@@ -45,6 +45,7 @@ keys! {
     KEY_CONFIG_UI_TUI_HISTORY_SCROLL_HEIGHT = "config", "ui.tui.zone.main.history", "scrollHeight", Int, DefaultValue::Int(10), "Screen rows one wheel notch walks.", true;
     KEY_CONFIG_UI_TUI_HISTORY_TODO_FOLD = "config", "ui.tui.zone.main.history", "todoFold", BoolOrInt, DefaultValue::Bool(false), "Fold the task list; true = 8 rows, N = N rows.", true;
     KEY_CONFIG_UI_TUI_FX_USD_CNY = "config", "ui.tui.fx", "usdCny", Float, DefaultValue::Float(6.0), "1 USD in CNY, for display only.", true;
+    KEY_CONFIG_UI_TUI_FX_CURRENCY = "config", "ui.tui.fx", "currency", Text, DefaultValue::Text("CNY"), "The currency the cost pill counts in: CNY or USD.", true;
     KEY_CONFIG_UI_TUI_DECO_GIT_SCAN = "config", "ui.tui.zone.main.input.deco", "gitScanInterval", Int, DefaultValue::Int(3), "Seconds between git scans of the workspace.", true;
 
     PATTERN_MODELS_PROVIDER_BASE_URL = "models", "provider.<name>", "baseUrl", Text, DefaultValue::Null, "Request root; must be http(s).", true;
@@ -54,7 +55,7 @@ keys! {
     PATTERN_MODELS_PROVIDER_MODELS = "models", "provider.<name>", "models", List, DefaultValue::List(NO_ARGS), "The model ids this provider serves.", true;
     PATTERN_MODELS_MODEL_ID = "models", "model.<address>", "id", Text, DefaultValue::Null, "The wire model id.", true;
     PATTERN_MODELS_MODEL_NAME = "models", "model.<address>", "name", Text, DefaultValue::Null, "Display name; falls back to the id.", true;
-    PATTERN_MODELS_MODEL_CONTEXT_WINDOW = "models", "model.<address>", "contextWindow", Int, DefaultValue::Null, "Context window; absent = req decides.", true;
+    PATTERN_MODELS_MODEL_CONTEXT_WINDOW = "models", "model.<address>", "contextWindow", Int, DefaultValue::Null, "Context window; a model without one is not a legal configuration.", true;
     PATTERN_MODELS_MODEL_MAX_OUTPUT_TOKENS = "models", "model.<address>", "maxOutputTokens", Int, DefaultValue::Null, "max_tokens per request; absent = req decides.", true;
     PATTERN_MODELS_MODEL_CURRENCY = "models", "model.<address>", "currency", Text, DefaultValue::Text("CNY"), "Price display currency: CNY or USD.", true;
     PATTERN_MODELS_MODEL_COST_INPUT = "models", "model.<address>.cost", "input", Float, DefaultValue::Float(0.0), "Input price per 1M tokens.", true;

@@ -4,12 +4,12 @@ use crate::ui::command::{self, CommandMeta};
 use crate::ui::session::ModelId;
 
 use super::{
-    Call, Done, cd, compact, delete, model, name, new, profile, quit, resume, switch, usage,
+    Call, Done, cdp, compact, delete, model, name, new, profile, quit, resume, switch, usage,
 };
 
 pub const TABLE: &[CommandMeta] = &[
     name::META,
-    cd::META,
+    cdp::META,
     compact::META,
     switch::META,
     model::META,
@@ -37,7 +37,7 @@ pub fn lookup(name: &str) -> Option<&'static CommandMeta> {
 pub fn run(meta: &CommandMeta, call: &Call<'_>) -> Done {
     match meta.name {
         "/name" => name::run(call),
-        "/cdp" => cd::run(call),
+        "/cdp" => cdp::run(call),
         "/compact" => compact::run(call),
         "/switch" => switch::run(call),
         "/model" => model::run(call),

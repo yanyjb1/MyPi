@@ -20,19 +20,18 @@ const PARAMS: &[Param] = &[Param::req(
 pub(crate) const TOOL: Tool = Tool {
     name: "cd",
     about: "Change the working directory for the rest of the session. Later tool calls and relative paths resolve from\n\
-            the new one. Directories only, inside the workspace, the home directory or the temp directory but never\n\
-            the home directory itself; confirm with `pwd` or `ls`.",
+            the new one. Directories only: not the filesystem root, not a top-level directory (the temp dir excepted),\n\
+            not the home directory itself, and nowhere under /proc, /sys or /dev; confirm with `pwd` or `ls`.",
     params: PARAMS,
     run,
     summary,
 };
 
-/// Change footing. The target must exist, be a directory, and land inside the workspace, the
-/// home directory or the temp dir; the home directory itself is never a workspace.
+/// Change footing. The target must exist, be a directory, and pass `workspace::may_stand_in`.
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
     let path = args.str(PATH)?;
     let from = env.workspace.cwd().to_path_buf();
-    let real = workspace::resolve_cwd(env.workspace.root(), &from, &path)?;
+    let real = workspace::resolve_cwd(&from, &path)?;
     env.workspace.chdir(real.clone());
     Ok(ToolOutput::with_memo(
         format!("working directory changed to {}", real.display()),

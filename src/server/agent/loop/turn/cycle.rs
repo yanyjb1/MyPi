@@ -77,6 +77,7 @@ pub(crate) fn run(
         };
         let mut usage = Usage::default();
         usage += reply.usage;
+        handle.publish(&usage, reply.usage.prompt + reply.usage.completion);
         if !reply.text.is_empty() {
             pen::turn::append_summary(&inner.writer, turn, reply.text)?;
         }
@@ -144,6 +145,7 @@ pub(crate) fn run(
         }
         first = false;
         usage += lap.usage;
+        handle.publish(&usage, lap.usage.prompt + lap.usage.completion);
 
         if lap.calls.is_empty() {
             blocks.flush()?;

@@ -148,7 +148,9 @@ Workspace { cwd, root }
 
 - `resolve` licenses two zones only: the live `cwd` and the temp directory. A path outside both is
   refused; `must_exist` adds the file checks.
-- `cd` may move to `root`, `$HOME` or the temp directory, and then the licensed zones follow `cwd`.
+- `cd` is licensed by one rule, `may_stand_in`: not the filesystem root, not a top-level directory
+  (`/tmp` excepted), not `$HOME` itself, and nowhere under `/proc`, `/sys` or `/dev`. Everything
+  deeper is fair ground, and the licensed zones then follow `cwd`.
 - `with_write(path, f)` takes a process-wide write lock keyed by that path; `write_atomic` writes a
   sibling temp file and renames it over the target. `read` takes no lock.
 - `bash` takes no lock.
@@ -306,9 +308,10 @@ not checked here; a bad argument is the server's error to report.
   result that caused it; one transaction owns both.
 - **A guard, not a sandbox.** The model runs real shell commands; the classifier blocks the
   machine-destroying shapes and warns on the rest, and it always judges the expanded command.
-- **Two zones.** File tools may touch the session's directory and the temp directory; `cd` may
-  widen the first one to `root` or `$HOME`, and the write lock is per path, so unrelated writes
-  never queue behind each other.
+- **Two questions, two rules.** File tools may touch the session's directory and the temp
+  directory; `cd` answers a different one — where may a session stand at all — and its rule is a
+  blacklist, not a zone list. The write lock is per path, so unrelated writes never queue behind
+  each other.
 - **Long work leaves the round.** `kairos` starts a job and returns; a finished job wakes the
   session, so a slow command does not hold a round open.
 - **A child is a session.** Subagents reuse the loop, storage and stream; corrected lists keep a

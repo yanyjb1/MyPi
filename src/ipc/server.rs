@@ -54,8 +54,16 @@ pub struct Bound {
 
 /// Create the endpoint; the caller already holds the lock.
 pub fn bind(api: Arc<Api>, db: &Path, endpoint: Endpoint, claim: Claim) -> Result<Bound> {
-    let listener =
-        transport::bind(&endpoint).with_context(|| format!("cannot listen on {endpoint:?}"))?;
+    // A killed server leaves its socket behind; nobody listening on it means the name is free.
+    let listener = match transport::bind(&endpoint) {
+        Ok(listener) => listener,
+        Err(_) if transport::connect(&endpoint).is_err() => {
+            transport::unlink(&endpoint);
+            transport::bind(&endpoint)
+                .with_context(|| format!("cannot listen on {endpoint:?}"))?
+        }
+        Err(e) => return Err(e).with_context(|| format!("cannot listen on {endpoint:?}")),
+    };
     set_private(&endpoint);
     let endpoint_file = Endpoint::file_path(db);
     endpoint::write(&endpoint_file, &endpoint)

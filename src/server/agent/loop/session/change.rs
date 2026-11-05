@@ -14,7 +14,12 @@ pub enum Change {
     Cwd(PathBuf),
 }
 
-pub(crate) fn apply(handle: &Handle, change: Change, writer: &Writer, scrooge: bool) -> Result<()> {
+pub(crate) fn apply(
+    handle: &Handle,
+    change: Change,
+    writer: &Writer,
+    scrooge: bool,
+) -> Result<Option<PathBuf>> {
     match change {
         Change::Model { provider, model } => {
             if scrooge {
@@ -42,32 +47,32 @@ pub(crate) fn apply(handle: &Handle, change: Change, writer: &Writer, scrooge: b
             })?;
         }
         Change::Cwd(path) => {
-            let root = handle.birth().cwd.clone().unwrap_or_default();
-            let mut live = handle.live.lock().unwrap_or_else(|e| e.into_inner());
-            let base = match live.as_ref() {
+            let birth = handle.birth();
+            let base = match handle.live.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                 Some(live) => live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone(),
-                None => root.clone(),
+                None => birth.cwd.clone().unwrap_or_default(),
             };
-            let real = crate::server::agent::tools::workspace::resolve_cwd(
-                &root,
-                &base,
-                &path.to_string_lossy(),
-            )?;
-            if let Some(live) = live.as_mut() {
+            let real =
+                crate::server::agent::tools::workspace::resolve_cwd(&base, &path.to_string_lossy())?;
+            if let Some(live) = handle
+                .live
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+            {
                 *live.cwd.write().unwrap_or_else(|e| e.into_inner()) = real.clone();
             }
-            drop(live);
-            {
-                let mut birth = handle.birth.lock().unwrap_or_else(|e| e.into_inner());
-                birth.cwd = Some(real.clone());
+            // A move that lands where the session already stands is no row change.
+            if real != base {
+                writer.push(Submit {
+                    rows: vec![Row::MoveCwd {
+                        session: handle.id,
+                        cwd: real.to_string_lossy().into_owned(),
+                    }],
+                })?;
             }
-            writer.push(Submit {
-                rows: vec![Row::MoveCwd {
-                    session: handle.id,
-                    cwd: real.to_string_lossy().into_owned(),
-                }],
-            })?;
+            return Ok(Some(real));
         }
     }
-    Ok(())
+    Ok(None)
 }

@@ -113,9 +113,11 @@ row that differs from the handed-over block drops that block's product.
 
 ### What it shouts
 
-`busy` (on for any round's piece, off when a structural snapshot lands), `usage` (`{used}` on the increment that
-carries a request's bill) and `prefill` (`{text}` after a rewind). It hears `cwd`, `echo` and
-`retract`; the last two are the front end's own message and its withdrawal.
+`busy` (on for any round's piece, off when a structural snapshot lands), `usage` (one per request
+that carried a bill: the front end answers it with `call usage`, which owns the cost and the
+context), `tick` (one per live increment: the spinner steps on it) and `prefill` (`{text}` after a
+rewind). It hears `cwd`, `echo` and `retract`; the last two are the front end's own message and its
+withdrawal.
 
 ## 2. Design intent
 

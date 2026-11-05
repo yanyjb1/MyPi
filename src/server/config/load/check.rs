@@ -114,4 +114,10 @@ pub(super) fn check(
             }
         }
     }
+    // The gauge and every compaction decision read this window; a model without one is unusable.
+    for (provider, entry) in models.models() {
+        if entry.context_window.is_none() {
+            panic!("models.yml: {provider}:{} has no contextWindow", entry.id);
+        }
+    }
 }

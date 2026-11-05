@@ -42,7 +42,8 @@ mod architecture {
         // The api surface asks downward (storage / config / platform / agent);
         // terminals, the CLI and the tool providers are none of its business.
         ("server::api", &["cli", "tui", "web", "git", "ansi"]),
-        // Platform: the standard library and each other, nothing more. Anyone may ask it.
+        // Platform: the standard library and each other, nothing more. The backend layers may
+        // ask it; a front end may not (`ui::tui` below forbids the whole `server` tree).
         (
             "server::platform",
             &[

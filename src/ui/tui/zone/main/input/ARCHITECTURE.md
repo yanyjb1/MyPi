@@ -7,7 +7,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | file | holds | outside |
 |---|---|---|
 | `mod.rs` | `InputZone`, `CLAIMS`, `ExitRequest`, the frame answers it decodes | private |
-| `ctx.rs` | `Ctx`, `Data`, `Money` — what the parts read | private |
+| `ctx.rs` | `Ctx`, `Data`, `Money`, `Context`, `Currency` — what the parts read | private |
 | `editor/` | the text, undo, paste store, separators, submission ring | private |
 | `semantics.rs` | key → intent, one context-free table | private |
 | `route.rs` | one line classified as a message or a command | private |
@@ -52,9 +52,12 @@ InputZone
 
 - `deliver_action` applies the intent, then re-reads `hang`; a word in range hires completion. A
   command answers with one `Done`: an intent, an exit, a hire, a picked profile, a hint, or `Hold`.
+- `hang` is `command::wants(before, word)`: the same pure rule the completion engine lists by, so
+  the hire and the candidates never disagree.
 - `deliver_event` decodes only the frames it named: `call meta`, `call config`, `call usage`,
   `post cwd`, `post switch`, `stream change`.
-- `hear` takes `cwd`, `usage`, `bill`, `tick`, `busy`, `prefill`; the statusline hears the rest.
+- `hear` takes `cwd`, `usage`, `tick`, `busy`, `prefill`; the statusline hears the rest. A `usage`
+  shout means a request landed: the zone answers it with one `call usage`, the only cost source.
 
 ## Must stay in sync
 
@@ -66,6 +69,7 @@ InputZone
 
 ## Not wired
 
-1. `call usage` is asked once at attach, not after each round; the cost deco can lag.
-2. A model switch re-asks the window but keeps the old `used` until the next round closes.
-3. The `git` deco scans on its own thread; the interval is a constant.
+1. `/cdp` renders its target at once; a refusal puts the old workspace back, and a notice says why.
+2. A model switch re-asks the entry; the gauge keeps its count and takes the new window.
+3. The `git` deco scans on the frame that finds it due: one `git status` plus one `git branch`,
+   tens of milliseconds, once per interval.

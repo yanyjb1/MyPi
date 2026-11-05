@@ -3,6 +3,7 @@
 pub(crate) mod blocks;
 pub(crate) mod children;
 pub(crate) mod config;
+pub(crate) mod estimate;
 pub(crate) mod init;
 pub(crate) mod memo;
 pub(crate) mod meta;

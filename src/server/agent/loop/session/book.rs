@@ -33,6 +33,7 @@ pub struct Birth {
     /// The compaction instruction template; `{{focus}}` marks where the focus goes.
     pub compact: String,
     pub meta: Option<i64>,
+    /// The launch directory the front end handed `init`; a change door never writes it.
     pub cwd: Option<PathBuf>,
 }
 
@@ -195,7 +196,12 @@ impl Loop {
         unbook(&self.inner, id);
     }
 
-    pub fn change(&self, session: i64, change: Change) -> Result<()> {
+    /// Apply one change; a `Cwd` change answers the directory it landed on.
+    pub fn change(
+        &self,
+        session: i64,
+        change: Change,
+    ) -> Result<Option<std::path::PathBuf>> {
         let handle = self.handle(session)?;
         change::apply(
             &handle,
@@ -208,6 +214,17 @@ impl Loop {
     /// Is this session on the table?
     pub fn booked(&self, session: i64) -> bool {
         self.inner.slots.get(session).is_some()
+    }
+
+    /// The running turn's partial usage, for a live `usage` answer.
+    pub fn running(&self, session: i64) -> Option<super::handle::Partial> {
+        self.handle(session).ok().and_then(|handle| handle.partial())
+    }
+
+    /// The model the session's next request would use.
+    pub fn model_of(&self, session: i64) -> Option<(String, String)> {
+        let birth = self.handle(session).ok()?.birth();
+        Some((birth.provider, birth.model))
     }
 
     fn handle(&self, session: i64) -> Result<Arc<Handle>> {

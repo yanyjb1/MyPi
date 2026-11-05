@@ -163,8 +163,6 @@ pub struct HistoryZone {
     pub(super) scroll_height: usize,
     /// Where the tools ran, for shortening paths.
     pub(super) cwd: String,
-    /// The last context size shouted, so one number is not repeated every frame.
-    pub(super) usage: u64,
     /// A fresh attach lays the structure out again.
     pub(super) needs_layout: bool,
     /// A spot to put the sight line on, once its block has a slot.
@@ -196,7 +194,6 @@ impl Default for HistoryZone {
             fold: DEFAULT_FOLD,
             scroll_height: DEFAULT_SCROLL,
             cwd: String::new(),
-            usage: 0,
             needs_layout: false,
             pending_focus: None,
             outbox: Vec::new(),
@@ -252,7 +249,6 @@ impl HistoryZone {
         self.todo_panel.changed();
         self.disp.follow();
         self.landed = 0;
-        self.usage = 0;
         self.needs_layout = false;
     }
 

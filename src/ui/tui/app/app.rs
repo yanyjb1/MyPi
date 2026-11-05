@@ -17,12 +17,15 @@ use crate::ui::tui::zone::{
 /// A usable launch directory: the home directory and its parent are not workspaces, so a launch
 /// there lands in the temp dir instead.
 fn workspace(dir: PathBuf) -> PathBuf {
-    use crate::server::platform::env;
-    let home = env::home();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     let barred = home.as_ref().is_some_and(|home| {
         dir == *home || home.parent().is_some_and(|parent| dir.as_path() == parent)
     });
-    if barred { env::temp_dir() } else { dir }
+    if barred {
+        std::env::temp_dir()
+    } else {
+        dir
+    }
 }
 
 /// One thing the loop hands the app.
@@ -247,8 +250,25 @@ impl App {
             Request::Quit => self.settle(Outcome::Quit),
             Request::PickProfile(profile) => self.pick_profile(profile),
             Request::Submit(text) => self.submit(text),
+            Request::SetCwd(path) => self.set_cwd(path),
             other => wire::land(&mut self.session, other),
         }
+    }
+
+    /// A move lands on the session when there is one; a draft has only its launch directory,
+    /// which is what the row will be created with.
+    fn set_cwd(&mut self, path: String) {
+        if self.session.attached().is_some() {
+            self.session.set_cwd(&path);
+            return;
+        }
+        let target = if std::path::Path::new(&path).is_absolute() {
+            PathBuf::from(&path)
+        } else {
+            self.cwd.join(&path)
+        };
+        let target = target.canonicalize().unwrap_or(target);
+        self.cwd = workspace(target);
     }
 
     /// A message with no session yet: the row comes first, the text after it.
