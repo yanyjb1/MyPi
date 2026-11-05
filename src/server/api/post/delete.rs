@@ -3,6 +3,7 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use crate::server::agent::r#loop::NoticeLevel;
 use crate::server::api::route::i64_of;
 use crate::server::api::{Api, Refuse};
 use crate::server::storage::Reader;
@@ -15,6 +16,8 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
     let session = i64_of(ask, "session")?;
     emit::require_writer(api, viewer, session)?;
     if api.relay().busy(session) {
+        api.relay()
+            .notice(session, NoticeLevel::Warn, "会话正在跑一轮，先打断再删");
         return Err(Refuse::Busy("the session is busy".into()));
     }
 

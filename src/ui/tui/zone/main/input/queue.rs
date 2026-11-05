@@ -4,8 +4,6 @@
 
 use std::collections::VecDeque;
 
-use serde_json::json;
-
 use crate::ui::tui::zone::Request;
 
 /// One sentence the user sent while a round was running.
@@ -27,10 +25,11 @@ impl Outgoing {
 
     /// The door's frame; the app fills in the session.
     fn frame(&self) -> Request {
-        Request::post(
-            "mailbox",
-            json!({"text": self.text, "prefix": self.prefix, "suffix": self.suffix}),
-        )
+        Request::Mailbox {
+            prefix: self.prefix.clone(),
+            text: self.text.clone(),
+            suffix: self.suffix.clone(),
+        }
     }
 }
 
@@ -82,7 +81,7 @@ impl Queue {
             Some(_) => None,
             None if self.in_slot => {
                 self.in_slot = false;
-                Some(Request::post("mailbox", json!({})))
+                Some(Request::ClearMailbox)
             }
             None => None,
         }

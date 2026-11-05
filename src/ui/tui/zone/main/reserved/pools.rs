@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::commands::Candidate;
+use crate::ui::command::Candidate;
 
 /// Model addresses and profile names, ready for the completion engine.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -30,7 +30,6 @@ impl Pools {
                                 format!("{name} ({id})")
                             },
                             value,
-                            more: false,
                         })
                     })
                     .collect()
@@ -45,7 +44,6 @@ impl Pools {
                     .map(|name| Candidate {
                         value: name.to_string(),
                         detail: String::new(),
-                        more: false,
                     })
                     .collect()
             })

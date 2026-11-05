@@ -111,7 +111,7 @@ impl Ask for Request {
 
         let line = Line::new(input.live.clone(), input.session);
         let mut forward = Forward::new(&line, input.blocks.as_ref(), self.options.streaming);
-        let message = client.complete(&req, &mut forward, &line, &input.stop)?;
+        let message = client.complete(&req, &mut forward, &line, &input.stop, &input.worker)?;
         forward.finish(message.usage)?;
 
         Ok(LapReply {
@@ -207,7 +207,7 @@ impl Ask for Request {
             streaming: self.options.streaming,
             buffered: Vec::new(),
         };
-        let message = client.complete(&req, &mut forward, &line, &input.stop)?;
+        let message = client.complete(&req, &mut forward, &line, &input.stop, &input.worker)?;
         forward.finish();
 
         if message.interrupted {

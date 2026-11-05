@@ -47,6 +47,10 @@ Subscribe: `watch`, `submit`, `compact`.
   whatever was there; no `text` clears it. The loop takes it at a blocking point and opens a turn
   named `mailbox`, exactly as a `submit` would; taking it clears it.
 - `interrupt`, `cwd`, `switch`, `delete`, `rewind` act on the running session or its rows.
+  `interrupt` is silent: it stops what runs, and an idle session hears nothing.
+- A refusal the user can actually cause is said in the session's own stream — one `stream notice`
+  frame — instead of only in the answer the front end may drop. Today that is `delete` on a busy
+  session.
 - `profile` is an argument of the write `init` and never a door of its own: a session's profile is
   fixed when it is created.
 - A child session takes no messages: `submit` and `compact` answer `permission_denied` for one.
@@ -72,7 +76,6 @@ Subscribe: `watch`, `submit`, `compact`.
 | `call` | `sessions` | `under` (optional directory) | `rows`: main sessions, newest first, each carrying `first_user`, `bytes`, `last_ts`, `memos` |
 | `post` | `init` | `cwd`, `name`, `model`, `profile` | `session` |
 | `post` | `name` | `session`, `name` | — |
-| `post` | `profile` | `session`, `name` | — (memory only; before the first message) |
 | `post` | `cwd` | `session`, `path` | — |
 | `post` | `switch` | `session`, `model` | — |
 | `post` | `delete` | `session` | — |

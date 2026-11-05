@@ -24,10 +24,12 @@ pub enum Slot {
     GitDirty,
     /// The ` > ` connector between left decos.
     Sep,
+    /// A line this front end has to say: the last command's refusal.
+    Warn,
 }
 
 /// Every slot, in index order.
-pub const ALL_SLOTS: [Slot; 8] = [
+pub const ALL_SLOTS: [Slot; 9] = [
     Slot::Accent,
     Slot::Gold,
     Slot::Muted,
@@ -36,6 +38,7 @@ pub const ALL_SLOTS: [Slot; 8] = [
     Slot::GitClean,
     Slot::GitDirty,
     Slot::Sep,
+    Slot::Warn,
 ];
 
 impl Slot {
@@ -49,6 +52,7 @@ impl Slot {
             Slot::GitClean => 5,
             Slot::GitDirty => 6,
             Slot::Sep => 7,
+            Slot::Warn => 8,
         }
     }
 }
@@ -71,6 +75,7 @@ impl StatusTheme {
         colors[Slot::GitClean.idx()] = fixed::STATUS_GIT_CLEAN;
         colors[Slot::GitDirty.idx()] = fixed::STATUS_GIT_DIRTY;
         colors[Slot::Sep.idx()] = fixed::STATUS_SEP;
+        colors[Slot::Warn.idx()] = fixed::WARN;
         Self { colors }
     }
 

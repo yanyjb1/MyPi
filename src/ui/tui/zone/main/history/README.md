@@ -113,7 +113,7 @@ row that differs from the handed-over block drops that block's product.
 
 ### What it shouts
 
-`busy` (on for any round's piece, off when a round closes), `usage` (`{used}` on the increment that
+`busy` (on for any round's piece, off when a structural snapshot lands), `usage` (`{used}` on the increment that
 carries a request's bill) and `prefill` (`{text}` after a rewind). It hears `cwd`, `echo` and
 `retract`; the last two are the front end's own message and its withdrawal.
 

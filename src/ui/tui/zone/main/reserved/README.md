@@ -17,7 +17,6 @@ leaves before another sits down.
 | `want: u16` | rows the main zone allocated |
 | `reply: Option<Reply>` | a replacement waiting for the input zone |
 | `cwd: String` | the workspace paths complete against |
-| `pools: Option<Pools>` | the model and profile names |
 | `queued: usize` | sentences waiting in the slot, as the input zone counts them |
 | `outbox: Vec<Request>` | frames the desk owes the session |
 
@@ -41,7 +40,7 @@ A hand also has:
 - `ready()` — the desk waits for this before freezing the height;
 - `stays()` — `false` drops the hand;
 - `on_event(event, content)` — one bus event;
-- `place(cwd)` and `pools(pools)` — what the desk knows and hands over;
+- `place(cwd)` — the workspace, handed over on arrival and on every change;
 - `text(text, cursor)` and `col(col)`;
 - `on_key(key) -> Option<Reply>`;
 - `draw(width, rows, palette) -> Vec<Line>`;
@@ -53,7 +52,7 @@ A hand also has:
 
 ### Frames
 
-- On attach the desk asks `call pools` once and keeps the answer; the completion hand gets it.
+- Every completion hire asks `call pools`; the answer goes straight to the hand on duty.
 - Hiring the usage panel asks `call usage`; the panel decodes `groups` and keeps only what it draws.
 - The desk hears `cwd` from the bus and hands it to the hand on duty.
 - The desk hears `queue` (`{count}`) and keeps the number. Idle, that number is the one row it
@@ -63,14 +62,14 @@ A hand also has:
 ### Lifecycle
 
 - `hire(who)` calls `left()` on a different current hand, records the new hire, clears the report,
-  calls `arrived`, and feeds the hand the workspace and pools it already knows.
+  calls `arrived`, asks the hand's pools, and feeds it the workspace.
 - `settle()` drops a hand whose `stays()` is false and takes the report of a fresh hand once
   `ready()` is true.
 - `pane::Pane`'s `request_height` returns the frozen report's rows, or `IDLE_ROWS`.
 - `assign` records the allocated rows, at least `IDLE_ROWS`.
 - `borrowed` returns the report's keys.
 - `deliver_action` passes a key to the hand and stores any reply.
-- `detach` calls `left()`, then clears the seat, report, reply, rows, workspace, and pools.
+- `detach` calls `left()`, then clears the seat, report, reply, rows and workspace.
 
 ## 2. Design intent
 
@@ -80,14 +79,19 @@ A hand also has:
   transcript would both move under the reader.
 - **A hand is a part of the input.** It borrows the editor's keys and draws its own rows; it never
   talks to the session itself, it asks the desk.
-- **Data flows down.** The desk owns the workspace and the pools; a hand is handed them, never
+- **The word decides.** The input asks for the hand on every edit of a trigger word, so deleting a
+  character and typing the level again reopens the same popup; Esc is the only thing that keeps one
+  word closed, and it is spent as soon as the word changes.
+- **Names are asked on every hire.** The completion hand holds the seat until the answer lands, so
+  the frozen height is the popup's real one; a hand that is merely dismissed leaves at once.
+- **Data flows down.** The desk owns the workspace; a hand is handed it, never
   reads them from a global.
 
 ## 3. Unresolved
 
 1. The completion popup's anchor column is pushed after the first draw; the first frame of a hire
    draws at column zero.
-2. A failed `call pools` leaves completion without model or profile names.
+2. A failed `call pools` leaves completion without model or profile names until the next hire.
 
 ## 4. Config fields
 

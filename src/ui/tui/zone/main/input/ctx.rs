@@ -34,6 +34,10 @@ pub struct Data {
     pub money: Money,
     /// A round is running.
     pub busy: bool,
+    /// A conversation is open; a profile can no longer be chosen.
+    pub attached: bool,
+    /// One line about the last command; an edit clears it.
+    pub hint: Option<String>,
 }
 
 /// What one part is handed: the zone's data.

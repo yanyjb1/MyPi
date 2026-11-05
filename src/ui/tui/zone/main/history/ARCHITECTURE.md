@@ -13,7 +13,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `local.rs` | `Local`, `Slot`, `SlotKind`, `Level`, `Life` | private |
 | `layout/` | `segment` (source to segments), `line` (`Row`, `Run`, `Ink`, `Lead`), `wrap`, `fold` | private |
 | `product/` | `Products` and the two product kinds: `markdown` (pieces), `card` (rows), `todo` (the checklist) | private |
-| `wire/` | `mod` (frame dispatch, busy and idle), `decode` (block rows), `ask` (blocks on demand), `live` (the growing tail), `transfer` (the handover) | private |
+| `wire/` | `mod` (frame dispatch, busy on, idle on the snapshot), `decode` (block rows), `ask` (blocks on demand), `live` (the growing tail), `transfer` (the handover) | private |
 | `paint/` | how one block is drawn: prose, code, table, notice, user, cards | private |
 | `paint/card/` | `frame` (the renderer contract, dispatch, the card frame), one file per tool family: `bash`, `edit`, `file`, `todo`, `web`, `alias`, `memo`, `context`, `kairos`, `mcp`, `task`, `draft`, `fallback`, and `tree` for the branch rows | private |
 

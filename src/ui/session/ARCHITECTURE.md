@@ -6,7 +6,9 @@ What is here, what each file holds, who calls whom. Current state only.
 
 | path | holds | outside |
 |---|---|---|
-| `mod.rs` | the module list and the two re-exports | public |
+| `mod.rs` | the module list and the re-exports | public |
+| `actions.rs` | one named action per door: the only place a door's kind and name are written | public |
+| `vocabulary.rs` | `ModelId`, `Retention`: the words a front end and the api both use | public |
 | `packet.rs` | `Packet { kind, name, content }`, the normalized unit | public |
 | `client.rs` | `Client`, `Incoming`: the queue, the matching, the send | private |
 | `session.rs` | `Session`: connect, forward, attach, send, the ingest of each frame | public |
@@ -20,6 +22,8 @@ What is here, what each file holds, who calls whom. Current state only.
 - **`ipc::endpoint`**: where the server listens; the session does not start it.
 - **Knows nothing about**: terminals, tables, cards, rounds beyond their ranges, block fields
   beyond an id, doors' payloads beyond the two special cases below.
+- **A front end** names actions, not doors: `switch_model`, `set_cwd`, `submit`. The kind and the
+  door name stay on this side.
 
 ## Inside
 

@@ -1,8 +1,9 @@
 //! Where one line of input goes: a message, or a command with its owner.
 //!
-//! The command table is the shared unit at the crate root; this file only reads it.
+//! The command table is the input zone's own; this file only reads it.
 
-use crate::commands::{self, CommandMeta};
+use super::command;
+use crate::ui::command::CommandMeta;
 
 /// One input line, classified.
 pub enum Route<'a> {
@@ -13,7 +14,7 @@ pub enum Route<'a> {
 }
 
 pub fn classify(input: &str) -> Route<'_> {
-    match commands::split(input) {
+    match command::split(input) {
         Some((meta, args)) => Route::Command(meta, args),
         None => Route::Message,
     }

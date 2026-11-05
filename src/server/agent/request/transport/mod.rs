@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 
 use self::client::{ChannelReader, Client};
+use self::worker::SessionWorker;
 use super::protocol::{ProtocolId, WireRequest};
 use super::retry::Failure;
 
@@ -24,16 +25,20 @@ pub struct Provider {
     pub auth_header: bool,
 }
 
-pub(crate) fn send(client: &Client, wire: &WireRequest) -> Result<Box<dyn BufRead>> {
-    let worker = client.worker();
-    if let Some(worker) = worker {
+pub(crate) fn send(
+    client: &Client,
+    worker: &Arc<SessionWorker>,
+    wire: &WireRequest,
+) -> Result<Box<dyn BufRead>> {
+    if let Some(shared) = worker.request() {
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let url = wire.url.clone();
         let body = wire.body.clone();
         let headers = wire.headers.clone();
         let timeout_ms = client.retry.timeout.as_millis() as u64;
+        let slot = worker.clone();
         std::thread::spawn(move || {
-            let result = worker
+            let result = shared
                 .lock()
                 .map_err(|_| anyhow!("HTTP worker lock poisoned"))
                 .and_then(|mut w| {
@@ -41,6 +46,7 @@ pub(crate) fn send(client: &Client, wire: &WireRequest) -> Result<Box<dyn BufRea
                         tx.send(line.to_string()).is_ok()
                     })
                 });
+            slot.end();
             if let Err(e) = result {
                 let _ = tx.send(format!("__WORKER_ERROR__{e}"));
             }

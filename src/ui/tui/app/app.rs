@@ -6,6 +6,7 @@ use ratatui::text::Line;
 use serde_json::{Value, json};
 
 use super::startup::Startup;
+use super::wire;
 use crate::ui::session::Session;
 use crate::ui::tui::action::Action;
 use crate::ui::tui::theme::Accent;
@@ -35,8 +36,10 @@ pub struct App {
     cwd: PathBuf,
     /// `--model`: the model a new session is created with; `None` = the configured default.
     model: Option<ModelId>,
+    /// `/profile` before any session: the name travels with the row that opens.
+    profile: Option<String>,
     /// A message sent with no session yet: it goes out once the row exists.
-    waiting: Option<Value>,
+    waiting: Option<String>,
     /// The session each zone has last been told about; a zone hears it once.
     pub(super) told: Vec<Option<i64>>,
     finished: bool,
@@ -61,6 +64,7 @@ impl App {
             accent: Accent::pick(),
             cwd: startup.cwd,
             model: startup.model,
+            profile: None,
             waiting: None,
             told,
             finished: false,
@@ -226,38 +230,30 @@ impl App {
     /// The only exit to the session.
     fn land(&mut self, request: Request) {
         match request {
-            Request::Send {
-                kind,
-                name,
-                content,
-                answer,
-            } => {
-                // A message with no session yet: the row comes first, the text after it.
-                if kind == Kind::Subscribe && name == "submit" && self.session.attached().is_none()
-                {
-                    self.waiting = Some(content);
-                    self.create(None);
-                    return;
-                }
-                let content = with_session(content, self.session.attached());
-                self.session.send(kind.as_str(), name, content, answer);
-            }
             Request::Attach(id) => self.attach(id),
             Request::Detach => self.detach(),
             Request::Structure => self.structure(),
-            Request::Create { profile } => self.profile(profile),
             Request::Quit => self.settle(Outcome::Quit),
+            Request::PickProfile(profile) => self.pick_profile(profile),
+            Request::Submit(text) => self.submit(text),
+            other => wire::land(&mut self.session, other),
         }
     }
 
-    /// A profile before the first message: open the row with it, or change the empty one.
-    fn profile(&mut self, profile: Option<String>) {
-        match (self.session.attached(), profile) {
-            (Some(_), Some(name)) => {
-                self.land(Request::post("profile", json!({"name": name})));
-            }
-            (Some(_), None) => {}
-            (None, profile) => self.create(profile),
+    /// A message with no session yet: the row comes first, the text after it.
+    fn submit(&mut self, text: String) {
+        if self.session.attached().is_none() {
+            self.waiting = Some(text);
+            self.create();
+            return;
+        }
+        self.session.submit(&text);
+    }
+
+    /// `/profile` before any session: the name stays in this front end until the row opens.
+    fn pick_profile(&mut self, profile: Option<String>) {
+        if self.session.attached().is_none() {
+            self.profile = profile;
         }
     }
 
@@ -267,8 +263,8 @@ impl App {
         self.memo.write("cwd", &self.cwd.to_string_lossy());
     }
 
-    /// Create the session a waiting message needs; a first command may name its profile.
-    fn create(&mut self, profile: Option<String>) {
+    /// Create the session a waiting message needs; a profile picked earlier travels with it.
+    fn create(&mut self) {
         let model = self.model.as_ref().map(|id| {
             json!({
                 "provider": id.provider,
@@ -279,7 +275,7 @@ impl App {
             "cwd": self.cwd.to_string_lossy(),
             "name": Value::Null,
             "model": model,
-            "profile": profile,
+            "profile": self.profile.clone(),
         });
         self.session.send("post", "init", content, true);
     }
@@ -296,14 +292,10 @@ impl App {
         let Some(id) = frame.content.get("session").and_then(Value::as_i64) else {
             return;
         };
+        self.profile = None;
         self.attach(id);
-        if let Some(content) = self.waiting.take() {
-            self.land(Request::Send {
-                kind: Kind::Subscribe,
-                name: "submit",
-                content,
-                answer: true,
-            });
+        if let Some(text) = self.waiting.take() {
+            self.session.submit(&text);
         }
     }
 
@@ -312,17 +304,4 @@ impl App {
         let frame = Frame::new("local", "accent", json!({"color": self.accent.hex()}));
         self.deliver(&frame);
     }
-}
-
-/// Fill the session into one frame's content, unless the zone named one.
-fn with_session(content: Value, session: Option<i64>) -> Value {
-    let Value::Object(mut map) = content else {
-        return content;
-    };
-    if !map.contains_key("session")
-        && let Some(session) = session
-    {
-        map.insert("session".to_string(), json!(session));
-    }
-    Value::Object(map)
 }

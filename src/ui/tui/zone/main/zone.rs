@@ -140,11 +140,7 @@ impl Zone for MainZone {
                 self.input.attach(id, size);
                 self.reserved.attach(id, size);
                 self.flush();
-                let mut requests = vec![
-                    Request::call("init", json!({})),
-                    Request::call("meta", json!({})),
-                    Request::Structure,
-                ];
+                let mut requests = vec![Request::Init, Request::Meta, Request::Structure];
                 requests.extend(self.history.take_requests());
                 requests.extend(self.reserved.take_requests());
                 requests.extend(self.input.take_requests());
@@ -205,6 +201,8 @@ impl Zone for MainZone {
 
     fn action(&mut self, action: &crate::ui::tui::action::Action) -> (Outcome, Vec<Request>) {
         let (outcome, mut requests) = dispatch::dispatch(self, action);
+        // An edit lands the hand here, not at draw time: its asks must leave with this frame.
+        self.deliver_hires();
         requests.extend(self.history.take_requests());
         requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
@@ -258,15 +256,23 @@ impl MainZone {
 
     /// The editor asked for a hand: seat it, and feed it the text it missed.
     fn deliver_hires(&mut self) {
-        if let Some(who) = self.input.take_hire() {
-            self.reserved.hire(who);
-            self.sync_borrowed();
-            let (text, cursor) = self.input.draft();
-            self.reserved.text(&text, cursor);
-        }
+        self.seat_hand();
         if let Some(reply) = self.reserved.take_reply() {
             self.input.apply_reply(reply);
         }
+        // The reply may have moved the word onto its next level: seat that hand now.
+        self.seat_hand();
+        let (text, cursor) = self.input.draft();
+        self.reserved.text(&text, cursor);
+    }
+
+    /// One pending hire, if the editor asked for one.
+    fn seat_hand(&mut self) {
+        let Some(who) = self.input.take_hire() else {
+            return;
+        };
+        self.reserved.hire(who);
+        self.sync_borrowed();
         let (text, cursor) = self.input.draft();
         self.reserved.text(&text, cursor);
     }

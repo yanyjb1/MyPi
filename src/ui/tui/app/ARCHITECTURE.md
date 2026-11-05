@@ -37,7 +37,7 @@ fields.
 
 1. `Kind::of` and the upstream frame names it classifies.
 2. `App::boot` order and the zone that shows: attach first, start second.
-3. `with_session` and the doors that do not take a session (`config`, `pools`, `sessions`).
+3. `wire::land` and the session's actions (`ui/session/actions.rs`): one line per intent.
 4. `create`'s payload and api's `post init` arguments.
 5. `Startup` and the CLI's launch parameters.
 

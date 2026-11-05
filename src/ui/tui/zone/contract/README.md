@@ -10,7 +10,7 @@ The only vocabulary the app and the three major zones share.
 | `SubZone` | what `Main` knows of history, input and reserved |
 | `Kind` | a frame class a zone may declare |
 | `Claim` | one action a zone may declare |
-| `Request` | what a zone asks the app to land |
+| `Request` | one intent: reads, writes, and the app's own asks; the door name lives app-side |
 | `Outcome` | what a delivery made the screen do |
 | `ZoneId` | `Main`, `Resume`, `Tree` |
 | `TermSize` | columns and rows |

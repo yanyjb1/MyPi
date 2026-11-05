@@ -1,13 +1,14 @@
 //! Completion candidates: which level the cursor is on, and what that level offers.
 //!
-//! Command names come from `crate::commands::COMMANDS`, model and profile names
-//! from the view's pools, paths from one directory level scanned here (cached).
+//! Command names come from the input zone's table, model and profile names from
+//! the desk's pools, paths from one directory level scanned here (cached).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::super::super::pools::Pools;
-use crate::commands::{self, Arg, Candidate};
+use crate::ui::command::{Arg, Candidate};
+use crate::ui::tui::zone::main::input::command;
 
 /// How many candidates the popup shows at most.
 pub const MAX_VISIBLE: usize = 8;
@@ -101,6 +102,8 @@ pub struct Found {
     pub from: usize,
     /// Candidates for it.
     pub items: Vec<Completion>,
+    /// The candidates are names from the pools, not paths or command names.
+    pub names: bool,
 }
 
 /// Candidates for the word the cursor sits in. Empty = nothing to offer.
@@ -112,18 +115,24 @@ pub fn suggest(line: &str, cursor: usize, look: &Look, scan: &mut Scan) -> Found
             word: String::new(),
             from: 0,
             items: Vec::new(),
+            names: false,
         };
     }
     let before: String = chars[..cursor].iter().collect();
     let word = word_before(&before).to_string();
     let from = before.chars().count() - word.chars().count();
     // A command line: the input starts with `/` and the cursor is on its first line.
-    let items = if chars[0] == '/' && !before.contains('\n') {
+    let (items, names) = if chars[0] == '/' && !before.contains('\n') {
         command_line(&before, &word, look, scan)
     } else {
-        path_items(&word, look, scan)
+        (path_items(&word, look, scan), false)
     };
-    Found { word, from, items }
+    Found {
+        word,
+        from,
+        items,
+        names,
+    }
 }
 
 /// The word the cursor sits in: the trailing non-whitespace run of `before`.
@@ -138,7 +147,7 @@ fn word_before(before: &str) -> &str {
 }
 
 /// A line that starts with `/`: the command name first, then its argument positions.
-fn command_line(before: &str, word: &str, look: &Look, scan: &mut Scan) -> Vec<Completion> {
+fn command_line(before: &str, word: &str, look: &Look, scan: &mut Scan) -> (Vec<Completion>, bool) {
     let complete: Vec<&str> = before.split_whitespace().collect();
     let ends_space = before.chars().last().is_some_and(|c| c.is_whitespace());
     let index = if ends_space {
@@ -147,16 +156,16 @@ fn command_line(before: &str, word: &str, look: &Look, scan: &mut Scan) -> Vec<C
         complete.len().saturating_sub(1)
     };
     if index == 0 {
-        return command_items(word);
+        return (command_items(word), false);
     }
-    let Some(meta) = complete.first().and_then(|name| commands::lookup(name)) else {
-        return Vec::new();
+    let Some(meta) = complete.first().and_then(|name| command::lookup(name)) else {
+        return (Vec::new(), false);
     };
     match meta.arg(index - 1) {
-        Some(Arg::Model) => name_items(pools(look, true), word),
-        Some(Arg::Profile) => name_items(pools(look, false), word),
-        Some(Arg::Path) => path_items(word, look, scan),
-        Some(Arg::Number | Arg::Text) | None => Vec::new(),
+        Some(Arg::Model) => (name_items(pools(look, true), word), true),
+        Some(Arg::Profile) => (name_items(pools(look, false), word), true),
+        Some(Arg::Path) => (path_items(word, look, scan), false),
+        Some(Arg::Number | Arg::Text) | None => (Vec::new(), false),
     }
 }
 
@@ -175,7 +184,7 @@ fn pools<'a>(look: &'a Look<'a>, models: bool) -> &'a [Candidate] {
 /// Command names (and aliases) starting at the word.
 fn command_items(word: &str) -> Vec<Completion> {
     let mut out: Vec<(Rank, Completion)> = Vec::new();
-    for meta in commands::COMMANDS {
+    for meta in command::TABLE {
         let names = std::iter::once(meta.name).chain(meta.aliases.iter().copied());
         for name in names {
             let Some((rank, hits)) = matches(word, name, false) else {

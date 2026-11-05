@@ -1,7 +1,7 @@
 //! The input zone: editor, history, statusline, submit, command routing.
 //! It does not know what sits above it; it only knows when it lent its keys away.
 
-mod command;
+pub mod command;
 mod ctx;
 mod editor;
 mod queue;
@@ -340,6 +340,7 @@ impl InputZone {
                 // editor's store, which `clear()` below drops.
                 let text = self.editor.expanded_text();
                 let route = route::classify(&text);
+                self.data.hint = None;
                 // A live round with a message in the box: the first Enter interrupts, a second
                 // one inside the window sends it to the slot. A command never interrupts.
                 if self.data.busy
@@ -360,15 +361,20 @@ impl InputZone {
                 if text.trim().is_empty() {
                     Effect::Nothing
                 } else if let route::Route::Command(meta, args) = route {
-                    let request = command::frame(meta, args);
-                    let sent = request.is_some();
-                    if let Some(request) = request {
-                        self.outbox.push(request);
-                    }
-                    let sent = sent || self.local_command(meta, args);
-                    if !sent {
+                    let call = command::Call {
+                        args,
+                        attached: self.data.attached,
+                    };
+                    match command::run(meta, &call) {
+                        command::Done::Intent(request) => self.outbox.push(request),
+                        command::Done::Exit(exit) => self.pending_exits.push(exit),
+                        command::Done::Hire(who) => self.pending_hire = Some(who),
+                        command::Done::Profile(profile) => {
+                            self.outbox.push(Request::PickProfile(profile));
+                        }
+                        command::Done::Hint(line) => self.data.hint = Some(line.to_string()),
                         // A required argument is missing: the line stays where it can be fixed.
-                        return true;
+                        command::Done::Hold => return true,
                     }
                     self.history.push(self.editor.text());
                     self.editor.clear();
@@ -455,27 +461,6 @@ impl InputZone {
             .push(ExitRequest::Submit(text.to_string()));
     }
 
-    /// The commands this front end runs itself. `false` = a server door takes it.
-    fn local_command(&mut self, meta: &'static crate::commands::CommandMeta, _args: &str) -> bool {
-        if meta.name == crate::commands::Quit::META.name {
-            self.pending_exits.push(ExitRequest::Quit);
-            return true;
-        }
-        if meta.name == crate::commands::Resume::META.name {
-            self.pending_exits.push(ExitRequest::OpenResume);
-            return true;
-        }
-        if meta.name == crate::commands::New::META.name {
-            self.pending_exits.push(ExitRequest::New);
-            return true;
-        }
-        if meta.name == crate::commands::Usage::META.name {
-            self.pending_hire = Some(Hire::Usage);
-            return true;
-        }
-        false
-    }
-
     /// Whether the input spans more than one line.
     fn editor_is_multiline(&self) -> bool {
         self.editor.text().contains('\n')
@@ -532,7 +517,11 @@ impl InputZone {
         let Reply::Replace { from, to, text } = reply;
         self.editor.replace_range(from, to, &text);
         self.finished = false;
+        self.data.hint = None;
         self.refresh_hang();
+        if self.hang {
+            self.pending_hire = Some(Hire::Completion);
+        }
     }
 
     /// Whether the cursor sits in a completion trigger word, from the editor's own
@@ -577,15 +566,15 @@ impl InputZone {
         if index == 0 || start == 0 {
             return false;
         }
-        let Some(meta) = words.first().and_then(|name| crate::commands::lookup(name)) else {
+        let Some(meta) = words.first().and_then(|name| command::lookup(name)) else {
             return false;
         };
         matches!(
             meta.arg(index - 1),
             Some(
-                crate::commands::Arg::Path
-                    | crate::commands::Arg::Model
-                    | crate::commands::Arg::Profile
+                crate::ui::command::Arg::Path
+                    | crate::ui::command::Arg::Model
+                    | crate::ui::command::Arg::Profile
             )
         )
     }
@@ -699,7 +688,7 @@ impl InputZone {
         }
         self.data.model = Some(address.clone());
         let key = format!("models.model.{address}.contextWindow");
-        out.push(Request::call("config", serde_json::json!({"key": key})));
+        out.push(Request::Config { key });
     }
 
     /// The bill: one currency, the model's own.
@@ -764,11 +753,13 @@ impl SubZone for InputZone {
 
     /// Esc first (a lent-away Esc never arrives here), then the intent table.
     fn deliver_action(&mut self, a: &Action) -> bool {
+        self.data.hint = None;
         let key = match a {
             Action::Key(key) => *key,
             Action::Paste(text) => {
                 let intent = semantics::Intent::Paste(text.clone());
-                return self.apply(&intent, None);
+                let consumed = self.apply(&intent, None);
+                return self.edited(consumed);
             }
             Action::ScrollUp { .. } | Action::ScrollDown { .. } => return false,
         };
@@ -782,10 +773,13 @@ impl SubZone for InputZone {
         let wrapped = matches!(intent, semantics::Intent::Up | semantics::Intent::Down)
             .then(|| self.wrapped());
         let consumed = self.apply(&intent, wrapped.as_ref());
-        // Hang is re-read after every edit; a fresh hang is what hires the completion.
-        let was = self.hang;
+        self.edited(consumed)
+    }
+
+    /// An edit landed: the word decides whether the completion hand is wanted.
+    fn edited(&mut self, consumed: bool) -> bool {
         self.refresh_hang();
-        if self.hang && !was {
+        if self.hang {
             self.pending_hire = Some(Hire::Completion);
         }
         consumed
@@ -793,11 +787,11 @@ impl SubZone for InputZone {
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
         self.data = Data::default();
+        self.data.attached = true;
         self.queue.clear();
         self.in_flight = None;
         self.last_mailbox_turn = None;
-        self.outbox
-            .push(Request::call("usage", serde_json::json!({})));
+        self.outbox.push(Request::Usage);
     }
 
     fn detach(&mut self) {
@@ -843,8 +837,7 @@ impl SubZone for InputZone {
                 self.data.busy = content.get("on").and_then(Value::as_bool).unwrap_or(false);
                 if !self.data.busy {
                     self.enter_armed = None;
-                    self.outbox
-                        .push(Request::call("usage", serde_json::json!({})));
+                    self.outbox.push(Request::Usage);
                 }
                 self.notify(event, content);
             }

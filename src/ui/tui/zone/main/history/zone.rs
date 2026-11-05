@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::display::{Dir, Display};
 use super::local::{Level, Life, Local, SlotKind};
@@ -347,8 +347,9 @@ impl SubZone for HistoryZone {
         self.needs_layout = true;
         self.disp.follow();
         for key in CONFIG_KEYS {
-            self.outbox
-                .push(Request::call("config", serde_json::json!({"key": key})));
+            self.outbox.push(Request::Config {
+                key: (*key).to_string(),
+            });
         }
     }
 
@@ -358,6 +359,8 @@ impl SubZone for HistoryZone {
 
     fn structure(&mut self, snapshot: &Turns) {
         self.apply_structure(snapshot);
+        self.shouts
+            .push(Shout::new(name::BUSY, json!({"on": false})));
     }
 
     fn take_shouts(&mut self) -> Vec<Shout> {

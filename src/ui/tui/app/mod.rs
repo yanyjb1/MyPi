@@ -3,6 +3,7 @@
 mod app;
 mod lifecycle;
 mod startup;
+mod wire;
 
 pub use app::{App, Input};
 pub use startup::Startup;

@@ -1,7 +1,6 @@
 //! Session attachment: the data first, then the zone that shows.
 
 use super::App;
-use crate::ui::tui::zone::Kind;
 
 impl App {
     /// Enter a conversation: follow it, watch it, then tell the zone that shows.
@@ -10,12 +9,7 @@ impl App {
             return;
         }
         self.session.attach(id);
-        self.session.send(
-            Kind::Subscribe.as_str(),
-            "watch",
-            serde_json::json!({"session": id}),
-            false,
-        );
+        self.session.watch(id);
         self.attached = Some(id);
         self.reset_memo();
         for told in &mut self.told {

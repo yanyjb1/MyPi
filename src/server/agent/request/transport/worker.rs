@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,6 +49,101 @@ pub struct HttpWorker {
 }
 pub type SharedWorker = Arc<Mutex<HttpWorker>>;
 
+/// The environment variable that turns this executable into a worker.
+pub const WORKER_ENV: &str = "MYPI_HTTP_WORKER";
+
+/// One session's worker: the child that owns its sockets, and whether a request is in flight.
+pub struct SessionWorker {
+    slot: Mutex<Option<SharedWorker>>,
+    pid: Arc<AtomicU32>,
+    in_flight: AtomicBool,
+    /// An interrupt landed before the request it meant: the next request starts on a fresh child.
+    pending: AtomicBool,
+}
+
+impl SessionWorker {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            slot: Mutex::new(None),
+            pid: Arc::new(AtomicU32::new(0)),
+            in_flight: AtomicBool::new(false),
+            pending: AtomicBool::new(false),
+        })
+    }
+
+    /// The child for one request, spawned on first use. `None` = this request goes direct.
+    pub fn request(&self) -> Option<SharedWorker> {
+        if self.pending.swap(false, Ordering::AcqRel) {
+            self.restart();
+        }
+        let shared = self.slot()?;
+        self.in_flight.store(true, Ordering::Release);
+        Some(shared)
+    }
+
+    /// The child, spawned on first use.
+    fn slot(&self) -> Option<SharedWorker> {
+        let mut slot = self.slot.lock().ok()?;
+        if slot.is_none() {
+            let fresh = HttpWorker::spawn().ok()?;
+            self.pid
+                .store(HttpWorker::pid(&fresh).unwrap_or(0), Ordering::Release);
+            *slot = Some(fresh);
+        }
+        slot.clone()
+    }
+
+    /// The request is over, one way or another.
+    pub fn end(&self) {
+        self.in_flight.store(false, Ordering::Release);
+    }
+
+    /// No request in flight: the interrupt may still be one moment early.
+    pub fn interrupt(&self) {
+        if self.in_flight.load(Ordering::Acquire) {
+            self.restart();
+        } else {
+            self.pending.store(true, Ordering::Release);
+        }
+    }
+
+    /// Kill the child that owns the sockets, then take a fresh one in its place.
+    pub fn restart(&self) {
+        self.in_flight.store(false, Ordering::Release);
+        let pid = self.pid.swap(0, Ordering::AcqRel);
+        if pid != 0 {
+            HttpWorker::kill_pid(pid);
+        }
+        let fresh = HttpWorker::spawn().ok();
+        if let Ok(mut slot) = self.slot.lock() {
+            let old = std::mem::replace(&mut *slot, fresh);
+            if let Some(old) = old {
+                std::thread::spawn(move || {
+                    if let Ok(mut old) = old.lock() {
+                        old.reap();
+                    }
+                });
+            }
+        }
+    }
+}
+
+impl Drop for SessionWorker {
+    fn drop(&mut self) {
+        let pid = self.pid.swap(0, Ordering::AcqRel);
+        if pid != 0 {
+            HttpWorker::kill_pid(pid);
+        }
+        if let Ok(mut slot) = self.slot.lock()
+            && let Some(worker) = slot.take()
+            && let Ok(mut worker) = worker.lock()
+        {
+            let _ = worker.child.kill();
+            let _ = worker.child.wait();
+        }
+    }
+}
+
 impl HttpWorker {
     pub fn pid(slot: &SharedWorker) -> Option<u32> {
         slot.lock()
@@ -61,24 +156,10 @@ impl HttpWorker {
             .args(["-KILL", &pid.to_string()])
             .status();
     }
-    pub fn replace(slot: &SharedWorker) -> Result<()> {
-        let fresh = Self::spawn()?;
-        let mut old = slot
-            .lock()
-            .map_err(|_| anyhow::anyhow!("HTTP worker lock poisoned"))?;
-        let mut new = fresh
-            .lock()
-            .map_err(|_| anyhow::anyhow!("HTTP worker lock poisoned"))?;
-        let _ = old.child.kill();
-        let _ = old.child.wait();
-        std::mem::swap(&mut *old, &mut *new);
-        Ok(())
-    }
-
     pub fn spawn() -> Result<SharedWorker> {
         let exe = std::env::current_exe().context("cannot locate the mypi executable")?;
         let mut child = Command::new(exe)
-            .arg("--http-worker")
+            .env(WORKER_ENV, "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -172,47 +253,6 @@ impl HttpWorker {
             }
         }
     }
-    pub fn kill_and_replace(slot: &SharedWorker) -> Result<()> {
-        let mut old = slot
-            .lock()
-            .map_err(|_| anyhow::anyhow!("HTTP worker lock poisoned"))?;
-        let _ = old.child.kill();
-        let _ = old.child.wait();
-        let fresh = match Self::spawn() {
-            Ok(f) => f,
-            // The replacement would not start: swap the dead worker for an empty slot (later requests go direct).
-            Err(e) => {
-                let mut empty = Self::make_empty();
-                std::mem::swap(&mut *old, &mut empty);
-                return Err(e.context("HTTP worker replacement failed; direct connection restored"));
-            }
-        };
-        let mut replacement = fresh
-            .lock()
-            .map_err(|_| anyhow::anyhow!("HTTP worker lock poisoned"))?;
-        std::mem::swap(&mut *old, &mut *replacement);
-        Ok(())
-    }
-
-    /// An "empty slot": the replacement on a failed spawn, an immediately-exiting `/bin/true`.
-    fn make_empty() -> Self {
-        let mut child = Command::new("true")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("`/bin/true` always spawns");
-        let pid = Arc::new(AtomicU32::new(child.id()));
-        let input = child.stdin.take().expect("piped stdin");
-        let output = BufReader::new(child.stdout.take().expect("piped stdout"));
-        Self {
-            child,
-            pid,
-            input,
-            output,
-            next_id: 1,
-        }
-    }
     pub fn reap(&mut self) {
         let _ = self.child.wait();
     }
@@ -244,7 +284,7 @@ pub fn run() -> Result<()> {
                 let agent: ureq::Agent = ureq::Agent::config_builder()
                     .timeout_connect(Some(std::time::Duration::from_secs(30)))
                     .timeout_recv_response(Some(std::time::Duration::from_millis(timeout_ms)))
-                    .timeout_recv_body(Some(std::time::Duration::from_secs(1)))
+                    .timeout_recv_body(None)
                     .http_status_as_error(false)
                     .build()
                     .into();

@@ -1,7 +1,5 @@
 //! Key routing, and the exits that become requests or one handover.
 
-use serde_json::json;
-
 use super::input::ExitRequest;
 use super::keys::{self, Seat};
 use super::zone::MainZone;
@@ -32,10 +30,8 @@ fn exits(zone: &mut MainZone) -> (Outcome, Vec<Request>) {
     let mut outcome = Outcome::Stay;
     for exit in zone.input.take_exits() {
         match exit {
-            ExitRequest::Submit(text) => {
-                requests.push(Request::subscribe("submit", json!({"text": text})));
-            }
-            ExitRequest::Interrupt => requests.push(Request::post("interrupt", json!({}))),
+            ExitRequest::Submit(text) => requests.push(Request::Submit(text)),
+            ExitRequest::Interrupt => requests.push(Request::Interrupt),
             ExitRequest::OpenTree => {
                 outcome = Outcome::Show {
                     to: ZoneId::Tree,
@@ -52,7 +48,7 @@ fn exits(zone: &mut MainZone) -> (Outcome, Vec<Request>) {
             ExitRequest::New => {
                 zone.history.reset();
                 zone.input.clear();
-                requests.push(Request::post("mailbox", json!({})));
+                requests.push(Request::ClearMailbox);
                 requests.push(Request::Detach);
             }
         }

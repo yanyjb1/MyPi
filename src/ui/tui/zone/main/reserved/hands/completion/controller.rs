@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 
 use super::engine::{self, Completion, CompletionPopup, Look, Scan};
-use crate::commands;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
 use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::Claim;
 use crate::ui::tui::zone::main::desk::Reply;
+use crate::ui::tui::zone::main::input::command;
 use crate::ui::tui::zone::main::reserved::hand::{Hand, Report};
 use crate::ui::tui::zone::main::reserved::pools::Pools;
 
@@ -26,6 +26,8 @@ pub struct CompletionController {
     last_word: Option<(usize, String)>,
     /// The spot the user dismissed (Esc): the same word stays closed.
     dismissed: Option<(usize, String)>,
+    /// The current word's candidates come from the name pools.
+    names: bool,
 }
 
 impl CompletionController {
@@ -34,6 +36,7 @@ impl CompletionController {
             popup: CompletionPopup::default(),
             last_word: None,
             dismissed: None,
+            names: false,
         }
     }
 
@@ -43,6 +46,11 @@ impl CompletionController {
 
     pub fn is_open(&self) -> bool {
         self.popup.is_open()
+    }
+
+    /// The current word's candidates are names: the pools must land before a height is frozen.
+    pub fn wants_names(&self) -> bool {
+        self.names
     }
 
     /// The rows the popup claims while open.
@@ -61,6 +69,11 @@ impl CompletionController {
         };
         let found = engine::suggest(cx.text, cx.cursor, &look, scan);
         let spot = (found.from, found.word.clone());
+        self.names = found.names;
+        // A dismissal covers one word only: the word moved, so it is spent.
+        if self.dismissed.as_ref().is_some_and(|d| *d != spot) {
+            self.dismissed = None;
+        }
         // The same word (a cursor move) leaves the popup as it stands.
         if self.last_word.as_ref() == Some(&spot) && self.popup.is_open() {
             return;
@@ -104,7 +117,7 @@ impl CompletionController {
         self.popup.move_selection(delta);
     }
 
-    /// Esc: close, and remember the spot so the next refresh does not reopen it.
+    /// Esc: close, and remember this word so it does not reopen while the word stands.
     pub fn dismiss(&mut self) {
         if self.popup.is_open() {
             self.dismissed = self.last_word.clone();
@@ -131,7 +144,7 @@ fn leaf(items: &[Completion], word: &str, at_line_start: bool) -> bool {
     if items.len() != 1 {
         return false;
     }
-    items[0].insert == word || (at_line_start && commands::lookup(word).is_some())
+    items[0].insert == word || (at_line_start && command::lookup(word).is_some())
 }
 
 /// The completion hand: the reserved zone hires it, it borrows the popup's keys.
@@ -141,8 +154,10 @@ pub struct CompletionService {
     cwd: PathBuf,
     /// `~` resolves to it, for lookups only.
     home: PathBuf,
-    /// The model and profile names, taken once.
+    /// The model and profile names; asked again on every arrival, kept for the popup.
     pools: Option<Pools>,
+    /// This arrival has no pools yet: the desk must not freeze a height before they land.
+    awaiting: bool,
     /// The cursor's column, pushed by the input zone each frame.
     anchor_col: usize,
     /// The editor's text and cursor, as last fed.
@@ -161,6 +176,7 @@ impl CompletionService {
                 .map(PathBuf::from)
                 .unwrap_or_default(),
             pools: None,
+            awaiting: false,
             anchor_col: 0,
             last: (String::new(), 0),
             scan: Scan::default(),
@@ -177,6 +193,7 @@ impl CompletionService {
             pools: self.pools.as_ref(),
         };
         self.controller.refresh(&cx, &mut self.scan);
+        self.awaiting = self.pools.is_none() && self.controller.wants_names();
     }
 
     /// Tab semantics for the editor's completion key.
@@ -201,7 +218,9 @@ impl Default for CompletionService {
 }
 
 impl Hand for CompletionService {
-    fn arrived(&mut self) {}
+    fn arrived(&mut self) {
+        self.awaiting = false;
+    }
 
     fn place(&mut self, cwd: &str) {
         if self.cwd.as_path() != std::path::Path::new(cwd) {
@@ -211,10 +230,13 @@ impl Hand for CompletionService {
 
     fn pools(&mut self, pools: &Pools) {
         self.pools = Some(pools.clone());
+        self.awaiting = false;
+        let (text, cursor) = self.last.clone();
+        self.refresh(&text, cursor);
     }
 
     fn ready(&self) -> bool {
-        self.controller.is_open()
+        !self.awaiting
     }
 
     fn report(&self) -> Report {
@@ -225,7 +247,8 @@ impl Hand for CompletionService {
     }
 
     fn stays(&self) -> bool {
-        self.controller.is_open()
+        // A hand still waiting for the names holds the seat: dropping it would drop the popup.
+        self.awaiting || self.controller.is_open()
     }
 
     fn text(&mut self, text: &str, cursor: usize) {
@@ -274,6 +297,7 @@ impl Hand for CompletionService {
 
     fn left(&mut self) {
         self.controller.close();
+        self.awaiting = false;
     }
 }
 

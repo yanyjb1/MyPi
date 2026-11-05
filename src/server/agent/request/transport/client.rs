@@ -1,7 +1,7 @@
-//! One provider connection: retry, cancellation, and the worker that owns the socket.
+//! One provider connection: its agent, its retry policy, its protocol.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -11,7 +11,7 @@ use crate::server::agent::request::message::AssistantMessage;
 use crate::server::agent::request::protocol::{Endpoint, Output, Protocol, ProtocolRequest};
 use crate::server::agent::request::retry::{self, Class, Failure, RetryPolicy};
 use crate::server::agent::request::transport::Provider;
-use crate::server::agent::request::transport::worker::{HttpWorker, SharedWorker};
+use crate::server::agent::request::transport::worker::SessionWorker;
 
 pub(crate) struct ChannelReader {
     pub(crate) rx: std::sync::mpsc::Receiver<String>,
@@ -41,8 +41,6 @@ pub struct Client {
     model: String,
     http: ureq::Agent,
     pub(crate) retry: RetryPolicy,
-    worker: Mutex<Option<SharedWorker>>,
-    pid: Arc<AtomicU32>,
 }
 
 impl Client {
@@ -58,8 +56,6 @@ impl Client {
             model: model.to_string(),
             http: agent(retry.timeout),
             retry,
-            worker: Mutex::new(None),
-            pid: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -71,47 +67,6 @@ impl Client {
         &self.http
     }
 
-    /// The worker, spawned on first use. `None` means every call goes direct.
-    pub(crate) fn worker(&self) -> Option<SharedWorker> {
-        let mut slot = self.worker.lock().ok()?;
-        if slot.is_none() {
-            let fresh = HttpWorker::spawn().ok()?;
-            self.pid
-                .store(HttpWorker::pid(&fresh).unwrap_or(0), Ordering::Release);
-            *slot = Some(fresh);
-        }
-        slot.clone()
-    }
-
-    /// Kill the worker (and with it the socket) and put a fresh one in its place.
-    fn replace_worker(&self) {
-        let pid = self.pid.swap(0, Ordering::AcqRel);
-        if pid != 0 {
-            HttpWorker::kill_pid(pid);
-        }
-        let fresh = HttpWorker::spawn().ok();
-        if let Ok(mut slot) = self.worker.lock() {
-            match fresh {
-                Some(fresh) => {
-                    let new_pid = HttpWorker::pid(&fresh).unwrap_or(0);
-                    let old = slot.replace(fresh);
-                    self.pid.store(new_pid, Ordering::Release);
-                    if let Some(old) = old {
-                        std::thread::spawn(move || {
-                            if let Ok(mut old) = old.lock() {
-                                old.reap();
-                            }
-                        });
-                    }
-                }
-                None => {
-                    let _ = slot.take();
-                    self.pid.store(0, Ordering::Release);
-                }
-            }
-        }
-    }
-
     /// One call, retried per policy. Every failure is said out loud exactly once.
     pub fn complete(
         &self,
@@ -119,26 +74,8 @@ impl Client {
         out: &mut dyn Output,
         line: &Line,
         cancel: &Arc<AtomicBool>,
+        worker: &Arc<SessionWorker>,
     ) -> Result<AssistantMessage> {
-        let done = Arc::new(AtomicBool::new(false));
-        let watcher = {
-            let cancel = cancel.clone();
-            let done = done.clone();
-            let pid = self.pid.clone();
-            std::thread::spawn(move || {
-                while !done.load(Ordering::Relaxed) {
-                    if cancel.load(Ordering::Relaxed) {
-                        let pid = pid.load(Ordering::Relaxed);
-                        if pid != 0 {
-                            HttpWorker::kill_pid(pid);
-                        }
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            })
-        };
-
         let mut emitted = false;
         let mut attempt = 0u32;
 
@@ -150,7 +87,7 @@ impl Client {
                 Ok(wire) => wire,
                 Err(e) => break Err(e),
             };
-            let attempt_result = super::send(self, &wire).and_then(|reader| {
+            let attempt_result = super::send(self, worker, &wire).and_then(|reader| {
                 let mut tracked = Tracked {
                     inner: out,
                     emitted: &mut emitted,
@@ -188,14 +125,12 @@ impl Client {
                     if attempt > self.retry.max_retries {
                         break Err(e);
                     }
-                    self.replace_worker();
+                    worker.restart();
                     std::thread::sleep(self.retry.interval);
                 }
             }
         };
 
-        done.store(true, Ordering::Relaxed);
-        let _ = watcher.join();
         outcome
     }
 }

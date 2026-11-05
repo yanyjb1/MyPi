@@ -35,12 +35,8 @@ pub struct ReservedZone {
     reply: Option<Reply>,
     /// The workspace, as the conversation reports it.
     cwd: String,
-    /// The name pools, once the session has answered.
-    pools: Option<Pools>,
     /// Sentences waiting in the slot, as the input zone counts them.
     queued: usize,
-    /// The pools were asked for; one ask per attachment.
-    asked: bool,
     /// Frames this zone owes the session.
     outbox: Vec<Request>,
 }
@@ -57,26 +53,23 @@ impl ReservedZone {
         }
     }
 
-    /// Call a hand in. Whoever is on duty leaves first.
+    /// Call a hand in. Whoever is on duty leaves first; the name pools are asked every time.
     pub fn hire(&mut self, who: Hire) {
-        if let Some(prev) = self.on_duty
-            && prev != who
-        {
+        if self.on_duty == Some(who) {
+            return;
+        }
+        if let Some(prev) = self.on_duty {
             self.hand(prev).left();
         }
         self.on_duty = Some(who);
         self.report = None;
-        if who == Hire::Usage {
-            self.outbox
-                .push(Request::call("usage", serde_json::json!({})));
+        match who {
+            Hire::Completion => self.outbox.push(Request::Pools),
+            Hire::Usage => self.outbox.push(Request::Usage),
         }
         self.hand(who).arrived();
         let cwd = self.cwd.clone();
         self.hand(who).place(&cwd);
-        if let Some(pools) = &self.pools {
-            let pools = pools.clone();
-            self.hand(who).pools(&pools);
-        }
     }
 
     /// The editor's text and cursor, after every edit. A hand that needs them reads them;
@@ -167,7 +160,6 @@ impl SubZone for ReservedZone {
                 if let Some(who) = self.on_duty {
                     self.hand(who).pools(&pools);
                 }
-                self.pools = Some(pools);
             }
             ("call", "usage") => {
                 self.usage.take(&frame.content);
@@ -198,15 +190,10 @@ impl SubZone for ReservedZone {
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
         self.cwd.clear();
-        self.pools = None;
-        self.asked = false;
         self.on_duty = None;
         self.report = None;
         self.reply = None;
         self.want = 0;
-        self.outbox
-            .push(Request::call("pools", serde_json::json!({})));
-        self.asked = true;
     }
 
     fn detach(&mut self) {
@@ -218,8 +205,6 @@ impl SubZone for ReservedZone {
         self.reply = None;
         self.want = 0;
         self.cwd.clear();
-        self.pools = None;
-        self.asked = false;
     }
 
     fn hear(&mut self, event: &str, content: &Value) {

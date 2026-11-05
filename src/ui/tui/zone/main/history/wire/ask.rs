@@ -1,7 +1,5 @@
 //! Blocks on demand: one turn at a time, and the anchor's neighbours.
 
-use serde_json::json;
-
 use super::super::local::SlotKind;
 use super::super::zone::HistoryZone;
 
@@ -23,8 +21,9 @@ impl HistoryZone {
                 continue;
             }
             self.asking.insert(*range);
-            self.outbox
-                .push(Request::call("blocks", json!({"ranges": [[lo, hi]]})));
+            self.outbox.push(Request::Blocks {
+                ranges: vec![[lo, hi]],
+            });
         }
     }
 

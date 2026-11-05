@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::ui::tui::zone::{
     Claim, Frame, Kind, Memo, Outcome, Request, TermSize, Turns, Zone, ZoneId,
@@ -202,7 +202,7 @@ impl Zone for TreeZone {
         self.stale = true;
         self.sync();
         self.selected = self.current();
-        vec![Request::Structure, Request::call("init", json!({}))]
+        vec![Request::Structure, Request::Init]
     }
 
     fn session(&mut self, id: Option<i64>) -> Vec<Request> {
@@ -263,10 +263,10 @@ impl Zone for TreeZone {
                     let rewind = !key.mods.shift;
                     if rewind {
                         if let Some(row) = self.rows.get(self.selected) {
-                            let request = Request::post(
-                                "rewind",
-                                json!({"turn": row.turn, "block": row.block_id}),
-                            );
+                            let request = Request::Rewind {
+                                turn: row.turn,
+                                block: row.block_id,
+                            };
                             return (self.handover(), vec![request]);
                         }
                     } else {

@@ -26,7 +26,7 @@ To `Input`: nothing directly; the main zone carries `Reply` across.
 - `ui::tui::zone::{Frame, Request, TermSize, Claim, Kind, name}` and
   `super::desk::{Hire, Reply}`.
 - `ui::tui::action` for keys, `ui::tui::theme::Accent` for the accent.
-- `commands` for the command table and the `Candidate` shape.
+- `ui::command` for `Candidate`; the command table itself belongs to the input zone.
 - `crate::git` is not called here; the statusline owns that.
 
 ## Who calls it
@@ -44,10 +44,11 @@ loop, the picker, and the tree.
 
 1. `Hire` with `ReservedZone::hand`'s match.
 2. `Report.keys` with the keys the hand actually reads.
-3. `Pools` with the `call pools` answer.
-4. `UsagePanel::take` with the `call usage` answer.
+3. `Pools` with the `call pools` answer, asked on every completion hire.
+4. The completion hand's `ready` / `stays` with the desk's report freeze: names land before a height
+   is taken, and a hand still waiting holds the seat.
+5. `UsagePanel::take` with the `call usage` answer.
 
 ## Not wired
 
 1. `/usage`'s alignment is not read from config.
-2. The completion hand keeps its pools once given; a later model change does not refresh them.

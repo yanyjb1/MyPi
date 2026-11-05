@@ -46,12 +46,12 @@ to change and broadcasts only when the numbers moved.
 
 | exit | becomes |
 |---|---|
-| `Submit(text)` | `subscribe / submit` |
-| `Interrupt` | `post / interrupt` |
+| `Submit(text)` | `Request::Submit` |
+| `Interrupt` | `Request::Interrupt` |
 | `OpenTree` | `Outcome::Show { to: Tree }` |
 | `OpenResume` | `Outcome::Show { to: Resume }` |
 | `Quit` | `Outcome::Quit` |
-| `New` | history and editor cleared, `Request::Detach` |
+| `New` | history and editor cleared, `Request::ClearMailbox`, `Request::Detach` |
 
 A `local / disconnected` frame becomes `Request::Quit`: no session, no screen worth keeping.
 
@@ -66,6 +66,8 @@ A `local / disconnected` frame becomes `Request::Quit`: no session, no screen wo
 - **Claims from the consumer.** The key table is assembled from the children's own declarations.
 - **Exits are data.** A child says what it cannot finish; the main zone turns it into a request or
   a handover.
+- **An edit seats the hand.** `deliver_hires` runs on the action path, so the hand's asks leave
+  with the same frame; a reply that moves the word seats the next hand at once.
 
 ## 3. Unresolved
 

@@ -15,8 +15,8 @@ compact(CompactInput) -> CompactReply
 ```
 
 `LapInput` carries the session id, the history read port, the block write port, the transport
-(provider name and model id), the system prompt, the tool manuals as raw JSON, the cancel flag and
-the live line. `LapReply` carries why the model stopped (`Model` or `User`), the bill, and the calls
+(provider name and model id), the system prompt, the tool manuals as raw JSON, the cancel flag, the
+session's worker and the live line. `LapReply` carries why the model stopped (`Model` or `User`), the bill, and the calls
 it placed (call id, name, arguments verbatim, intent).
 
 `ResultsInput` carries the session id, the history (for citations already handed out), the artifact
@@ -41,9 +41,10 @@ Notice = { level, text }
 
 `ToolEvent` belongs to the loop.
 
-A stream has no total budget: one lap runs as long as the model keeps talking. The reader polls
-once a second so cancellation and silence stay visible, and a stream ends only when no line has
-arrived for the provider's silence budget, or 600 s when the provider names none.
+A stream has no total budget: one lap runs as long as the model keeps talking, and it ends only
+when no line has arrived for the provider's silence budget, or 600 s when the provider names none.
+Cancellation is a kill, not a poll: the session's worker dies and the reader sees its pipe close.
+Only the direct fallback polls once a second, because there the reader is a socket.
 
 The history read port has two queries: `turns(session)` — from the newest compaction marker on, in
 list order, each turn carrying its interval list (a turn has several when other sessions wrote
@@ -83,11 +84,18 @@ prefix up to the cut is byte-identical to the previous real call.
 **Retry belongs to one call.** Only "nothing arrived" and 429 are retried; anything already shown to
 a front end is never re-sent, because the front end has already drawn it.
 
+**An interrupt is a kill.** The child that owns the socket belongs to one session, so pressing Esc
+kills that session's connection and nothing else. The kernel closes the socket with the child, so
+the reader returns at once instead of waiting for the host to speak; a fresh child takes its place
+before the next request. A cancelled lap is not a failure: it settles as interrupted, with no
+notice, no retry, and no error text.
+
 ## 3. Unresolved
 
-1. The loop does not implement `History` or `BlockSink` yet, so this domain is not wired.
-2. A worker's HTTP status reaches the decoder with its body split across lines; the status survives
+1. A worker's HTTP status reaches the decoder with its body split across lines; the status survives
    and the body may arrive empty.
+2. A session whose child could not start falls back to a direct connection; an interrupt there waits
+   on the reader, and only the next request tries for a child again.
 
 ## 4. Config Fields
 

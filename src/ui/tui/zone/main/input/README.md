@@ -22,7 +22,7 @@ finish itself.
 | `esc_armed` / `enter_armed` | the two double-tap windows |
 | `cursor_col`, `cursor_row` | the cursor inside the container, recomputed on render |
 | `statusline: StatusLine` | the deco table and the row engine |
-| `data: Data` | model, name, directory, context size and window, money, busy |
+| `data: Data` | model, name, directory, context size and window, money, busy, attachment, hint |
 | `queue: Queue` | sentences sent while a round was running, head first |
 | `in_flight` | the sentence a submit put out, until the door answers |
 | `last_mailbox_turn` | the slot-opened turn the queue has accounted for |
@@ -45,15 +45,14 @@ A paste longer than the collapse thresholds becomes one marker; the marker is re
 
 ### Routing
 
-`route::classify` uses the shared command table: a known command becomes `Command(meta, args)`,
-anything else `Message`.
+`route::classify` uses this zone's own table (`command::split`): a known command becomes
+`Command(meta, args)`, anything else `Message`. An unknown `/xxx` is a message.
 
-Local commands stay here: `/q` quits at once, `/resume` opens the picker, `/new` resets, `/usage`
-hires the panel. Every other command becomes one door call (`command::frame`): `/name` → `post
-name`, `/cdp` → `post cwd`, `/switch` → `post switch`, `/model` → `post default_model`, `/profile`
-→ `post profile` or a session created for it, `/delete` → `post delete`, `/compact` → `subscribe
-compact`. A required argument that is missing leaves the line in the box and sends nothing. Only a
-plain message leaves as `ExitRequest::Submit`.
+Every command is one file under `command/`, and every file declares its `META` and answers with one
+`Done`: an intent (a session action), an exit (`/q`, `/resume`, `/new`), a hire (`/usage`), the
+picked profile (`/profile`), a `Hint` line, or `Hold` when an argument is missing or unusable —
+`Hold` leaves the line in the box and sends nothing. A plain message leaves as
+`ExitRequest::Submit`.
 
 ### Submit, interrupt, Esc
 
@@ -69,9 +68,11 @@ plain message leaves as `ExitRequest::Submit`.
 
 ### Completion hire
 
-After every edit the zone recomputes `hang`. A fresh hang sets `pending_hire = Completion`; the main
-zone seats the desk and feeds it the editor's text, cursor and column. A hand's `Reply::Replace` is
-applied with `replace_range`.
+After every edit the zone recomputes `hang` from the cursor's word. While the word is in range it
+sets `pending_hire = Completion`; the main zone seats the desk on the action path and feeds it the
+editor's text, cursor and column. A hand's `Reply::Replace` is applied with `replace_range`, and a
+reply that lands on a new level seats the next hand at once. Esc is the one thing that keeps a word
+closed: the hand remembers the spot until the word changes.
 
 ### The pending queue
 
@@ -81,7 +82,7 @@ starts, and clearing the last one clears the slot. `Alt+Up` pops the tail, so th
 when the queue empties.
 
 The only `busy` source that matters is the bus: history shouts `busy` when any round says anything
-and `idle` when a round closes, so a round another party opened is known too.
+and `idle` when a structural snapshot lands, so a round another party opened is known too.
 
 ### The data it reads
 

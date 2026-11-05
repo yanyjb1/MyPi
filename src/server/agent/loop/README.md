@@ -34,6 +34,10 @@ system prompt, the tool names and the compaction instruction. It also starts the
 attaches the session's job service to `Source`. `deliver` opens a turn and returns its id; a busy
 session and a sub-session both refuse it, nothing is queued.
 
+`interrupt` touches a busy session only: it sets the stop flag (the tools and the next lap read it)
+and kills the session's worker, which is what ends a blocking read. An idle session hears nothing.
+A turn stopped this way settles as `interrupted`, never as broken.
+
 `Mailbox` holds a wake queue and one user slot. A wake text is written as its own `wake` block when
 the loop takes it; consecutive wake blocks are joined into one user message only when a request is
 assembled. The slot is written whole by a front end, taken by the loop at a blocking point, and

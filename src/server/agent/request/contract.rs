@@ -9,6 +9,7 @@ use anyhow::Result;
 use super::live::Event;
 use super::message::Message;
 pub use super::message::Usage;
+use super::transport::worker::SessionWorker;
 
 /// Where one request goes: which provider serves, which model answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +68,8 @@ pub struct LapInput {
     pub system: String,
     pub tools: Vec<serde_json::Value>,
     pub stop: Arc<AtomicBool>,
+    /// This session's worker: the child that owns its sockets.
+    pub worker: Arc<SessionWorker>,
     pub live: Sender<Event>,
 }
 
@@ -199,6 +202,8 @@ pub struct CompactInput {
     /// The instruction template; `{{focus}}` marks where the focus goes.
     pub instruction: String,
     pub stop: Arc<AtomicBool>,
+    /// This session's worker: the child that owns its sockets.
+    pub worker: Arc<SessionWorker>,
     pub live: Sender<Event>,
 }
 

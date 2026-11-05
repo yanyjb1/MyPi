@@ -40,11 +40,12 @@ Every delivery returns requests; they are landed at once, in order.
 
 ### Landing
 
-`Request::Send` gets the attached session filled in (unless the zone named one) and goes to the
-session. A `subscribe / submit` with no session attached first creates the row (`post init` with
-`cwd` and `model`), parks the message, and sends it after the id lands. `Attach` / `Detach` are
-the lifecycle. `Structure` asks the session for the structural window and hands one `Turns`
-snapshot to the zone that shows; a nested `Structure` request is dropped.
+A `Request` is an intent: the app names the door. `wire::land` carries every session action; the
+app keeps the six it owns — `Submit`, `Attach`, `Detach`, `Structure`, `Quit`, `PickProfile`.
+A `Submit` with no session attached first creates the row (`post init` with `cwd`, `model` and the
+picked profile), parks the text, and sends it after the id lands. `Structure` asks the session for
+the structural window and hands one `Turns` snapshot to the zone that shows; a nested `Structure`
+request is dropped.
 
 ### Lifecycle
 

@@ -17,6 +17,10 @@ use mypi::server::storage;
 use mypi::ui::tui;
 
 fn main() -> anyhow::Result<()> {
+    // The worker is this same executable, told by its environment: no flag, no config, no db.
+    if std::env::var_os(mypi::server::agent::request::transport::worker::WORKER_ENV).is_some() {
+        return mypi::server::agent::request::transport::worker::run();
+    }
     let cli = Cli::parse(std::env::args().skip(1))?;
     let db = storage::default_path();
 

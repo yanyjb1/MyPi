@@ -102,7 +102,7 @@ impl Session {
     /// Queue one frame. `answer` says whether the server replies to it.
     pub fn send(&mut self, kind: &str, name: &str, content: Value, answer: bool) {
         if kind == "call" && name == "blocks" {
-            self.blocks(content);
+            self.read_blocks(content);
             return;
         }
         // A rewind is owed a trim of this layer's own index; the spot comes from the
@@ -119,6 +119,18 @@ impl Session {
         self.client.queue(Frame::new(kind, name, content), answer);
     }
 
+    /// Queue one action frame: this session's id goes in, a reply is owed.
+    pub(super) fn act(&mut self, kind: &str, name: &str, content: Value) {
+        let content = match (self.attached, content) {
+            (Some(id), Value::Object(mut map)) => {
+                map.entry("session").or_insert(json!(id));
+                Value::Object(map)
+            }
+            (_, content) => content,
+        };
+        self.send(kind, name, content, true);
+    }
+
     /// Say goodbye and let the connection go: everything queued leaves, then `bye`.
     pub fn bye(&mut self) {
         self.client
@@ -127,7 +139,7 @@ impl Session {
     }
 
     /// A block read: answered from the window when it covers the ranges.
-    fn blocks(&mut self, content: Value) {
+    fn read_blocks(&mut self, content: Value) {
         let session = content
             .get("session")
             .and_then(Value::as_i64)

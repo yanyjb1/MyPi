@@ -189,6 +189,17 @@ impl Relay {
         );
     }
 
+    /// One line the api has to say, into the session's stream.
+    pub(crate) fn notice(&self, session: i64, level: NoticeLevel, text: impl Into<String>) {
+        let level = match level {
+            NoticeLevel::Info => "info",
+            NoticeLevel::Warn => "warn",
+            NoticeLevel::Error => "error",
+        };
+        let payload = json!({"session": session, "level": level, "content": text.into()});
+        self.deliver(session, Frame::new("stream", "notice", payload), None);
+    }
+
     /// The session is gone: its buffer, its turn, and every watcher's claim on it.
     pub(crate) fn forget(&self, session: i64) {
         let mut state = self.state();

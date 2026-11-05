@@ -12,8 +12,7 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<Value, Refuse> {
         ask.get("model")
             .ok_or_else(|| Refuse::Bad("missing `model`".into()))?,
     )?;
-    let path = api
-        .cfg()
+    api.cfg()
         .set_default_model(&format!("{provider}:{model}"))?;
-    Ok(json!({"path": path.to_string_lossy()}))
+    Ok(json!({}))
 }

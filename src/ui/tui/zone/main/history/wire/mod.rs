@@ -146,8 +146,6 @@ impl HistoryZone {
 
     /// A round closed: the tail hands its product over and stops growing.
     fn closed(&mut self, content: &Value) {
-        self.shouts
-            .push(Shout::new(name::BUSY, json!({"on": false})));
         let ranges = content
             .get("ranges")
             .and_then(ranges_of)
@@ -162,8 +160,9 @@ impl HistoryZone {
             if have {
                 continue;
             }
-            self.outbox
-                .push(Request::call("blocks", json!({"ranges": [[lo, hi]]})));
+            self.outbox.push(Request::Blocks {
+                ranges: vec![[lo, hi]],
+            });
         }
         self.outbox.push(Request::Structure);
     }

@@ -129,7 +129,9 @@ impl ResumeZone {
 
     /// The list is refetched every time: it is a fact about the outside.
     fn list(&self) -> Request {
-        Request::call("sessions", serde_json::json!({"under": self.under()}))
+        Request::Sessions {
+            under: self.under(),
+        }
     }
 
     fn under(&self) -> Option<String> {
@@ -336,10 +338,7 @@ impl Zone for ResumeZone {
                         };
                         if self.pending_delete == Some(id) {
                             self.failed = false;
-                            let requests = vec![
-                                Request::post("delete", serde_json::json!({"session": id})),
-                                self.list(),
-                            ];
+                            let requests = vec![Request::Delete(id), self.list()];
                             return (Outcome::Stay, requests);
                         }
                         return (

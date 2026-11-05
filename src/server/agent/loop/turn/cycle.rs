@@ -55,10 +55,22 @@ pub(crate) fn run(
             focus,
             instruction: live.compact.clone(),
             stop: handle.stop.clone(),
+            worker: handle.worker.clone(),
             live: inner.out.clone(),
         }) {
             Ok(reply) => reply,
             Err(e) => {
+                if stopped(handle, &e) {
+                    pen::turn::settle(
+                        &inner.writer,
+                        turn,
+                        Stop::User,
+                        Usage::default(),
+                        None,
+                        handle.meta(),
+                    )?;
+                    return Ok(Stop::User);
+                }
                 broken(inner, handle, turn, Usage::default(), None, &e);
                 return Err(e);
             }
@@ -107,10 +119,22 @@ pub(crate) fn run(
             system: live.system.clone(),
             tools: manuals(&live.tools),
             stop: handle.stop.clone(),
+            worker: handle.worker.clone(),
             live: inner.out.clone(),
         }) {
             Ok(lap) => lap,
             Err(e) => {
+                if stopped(handle, &e) {
+                    pen::turn::settle(
+                        &inner.writer,
+                        turn,
+                        Stop::User,
+                        usage,
+                        baseline,
+                        handle.meta(),
+                    )?;
+                    return Ok(Stop::User);
+                }
                 broken(inner, handle, turn, usage, baseline, &e);
                 return Err(e);
             }
@@ -318,6 +342,17 @@ fn report(result: &ToolResult) -> Reported {
         spill: result.spill.clone(),
         duration_ms: result.duration_ms,
     }
+}
+
+/// The user stopped this turn: no notice, no error text, settled as interrupted.
+fn stopped(handle: &Handle, why: &anyhow::Error) -> bool {
+    if handle.stop.load(Ordering::Acquire) {
+        return true;
+    }
+    matches!(
+        why.downcast_ref::<crate::server::agent::request::retry::Failure>(),
+        Some(crate::server::agent::request::retry::Failure::Cancelled)
+    )
 }
 
 fn broken(
