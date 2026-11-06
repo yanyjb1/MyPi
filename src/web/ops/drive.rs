@@ -1,12 +1,10 @@
 use anyhow::{Result, anyhow};
 use serde_json::Value;
-use std::time::Duration;
 
-use super::page::Page;
-use super::session;
+use super::ACTION_TIMEOUT;
 use crate::web::WebArgs;
-
-pub(crate) const ACTION_TIMEOUT: Duration = Duration::from_secs(10);
+use crate::web::browser::page::Page;
+use crate::web::browser::tabs;
 
 fn js_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -28,7 +26,7 @@ fn js_string(s: &str) -> String {
     out
 }
 
-fn expect(raw: &str, what: &str) -> Result<String> {
+fn matched(raw: &str, what: &str) -> Result<String> {
     if raw.contains("NOT_FOUND") {
         Err(anyhow!("{what}: selector matched nothing"))
     } else {
@@ -53,14 +51,14 @@ fn selector(args: &WebArgs, what: &str) -> Result<String> {
 
 pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
     let op = args.op.as_str();
-    session::with_work(session, |page: &Page| match op {
+    tabs::with_work(session, |page: &Page| match op {
         "click" => {
             let sel = selector(args, "click")?;
             let r = page.evaluate(
                 &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.click(); return 'clicked'; }})()"),
                 ACTION_TIMEOUT,
             )?;
-            expect(&r, "click")
+            matched(&r, "click")
         }
         "fill" => {
             let sel = selector(args, "fill")?;
@@ -69,7 +67,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
                 &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.focus(); el.value = {value}; el.dispatchEvent(new Event('input', {{bubbles: true}})); return 'filled'; }})()"),
                 ACTION_TIMEOUT,
             )?;
-            expect(&r, "fill")
+            matched(&r, "fill")
         }
         "press" => {
             let key = js_string(
@@ -81,7 +79,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
                 &format!("(() => {{ const el = document.activeElement; if (!el) return 'NOT_FOUND'; el.dispatchEvent(new KeyboardEvent('keydown', {{key: {key}, bubbles: true}})); el.dispatchEvent(new KeyboardEvent('keyup', {{key: {key}, bubbles: true}})); return 'pressed'; }})()"),
                 ACTION_TIMEOUT,
             )?;
-            expect(&r, "press")
+            matched(&r, "press")
         }
         "select" => {
             let sel = selector(args, "select")?;
@@ -90,7 +88,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
                 &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.value = {value}; el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'selected'; }})()"),
                 ACTION_TIMEOUT,
             )?;
-            expect(&r, "select")
+            matched(&r, "select")
         }
         "scroll" => {
             let dy = args.value.as_ref().and_then(Value::as_i64).unwrap_or(600);
@@ -98,7 +96,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
                 &format!("window.scrollBy(0, {dy}); 'scrolled'"),
                 ACTION_TIMEOUT,
             )?;
-            expect(&r, "scroll")
+            matched(&r, "scroll")
         }
         "eval" => {
             let expr = text(args, "eval")?;

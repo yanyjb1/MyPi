@@ -1,16 +1,10 @@
+//! The CDP WebSocket transport: connect, send, receive.
+
 use anyhow::{Context as _, anyhow};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 use tungstenite::Message;
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Target {
-    pub id: String,
-    #[serde(rename = "webSocketDebuggerUrl", default)]
-    pub ws_url: String,
-}
 
 pub(crate) struct Cdp {
     next_id: u64,

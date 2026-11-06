@@ -22,6 +22,21 @@ pub fn spawn_grouped(cmd: &mut Command) -> std::io::Result<Child> {
     cmd.spawn()
 }
 
+/// Kill this command's tree when the thread that forks it ends; Linux only.
+#[cfg(target_os = "linux")]
+pub fn guard_orphan(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt as _;
+    // SAFETY: `prctl` is one syscall, and the child has not execed yet.
+    unsafe {
+        cmd.pre_exec(|| {
+            if linux::parent_death_signal() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 /// Signal the whole group. A group that is already gone is the normal case.
 pub fn signal_group(pgid: u32, signal: Signal) {
     sys::signal(pgid, signal);
@@ -115,5 +130,21 @@ mod sys {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    const PR_SET_PDEATHSIG: i32 = 1;
+    const SIGKILL: i32 = 9;
+
+    unsafe extern "C" {
+        fn prctl(option: i32, ...) -> i32;
+    }
+
+    /// Ask the kernel to SIGKILL the child once the forking thread ends.
+    pub fn parent_death_signal() -> i32 {
+        // SAFETY: one syscall with constant arguments.
+        unsafe { prctl(PR_SET_PDEATHSIG, SIGKILL as u64, 0u64, 0u64, 0u64) }
     }
 }

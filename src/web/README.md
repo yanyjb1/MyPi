@@ -4,8 +4,8 @@ A self-contained domain for reading pages, searching, and driving a browser. The
 call's arguments into `WebArgs` and hands it over; everything below that line — Chromium, CDP, tabs,
 providers, HTML conversion — belongs here and nowhere else.
 
-It is not part of the tool layer. It decides for itself how the browser starts, which is why it
-reads its own configuration instead of receiving it through `Env`.
+It is not part of the tool layer. It decides for itself when the browser starts and when it dies,
+which is why it reads its own configuration instead of receiving it through `Env`.
 
 ## 1. Design / Schema
 
@@ -30,10 +30,56 @@ reads its own configuration instead of receiving it through `Env`.
 `run(args, session)` is the whole entry. It takes one of two permits, dispatches on `op`, and
 returns the text the model reads.
 
+### Browser process
+
+One Chromium per process, **always headed**, launched on the first operation and never before.
+
+```text
+ensure
+  → a live handle in STATE?                        → reuse it
+     (an owned child that exited or a dead port is replaced)
+  → MYPI_BROWSER_PORT, config port                 → attach
+  → DevToolsActivePort of the profile              → attach
+  → otherwise                                      → launch
+```
+
+- `owned` browsers are launched into a session of their own (`setsid`), so the group id is the
+  leader's pid; closing signals the whole group TERM, waits two seconds, then KILLs and reaps.
+- `attached` browsers belong to the user: this domain never signals them, and never idles them out.
+- The idle clock is set at launch and at the end of every tab lease; an operation in flight also
+  keeps the browser alive. Ten minutes without either closes an owned browser: tabs, group and all.
+  The next operation launches a new one.
+- `shutdown()` closes the owner and forgets every tab; it is idempotent. `main` calls it after the
+  IPC server returns, and a signal thread calls it for INT, TERM and HUP before letting the signal
+  take its default action.
+- An owned browser must not survive the server. Linux gets that from `PR_SET_PDEATHSIG`, which is
+  delivered when the *forking thread* ends; the launch therefore happens on one thread that lives
+  as long as the process.
+- No display (`DISPLAY` / `WAYLAND_DISPLAY` missing) is an error, not a fallback: there is no
+  headless mode.
+
+Launch argv:
+
+```text
+<bin>
+  --user-data-dir=<profile>
+  --remote-debugging-port=0
+  --remote-debugging-address=127.0.0.1
+  --no-first-run
+  --no-default-browser-check
+  --disable-blink-features=AutomationControlled
+  <config.server.agent.tools.browser.extraArgs…>
+  about:blank
+```
+
+The profile is persistent: logins, cookies and user-installed extensions live there. The
+User-Agent is not overridden; a headed Chromium already reports `Chrome/<major>` consistently with
+`Sec-CH-UA`. `--disable-blink-features=AutomationControlled` is what keeps `navigator.webdriver`
+false while a CDP client is attached.
+
 ### Tabs
 
-`session::STATE` is the process's only browser state: the handle, the tabs, the challenge marks,
-and one search lock per session.
+`tabs::POOL` is the process's only tab state.
 
 ```text
 (session, TabKind::Search)  → search, and a read that carries a url
@@ -41,65 +87,33 @@ and one search lock per session.
 ```
 
 - Tabs are created on demand and keyed by session and kind.
-- A tab that vanished from the browser is recreated on the next call; its challenge mark is dropped
-  with it.
+- A tab that vanished from the browser is recreated on the next call.
 - The search tab is serial per session through a lock held for the whole call, so two searches in
   one session queue rather than interleave.
 - A tab closes after 30 minutes without an active call. The work tab is marked reserved for the
   duration of a call, so the call in flight is never reclaimed underneath itself.
 - `close_session` closes both of a session's tabs.
 
+### Verification
+
+When a provider returns a challenge page, the domain waits instead of failing:
+
+1. If `config.web.bringToFront` is true, the tab is raised once. The flag only decides whether the
+   window comes forward; polling happens either way.
+2. Every 30 seconds the current URL and DOM are handed to a predicate supplied by the caller; the
+   default predicate is the provider's `challenge()` answering "no longer a challenge page".
+3. Passing inside five minutes is silent: the page is fetched again and the operation continues as
+   if nothing happened. The model never learns a verification occurred.
+4. Five minutes without passing returns an error saying the user may be away or may not have
+   noticed the window; the model is expected to ask the user, and a later retry starts over.
+
+The poll never navigates, so the page the user is working on is not reset.
+
 ### The permit
 
 At most two operations run at once across the process. The third waits on a condition variable.
-The permit is taken once in `run`, so no operation can forget it.
-
-### Browser lifecycle
-
-One Chromium per process, either spawned by this domain or attached to a port that already exists.
-
-```text
-ensure_browser
-  → a live, attached or headless handle in STATE?  → reuse it
-  → MYPI_BROWSER_PORT, config port, DevToolsActivePort → attach
-  → otherwise                                        → launch
-```
-
-The profile is persistent: logins, cookies and user-installed extensions live there, and that is
-the reason the browser exists at all.
-
-Headless is the starting point. When a provider or a page answers with a challenge, the caller asks
-`ensure_headed`: if the handle is attached it refuses, if it is already headed it does nothing, and
-otherwise it replaces the handle with a headed launch. A launched browser stays headed for the
-process; there is no switch back.
-
-### Configuration
-
-Read once, in `ensure_browser`, at the moment a browser has to start. A live handle short-circuits
-before the read, so a long-lived session reads the file once and never again.
-
-`BrowserOptions` comes from `server::config`; this domain never parses `config.yaml` itself.
-
-| key | use |
-|---|---|
-| `config.server.agent.tools.browser.bin` | the executable to launch |
-| `config.server.agent.tools.browser.profileDir` | the persistent profile |
-| `config.server.agent.tools.browser.port` | attach instead of launching |
-| `config.server.agent.tools.browser.headless` | launch without a window; default true |
-| `config.server.agent.tools.browser.user_agent` | override the launched browser's User-Agent |
-| `config.server.agent.tools.browser.extra_args` | extra argv |
-
-`bin` and `profile_dir` have no usable default: a machine that names neither cannot start a
-browser, and the failure is reported rather than papered over with a guessed path.
-
-### Search
-
-- One provider per call. `provider` is required; there is no aggregation across engines.
-- Pages `1..=page` are fetched in order through the search tab; an empty page stops the loop.
-- Hits are deduplicated by URL, first sighting wins.
-- A challenge is a two-step handoff: detection returns a retry hint, the retry asks for a headed
-  browser and the same provider is tried once more.
-- Every provider reads through the browser. There is no plain-HTTP fallback.
+The permit is taken once in `run`, so no operation can forget it. The count is also what the idle
+sweep reads: a browser with an operation in flight is never closed.
 
 ### Output
 
@@ -109,31 +123,52 @@ entries, and `screenshot`, which names a file and its size.
 
 ## 2. Design intent
 
-- **A domain, not a tool.** The browser's behaviour is its own: when to start, headed or not, how
-  many tabs, when to reclaim them. The tool layer gives the model a convenient verb; it does not
-  steer the browser.
-- **Flat `op`.** One verb per call, no nested action field, so the model never has to compose two
-  operation names.
+- **A domain, not a tool.** The browser's behaviour is its own: when to start, how many tabs, when
+  to reclaim them, when to die. The tool layer gives the model a convenient verb; it does not steer
+  the browser.
+- **Always headed.** A challenge needs a human in front of a window, and a headed browser carries
+  fewer automation tells than any headless mode. This domain is for surfaces that need operating;
+  plain text fetching has other tools.
+- **One browser per process.** One persistent profile keeps logins; one window keeps the user able
+  to supervise; one process group gives the exit path a single handle.
+- **Owned versus attached.** A browser the user started is theirs; the domain only speaks CDP to it.
+  A browser the domain started is a child of the server and must not survive it.
+- **A resident fork thread.** `PR_SET_PDEATHSIG` binds to the forking thread, so a fork from a
+  connection thread would kill the browser when that front end disconnects. One thread that never
+  ends makes the signal mean "the server died".
+- **Idle close.** The profile is on disk, so closing costs only a relaunch. Leaving the process up
+  costs an orphan every time the server goes away badly.
 - **Two tabs per session.** Search and interactive work have different lifetimes: a search tab may
   be replaced freely, a work tab must survive between `open`, `click`, `fill` and `read`.
 - **A serial search tab.** One provider, one tab, one call at a time keeps a challenge attributable
   to the engine that raised it.
-- **A persistent profile.** An ephemeral profile would make the tool less useful and add cleanup
-  work for no gain.
-- **A permit of two.** Chromium serializes most CDP work anyway; two in flight keeps a batch moving
-  without letting a fan-out of calls pile onto one browser.
+- **A silent verification.** The model asked for results; a human solving a challenge is
+  infrastructure, not an outcome. Only a timeout is worth reporting.
+- **30 seconds and five minutes are constants.** They are interaction pacing, not deployment
+  parameters; a config key would invite tuning that makes the wait either useless or hostile.
 - **Config read late and once.** Reading at launch keeps a long-lived session from re-parsing the
   file on every call, and keeps the domain from holding state it does not act on.
 
 ## 3. Unresolved
 
-- `BrowserOptions` still carries six fields; only `bin` and `profileDir` are decisions a user has to
-  make, and the rest are the domain's own defaults. The config rewrite settles this.
+- macOS has no parent-death equivalent; only the explicit exit path covers it there.
+- Windows needs a Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`); not written yet.
+- Attached mode cannot switch a user's browser between headed and headless — irrelevant now, since
+  there is no headless mode.
 - Provider selectors are implemented but need live tuning against current result markup.
-- A headed browser needs `DISPLAY` or `WAYLAND_DISPLAY`; an attached browser cannot switch to headed.
+- A machine without a display cannot use this domain at all.
 - CDP Network, HAR and response bodies are intentionally absent.
 
 ## 4. Config fields
 
-All keys live under `config.server.agent.tools.browser`; see the table above. `bin` and
-`profileDir` are required in practice — without them no browser starts.
+Read by this domain itself, never through `Env`.
+
+| key | use |
+|---|---|
+| `config.server.agent.tools.browser.bin` | the executable; empty = `$MYPI_BROWSER_BIN`, else `/opt/helium/helium` |
+| `config.server.agent.tools.browser.profileDir` | the persistent profile; empty = `<data dir>/browser/profile` |
+| `config.server.agent.tools.browser.port` | attach to a running browser instead of launching |
+| `config.server.agent.tools.browser.idleSecs` | seconds of no activity before an owned browser is closed; default 600 |
+| `config.server.agent.tools.browser.userAgent` | override the launched browser's User-Agent; unset = the browser's own |
+| `config.server.agent.tools.browser.extraArgs` | extra argv |
+| `config.web.bringToFront` | raise the window when a verification challenge appears; default true |

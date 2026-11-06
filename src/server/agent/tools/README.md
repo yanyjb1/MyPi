@@ -335,12 +335,13 @@ not checked here; a bad argument is the server's error to report.
 | `config.server.agent.tools.bashTimeout` | one shell command's deadline; default 600 s |
 | `config.server.agent.tools.outputMaxLines` | inline line budget; also caps `read`'s `limit` |
 | `config.server.agent.tools.outputMaxBytes` | inline byte budget |
-| `config.server.agent.tools.browser.bin` | the browser executable; no default, the web domain refuses to start without it |
-| `config.server.agent.tools.browser.profileDir` | the persistent profile; no default, the web domain refuses to start without it |
+| `config.server.agent.tools.browser.bin` | the browser executable; empty = `$MYPI_BROWSER_BIN`, else `/opt/helium/helium` |
+| `config.server.agent.tools.browser.profileDir` | the persistent profile; empty = `<data dir>/browser/profile` |
 | `config.server.agent.tools.browser.port` | attach to a running debugging port instead of launching |
-| `config.server.agent.tools.browser.headless` | launch without a window; default true |
-| `config.server.agent.tools.browser.userAgent` | override the launched browser's User-Agent |
+| `config.server.agent.tools.browser.idleSecs` | seconds without activity before an owned browser is closed; default 600 |
+| `config.server.agent.tools.browser.userAgent` | override the launched browser's User-Agent; unset = the browser's own |
 | `config.server.agent.tools.browser.extraArgs` | extra browser argv |
+| `config.web.bringToFront` | raise the window when a verification challenge appears; default true |
 | `config.server.agent.tools.kairos.*` | `maxConcurrent`, `timeoutSecs`, `maxOutputBytes`, `maxRetained`; the job scheduler's numbers, read by the loop |
 | `config.server.agent.subagent.maxToolCalls` | one child's tool-call budget; read by the loop |
 

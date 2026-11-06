@@ -6,26 +6,39 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 | file | holds |
 |---|---|
-| `mod.rs` | declares the modules; exports `WebArgs`, `run`, `close_session` |
+| `mod.rs` | declares the modules; exports `WebArgs`, `run`, `close_session`, `shutdown` |
 | `args.rs` | `WebArgs`: the shared input shape of every operation |
-| `run.rs` | the two-operation permit, and the `op` dispatch |
+| `run.rs` | the two-operation permit, the in-flight count, and the `op` dispatch |
 | `url.rs` | URL normalisation, query encoding, percent and base64 decoding |
 
 ### browser
 
 | file | holds |
 |---|---|
-| `browser/mod.rs` | declares the modules and the one re-export `search` needs |
-| `browser/cdp.rs` | the CDP WebSocket transport: connect, send, receive, target discovery |
-| `browser/process.rs` | one Chromium process or an attachment: launch argv, profile, target create and close, `port_alive` |
-| `browser/page.rs` | one target: navigate, evaluate, read the DOM, poll, capture |
-| `browser/session.rs` | the process-wide state: the handle, the tabs, the search locks, the challenge marks, `ensure_browser`, `ensure_headed`, `with_search`, `with_work`, `close_session` |
-| `browser/reaper.rs` | one timer thread that closes idle tabs |
-| `browser/open.rs` | `Page.navigate` |
-| `browser/read.rs` | `DOM.getDocument` + `DOM.getOuterHTML` |
-| `browser/actions.rs` | `Runtime.evaluate`, one shape per action |
-| `browser/net.rs` | `performance.getEntriesByType('resource')` |
-| `browser/screenshot.rs` | `Page.captureScreenshot` |
+| `browser/mod.rs` | declares the browser's six parts |
+| `browser/process/mod.rs` | one browser handle: owned or attached, port, `alive`, `stop`, and the profile's DevToolsActivePort lookup |
+| `browser/process/launch.rs` | launch argv, the fork, the DevTools port wait, and the one resident thread that performs the fork |
+| `browser/devtools/mod.rs` | `Client`: `/json/list`, `/json/new`, `/json/close`, port probing |
+| `browser/devtools/cdp.rs` | the CDP WebSocket transport: connect, send, receive |
+| `browser/devtools/target.rs` | `Target`: id and socket URL |
+| `browser/page.rs` | one target: navigate, evaluate, DOM, wait, url, screenshot, bring-to-front |
+| `browser/lifecycle/mod.rs` | the process-wide state: lazy start, ownership, `port`, `existing_port`, `shutdown` |
+| `browser/lifecycle/idle.rs` | the activity clock and the idle decision |
+| `browser/lifecycle/timer.rs` | the one 30-second thread: idle sweep, then tab reap |
+| `browser/lifecycle/signal.rs` | INT/TERM/HUP registration |
+| `browser/tabs.rs` | the tab pool, leases, per-session search locks, idle tab reclaim, `close_session` |
+| `browser/verify.rs` | the human-verification poll: 30 seconds, five minutes, caller's predicate |
+
+### ops
+
+| file | holds |
+|---|---|
+| `ops/mod.rs` | declares the operations, and the shared action timeout |
+| `ops/read.rs` | `read` |
+| `ops/open.rs` | `open` |
+| `ops/drive.rs` | `click`, `fill`, `press`, `select`, `scroll`, `eval` |
+| `ops/net.rs` | `net` |
+| `ops/screenshot.rs` | `screenshot` |
 
 ### search
 
@@ -45,48 +58,60 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 ## What it talks to
 
-- **`server::config`**: `Config::load()` and `BrowserOptions`, read inside `ensure_browser` and
-  `ensure_headed`. This is the domain's only reach into the backend, and it is why `Env` carries no
-  browser settings.
-- **`platform`**: `env::data_dir` for the default profile root.
-- **Crates**: `tungstenite` (WebSocket), `html-to-markdown-rs` (DOM to Markdown), `url`.
+- **`server::config`**: `Config::load()`, `BrowserOptions` and `bring_to_front()`, read inside
+  `lifecycle::port` and `lifecycle::bring_to_front`. This is the domain's only reach into the
+  backend, and it is why `Env` carries no browser settings.
+- **`server::platform`**: `env::data_dir` for the default profile root, `proc::guard_orphan` before
+  a fork, and `proc::terminate_tree` to close a group.
+- **Crates**: `tungstenite` (WebSocket), `html-to-markdown-rs` (DOM to Markdown), `url`, `ureq`
+  (DevTools HTTP), `signal-hook` (exit signals).
 - **Who calls it**: `server::agent::tools::web` — `run` for every operation, and its own
-  `close_session` forward for a finished session, called by `api`'s delete door.
+  `close_session` forward for a finished session, called by `api`'s delete door. `main` calls
+  `shutdown` once the IPC server returns.
 - **Knows nothing about**: `Env`, tools, sessions' rows, the api doors, the front end.
 
 ## Inside
 
 ```text
 run (permit)
-  → read ──────→ browser::read::run ────→ session::with_search | with_work → Page
-  → search ────→ search::run ──────────→ session::with_search, ensure_headed
-  → open ──────→ browser::open::run ────→ session::with_work
-  → actions ───→ browser::actions::run ─→ session::with_work
-  → net ───────→ browser::net::run ─────→ session::with_work
-  → screenshot → browser::screenshot::run → session::with_work
+  → ops::read ────→ tabs::with_search | with_work → page
+  → search ───────→ tabs::with_search → verify::await_human
+  → ops::open ────→ tabs::with_work → page
+  → ops::drive ───→ tabs::with_work → page
+  → ops::net ─────→ tabs::with_work → page
+  → ops::screenshot → tabs::with_work → page
+
+tabs::with_* → lifecycle::port → process::{launch, attach}
+page → devtools::{Client, Cdp}
+lifecycle::timer → idle::sweep, tabs::reap
+lifecycle::signal → shutdown
 ```
 
-- `session` is the only owner of tab state. `page` does not know sessions. `process` does not know
+- `tabs` is the only owner of tab state. `page` does not know sessions. `process` does not know
   tabs. An operation does not touch CDP directly.
-- `with_search` and `with_work` are the only doors into a page: they find or create the tab, take
-  the lease, and hand the page to the caller's closure.
-- `ensure_browser` reads the configuration at the point of launch only; a live handle returns
-  before the read.
-- `close_session` drops both tabs; the browser itself stays up for the process.
+- `lifecycle` is the only owner of the browser handle: `port` launches or attaches, `existing_port`
+  never launches, `shutdown` closes and forgets. `tabs` asks it for a port and nothing else.
+- `process::launch` is the only place that forks, and the only place that names a platform hook.
+- `devtools` only speaks protocol: it never decides when a browser exists.
+- `verify` knows a page and a predicate, not an engine.
+- `idle` reads the permit count from `run`; the timer reads `idle` and `tabs`.
 
 ## Must stay in step
 
 1. `WebArgs` and `tools/web/mod.rs`: the tool maps the model's positional arguments into this shape,
    so a field added here needs a parameter there.
-2. `BrowserOptions` and `session::ensure_browser`: the domain reads the fields it acts on; a rename
-   in `server::config` is a rename here.
-3. `session::STATE` and `reaper`: the timer closes what the state records; a new tab kind needs both.
+2. `BrowserOptions` and `lifecycle::port`: an owned browser caches the idle timeout and the
+   bring-to-front flag at launch; a rename in `server::config` is a rename here.
+3. `tabs::POOL` and `lifecycle::shutdown`: the browser is gone, so every tab id is stale;
+   `shutdown` clears the pool.
 4. `search::provider` and `search/providers/`: the static table is the only registry, and `run`
    refuses a name it cannot find.
 5. `page::RENDER_WAIT` and the providers' parsers: a page that has not rendered yields no hits, and
    the wait is what keeps the loop from reading a shell.
+6. `platform::proc::guard_orphan` and `process::launch`: the fork must happen on the resident
+   thread for the Linux parent-death signal to mean the server.
 
 ## Not wired yet
 
 1. Provider selectors await live tuning.
-2. A headed launch needs a display server; the failure is reported, not retried.
+2. Windows has no Job Object yet; macOS has no parent-death equivalent.

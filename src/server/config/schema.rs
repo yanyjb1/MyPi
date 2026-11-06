@@ -20,9 +20,10 @@ keys! {
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN = "config", "server.agent.tools.browser", "bin", Text, DefaultValue::Null, "Chromium-family executable; empty = $MYPI_BROWSER_BIN or a shipped default.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT = "config", "server.agent.tools.browser", "port", Int, DefaultValue::Null, "Attach to a running browser on this port instead of launching one.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PROFILE_DIR = "config", "server.agent.tools.browser", "profileDir", Text, DefaultValue::Null, "Persistent browser profile directory.", true;
-    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_HEADLESS = "config", "server.agent.tools.browser", "headless", Bool, DefaultValue::Bool(true), "Launch the browser headless.", true;
+    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_IDLE_SECS = "config", "server.agent.tools.browser", "idleSecs", Int, DefaultValue::Int(600), "Seconds without web activity before the browser process is closed.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_USER_AGENT = "config", "server.agent.tools.browser", "userAgent", Text, DefaultValue::Null, "Override the launched browser's User-Agent.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS = "config", "server.agent.tools.browser", "extraArgs", List, DefaultValue::List(NO_ARGS), "Extra argv appended to the browser launch.", true;
+    KEY_CONFIG_WEB_BRING_TO_FRONT = "config", "web", "bringToFront", Bool, DefaultValue::Bool(true), "Raise the window when a verification challenge appears.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_KAIROS_MAX_CONCURRENT = "config", "server.agent.tools.kairos", "maxConcurrent", Int, DefaultValue::Int(4), "Background jobs allowed at once in one session.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_KAIROS_TIMEOUT_SECS = "config", "server.agent.tools.kairos", "timeoutSecs", Int, DefaultValue::Int(3600), "Default background-job timeout.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_KAIROS_MAX_OUTPUT_BYTES = "config", "server.agent.tools.kairos", "maxOutputBytes", Int, DefaultValue::Int(8388608), "Bytes captured per background job.", true;

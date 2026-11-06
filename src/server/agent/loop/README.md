@@ -91,7 +91,7 @@ half's, and the loop only adds tool events to it.
 - `config.server.agent.loop.scrooge` — true forbids a mid-session model change.
 - `config.server.agent.tools.outputMaxLines` / `outputMaxBytes` — the inline budget handed to the tool layer.
 - `config.server.agent.tools.bashTimeout` — one command's wall-clock cap.
-- `config.server.agent.tools.browser.{bin,port,profileDir,headless,userAgent,extraArgs}` — the web tool's launch values.
+- `config.server.agent.tools.browser.{bin,port,profileDir,idleSecs,userAgent,extraArgs}` — the web tool's launch values, and `config.web.bringToFront` for its challenge window.
 - `config.server.agent.tools.kairos.*` — `maxConcurrent`, `timeoutSecs`, `maxOutputBytes`, `maxRetained`: the job scheduler's numbers.
 - `config.server.agent.subagent.maxToolCalls` — the default budget for a sub-session.
 

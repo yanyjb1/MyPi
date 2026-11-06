@@ -62,7 +62,7 @@ What is here, what each file holds, who talks to whom. Current state only.
   `env::temp_dir`, `shell::Shell` (the session's shell: program, one-shot argument shape,
   stored-text read form), `proc` (process group spawn, group signal, tree teardown).
 - **`request`**: `ToolCall`, `ToolDef`, `Message` for definitions and the context window.
-- **`web`**: `WebArgs`, `run`, `close_session`, only from the `web` tool.
+- **`web`**: `WebArgs`, `run`, `close_session` from the `web` tool; `shutdown` from `main`.
 - **Who calls it**: `loop/turn` (one batch at a time, `Batch::run`), `loop/turn/cycle` (`roster`
   for the manuals, and the child list correction), `loop/session/book` (builds `Engine` from
   config, reads `mcp.json`, attaches the bridge), `api` for `close_web_session`.

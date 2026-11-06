@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
 
-use super::page::{Page, RENDER_WAIT};
-use super::session;
 use crate::web::WebArgs;
+use crate::web::browser::page::{Page, RENDER_WAIT};
+use crate::web::browser::tabs;
 use crate::web::html::{html_to_markdown, is_js_shell};
 use crate::web::url;
 
@@ -10,7 +10,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
     match args.url.as_deref() {
         Some(raw) => {
             let target = url::normalize(raw)?;
-            session::with_search(session, |page: &Page| {
+            tabs::with_search(session, |page: &Page| {
                 page.navigate(&target)?;
                 if args.raw {
                     return page.wait(RENDER_WAIT, |_| Some(Ok(())));
@@ -27,7 +27,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
             if args.raw {
                 bail!("raw requires url");
             }
-            session::with_work(session, |page: &Page| {
+            tabs::with_work(session, |page: &Page| {
                 let html = page.dom_html()?;
                 html_to_markdown(&html)
             })

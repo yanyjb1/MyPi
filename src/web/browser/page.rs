@@ -1,18 +1,17 @@
-use anyhow::{Context as _, anyhow};
+//! One target's CDP surface: navigate, evaluate, read, wait, capture.
+
+use anyhow::anyhow;
 use parking_lot::Mutex;
 use serde_json::json;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::cdp::{Cdp, Target};
-use super::process::Browser;
+use super::devtools::{Cdp, Client, Target};
 
-pub(crate) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
+const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) const RENDER_WAIT: Duration = Duration::from_secs(15);
-pub(crate) const POLL_TIMEOUT: Duration = Duration::from_secs(8);
+const POLL_TIMEOUT: Duration = Duration::from_secs(8);
 
-#[derive(Clone)]
 pub(crate) struct Page {
     port: u16,
     target_id: String,
@@ -36,6 +35,19 @@ impl Page {
 
     pub(crate) fn dom_html(&self) -> anyhow::Result<String> {
         self.resilient(|c| c.dom_html(POLL_TIMEOUT))
+    }
+
+    /// The document's current URL.
+    pub(crate) fn url(&self) -> anyhow::Result<String> {
+        self.evaluate("location.href", POLL_TIMEOUT)
+    }
+
+    /// Raise the tab, and the window that holds it.
+    pub(crate) fn bring_to_front(&self) -> anyhow::Result<()> {
+        self.resilient(|c| {
+            c.call("Page.bringToFront", json!({}), POLL_TIMEOUT)
+                .map(|_| ())
+        })
     }
 
     pub(crate) fn wait(
@@ -96,9 +108,7 @@ impl Page {
     }
 
     fn connect_fresh(&self) -> anyhow::Result<Cdp> {
-        let browser =
-            Browser::attach(Path::new(""), self.port).context("re-attaching to browser")?;
-        let target = browser
+        let target = Client::new(self.port)
             .targets()?
             .into_iter()
             .find(|t| t.id == self.target_id)

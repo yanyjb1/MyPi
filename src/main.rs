@@ -52,9 +52,11 @@ fn main() -> anyhow::Result<()> {
         .env("MYPI_ENDPOINT", &file)
         .spawn()
         .context("cannot start the front end")?;
-    server::serve(bound)?;
+    let served = server::serve(bound);
     let _ = front.wait();
-    Ok(())
+    #[cfg(feature = "web")]
+    mypi::web::shutdown();
+    served
 }
 
 /// `mypi --server`: the server alone.
@@ -65,7 +67,10 @@ fn run_server(db: &Path) -> anyhow::Result<()> {
     };
     init_time(&cfg);
     let endpoint = Endpoint::for_db(db, ipc_kind(&cfg));
-    server::run(Api::open(db.to_path_buf(), cfg)?, db, endpoint, claim)
+    let served = server::run(Api::open(db.to_path_buf(), cfg)?, db, endpoint, claim);
+    #[cfg(feature = "web")]
+    mypi::web::shutdown();
+    served
 }
 
 /// The endpoint kind this process asks for.

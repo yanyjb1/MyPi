@@ -13,12 +13,13 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE,
     KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
-    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_HEADLESS, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT,
+    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_IDLE_SECS, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PROFILE_DIR,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_USER_AGENT,
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES, KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES,
     KEY_CONFIG_SERVER_API_DEFAULT_MODEL, KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE,
     KEY_CONFIG_SERVER_REQUEST_COMPACT_RETAIN_TAIL, KEY_CONFIG_SERVER_REQUEST_STREAMING,
+    KEY_CONFIG_WEB_BRING_TO_FRONT,
 };
 use super::super::write;
 use super::source::child;
@@ -69,9 +70,12 @@ impl Config {
                 .and_then(Value::as_int)
                 .and_then(|port| u16::try_from(port).ok()),
             profile_dir: path(KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PROFILE_DIR),
-            headless: value(KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_HEADLESS)
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
+            idle: std::time::Duration::from_secs(
+                value(KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_IDLE_SECS)
+                    .and_then(Value::as_int)
+                    .unwrap_or(600)
+                    .max(1) as u64,
+            ),
             user_agent: value(KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_USER_AGENT)
                 .and_then(Value::as_text)
                 .map(str::to_string),
@@ -80,6 +84,15 @@ impl Config {
                 .unwrap_or(&[])
                 .to_vec(),
         }
+    }
+
+    /// Whether a verification challenge should raise the browser window.
+    pub fn bring_to_front(&self) -> bool {
+        self.effective(None)
+            .values
+            .get(KEY_CONFIG_WEB_BRING_TO_FRONT)
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
     }
 
     /// The tool-call budget a sub-session gets when its call names none.

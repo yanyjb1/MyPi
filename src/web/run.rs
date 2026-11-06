@@ -1,10 +1,11 @@
 //! Op dispatch under the process-wide permit: at most two operations run at once.
 
-use anyhow::{Result, bail};
-use std::sync::{Condvar, Mutex};
+use anyhow::{Result, anyhow, bail};
+use parking_lot::{Condvar, Mutex};
 
-use super::WebArgs;
-use super::{browser, search};
+use super::ops;
+use super::search;
+use crate::web::WebArgs;
 
 static ACTIVE: Mutex<usize> = Mutex::new(0);
 static WAKE: Condvar = Condvar::new();
@@ -13,43 +14,45 @@ struct Permit;
 
 impl Drop for Permit {
     fn drop(&mut self) {
-        let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
-        *active = (*active).saturating_sub(1);
+        *ACTIVE.lock() -= 1;
         WAKE.notify_one();
     }
 }
 
 fn permit() -> Permit {
-    let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut active = ACTIVE.lock();
     while *active >= 2 {
-        active = WAKE.wait(active).unwrap_or_else(|e| e.into_inner());
+        WAKE.wait(&mut active);
     }
     *active += 1;
     Permit
+}
+
+/// How many operations are in flight; the idle sweep leaves a busy browser alone.
+pub(crate) fn active() -> usize {
+    *ACTIVE.lock()
 }
 
 /// One operation under the permit; the op names which.
 pub fn run(args: &WebArgs, session: i64) -> Result<String> {
     let _permit = permit();
     match args.op.as_str() {
-        "read" => browser::read::run(args, session),
+        "read" => ops::read::run(args, session),
         "search" => {
             let query = args
                 .query
                 .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("`search` requires `query`"))?;
+                .ok_or_else(|| anyhow!("`search` requires `query`"))?;
             let provider = args
                 .provider
                 .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("`search` requires `provider`"))?;
+                .ok_or_else(|| anyhow!("`search` requires `provider`"))?;
             search::run(session, query, provider, args.page)
         }
-        "open" => browser::open::run(args, session),
-        "click" | "fill" | "press" | "select" | "scroll" | "eval" => {
-            browser::actions::run(args, session)
-        }
-        "net" => browser::net::run(args, session),
-        "screenshot" => browser::screenshot::run(args, session),
+        "open" => ops::open::run(args, session),
+        "click" | "fill" | "press" | "select" | "scroll" | "eval" => ops::drive::run(args, session),
+        "net" => ops::net::run(args, session),
+        "screenshot" => ops::screenshot::run(args, session),
         other => bail!(
             "unknown op {other:?}; read|search|open|click|fill|press|select|scroll|eval|net|screenshot"
         ),

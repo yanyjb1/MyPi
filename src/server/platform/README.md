@@ -30,6 +30,7 @@ name.
 
 ```text
 spawn_grouped(cmd)         start the command so it leads a group of its own
+guard_orphan(cmd)          Linux only: kill the tree when the forking thread ends
 signal_group(pgid, sig)    Term or Kill, whole group
 terminate_tree(pid)        Term, then Kill once `grace()` has run out
 ```
@@ -37,6 +38,9 @@ terminate_tree(pid)        Term, then Kill once `grace()` has run out
 On unix the child becomes its own session (`setsid`) before `exec`, and a group is signalled through
 the `kill` syscall declared in that file; on windows the child gets no console window and the tree is
 taken down with `taskkill /T`. Nothing here spawns `setsid`, `kill` or `timeout` as a program.
+`guard_orphan` sets `PR_SET_PDEATHSIG`, which the kernel delivers when the thread that forked the
+child ends — a caller that wants it to mean "the process died" must fork from a thread that lives
+that long.
 
 ### The stamp
 

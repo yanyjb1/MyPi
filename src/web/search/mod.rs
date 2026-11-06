@@ -1,17 +1,16 @@
+//! One provider per call: pages 1..=N through the search tab, until a page comes back empty.
+
 use anyhow::{Result, anyhow, bail};
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
 
 use self::hit::{Hit, dedup_key};
 use self::provider::SearchProvider;
-use super::browser;
+use super::browser::page::{Page, RENDER_WAIT};
+use super::browser::{tabs, verify};
 
 mod hit;
 mod provider;
 mod providers;
-
-const VERIFY_INTERVAL: Duration = Duration::from_secs(60);
-const VERIFY_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(crate) fn run(session: i64, query: &str, provider_name: &str, page: u32) -> Result<String> {
     if page == 0 {
@@ -23,55 +22,26 @@ pub(crate) fn run(session: i64, query: &str, provider_name: &str, page: u32) -> 
         )
     })?;
     let name = provider.name();
-    let mut verified = false;
-    if browser::is_challenged(session, name) {
-        browser::ensure_headed().map_err(|e| anyhow!("{name}: {e}"))?;
-        verify(session, provider, query)?;
-        browser::clear_challenged(session, name);
-        verified = true;
-    }
 
     let mut hits: Vec<Hit> = Vec::new();
     let mut seen = HashSet::new();
     let mut current = 1u32;
     while current <= page {
         let url = provider.page_url(query, current);
-        let html = browser::with_search(session, |page| {
-            page.navigate(&url)?;
-            page.wait(browser::RENDER_WAIT, |html| {
-                if provider.challenge(&url, html).is_some() {
-                    return Some(Ok(()));
-                }
-                if !provider.parse(html).is_empty() {
-                    return Some(Ok(()));
-                }
-                None
-            })
-        })?;
+        let mut html = fetch(session, &url, provider)?;
 
         if provider.challenge(&url, &html).is_some() {
-            if !browser::is_challenged(session, name) {
-                browser::mark_challenged(session, name);
-                if !browser::has_display() {
-                    bail!(
-                        "{name}: human verification required at {url}; no display is available for a headed browser."
-                    );
-                }
+            verify::await_human(session, |challenge_url, challenge_html| {
+                provider.challenge(challenge_url, challenge_html).is_none()
+            })
+            .map_err(|e| anyhow!("{name}: {e}"))?;
+            html = fetch(session, &url, provider)?;
+            if provider.challenge(&url, &html).is_some() {
                 bail!(
-                    "{name}: human verification required. Retry the same provider to open a headed browser, or switch provider."
+                    "{name}: the verification page is still there. Ask the user to finish it, \
+                     then retry."
                 );
             }
-            if verified {
-                bail!("{name}: verification did not clear; retry or switch provider.");
-            }
-            browser::ensure_headed().map_err(|e| anyhow!("{name}: {e}"))?;
-            verify(session, provider, query)?;
-            browser::clear_challenged(session, name);
-            verified = true;
-            hits.clear();
-            seen.clear();
-            current = 1;
-            continue;
         }
 
         let parsed = provider.parse(&html);
@@ -89,23 +59,19 @@ pub(crate) fn run(session: i64, query: &str, provider_name: &str, page: u32) -> 
     Ok(render(name, page, &hits))
 }
 
-fn verify(session: i64, provider: &'static dyn SearchProvider, query: &str) -> Result<()> {
-    let url = provider.page_url(query, 1);
-    browser::with_search(session, |page| page.navigate(&url))?;
-    let deadline = Instant::now() + VERIFY_TIMEOUT;
-    loop {
-        let html = browser::with_search(session, |page| page.dom_html())?;
-        if provider.challenge(&url, &html).is_none() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!(
-                "{}: verification not completed within 5 minutes. Browser is headed; retry or switch provider.",
-                provider.name()
-            );
-        }
-        std::thread::sleep(VERIFY_INTERVAL);
-    }
+fn fetch(session: i64, url: &str, provider: &'static dyn SearchProvider) -> Result<String> {
+    tabs::with_search(session, |page: &Page| {
+        page.navigate(url)?;
+        page.wait(RENDER_WAIT, |html| {
+            if provider.challenge(url, html).is_some() {
+                return Some(Ok(()));
+            }
+            if !provider.parse(html).is_empty() {
+                return Some(Ok(()));
+            }
+            None
+        })
+    })
 }
 
 fn render(name: &str, page: u32, hits: &[Hit]) -> String {

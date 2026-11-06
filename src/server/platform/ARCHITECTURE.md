@@ -16,7 +16,7 @@ keeps — is in `README.md`.
 | `stamp.rs` | the timestamp templates: `parse` and `render` turn two instants into the prefix and suffix of one user message |
 | `log.rs` | the in-process ring of what happened to us: a level, a scope, a message and a millisecond |
 | `shell.rs` | which shell runs a command line: `Kind`, `Shell`, `default`, `resolve`, `names`, the one-shot argument shape, and the read form a stored text takes |
-| `proc.rs` | one command's process tree: `spawn_grouped`, `signal_group`, `terminate_tree`, `grace`; the per-family pieces are compile-time `cfg` modules |
+| `proc.rs` | one command's process tree: `spawn_grouped`, `guard_orphan`, `signal_group`, `terminate_tree`, `grace`; the per-family pieces are compile-time `cfg` modules |
 
 ## The public surface
 
@@ -32,7 +32,7 @@ keeps — is in `README.md`.
 | `stamp::{Parts, parse, weekday, render, inject}` | the injection templates: render a template against two instants, or both halves of one message at once |
 | `log::{Level, Record, push, info, warn, error, recent, by_scope, len}` | the ring |
 | `shell::{Kind, Shell, names}` | the session's shell; `resolve` refuses a shell the platform does not run |
-| `proc::{spawn_grouped, signal_group, terminate_tree, grace, Signal}` | start a command as its own group, signal the group, take the tree down |
+| `proc::{spawn_grouped, guard_orphan, signal_group, terminate_tree, grace, Signal}` | start a command as its own group, guard its lifetime, signal the group, take the tree down |
 
 Everything else in this folder is private.
 
@@ -76,10 +76,8 @@ Everything else in this folder is private.
    (`memo.md`); `config.server.platform.stamp.*` has no reader for the same reason.
 3. **Windows.** `env.rs` answers every directory with the current directory on a non-unix family.
    `shell.rs` and `proc.rs` carry both families, but three places still assume unix: the zoneinfo
-   paths in `time.rs`, the transport worker's `kill -KILL`, and the browser paths
-   (`src/web/browser/process.rs`). 第 16 条 lists the sites.
+   paths in `time.rs`, the transport worker's `kill -KILL`, and the absent parent-death guard for
+   launcher processes (`src/web/browser/process/launch.rs`). 第 16 条 lists the sites.
 4. **The shell backend is not selectable yet.** `Shell::resolve` exists; nothing reads a configured
    name, so every session takes the platform default. `Shell::default` is `bash` on unix and `pwsh`
    on windows, and the `niu` backend is reachable only through `resolve`.
-5. **`proc::terminate_tree` has one caller to come.** The browser process still calls `Child::kill`,
-   which leaves the engine's own children behind; its wave moves it onto `terminate_tree`.

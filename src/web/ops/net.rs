@@ -1,18 +1,18 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::actions::ACTION_TIMEOUT;
-use super::page::Page;
-use super::session;
+use super::ACTION_TIMEOUT;
 use crate::web::WebArgs;
+use crate::web::browser::page::Page;
+use crate::web::browser::tabs;
 
 pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
     let filter = args.filter.clone().unwrap_or_default();
     let max = args.max.unwrap_or(20).clamp(1, 100);
-    session::with_work(session, |page: &Page| capture_network(page, &filter, max))
+    tabs::with_work(session, |page: &Page| capture(page, &filter, max))
 }
 
-fn capture_network(page: &Page, filter: &str, max: usize) -> Result<String> {
+fn capture(page: &Page, filter: &str, max: usize) -> Result<String> {
     const SCAN: usize = 400;
     let expr = format!(
         "JSON.stringify((performance.getEntriesByType('resource')||[]).slice(-{SCAN}).map(e => ({{name: e.name, type: e.initiatorType, ms: Math.round(e.duration)}})))"
