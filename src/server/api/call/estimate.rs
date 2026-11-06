@@ -15,7 +15,7 @@ use crate::server::agent::r#loop::Partial;
 pub(crate) fn context(
     turns: &[Value],
     list: &[Value],
-    running: &Option<Partial>,
+    running: Option<&Partial>,
     baseline: Option<u64>,
 ) -> (Option<u64>, bool) {
     // A lap just landed: its prompt is the context, to the token.

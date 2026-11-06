@@ -12,7 +12,8 @@ A full-screen navigator over the blocks of one conversation: one block, one row.
 | `blocks: BTreeMap<i64, Node>` | what each block says, as the answers carried it |
 | `rows: Vec<Row>` | the projection, rebuilt only when the inputs moved |
 | `selected` / `scroll` | position inside `rows` |
-| `only_user` | `s` keeps user messages only |
+| `only_user` | `Tab` keeps user messages only |
+| `cherish` | `config.ui.tui.zone.tree.cherishYourWords`: Enter and Shift+Enter swap |
 
 `Node` is the projection of one block: its kind in the tree's words, a one-line summary, and the
 body when it is a user message. `Row` adds the geometry the layout computed.
@@ -21,18 +22,33 @@ body when it is a user message. `Row` adds the geometry the layout computed.
 
 `source::rows` walks the structure's ranges, joins each block id with its node (a block the
 window did not carry still gets a row, without a summary), filters `only_user`, then lays the
-result out with `layout::rows`. The geometry is a single fork today.
+result out with `layout::rows`. The geometry is a single fork today. The run covers the whole
+conversation, and the draw scrolls it: the cursor never leaves the screen.
+
+The first build puts the cursor on the newest block; after that it stays where the reader put it.
+
+### Blocks on demand
+
+The structure carries every block id; the contents arrive later. Whatever the screen shows and
+does not hold yet is asked for as closed id ranges, one `call blocks` per screen. Ranges already
+asked for are remembered until the structure changes, so a scroll never repeats a question.
+
+With `only_user` on, a round's first block is kept as a row even before its contents arrive; every
+other row is kept only once it is known to be a user block. So the filter costs no extra fetch.
 
 ### Keys
 
 | key | does |
 |---|---|
 | `↑` / `↓`, `PageUp` / `PageDown`, `Home` / `End` | move |
-| `s` | toggle user messages only |
+| wheel / `Shift+wheel` | one block / ten |
+| `Tab` | toggle user messages only |
 | `Enter` | rewind to the row; `Shift+Enter` focuses it in the transcript instead |
+| `Shift+Enter` | with `cherishYourWords` on, rewinds instead of focusing |
 | `Esc`, `q` | back to `Main` |
 
-Focusing writes `tree.focus` = `turn:block` into the handover memo; `Main` reads it on start.
+Focusing writes `tree.focus` = the block id into the handover memo; `Main` hands it to the
+transcript, which owns the round lookup.
 
 ### Requests
 
@@ -51,4 +67,6 @@ Focusing writes `tree.focus` = `turn:block` into the handover memo; `Main` reads
 
 ## 4. Config fields
 
-None.
+| key | use |
+|---|---|
+| `config.ui.tui.zone.tree.cherishYourWords` | `true` moves rewind to `Shift+Enter` |

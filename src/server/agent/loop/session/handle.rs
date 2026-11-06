@@ -66,6 +66,17 @@ impl Handle {
             .clone()
     }
 
+    /// A turn is opening: the tally of the one before it is spent.
+    pub(crate) fn clear_partial(&self) {
+        *self.partial.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// The model the next request would use, without copying the whole birth.
+    pub(crate) fn model(&self) -> (String, String) {
+        let birth = self.birth.lock().unwrap_or_else(|e| e.into_inner());
+        (birth.provider.clone(), birth.model.clone())
+    }
+
     pub(crate) fn birth(&self) -> Birth {
         self.birth.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }

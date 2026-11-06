@@ -47,13 +47,20 @@ pub(crate) fn apply(
             })?;
         }
         Change::Cwd(path) => {
-            let birth = handle.birth();
-            let base = match handle.live.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            // `/cdp` asks only whether the directory exists; `cd` answers where it may stand.
+            let base = match handle
+                .live
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
                 Some(live) => live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone(),
-                None => birth.cwd.clone().unwrap_or_default(),
+                None => handle.birth().cwd.clone().unwrap_or_default(),
             };
-            let real =
-                crate::server::agent::tools::workspace::resolve_cwd(&base, &path.to_string_lossy())?;
+            let real = crate::server::agent::tools::workspace::resolve_dir(
+                &base,
+                &path.to_string_lossy(),
+            )?;
             if let Some(live) = handle
                 .live
                 .lock()

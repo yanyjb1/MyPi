@@ -23,7 +23,8 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         Ok(landed) => landed,
         Err(e) => {
             let text = format!("{e:#}");
-            api.relay().notice(session, NoticeLevel::Error, text.clone());
+            api.relay()
+                .notice(session, NoticeLevel::Error, text.clone());
             return Err(Refuse::Bad(text));
         }
     };

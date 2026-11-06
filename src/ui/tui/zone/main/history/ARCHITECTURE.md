@@ -8,8 +8,8 @@ What each file holds, who calls it, and what it depends on. Current state only.
 |---|---|---|
 | `mod.rs` | the module list | private |
 | `zone.rs` | `HistoryZone`, its claims, the `SubZone` implementation | public |
-| `display.rs` | `Display`, `Dir`, the window, the scroll, the focus, the align | private |
-| `prefetch.rs` | `Prefetch`, `Laid`, `Origin`, the walk outwards, the piece budget | private |
+| `display.rs` | `Display`, `Dir`, the window, the scroll, the focus, the round step, the align | private |
+| `prefetch.rs` | `Prefetch`, `Laid`, `Origin`, `Anchor`, the walk outwards, the piece budget | private |
 | `local.rs` | `Local`, `Slot`, `SlotKind`, `Level`, `Life` | private |
 | `layout/` | `segment` (source to segments), `line` (`Row`, `Run`, `Ink`, `Lead`), `wrap`, `fold` | private |
 | `product/` | `Products` and the two product kinds: `markdown` (pieces), `card` (rows), `todo` (the checklist) | private |
@@ -36,7 +36,7 @@ HistoryZone
  ├── prep: Prefetch                      ── the laid rows around the sight line
  ├── disp: Display                       ── where the window starts
  ├── todo_panel: TodoPanel               ── the checklist's rows
- └── thinking / tool / fold / scroll_height / placeholder / cwd / usage
+ └── thinking / tool / fold / scroll_height / placeholder / cwd
 ```
 
 - `wire::mod::read_frame` decodes one frame; a closed round hands the tail over and asks for the
@@ -44,7 +44,8 @@ HistoryZone
 - `display::render_rows` refolds when the width moved, takes the window from `prefetch`, and puts
   the checklist under it.
 - `prefetch` walks one piece at a time: `extend_newer` for the growing end (which re-lays the live
-  tail in place), `extend_older` for the past.
+  tail in place), `extend_older` for the past. `head_of` and `anchor_of` turn a block into a row and
+  back, which is all the display layer asks for.
 - `product::Products` is the only place a block is turned into pieces; it keeps `cacheMargin` blocks
   and drops the oldest admission first.
 

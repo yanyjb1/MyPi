@@ -130,10 +130,8 @@ impl Zone for MainZone {
         }
         if let Some(focus) = memo.read("tree.focus") {
             memo.delete("tree.focus");
-            if let Some((turn, block)) = focus.split_once(':')
-                && let (Ok(turn), Ok(block)) = (turn.parse::<i64>(), block.parse::<i64>())
-            {
-                self.history.focus(turn, block);
+            if let Ok(block) = focus.parse::<i64>() {
+                self.history.focus(block);
             }
         }
         self.input.boot();
@@ -193,6 +191,13 @@ impl Zone for MainZone {
             return Vec::new();
         }
         self.read_cwd(frame);
+        // A message the app put out: the transcript hears it on the bus.
+        if frame.is_local()
+            && frame.name == "echo"
+            && let Some(text) = frame.content.get("text").and_then(Value::as_str)
+        {
+            self.shout(name::ECHO, json!({"text": text}));
+        }
         let kind = Kind::of(&frame.class, &frame.name);
         let size = self.term();
         let mut requests = Vec::new();

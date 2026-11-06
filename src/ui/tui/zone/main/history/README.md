@@ -10,7 +10,7 @@ The decisions behind the three layers are recorded in `docs/display-design.md`.
 |---|---|---|
 | product | a block as pieces: segments and their natural lines, colored | nothing but the block |
 | prefetch | the rows laid around the sight line | the width, and the whole piece each row came from |
-| display | where the window starts | the reader |
+| display | which row the window starts on | the reader |
 
 A product is one block's answer to "what am I made of":
 
@@ -39,18 +39,23 @@ The window is a slice of that run. Two states:
 | state | the window | new content |
 |---|---|---|
 | follow (`top` is `None`) | the last rows there are | pushes the top out, the reader stays at the bottom |
-| frozen (`top` is a piece) | starts at the row that piece begins with | lands behind the reader, nothing moves |
+| frozen (`top` is a row) | starts at that row | lands behind the reader, nothing moves |
+
+A frozen window names a row: the block it belongs to and how far into that block's own rows it
+sits. A piece shorter or taller than the window changes nothing; rows are what moves.
 
 A scroll moves the start of the window by `scrollHeight` screen rows, or by a full window for a page.
 Rows already laid are reused; only the rows that walk past either end are laid. A scroll towards the
 newest content that runs out of content goes back to following.
 
 A window is filled before it is placed: a run shorter than the screen is extended towards the older
-content until the screen has its rows, and the start never moves past `rows - screen rows`, so blank
-rows never come after the newest row. A run shorter than the screen keeps its first row at the top.
+content until the screen has its rows. Following keeps its start at `rows - screen rows`, so blank
+rows never come after the newest row. A frozen window keeps the row it names, and may leave blank
+rows below it when there is nothing newer to fill them.
 
-The sight line (`focusLine`, default 3) is where a block's head is put when the reader asks for one,
-and where the anchor for "keep this turn's neighbours in hand" is read.
+The sight line (`focusLine`, default 3, counted from one) is where a block's head is put when the
+reader asks for one: the head lands on that row. It also reads which block the anchor names, so
+"keep this turn's neighbours in hand" asks about the block under the line.
 
 ### Width
 
@@ -109,7 +114,7 @@ row that differs from the handed-over block drops that block's product.
 | `PageUp` / `PageDown` | a window older / newer |
 | `Ctrl+↑` / `Ctrl+↓` | one slot older / newer |
 | wheel | `scrollHeight` rows |
-| `Shift+wheel` | a window |
+| `Shift+wheel` | one round: its first block, put below the sight line |
 
 ### What it shouts
 

@@ -10,7 +10,7 @@ mod route;
 mod semantics;
 mod statusline;
 
-pub use ctx::{Context, Currency, Ctx, Data};
+pub use ctx::{Context, Ctx, Currency, Data};
 
 use super::desk::{Hire, Reply};
 use super::geometry;
@@ -103,8 +103,8 @@ pub struct InputZone {
     term: TermSize,
     /// What the parts read.
     data: Data,
-    /// The workspace to go back to if a `/cdp` is refused.
-    cwd_before: Option<(String, bool)>,
+    /// The name a `/name` asked for, kept until its receipt comes back.
+    pending_name: Option<Option<String>>,
     /// Events this zone puts out.
     shouts: Vec<Shout>,
     /// Frames this zone owes the session.
@@ -134,7 +134,7 @@ impl Default for InputZone {
             booted: false,
             term: TermSize { cols: 80, rows: 24 },
             data: Data::default(),
-            cwd_before: None,
+            pending_name: None,
             shouts: Vec::new(),
             outbox: Vec::new(),
         }
@@ -434,10 +434,6 @@ impl InputZone {
                 } else {
                     self.route_out(&text);
                     self.in_flight = Some(text.clone());
-                    self.shouts.push(Shout::new(
-                        name::ECHO,
-                        serde_json::json!({"text": text, "prefix": null, "suffix": null}),
-                    ));
                     self.history.push(self.editor.text());
                     self.editor.clear();
                     self.finished = true;
@@ -570,7 +566,7 @@ impl InputZone {
     }
 
     /// A write the user just asked for: the widgets follow it at once, and the receipt has
-    /// the last word. A refused move puts the old workspace back.
+    /// the last word.
     fn note_intent(&mut self, request: &Request) {
         match request {
             Request::SwitchModel(id) => {
@@ -579,16 +575,8 @@ impl InputZone {
                 self.model(&address, &mut out);
                 self.outbox.extend(out);
             }
-            Request::SetCwd(path) => {
-                let target = if std::path::Path::new(path).is_absolute() {
-                    std::path::PathBuf::from(path)
-                } else {
-                    std::path::Path::new(&self.data.cwd).join(path)
-                };
-                let target = target.canonicalize().unwrap_or(target);
-                self.cwd_before = Some((self.data.cwd.clone(), self.data.temporary));
-                self.data.cwd = target.to_string_lossy().into_owned();
-                self.data.temporary = false;
+            Request::Rename(name) => {
+                self.pending_name = Some(name.clone());
             }
             _ => {}
         }
@@ -626,6 +614,14 @@ impl InputZone {
             }
             ("post", "cwd") => {
                 self.read_cwd(&frame.content);
+            }
+            ("post", "name") => {
+                let name = self.pending_name.take();
+                if frame.content.get("error").is_none()
+                    && let Some(name) = name
+                {
+                    self.data.name = name;
+                }
             }
             ("post", "switch") => {
                 if frame.content.get("error").is_some() {
@@ -782,25 +778,19 @@ impl InputZone {
         self.data.money.usd = number("usd");
         self.data.context = Context {
             tokens: content.get("context").and_then(Value::as_u64),
-            estimated: content.get("estimated").and_then(Value::as_bool).unwrap_or(false),
+            estimated: content
+                .get("estimated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         };
         self.data.baseline = content.get("baseline_prompt").and_then(Value::as_u64);
     }
 
     /// The write landed: the workspace is the one the server resolved, and everyone hears it.
     fn read_cwd(&mut self, content: &Value) {
-        if content.get("error").is_some() {
-            // The move was refused: the optimistic text never happened.
-            if let Some((cwd, temporary)) = self.cwd_before.take() {
-                self.data.cwd = cwd;
-                self.data.temporary = temporary;
-            }
-            return;
-        }
         let Some(path) = content.get("cwd").and_then(Value::as_str) else {
             return;
         };
-        self.cwd_before = None;
         let content = serde_json::json!({ "path": path, "temporary": false });
         self.hear(name::CWD, &content);
         self.shouts.push(Shout::new(name::CWD, content));
@@ -865,7 +855,7 @@ impl SubZone for InputZone {
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
         self.restart_data();
-        self.cwd_before = None;
+        self.pending_name = None;
         self.data.attached = true;
         self.queue.clear();
         self.in_flight = None;
@@ -879,7 +869,7 @@ impl SubZone for InputZone {
         self.hang = false;
         self.esc_armed = None;
         self.enter_armed = None;
-        self.cwd_before = None;
+        self.pending_name = None;
         self.editor.clear();
         self.history.exit();
         self.finished = true;

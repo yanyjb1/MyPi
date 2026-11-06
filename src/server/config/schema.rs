@@ -47,6 +47,7 @@ keys! {
     KEY_CONFIG_UI_TUI_FX_USD_CNY = "config", "ui.tui.fx", "usdCny", Float, DefaultValue::Float(6.0), "1 USD in CNY, for display only.", true;
     KEY_CONFIG_UI_TUI_FX_CURRENCY = "config", "ui.tui.fx", "currency", Text, DefaultValue::Text("CNY"), "The currency the cost pill counts in: CNY or USD.", true;
     KEY_CONFIG_UI_TUI_DECO_GIT_SCAN = "config", "ui.tui.zone.main.input.deco", "gitScanInterval", Int, DefaultValue::Int(3), "Seconds between git scans of the workspace.", true;
+    KEY_CONFIG_UI_TUI_TREE_CHERISH = "config", "ui.tui.zone.tree", "cherishYourWords", Bool, DefaultValue::Bool(false), "Keep Enter away from rewind: the tree's Enter and Shift+Enter swap when true.", true;
 
     PATTERN_MODELS_PROVIDER_BASE_URL = "models", "provider.<name>", "baseUrl", Text, DefaultValue::Null, "Request root; must be http(s).", true;
     PATTERN_MODELS_PROVIDER_API = "models", "provider.<name>", "api", Text, DefaultValue::Null, "Wire protocol name; the legal set comes from req.", true;

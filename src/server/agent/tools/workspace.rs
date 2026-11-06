@@ -114,6 +114,13 @@ pub(crate) fn canonicalize_lenient(p: &std::path::Path) -> std::path::PathBuf {
 /// A directory the session may stand in: it exists, it is a directory, and
 /// [`may_stand_in`] allows it.
 pub fn resolve_cwd(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBuf> {
+    let real = resolve_dir(cwd, raw)?;
+    may_stand_in(&real)?;
+    Ok(real)
+}
+
+/// A directory that exists and is a directory; where it may stand is another question.
+pub fn resolve_dir(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBuf> {
     anyhow::ensure!(!raw.trim().is_empty(), "empty path");
     let raw = raw.trim();
     let home = crate::server::platform::env::home();
@@ -133,37 +140,57 @@ pub fn resolve_cwd(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBu
         .canonicalize()
         .with_context(|| format!("no such dir: {raw}"))?;
     anyhow::ensure!(real.is_dir(), "not a directory: {raw}");
-    may_stand_in(&real, home.as_deref())?;
     Ok(real)
 }
 
-/// Where a session may stand: not the filesystem root, not a top-level directory (`/tmp`
-/// excepted), not the home directory itself, and nowhere under a system interface. Everything
-/// deeper is fair ground.
-fn may_stand_in(real: &std::path::Path, home: Option<&std::path::Path>) -> Result<()> {
+/// The launch directory `init` was handed: it exists, so only where it may stand is asked, and a
+/// directory it may not stand in becomes the temp dir.
+pub fn launch_dir(raw: &str) -> std::path::PathBuf {
+    let given = std::path::Path::new(raw);
+    let given = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(given)
+    };
+    let real = canonicalize_lenient(&given);
+    match may_stand_in(&real) {
+        Ok(()) => real,
+        Err(_) => canonicalize_lenient(&crate::server::platform::env::temp_dir()),
+    }
+}
+
+/// Where a session may stand: not the filesystem root, not a top-level directory (the temp dir
+/// and everything under it excepted), and not a home directory itself.
+pub fn may_stand_in(real: &std::path::Path) -> Result<()> {
     anyhow::ensure!(!real.as_os_str().is_empty(), "denied: that is no directory");
     let temp = canonicalize_lenient(&crate::server::platform::env::temp_dir());
     if !temp.as_os_str().is_empty() && real.starts_with(&temp) {
         return Ok(());
     }
-    for barred in ["/proc", "/sys", "/dev"] {
+    if let Some(home) = crate::server::platform::env::home().map(|home| canonicalize_lenient(&home))
+        && !home.as_os_str().is_empty()
+    {
         anyhow::ensure!(
-            !real.starts_with(barred),
-            "denied: {barred} is a system interface, not a workspace"
+            real != home,
+            "denied: the home directory itself is not a workspace"
         );
+        // Every home directory under the parent is barred; work below one is fair ground.
+        if let Some(tree) = home.parent()
+            && tree.parent().is_some()
+            && real.starts_with(tree)
+            && real.components().count() <= tree.components().count() + 1
+        {
+            anyhow::bail!(
+                "denied: {} is a home directory; stand inside one instead",
+                real.display()
+            );
+        }
     }
     anyhow::ensure!(
         real.components().count() >= 3,
         "denied: {} is a top-level directory; stand in one of its children",
         real.display()
     );
-    if let Some(home) = home {
-        let home = canonicalize_lenient(home);
-        anyhow::ensure!(
-            home.as_os_str().is_empty() || real != home,
-            "denied: the home directory itself is not a workspace"
-        );
-    }
     Ok(())
 }
 

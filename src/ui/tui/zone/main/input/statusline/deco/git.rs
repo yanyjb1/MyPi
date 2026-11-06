@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use crate::git::GitStatus;
 use crate::ui::tui::zone::main::input::Ctx;
-use crate::ui::tui::zone::main::input::statusline::theme::{Slot, StatusTheme};
 use crate::ui::tui::zone::main::input::statusline::Deco;
+use crate::ui::tui::zone::main::input::statusline::theme::{Slot, StatusTheme};
 
 /// Until the config answers: `config.ui.tui.zone.main.input.deco.gitScanInterval`.
 pub const DEFAULT_SCAN: Duration = Duration::from_secs(3);

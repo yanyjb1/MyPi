@@ -3,8 +3,8 @@
 use ratatui::text::Span;
 use serde_json::Value;
 
-use super::super::theme::{Slot, StatusTheme};
 use super::super::Deco;
+use super::super::theme::{Slot, StatusTheme};
 use crate::ui::tui::zone::main::input::Ctx;
 
 /// Animation frames.

@@ -6,8 +6,8 @@
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
-use super::super::theme::{Slot, StatusTheme};
 use super::super::Deco;
+use super::super::theme::{Slot, StatusTheme};
 use crate::ui::tui::zone::main::input::Ctx;
 
 #[derive(Debug, Default)]

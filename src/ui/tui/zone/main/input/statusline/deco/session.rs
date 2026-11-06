@@ -2,8 +2,8 @@
 
 use ratatui::text::Span;
 
-use super::super::theme::{Slot, StatusTheme};
 use super::super::Deco;
+use super::super::theme::{Slot, StatusTheme};
 use crate::ui::tui::zone::main::input::Ctx;
 
 /// What the pill says before a session has a name.

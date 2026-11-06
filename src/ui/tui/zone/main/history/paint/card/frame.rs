@@ -378,10 +378,11 @@ impl ToolView {
         if let Some(d) = diff {
             let lines = |key: &str| -> Vec<String> {
                 d.get(key)
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|s| s.as_str())
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.get("text").and_then(Value::as_str))
                             .map(String::from)
                             .collect::<Vec<_>>()
                     })

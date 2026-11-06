@@ -11,23 +11,29 @@ use crate::ui::tui::zone::Turns;
 pub fn rows(structure: &Turns, blocks: &BTreeMap<i64, Node>, only_user: bool) -> Vec<Row> {
     // Every shaped block id, with the round that owns it; a block the window did not carry
     // still gets a row, only without a summary.
-    let mut held: BTreeMap<i64, (i64, Option<&Node>)> = BTreeMap::new();
+    let mut held: BTreeMap<i64, (i64, bool, Option<&Node>)> = BTreeMap::new();
     for turn in structure.rounds() {
+        let first = turn.ranges.first().map(|[lo, _]| *lo);
         for [lo, hi] in &turn.ranges {
             for id in *lo..=*hi {
-                held.entry(id).or_insert((turn.id, None));
+                held.entry(id).or_insert((turn.id, Some(id) == first, None));
             }
         }
     }
     for (id, node) in blocks {
-        let turn = held.get(id).map(|(turn, _)| *turn).unwrap_or(0);
-        held.insert(*id, (turn, Some(node)));
+        let (turn, first) = held
+            .get(id)
+            .map(|(turn, first, _)| (*turn, *first))
+            .unwrap_or((0, false));
+        held.insert(*id, (turn, first, Some(node)));
     }
 
     let selected: Vec<(i64, Row)> = held
         .into_iter()
-        .filter(|(_, (_, node))| !only_user || node.is_some_and(|node| node.kind == "user"))
-        .map(|(id, (turn, node))| {
+        .filter(|(_, (_, first, node))| {
+            !only_user || *first || node.is_some_and(|node| node.kind == "user")
+        })
+        .map(|(id, (turn, first, node))| {
             let row = match node {
                 Some(node) => Row {
                     geom: Default::default(),
@@ -45,7 +51,11 @@ pub fn rows(structure: &Turns, blocks: &BTreeMap<i64, Node>, only_user: bool) ->
                     text: format!("block: #{id}"),
                     body: None,
                     fork: 0,
-                    kind: "block".to_string(),
+                    kind: if first {
+                        "user".to_string()
+                    } else {
+                        "block".to_string()
+                    },
                 },
             };
             (id, row)

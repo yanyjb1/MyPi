@@ -22,13 +22,13 @@ pub(super) fn land(session: &mut Session, request: Request) {
         } => session.write_mailbox(prefix.as_deref(), &text, suffix.as_deref()),
         Request::ClearMailbox => session.clear_mailbox(),
         Request::Rename(name) => session.rename(name.as_deref()),
-        Request::SetCwd(path) => session.set_cwd(&path),
         Request::SwitchModel(id) => session.switch_model(&id),
         Request::SetDefaultModel(id) => session.set_default_model(&id),
         Request::Compact { retention, focus } => session.compact(retention, focus.as_deref()),
         Request::Delete(id) => session.delete(id),
         Request::Rewind { turn, block } => session.rewind(turn, block),
         Request::Submit(_)
+        | Request::SetCwd(_)
         | Request::Attach(_)
         | Request::Detach
         | Request::Structure

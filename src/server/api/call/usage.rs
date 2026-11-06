@@ -57,9 +57,7 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
 
     // The running turn is not stored yet: its laps arrive here, priced at the model in use.
     let running = api.ledger().running(session);
-    if let Some(partial) = &running
-        && let Some((provider, model)) = api.ledger().model_of(session)
-    {
+    if let Some((partial, (provider, model))) = &running {
         let tally = groups.entry(format!("{provider}:{model}")).or_default();
         tally.prompt += partial.usage.prompt as i64;
         tally.completion += partial.usage.completion as i64;
@@ -91,7 +89,9 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     let mut rows: Vec<Value> = Vec::with_capacity(groups.len());
     for (address, tally) in &groups {
         let (provider, model) = address.split_once(':').unwrap_or(("", address));
-        let quote = cfg.model_by_id(address).map(|resolved| quote(&resolved, tally, fx));
+        let quote = cfg
+            .model_by_id(address)
+            .map(|resolved| quote(&resolved, tally, fx));
         if let Some(quote) = &quote {
             cny += quote.cny;
             usd += quote.usd;
@@ -125,7 +125,12 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let (context, estimated) = estimate::context(&turns, &list, &running, baseline);
+    let (context, estimated) = estimate::context(
+        &turns,
+        &list,
+        running.as_ref().map(|(partial, _)| partial),
+        baseline,
+    );
 
     Ok(json!({
         "prompt_tokens": prompt,

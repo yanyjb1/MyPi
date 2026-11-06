@@ -145,6 +145,8 @@ pub struct HistoryZone {
     pub(super) products: Products,
     /// The prefetch layer: the laid rows around the sight line.
     pub(super) prep: Prefetch,
+    /// The block the sight line is waiting for, once its slot or its blocks arrive.
+    pub(super) pending_focus: Option<i64>,
     /// The display layer: the window and the scroll.
     pub(super) disp: Display,
     /// The checklist's own product.
@@ -165,8 +167,6 @@ pub struct HistoryZone {
     pub(super) cwd: String,
     /// A fresh attach lays the structure out again.
     pub(super) needs_layout: bool,
-    /// A spot to put the sight line on, once its block has a slot.
-    pub(super) pending_focus: Option<(i64, i64)>,
     /// What this frame owes the session.
     pub(super) outbox: Vec<Request>,
     /// What this frame owes the other zones.
@@ -184,6 +184,7 @@ impl Default for HistoryZone {
             live: Live::default(),
             products: Products::default(),
             prep: Prefetch::default(),
+            pending_focus: None,
             disp: Display::default(),
             todo_panel: TodoPanel::default(),
             todo: Vec::new(),
@@ -195,7 +196,6 @@ impl Default for HistoryZone {
             scroll_height: DEFAULT_SCROLL,
             cwd: String::new(),
             needs_layout: false,
-            pending_focus: None,
             outbox: Vec::new(),
             shouts: Vec::new(),
         };
@@ -207,12 +207,8 @@ impl Default for HistoryZone {
 
 impl HistoryZone {
     /// How far one wheel notch walks.
-    fn walk(&self, shift: bool) -> usize {
-        if shift {
-            usize::from(self.disp.rows())
-        } else {
-            self.scroll_height.max(1)
-        }
+    fn walk(&self) -> usize {
+        self.scroll_height.max(1)
     }
 
     /// A line this front end has to say, on its own slot.
@@ -221,13 +217,27 @@ impl HistoryZone {
         self.local.push_now(SlotKind::Notice { text, level, life });
     }
 
-    /// Put a block under the sight line. The spot waits for the block's slot.
-    pub fn focus(&mut self, turn: i64, block: i64) {
+    /// Put a block under the sight line, asking for its round when it is not here yet.
+    pub fn focus(&mut self, block: i64) {
+        self.pending_focus = Some(block);
+        self.settle_focus();
+    }
+
+    /// Land the pending focus once its block is in hand; ask for its round until then.
+    pub(super) fn settle_focus(&mut self) {
+        let Some(block) = self.pending_focus else {
+            return;
+        };
+        let asked = self.turn_of(block);
         match self.local.num_of(block) {
-            Some(num) => self.focus_num(num),
-            None => {
-                self.pending_focus = Some((turn, block));
-                self.ask_turn(turn);
+            Some(num) if self.blocks.contains_key(&block) => {
+                self.pending_focus = None;
+                self.focus_num(num);
+            }
+            _ => {
+                if let Some(turn) = asked {
+                    self.ask_turn(turn);
+                }
             }
         }
     }
@@ -248,6 +258,7 @@ impl HistoryZone {
         self.todo.clear();
         self.todo_panel.changed();
         self.disp.follow();
+        self.pending_focus = None;
         self.landed = 0;
         self.needs_layout = false;
     }
@@ -274,12 +285,20 @@ impl SubZone for HistoryZone {
 
     fn deliver_action(&mut self, action: &Action) -> bool {
         let handled = match action {
-            Action::ScrollUp { shift } => {
-                self.scroll(Dir::Older, self.walk(*shift));
+            Action::ScrollUp { shift: false } => {
+                self.scroll(Dir::Older, self.walk());
                 true
             }
-            Action::ScrollDown { shift } => {
-                self.scroll(Dir::Newer, self.walk(*shift));
+            Action::ScrollDown { shift: false } => {
+                self.scroll(Dir::Newer, self.walk());
+                true
+            }
+            Action::ScrollUp { shift: true } => {
+                self.turn_step(Dir::Older);
+                true
+            }
+            Action::ScrollDown { shift: true } => {
+                self.turn_step(Dir::Newer);
                 true
             }
             Action::Paste(_) => false,

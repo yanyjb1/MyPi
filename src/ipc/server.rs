@@ -59,8 +59,7 @@ pub fn bind(api: Arc<Api>, db: &Path, endpoint: Endpoint, claim: Claim) -> Resul
         Ok(listener) => listener,
         Err(_) if transport::connect(&endpoint).is_err() => {
             transport::unlink(&endpoint);
-            transport::bind(&endpoint)
-                .with_context(|| format!("cannot listen on {endpoint:?}"))?
+            transport::bind(&endpoint).with_context(|| format!("cannot listen on {endpoint:?}"))?
         }
         Err(e) => return Err(e).with_context(|| format!("cannot listen on {endpoint:?}")),
     };

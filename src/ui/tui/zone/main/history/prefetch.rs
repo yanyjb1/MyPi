@@ -18,6 +18,13 @@ pub(crate) struct Origin {
     pub piece: u32,
 }
 
+/// The window's start: a block, and how many of its own rows sit above the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Anchor {
+    pub num: i64,
+    pub row: usize,
+}
+
 /// One row that is already laid, and where it came from.
 #[derive(Debug, Clone)]
 pub(crate) struct Laid {
@@ -35,6 +42,41 @@ pub(crate) struct Prefetch {
 }
 
 impl HistoryZone {
+    /// This block's first row in the run, laying the block out when the run lost it.
+    pub(super) fn head_of(&mut self, num: i64) -> Option<usize> {
+        if let Some(head) = self.head_in(num) {
+            return Some(head);
+        }
+        self.lay_from(Origin { num, piece: 0 });
+        self.head_in(num)
+    }
+
+    pub(super) fn head_in(&self, num: i64) -> Option<usize> {
+        self.prep.rows.iter().position(|laid| laid.at.num == num)
+    }
+
+    /// The row an anchor names.
+    pub(super) fn index_of(&mut self, at: Anchor) -> Option<usize> {
+        let head = self.head_of(at.num)?;
+        let last = self
+            .prep
+            .rows
+            .iter()
+            .rposition(|laid| laid.at.num == at.num)
+            .unwrap_or(head);
+        Some((head + at.row).min(last))
+    }
+
+    /// The anchor that names a row of the run.
+    pub(super) fn anchor_of(&self, index: usize) -> Option<Anchor> {
+        let num = self.prep.rows.get(index)?.at.num;
+        let head = self.prep.rows.iter().position(|laid| laid.at.num == num)?;
+        Some(Anchor {
+            num,
+            row: index - head,
+        })
+    }
+
     /// The number the growing tail answers to: right after the newest slot.
     pub(super) fn tail_num(&self) -> i64 {
         self.local.newest().map(|num| num + 1).unwrap_or(0)

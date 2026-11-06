@@ -197,11 +197,7 @@ impl Loop {
     }
 
     /// Apply one change; a `Cwd` change answers the directory it landed on.
-    pub fn change(
-        &self,
-        session: i64,
-        change: Change,
-    ) -> Result<Option<std::path::PathBuf>> {
+    pub fn change(&self, session: i64, change: Change) -> Result<Option<std::path::PathBuf>> {
         let handle = self.handle(session)?;
         change::apply(
             &handle,
@@ -216,15 +212,11 @@ impl Loop {
         self.inner.slots.get(session).is_some()
     }
 
-    /// The running turn's partial usage, for a live `usage` answer.
-    pub fn running(&self, session: i64) -> Option<super::handle::Partial> {
-        self.handle(session).ok().and_then(|handle| handle.partial())
-    }
-
-    /// The model the session's next request would use.
-    pub fn model_of(&self, session: i64) -> Option<(String, String)> {
-        let birth = self.handle(session).ok()?.birth();
-        Some((birth.provider, birth.model))
+    /// The running turn's tally and the model it runs on, from one handle.
+    pub fn running(&self, session: i64) -> Option<(super::handle::Partial, (String, String))> {
+        let handle = self.handle(session).ok()?;
+        let partial = handle.partial()?;
+        Some((partial, handle.model()))
     }
 
     fn handle(&self, session: i64) -> Result<Arc<Handle>> {
@@ -336,6 +328,8 @@ fn start_turn(
         bail!("session {} is gone", handle.id);
     }
     handle.stop.store(false, Ordering::Release);
+    // A new turn spends its own tokens; the tally of the one before it is already in the rows.
+    handle.clear_partial();
     let wake = match &start {
         pen::turn::Start::Wake { text } => Some(text.clone()),
         _ => None,

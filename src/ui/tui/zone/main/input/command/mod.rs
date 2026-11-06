@@ -22,24 +22,18 @@ pub use table::{TABLE, lookup, pair, run, split};
 /// Pure: it reads the line and nothing else. A word only shaped like a path still counts —
 /// whether the directory exists is the listing's business, not the hire's.
 pub fn wants(before: &str, word: &str) -> bool {
+    use crate::ui::command::Arg;
     if before.starts_with('/') && !before.contains('\n') {
-        return match argument(before) {
+        return match slot(before) {
             None => true,
-            Some(arg) => matches!(
-                arg,
-                Some(
-                    crate::ui::command::Arg::Path
-                        | crate::ui::command::Arg::Model
-                        | crate::ui::command::Arg::Profile
-                )
-            ),
+            Some(arg) => matches!(arg, Some(Arg::Path | Arg::Model | Arg::Profile)),
         };
     }
     crate::ui::command::path_shaped(word)
 }
 
-/// The argument position the cursor sits in: `None` = the cursor is on the command name.
-fn argument(before: &str) -> Option<Option<crate::ui::command::Arg>> {
+/// The argument kind the cursor sits on; `None` = the cursor is on the command name.
+pub fn slot(before: &str) -> Option<Option<crate::ui::command::Arg>> {
     let index = crate::ui::command::word_index(before);
     if index == 0 {
         return None;

@@ -55,7 +55,8 @@ InputZone
 - `hang` is `command::wants(before, word)`: the same pure rule the completion engine lists by, so
   the hire and the candidates never disagree.
 - `deliver_event` decodes only the frames it named: `call meta`, `call config`, `call usage`,
-  `post cwd`, `post switch`, `stream change`.
+  `post cwd`, `post name`, `post switch`, `stream change`. `/cdp` shows what the receipt names; a
+  `/name` writes the name it asked for once the receipt comes back.
 - `hear` takes `cwd`, `usage`, `tick`, `busy`, `prefill`; the statusline hears the rest. A `usage`
   shout means a request landed: the zone answers it with one `call usage`, the only cost source.
 
@@ -69,7 +70,6 @@ InputZone
 
 ## Not wired
 
-1. `/cdp` renders its target at once; a refusal puts the old workspace back, and a notice says why.
-2. A model switch re-asks the entry; the gauge keeps its count and takes the new window.
-3. The `git` deco scans on the frame that finds it due: one `git status` plus one `git branch`,
+1. A model switch re-asks the entry; the gauge keeps its count and takes the new window.
+2. The `git` deco scans on the frame that finds it due: one `git status` plus one `git branch`,
    tens of milliseconds, once per interval.

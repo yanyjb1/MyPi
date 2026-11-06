@@ -21,11 +21,7 @@ fn workspace(dir: PathBuf) -> PathBuf {
     let barred = home.as_ref().is_some_and(|home| {
         dir == *home || home.parent().is_some_and(|parent| dir.as_path() == parent)
     });
-    if barred {
-        std::env::temp_dir()
-    } else {
-        dir
-    }
+    if barred { std::env::temp_dir() } else { dir }
 }
 
 /// One thing the loop hands the app.
@@ -52,8 +48,8 @@ pub struct App {
     model: Option<ModelId>,
     /// `/profile` before any session: the name travels with the row that opens.
     profile: Option<String>,
-    /// A message sent with no session yet: it goes out once the row exists.
-    waiting: Option<String>,
+    /// The message whose opening `init` is in flight; it goes out as soon as the row answers.
+    opening: Option<String>,
     /// The session each zone has last been told about; a zone hears it once.
     pub(super) told: Vec<Option<i64>>,
     finished: bool,
@@ -79,7 +75,7 @@ impl App {
             cwd: workspace(startup.cwd),
             model: startup.model,
             profile: None,
-            waiting: None,
+            opening: None,
             told,
             finished: false,
         };
@@ -271,14 +267,21 @@ impl App {
         self.cwd = workspace(target);
     }
 
-    /// A message with no session yet: the row comes first, the text after it.
+    /// A message: the row comes first when there is none, then the text, then its echo.
     fn submit(&mut self, text: String) {
         if self.session.attached().is_none() {
-            self.waiting = Some(text);
+            self.opening = Some(text);
             self.create();
             return;
         }
         self.session.submit(&text);
+        self.echo(&text);
+    }
+
+    /// A message just went out: the transcript draws it before the round answers.
+    fn echo(&mut self, text: &str) {
+        let frame = Frame::new("local", "echo", json!({"text": text}));
+        self.deliver(&frame);
     }
 
     /// `/profile` before any session: the name stays in this front end until the row opens.
@@ -294,7 +297,7 @@ impl App {
         self.memo.write("cwd", &self.cwd.to_string_lossy());
     }
 
-    /// Create the session a waiting message needs; a profile picked earlier travels with it.
+    /// Create the row an opening message needs; a profile picked earlier travels with it.
     fn create(&mut self) {
         let model = self.model.as_ref().map(|id| {
             json!({
@@ -311,13 +314,13 @@ impl App {
         self.session.send("post", "init", content, true);
     }
 
-    /// The row exists: enter it, then send the message that was waiting for it.
+    /// The row exists: enter it, then send the message that opened it.
     fn created(&mut self, frame: &Frame) {
         if self.attached.is_some() {
             return;
         }
         if frame.content.get("error").is_some() {
-            self.waiting = None;
+            self.opening = None;
             return;
         }
         let Some(id) = frame.content.get("session").and_then(Value::as_i64) else {
@@ -325,8 +328,9 @@ impl App {
         };
         self.profile = None;
         self.attach(id);
-        if let Some(text) = self.waiting.take() {
+        if let Some(text) = self.opening.take() {
             self.session.submit(&text);
+            self.echo(&text);
         }
     }
 

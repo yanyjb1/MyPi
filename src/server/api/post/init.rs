@@ -1,7 +1,5 @@
 //! `init` — the session row, its request archive, and the loop's booking.
 
-use std::path::PathBuf;
-
 use anyhow::Result;
 use serde_json::{Value, json};
 
@@ -14,7 +12,9 @@ use crate::server::storage::{Ref, RequestMeta, Row, Submit};
 use super::emit;
 
 pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result<Value, Refuse> {
-    let cwd = str_of(ask, "cwd")?.to_string();
+    // The launch directory exists; only where it may stand is asked, and a barred one lands in
+    // the temp dir.
+    let cwd = crate::server::agent::tools::workspace::launch_dir(str_of(ask, "cwd")?);
     let name = opt_str_of(ask, "name")?.map(str::to_string);
     let profile = opt_str_of(ask, "profile")?.map(str::to_string);
     let stated = match ask.get("model") {
@@ -51,7 +51,7 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
             },
             Row::Session {
                 started_at: crate::server::platform::time::now_stamp(),
-                cwd: cwd.clone(),
+                cwd: cwd.to_string_lossy().into_owned(),
                 model: Some((provider.clone(), model.clone())),
                 name,
                 anchor: None,
@@ -73,7 +73,7 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
         tools,
         compact: resolved.compact_instruction,
         meta: Some(archive),
-        cwd: Some(PathBuf::from(&cwd)),
+        cwd: Some(cwd),
     })?;
     Ok(json!({"session": session}))
 }

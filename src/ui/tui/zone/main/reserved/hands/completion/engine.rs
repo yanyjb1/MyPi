@@ -147,27 +147,23 @@ fn command_line(
     look: &Look,
     scan: &mut Scan,
 ) -> (Vec<Completion>, bool, usize) {
-    let index = word_index(before);
-    if index == 0 {
+    if word_index(before) == 0 {
         return (command_items(word), false, command_total());
     }
-    let Some(meta) = before.split_whitespace().next().and_then(|name| command::lookup(name)) else {
-        return (Vec::new(), false, 0);
-    };
-    match meta.arg(index - 1) {
-        Some(Arg::Model) => {
+    match command::slot(before) {
+        Some(Some(Arg::Model)) => {
             let names = pools(look, true);
             (name_items(names, word), true, names.len())
         }
-        Some(Arg::Profile) => {
+        Some(Some(Arg::Profile)) => {
             let names = pools(look, false);
             (name_items(names, word), true, names.len())
         }
-        Some(Arg::Path) => {
+        Some(Some(Arg::Path)) => {
             let (items, total) = path_items(word, look, scan, true);
             (items, false, total)
         }
-        Some(Arg::Number | Arg::Text) | None => (Vec::new(), false, 0),
+        Some(Some(Arg::Number | Arg::Text) | None) | None => (Vec::new(), false, 0),
     }
 }
 

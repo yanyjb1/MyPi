@@ -219,8 +219,8 @@ impl HistoryZone {
             }
             self.local.kill_short_lived();
             self.local.push_now(SlotKind::Block(id));
-            self.products.drop_block(id);
         }
+        self.settle_focus();
     }
 
     /// The checklist, as one flat list.
@@ -295,12 +295,7 @@ impl HistoryZone {
         } else {
             self.drop_unowned();
         }
-        if let Some((_, block)) = self.pending_focus
-            && let Some(num) = self.local.num_of(block)
-        {
-            self.pending_focus = None;
-            self.focus_num(num);
-        }
+        self.settle_focus();
         self.ensure_around();
     }
 

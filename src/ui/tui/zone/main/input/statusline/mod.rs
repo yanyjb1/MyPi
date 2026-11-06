@@ -6,7 +6,6 @@ mod theme;
 
 pub use theme::StatusTheme;
 
-
 use ratatui::text::Line;
 
 use serde_json::Value;
