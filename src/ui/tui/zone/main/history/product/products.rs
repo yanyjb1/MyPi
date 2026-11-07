@@ -73,10 +73,10 @@ impl Products {
     fn trim(&mut self) {
         while self.blocks.len() > self.margin {
             let victim = self
-                .order
-                .iter()
-                .min_by_key(|(_, stamp)| **stamp)
-                .map(|(id, _)| *id);
+                .blocks
+                .keys()
+                .min_by_key(|id| (self.order.get(*id).copied().unwrap_or(0), **id))
+                .copied();
             let Some(id) = victim else { break };
             self.drop_block(id);
         }

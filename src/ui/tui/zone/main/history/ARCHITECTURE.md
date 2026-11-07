@@ -7,57 +7,57 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | path | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list | private |
-| `zone.rs` | `HistoryZone`, its claims, the `SubZone` implementation | public |
-| `display.rs` | `Display`, `Dir`, the window, the scroll, the focus, the round step, the align | private |
-| `prefetch.rs` | `Prefetch`, `Laid`, `Origin`, `Anchor`, the walk outwards, the piece budget | private |
-| `local.rs` | `Local`, `Slot`, `SlotKind`, `Level`, `Life` | private |
-| `layout/` | `segment` (source to segments), `line` (`Row`, `Run`, `Ink`, `Lead`), `wrap`, `fold` | private |
-| `product/` | `Products` and the two product kinds: `markdown` (pieces), `card` (rows), `todo` (the checklist) | private |
-| `wire/` | `mod` (frame dispatch, busy on, idle on the snapshot), `decode` (block rows), `ask` (blocks on demand), `live` (the growing tail), `transfer` (the handover) | private |
-| `paint/` | how one block is drawn: prose, code, table, notice, user, cards | private |
-| `paint/card/` | `frame` (the renderer contract, dispatch, the card frame), one file per tool family: `bash`, `edit`, `file`, `todo`, `web`, `alias`, `memo`, `context`, `kairos`, `mcp`, `task`, `draft`, `fallback`, and `tree` for the branch rows | private |
+| `zone.rs` | `HistoryZone`, its claims, the `SubZone` implementation, the `Pane` implementation | public |
+| `wire.rs` | frame dispatch: content to the local section, the checklist to its product, config to each part | private |
+| `row.rs` | `Row`, `Run`, `Ink`, `Lead`, and how a color slot becomes a terminal style | private |
+| `markdown.rs` | markdown to runs: headings, lists, quotes, inline emphasis | private |
+| `display.rs` | laid rows to screen lines | private |
+| `local/` | `section` (`Local`, `Idx`), `slot` (`Slot`, `SlotKind`, `Level`, `Life`), `content` (`Block`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
+| `product/` | `products` (the cache), `segment` (source to segments), `text`, `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `card` | private |
+| `product/card/` | `frame` (dispatch, the card frame, the renderer contract), one file per tool family | private |
+| `prefetch/` | `run` (the laid segments), `range` (the start and the budget), `segment` (`SegId`, `Laid`), `trim`, `walk`, `color` | private |
 
 ## What it talks to
 
-- **Calls**: `ui::tui::zone` for the contract, `ui::tui::theme` for the fixed palette and the accent,
-  `ui::tui::TodoFold`, `ui::tui::action`.
-- **Asks the session for**: `call init`, `call blocks`, `call config`, `call usage`, `call todo` and
-  the structural window, all through `Request` values its host drains.
+- **Calls**: `ui::tui::zone` for the contract (`Frame`, `Request`, `Shout`, `Turns`, `Claim`),
+  `ui::tui::theme` for the fixed palette and the accent, `ui::tui::TodoFold`,
+  `ui::tui::action` for keys and wheel, `ui::tui::text` for display width.
+- **Asks the session for**: `call init`, `call blocks`, `call config`, `call usage`, `call todo`,
+  and the structural window, all through `Request` values its host drains.
 - **Does not know**: the app, the socket, the database, the agent loop, the picker.
 
 ## Inside
 
 ```text
 HistoryZone
- ├── blocks: BTreeMap<i64, Block>        ── what the wire sent
- ├── local: Local                        ── the numbered slots
- ├── live: Live                          ── the tail still growing
- ├── products: Products                  ── block → pieces, `cacheMargin` of them
- ├── prep: Prefetch                      ── the laid rows around the sight line
- ├── disp: Display                       ── where the window starts
- ├── todo_panel: TodoPanel               ── the checklist's rows
- └── thinking / tool / fold / scroll_height / placeholder / cwd
+ ├── local: Local               ── positions and the blocks behind them
+ ├── products: Products         ── block id to segments or rows, `cacheMargin` of them
+ ├── run: Run                   ── the laid segments, in render order
+ ├── range: Range               ── `Latest` or one fixed place, plus the screen height
+ ├── todo_panel: TodoPanel      ── the checklist's rows
+ └── thinking / tool / fold / scroll_height / focus_line / placeholder / cwd
 ```
 
-- `wire::mod::read_frame` decodes one frame; a closed round hands the tail over and asks for the
-  missing blocks.
-- `display::render_rows` refolds when the width moved, takes the window from `prefetch`, and puts
-  the checklist under it.
-- `prefetch` walks one piece at a time: `extend_newer` for the growing end (which re-lays the live
-  tail in place), `extend_older` for the past. `head_of` and `anchor_of` turn a block into a row and
-  back, which is all the display layer asks for.
-- `product::Products` is the only place a block is turned into pieces; it keeps `cacheMargin` blocks
-  and drops the oldest admission first.
+- `wire::read_frame` decodes one frame. A piece appends to the running entry and re-lays only that
+  entry's last segment. A round close hands the entries over; the run starts again.
+- `zone::render_rows` spends the budget from `range`, draws the checklist under the transcript, and
+  reports any block whose content is missing.
+- `Range::rows` walks forward from the start, laying segments as it goes; `Range::scroll` moves the
+  start and reports missing content along the way.
+- `Run` keeps whole segments only: `place` lays one, `touch` re-lays a growing entry's tail,
+  `forget` drops one position's rows, `trim` keeps what the screen and its slack cover.
+- `Products` is the only place a block becomes segments or rows; it keeps `cacheMargin` blocks and
+  drops the oldest admission first.
 
 ## Must stay in sync
 
-1. `wire::decode::Kind` and `paint/` plus `product/`: a new block kind needs a product and a painter.
-2. `product::Piece` and `prefetch`: a new piece kind needs a way to be laid.
-3. `layout::segment::Kind` and `product::markdown`: a new segment kind needs a painter.
-4. The config key names and `zone::CONFIG_KEYS` plus `wire::mod::read_config`.
-5. `local::SlotKind` and `prefetch::piece_count` / `layer_piece`: a new slot kind needs both.
-6. A tool's memo shape and its `paint/card/` file: the renderer draws what the memo carries, or the
-   result text when the tool hands back no memo.
+1. `local::content::Kind` and `product::products::of`: a new block kind needs a product.
+2. `product::segment::Kind` and `prefetch::color`: a new segment kind needs a painter.
+3. The config key names and `zone::CONFIG_KEYS` plus `wire::read_config`.
+4. `SlotKind` and `Run::shape`: a new slot kind needs a shape.
+5. A tool's memo shape and its `product/card/` file: the renderer draws what the memo carries, or
+   the result text when the tool hands back no memo.
+6. `Range::scroll` and the wheel bindings in `zone::deliver_action`.
 
 ## Not wired
 

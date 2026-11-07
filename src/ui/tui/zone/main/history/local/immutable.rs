@@ -29,8 +29,8 @@ impl Immutable {
         num
     }
 
-    /// A short-lived line dies: its slot keeps its number and draws nothing.
-    pub fn kill_short_lived(&mut self) {
+    /// A short line expires: its slot keeps its number and draws nothing.
+    pub fn kill_short(&mut self) {
         for slot in self.past.iter_mut().chain(self.now.iter_mut()) {
             if let SlotKind::Notice {
                 life: super::slot::Life::Short,

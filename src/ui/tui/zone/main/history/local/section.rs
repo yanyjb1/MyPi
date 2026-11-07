@@ -13,22 +13,28 @@ pub enum Idx {
     /// A block of the finished conversation: -N..-1, then 0..M.
     Fixed(i64),
     /// A block of the running turn, by position; it moves as the turn grows.
-    Live(u32),
+    Turn(u32),
 }
 
 /// The whole conversation, in render order, and the content behind it.
 #[derive(Default)]
 pub struct Local {
     fixed: Immutable,
-    live: Mutable,
+    running: Mutable,
     blocks: BTreeMap<i64, Block>,
 }
 
 impl Local {
     pub fn clear(&mut self) {
         self.fixed.clear();
-        self.live.clear();
+        self.running.clear();
         self.blocks.clear();
+    }
+
+    /// Render order goes; the content already in hand stays.
+    pub fn reset_positions(&mut self) {
+        self.fixed.clear();
+        self.running.clear();
     }
 
     /// One finished block, appended above zero.
@@ -43,14 +49,23 @@ impl Local {
         Idx::Fixed(self.fixed.append_older(SlotKind::Block(id)))
     }
 
-    /// A line only this front end has to say.
+    /// A line only this front end has to say: it waits at the end of the running turn.
     pub fn notice(&mut self, text: String, level: Level, life: Life) -> Idx {
-        self.fixed.kill_short_lived();
+        if !self.running.is_empty() {
+            self.running.notice(text, level, life);
+            return Idx::Turn((self.running.len() - 1) as u32);
+        }
+        self.fixed.kill_short();
         Idx::Fixed(self.fixed.append(SlotKind::Notice { text, level, life }))
     }
 
-    pub fn kill_short_lived(&mut self) {
-        self.fixed.kill_short_lived();
+    /// A notice that waits past the turn it arrived in.
+    pub fn append_notice(&mut self, text: String, level: Level, life: Life) -> Idx {
+        Idx::Fixed(self.fixed.append(SlotKind::Notice { text, level, life }))
+    }
+
+    pub fn kill_short(&mut self) {
+        self.fixed.kill_short();
     }
 
     /// A rewind: the position keeps its number and draws nothing.
@@ -72,14 +87,14 @@ impl Local {
                 SlotKind::Block(id) => self.blocks.get(&id),
                 _ => None,
             },
-            Idx::Live(at) => self.live.get(at as usize),
+            Idx::Turn(at) => self.running.block(at as usize),
         }
     }
 
     pub fn slot(&self, idx: Idx) -> Option<&Slot> {
         match idx {
             Idx::Fixed(num) => self.fixed.at(num),
-            Idx::Live(_) => None,
+            Idx::Turn(_) => None,
         }
     }
 
@@ -95,7 +110,7 @@ impl Local {
                 SlotKind::Block(id) => self.blocks.get(&id),
                 _ => None,
             },
-            Idx::Live(at) => self.live.get(at as usize + 1),
+            Idx::Turn(at) => self.running.block(at as usize + 1),
         }
     }
 
@@ -168,11 +183,11 @@ impl Local {
             .and_then(|block| block.content.clone().or_else(|| block.text.clone()))
     }
 
-    pub fn live(&self) -> &Mutable {
-        &self.live
+    pub fn running(&self) -> &Mutable {
+        &self.running
     }
 
-    pub fn live_mut(&mut self) -> &mut Mutable {
-        &mut self.live
+    pub fn running_mut(&mut self) -> &mut Mutable {
+        &mut self.running
     }
 }

@@ -1,20 +1,28 @@
-//! The prefetch layer: the laid segments around the sight line.
+//! The run: one contiguous stretch of laid segments, whole segments in and out.
 
 use std::collections::VecDeque;
 
 use super::super::local::content::Block;
+use super::super::local::mutable::Entry;
 use super::super::local::section::{Idx, Local};
 use super::super::local::slot::SlotKind;
-use super::super::product::{self, Opts, Products};
+use super::super::product::{self, Opts, Product, Products};
 use super::super::row::Row;
-use super::segment::{At, Laid};
-use super::walk;
+use super::segment::{Laid, SegId};
 
-/// What one position hands over: whole rows, or segments to color.
+/// What one position hands over.
 enum Shape {
     Rows(Vec<Row>),
     Segs(Vec<product::Segment>, bool),
+    Missing(i64),
     Dead,
+}
+
+/// What placing one segment did.
+pub enum Placed {
+    Laid,
+    Empty,
+    Missing(i64),
 }
 
 /// The run of laid segments, and the width it was laid at.
@@ -43,7 +51,7 @@ impl Run {
         self.segs.clear();
     }
 
-    /// Rows in the run; the gap after each segment is one of them.
+    /// Rows in the run; a gap row is one of them.
     pub fn len(&self) -> usize {
         self.segs.iter().map(|laid| laid.rows.len()).sum()
     }
@@ -60,11 +68,20 @@ impl Run {
         None
     }
 
-    /// The run index of a slot's first content row.
-    pub fn head(&self, idx: Idx) -> Option<usize> {
+    /// The run row where this position's first row sits, laying from it when it is absent.
+    pub fn head(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        idx: Idx,
+    ) -> Option<usize> {
+        if !self.has(idx) {
+            self.place(local, products, opts, SegId { idx, piece: 0 });
+        }
         let mut at = 0usize;
         for laid in &self.segs {
-            if laid.idx == idx {
+            if laid.id.idx == idx && laid.id.piece == 0 {
                 return Some(at);
             }
             at += laid.rows.len();
@@ -72,293 +89,335 @@ impl Run {
         None
     }
 
-    /// The run index a place names.
-    pub fn index_of(&self, at: At) -> Option<usize> {
-        let mut base = 0usize;
+    /// The run row this place names, when the segment is laid.
+    pub fn index_of(&self, id: SegId, row: usize) -> Option<usize> {
+        let mut at = 0usize;
         for laid in &self.segs {
-            if laid.idx == at.idx && laid.piece == at.piece {
+            if laid.id == id {
                 let last = laid.rows.len().saturating_sub(1);
-                return Some(base + at.row.min(last));
+                return Some(at + row.min(last));
             }
-            base += laid.rows.len();
+            at += laid.rows.len();
         }
         None
     }
 
-    /// The place a run index names.
-    pub fn at_of(&self, index: usize) -> Option<At> {
-        let mut base = 0usize;
+    /// The place a run row names.
+    pub fn at(&self, index: usize) -> Option<(SegId, usize)> {
+        let mut at = 0usize;
         for laid in &self.segs {
-            let end = base + laid.rows.len();
+            let end = at + laid.rows.len();
             if index < end {
-                return Some(At {
-                    idx: laid.idx,
-                    piece: laid.piece,
-                    row: index - base,
-                });
+                return Some((laid.id, index - at));
             }
-            base = end;
+            at = end;
         }
         None
     }
 
-    /// One more segment on the newer end: the growing one is re-laid, new ones follow.
-    pub fn extend_newer(&mut self, local: &Local, products: &mut Products, opts: &Opts) -> bool {
-        let Some(last) = self.segs.back() else {
-            return self.start(local, products, opts);
-        };
-        let (idx, piece) = (last.idx, last.piece);
-        if last.open {
-            let (rows, open) = self
-                .lay(local, products, opts, idx, piece)
-                .unwrap_or_default();
-            if self.segs.back().is_some_and(|laid| laid.rows != rows) {
-                let Some(back) = self.segs.back_mut() else {
-                    return false;
-                };
-                back.rows = rows;
-                back.open = open;
-                return true;
-            }
-            return false;
-        }
-        let mut cursor = (idx, piece);
+    /// The newest segment that has rows, laying nothing.
+    pub fn newest(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+    ) -> Option<SegId> {
+        let mut idx = last_index(local)?;
         loop {
-            let Some((next, count)) = self.step_newer(local, products, opts, cursor.0, cursor.1)
-            else {
-                return false;
-            };
-            if next.1 >= count {
-                return false;
-            }
-            cursor = next;
-            if let Some((rows, open)) = self.lay(local, products, opts, cursor.0, cursor.1) {
-                self.push_back(Laid {
-                    idx: cursor.0,
-                    piece: cursor.1,
-                    rows,
-                    open,
+            let count = self.count(local, products, opts, idx);
+            if count > 0 {
+                return Some(SegId {
+                    idx,
+                    piece: count - 1,
                 });
-                return true;
             }
+            idx = walk::older(local, idx)?;
         }
     }
 
-    /// One more segment on the older end.
-    pub fn extend_older(&mut self, local: &Local, products: &mut Products, opts: &Opts) -> bool {
-        let Some(first) = self.segs.front() else {
-            return self.start(local, products, opts);
-        };
-        let (idx, piece) = (first.idx, first.piece);
-        let mut cursor = (idx, piece);
+    /// The segment after this one, and how many it has with rows left.
+    pub fn next(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        id: SegId,
+    ) -> Option<SegId> {
+        let count = self.count(local, products, opts, id.idx);
+        if id.piece + 1 < count {
+            return Some(SegId {
+                idx: id.idx,
+                piece: id.piece + 1,
+            });
+        }
+        let mut idx = walk::newer(local, id.idx)?;
         loop {
-            let Some((prev, _)) = self.step_older(local, products, opts, cursor.0, cursor.1) else {
-                return false;
-            };
-            cursor = prev;
-            if let Some((rows, open)) = self.lay(local, products, opts, cursor.0, cursor.1) {
-                self.push_front(Laid {
-                    idx: cursor.0,
-                    piece: cursor.1,
-                    rows,
-                    open,
-                });
-                return true;
+            if self.count(local, products, opts, idx) > 0 {
+                return Some(SegId { idx, piece: 0 });
             }
+            idx = walk::newer(local, idx)?;
         }
     }
 
-    /// No segment is laid: begin at the newest one there is.
-    fn start(&mut self, local: &Local, products: &mut Products, opts: &Opts) -> bool {
-        let Some(idx) = local.newest().map(Idx::Fixed) else {
-            return self.start_live(local, products, opts);
-        };
-        self.lay_from(local, products, opts, idx);
-        if self.segs.is_empty() {
-            return self.start_live(local, products, opts);
+    /// The segment before this one.
+    pub fn prev(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        id: SegId,
+    ) -> Option<SegId> {
+        if id.piece > 0 {
+            return Some(SegId {
+                idx: id.idx,
+                piece: id.piece - 1,
+            });
         }
-        true
-    }
-
-    /// A conversation with nothing finished yet: start at the running turn.
-    fn start_live(&mut self, local: &Local, products: &mut Products, opts: &Opts) -> bool {
-        if local.live().is_empty() {
-            return false;
-        }
-        self.lay_from(local, products, opts, Idx::Live(0));
-        !self.segs.is_empty()
-    }
-
-    /// Lay from this slot's first segment on, forwards.
-    pub fn lay_from(&mut self, local: &Local, products: &mut Products, opts: &Opts, idx: Idx) {
-        self.segs.clear();
-        let mut cursor = (idx, 0usize);
+        let mut idx = walk::older(local, id.idx)?;
         loop {
-            if let Some((rows, open)) = self.lay(local, products, opts, cursor.0, cursor.1) {
-                self.push_back(Laid {
-                    idx: cursor.0,
-                    piece: cursor.1,
-                    rows,
-                    open,
+            let count = self.count(local, products, opts, idx);
+            if count > 0 {
+                return Some(SegId {
+                    idx,
+                    piece: count - 1,
                 });
-                return;
             }
-            let Some((next, count)) = self.step_newer(local, products, opts, cursor.0, cursor.1)
-            else {
-                return;
-            };
-            if next.1 >= count {
-                return;
-            }
-            cursor = next;
+            idx = walk::older(local, idx)?;
         }
     }
 
-    /// Keep the segments the window needs, whole.
+    /// One content arrival: only the tail segment of that position is laid again.
+    pub fn touch(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        idx: Idx,
+    ) -> Vec<i64> {
+        let count = self.count(local, products, opts, idx);
+        let mut tail = 0usize;
+        for (at, laid) in self.segs.iter().enumerate() {
+            if laid.id.idx == idx {
+                tail = at;
+            }
+        }
+        let Some(laid) = self.segs.get(tail) else {
+            return Vec::new();
+        };
+        if laid.id.idx != idx {
+            return Vec::new();
+        }
+        let from = laid.id.piece;
+        while self
+            .segs
+            .get(tail)
+            .is_some_and(|laid| laid.id.idx == idx && laid.id.piece >= from)
+        {
+            self.segs.remove(tail);
+        }
+        let mut missing = Vec::new();
+        let mut cursor = Some(SegId { idx, piece: from });
+        while let Some(id) = cursor {
+            if id.piece >= count {
+                break;
+            }
+            let (rows, gone) = self.lay(local, products, opts, id);
+            missing.extend(gone);
+            if !rows.is_empty() {
+                self.insert(Laid { id, rows });
+            }
+            cursor = if id.piece + 1 < count {
+                Some(SegId {
+                    idx,
+                    piece: id.piece + 1,
+                })
+            } else {
+                None
+            };
+        }
+        missing
+    }
+
+    /// Lay this segment into the run.
+    pub fn place(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        id: SegId,
+    ) -> Placed {
+        if self.segs.iter().any(|laid| laid.id == id) {
+            return Placed::Laid;
+        }
+        let (rows, missing) = self.lay(local, products, opts, id);
+        if let Some(block) = missing.first() {
+            return Placed::Missing(*block);
+        }
+        if rows.is_empty() {
+            return Placed::Empty;
+        }
+        self.insert(Laid { id, rows });
+        Placed::Laid
+    }
+
+    /// One position's rows go, wherever they sit: its content changed.
+    pub fn forget(&mut self, idx: Idx) {
+        self.segs.retain(|laid| laid.id.idx != idx);
+    }
+
+    /// Keep the rows between these two run rows, plus one segment of slack on each side.
     pub fn trim(&mut self, from: usize, to: usize) {
         super::trim::trim(&mut self.segs, from, to);
     }
 
-    /// Drop a slot's rows, wherever they sit.
-    pub fn forget(&mut self, idx: Idx) {
-        self.segs.retain(|laid| laid.idx != idx);
+    /// The rows of one laid segment.
+    pub fn laid(&self, id: SegId) -> Option<&Laid> {
+        self.segs.iter().find(|laid| laid.id == id)
     }
 
-    fn push_back(&mut self, mut laid: Laid) {
-        if !laid.rows.is_empty() {
-            laid.rows.push(Row::blank());
-        }
-        self.segs.push_back(laid);
+    fn has(&self, idx: Idx) -> bool {
+        self.segs.iter().any(|laid| laid.id.idx == idx)
     }
 
-    fn push_front(&mut self, mut laid: Laid) {
-        if !laid.rows.is_empty() {
-            laid.rows.push(Row::blank());
-        }
-        self.segs.push_front(laid);
+    fn insert(&mut self, laid: Laid) {
+        let at = self
+            .segs
+            .iter()
+            .position(|other| rank(other.id) > rank(laid.id))
+            .unwrap_or(self.segs.len());
+        self.segs.insert(at, laid);
     }
 
-    /// One segment's rows, and whether it can still grow.
+    /// One segment's rows, the gap after it included; and the block ids it lacks.
     fn lay(
         &mut self,
         local: &Local,
         products: &mut Products,
-        opts: &Opts,
-        idx: Idx,
-        piece: usize,
-    ) -> Option<(Vec<Row>, bool)> {
-        let shape = shape(local, products, opts, idx, self.width())?;
-        match shape {
-            Shape::Rows(rows) => (piece == 0).then_some((rows, matches!(idx, Idx::Live(_)))),
-            Shape::Segs(segs, thinking) => {
-                let seg = segs.get(piece)?;
-                let rows = super::color::rows(seg, self.width(), thinking);
-                let open = piece + 1 == segs.len() && matches!(idx, Idx::Live(_));
-                Some((rows, open))
-            }
-            Shape::Dead => None,
-        }
-    }
-
-    /// The next (segment, count) inside the slot, or the next non-empty slot.
-    fn step_newer(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts,
-        idx: Idx,
-        piece: usize,
-    ) -> Option<((Idx, usize), usize)> {
-        let count = self.count(local, products, opts, idx);
-        if piece + 1 < count {
-            return Some(((idx, piece + 1), count));
-        }
-        let mut cursor = walk::newer(local, idx);
-        while let Some(next) = cursor {
-            let count = self.count(local, products, opts, next);
-            if count > 0 {
-                return Some(((next, 0), count));
-            }
-            cursor = walk::newer(local, next);
-        }
-        None
-    }
-
-    fn step_older(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts,
-        idx: Idx,
-        piece: usize,
-    ) -> Option<((Idx, usize), usize)> {
-        if piece > 0 {
-            return Some(((idx, piece - 1), 0));
-        }
-        let mut cursor = walk::older(local, idx);
-        while let Some(prev) = cursor {
-            let count = self.count(local, products, opts, prev);
-            if count > 0 {
-                return Some(((prev, count - 1), count));
-            }
-            cursor = walk::older(local, prev);
-        }
-        None
-    }
-
-    fn count(&mut self, local: &Local, products: &mut Products, opts: &Opts, idx: Idx) -> usize {
-        match shape(local, products, opts, idx, self.width()) {
-            Some(Shape::Rows(_)) => 1,
-            Some(Shape::Segs(segs, _)) => segs.len(),
-            _ => 0,
-        }
-    }
-}
-
-/// What one position hands over, at this width.
-fn shape(
-    local: &Local,
-    products: &mut Products,
-    opts: &Opts,
-    idx: Idx,
-    width: usize,
-) -> Option<Shape> {
-    match idx {
-        Idx::Live(at) => {
-            let block = local.live().get(at as usize)?;
-            let paired = local.live().get(at as usize + 1);
-            Some(live_shape(block, paired, opts, width))
-        }
-        Idx::Fixed(num) => match &local.slot(Idx::Fixed(num))?.kind {
-            SlotKind::Notice { text, level, .. } => {
-                Some(Shape::Rows(product::notice_rows(text, *level)))
-            }
-            SlotKind::Next => Some(Shape::Dead),
-            SlotKind::Block(id) => {
-                let block = local.block(Idx::Fixed(num))?;
-                let paired = local
-                    .next_block(Idx::Fixed(num))
-                    .filter(|next| block.answers(next));
-                let product = products.get(*id, || product::of(block, paired, opts, width));
-                match product {
-                    product::Product::Text(segs) => Some(Shape::Segs(
-                        segs.clone(),
-                        block.kind == super::super::local::content::Kind::Reasoning,
-                    )),
-                    product::Product::Fixed(rows) => Some(Shape::Rows(rows.clone())),
+        opts: &Opts<'_>,
+        id: SegId,
+    ) -> (Vec<Row>, Vec<i64>) {
+        match self.shape(local, products, opts, id.idx) {
+            Some(Shape::Rows(rows)) => {
+                if id.piece > 0 {
+                    return (Vec::new(), Vec::new());
                 }
+                (with_gap(rows), Vec::new())
             }
-        },
+            Some(Shape::Segs(segs, thinking)) => {
+                let Some(seg) = segs.get(id.piece) else {
+                    return (Vec::new(), Vec::new());
+                };
+                let rows = super::color::rows(seg, self.width(), thinking);
+                (with_gap(rows), Vec::new())
+            }
+            Some(Shape::Missing(block)) => (
+                with_gap(vec![Row::text(
+                    super::super::row::Lead::None,
+                    "…",
+                    Some(super::super::row::Ink::Fixed(
+                        crate::ui::tui::theme::fixed::SYSTEM,
+                    )),
+                )]),
+                vec![block],
+            ),
+            Some(Shape::Dead) | None => (Vec::new(), Vec::new()),
+        }
+    }
+
+    fn count(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        idx: Idx,
+    ) -> usize {
+        match self.shape(local, products, opts, idx) {
+            Some(Shape::Rows(rows)) => usize::from(!rows.is_empty()),
+            Some(Shape::Segs(segs, _)) => segs.len(),
+            Some(Shape::Missing(_)) => 1,
+            Some(Shape::Dead) | None => 0,
+        }
+    }
+
+    fn shape(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        idx: Idx,
+    ) -> Option<Shape> {
+        match idx {
+            Idx::Turn(at) => match local.running().get(at as usize)? {
+                Entry::Notice { text, level, .. } => {
+                    Some(Shape::Rows(product::notice_rows(text, *level)))
+                }
+                Entry::Block(block) => {
+                    let paired = local.running().block(at as usize + 1);
+                    Some(turn_shape(block, paired, opts, self.width()))
+                }
+            },
+            Idx::Fixed(num) => match &local.slot(Idx::Fixed(num))?.kind {
+                SlotKind::Notice { text, level, .. } => {
+                    Some(Shape::Rows(product::notice_rows(text, *level)))
+                }
+                SlotKind::Next => Some(Shape::Dead),
+                SlotKind::Block(id) => {
+                    if !local.has(*id) {
+                        return Some(Shape::Missing(*id));
+                    }
+                    let block = local.block(Idx::Fixed(num))?;
+                    let paired = local
+                        .next_block(Idx::Fixed(num))
+                        .filter(|next| block.answers(next));
+                    let product = products.get(*id, || product::of(block, paired, opts, self.width()));
+                    match product {
+                        Product::Text(segs) => Some(Shape::Segs(
+                            segs.clone(),
+                            block.kind == super::super::local::content::Kind::Reasoning,
+                        )),
+                        Product::Fixed(rows) => Some(Shape::Rows(rows.clone())),
+                    }
+                }
+            },
+        }
     }
 }
 
-/// A growing block is never cached: its content changes under the cache.
-fn live_shape(block: &Block, paired: Option<&Block>, opts: &Opts, width: usize) -> Shape {
+/// A growing position is never cached: its content changes under the cache.
+fn turn_shape(
+    block: &Block,
+    paired: Option<&Block>,
+    opts: &Opts<'_>,
+    width: usize,
+) -> Shape {
     match product::of(block, paired, opts, width) {
-        product::Product::Text(segs) => Shape::Segs(
+        Product::Text(segs) => Shape::Segs(
             segs,
             block.kind == super::super::local::content::Kind::Reasoning,
         ),
-        product::Product::Fixed(rows) => Shape::Rows(rows),
+        Product::Fixed(rows) => Shape::Rows(rows),
     }
 }
+
+fn with_gap(mut rows: Vec<Row>) -> Vec<Row> {
+    if !rows.is_empty() {
+        rows.push(Row::blank());
+    }
+    rows
+}
+
+fn rank(id: SegId) -> (u8, i64, usize) {
+    match id.idx {
+        Idx::Fixed(num) => (0, num, id.piece),
+        Idx::Turn(at) => (1, i64::from(at), id.piece),
+    }
+}
+
+fn last_index(local: &Local) -> Option<Idx> {
+    if !local.running().is_empty() {
+        return Some(Idx::Turn((local.running().len() - 1) as u32));
+    }
+    local.newest().map(Idx::Fixed)
+}
+
+use super::walk;

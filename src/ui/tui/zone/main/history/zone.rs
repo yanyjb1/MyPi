@@ -6,10 +6,9 @@ use serde_json::{Value, json};
 
 use super::local::section::{Idx, Local};
 use super::local::slot::{Level, Life, SlotKind};
-use super::prefetch::{Run, walk};
+use super::prefetch::{Range, Run, Start, walk};
 use super::product::{Opts, Products, Task, TodoPanel};
-use super::view::{Dir, Scene, View};
-use super::{view, wire};
+use super::{display, wire};
 
 use super::super::pane::Pane;
 use crate::ui::tui::TodoFold;
@@ -133,16 +132,19 @@ pub struct HistoryZone {
     pub(super) local: Local,
     /// The block cache.
     pub(super) products: Products,
-    /// The laid segments around the sight line.
+    /// The laid segments around the screen.
     pub(super) run: Run,
-    /// The window.
-    pub(super) view: View,
+    /// Where the screen starts.
+    pub(super) range: Range,
     /// The checklist's own product.
     pub(super) todo_panel: TodoPanel,
     pub(super) todo: Vec<Task>,
     pub(super) todo_fold: TodoFold,
     /// The last width the layout was built at.
     pub(super) width: usize,
+    /// The rows the host granted.
+    pub(super) height: u16,
+    pub(super) focus_line: usize,
     pub(super) thinking: bool,
     pub(super) tool: bool,
     pub(super) fold: usize,
@@ -171,11 +173,13 @@ impl Default for HistoryZone {
             local: Local::default(),
             products: Products::default(),
             run: Run::default(),
-            view: View::default(),
+            range: Range::default(),
             todo_panel: TodoPanel::default(),
             todo: Vec::new(),
             todo_fold: TodoFold::default(),
             width: 1,
+            height: 0,
+            focus_line: usize::from(DEFAULT_FOCUS_LINE),
             thinking: false,
             tool: false,
             fold: DEFAULT_FOLD,
@@ -190,21 +194,22 @@ impl Default for HistoryZone {
             outbox: Vec::new(),
             shouts: Vec::new(),
         };
-        zone.view.set_focus_line(DEFAULT_FOCUS_LINE);
         zone.products.set_margin(DEFAULT_MARGIN);
         zone
     }
 }
 
 impl HistoryZone {
-    /// Run one operation that needs the window and the run at once.
-    fn with_scene<R>(&mut self, f: impl FnOnce(&mut View, &mut Scene) -> R) -> R {
+    /// Run one operation that needs the local section, the products, the run and the range at once.
+    fn with_draw<R>(
+        &mut self,
+        f: impl FnOnce(&Local, &mut Products, &mut Run, &mut Range, &Opts<'_>) -> R,
+    ) -> R {
         let HistoryZone {
             local,
             products,
             run,
-            view,
-            width,
+            range,
             thinking,
             tool,
             placeholder,
@@ -219,29 +224,51 @@ impl HistoryZone {
             cwd: cwd.as_str(),
             fold: *fold,
         };
-        let mut scene = Scene {
-            local,
-            products,
-            run,
-            opts: &opts,
-            width: *width,
-        };
-        f(view, &mut scene)
+        f(local, products, run, range, &opts)
     }
 
-    /// One frame: the window, then the checklist pinned under it.
-    pub fn render_rows(
-        &mut self,
-        term_w: u16,
-        accent: Accent,
-    ) -> Vec<ratatui::text::Line<'static>> {
+    /// The screen: the transcript, then the checklist pinned under it.
+    pub fn render_rows(&mut self, term_w: u16, accent: Accent) -> Vec<ratatui::text::Line<'static>> {
         let width = usize::from(term_w.max(1));
-        let budget = usize::from(self.view.rows()) / 2;
-        let pinned = self
-            .todo_panel
-            .rows(&self.todo, self.todo_fold, width, budget)
-            .to_vec();
-        self.with_scene(|view, scene| view::window::rows(view, scene, &pinned, accent))
+        let budget = usize::from(self.height) / 2;
+        let pinned = {
+            let HistoryZone {
+                todo_panel,
+                todo,
+                todo_fold,
+                ..
+            } = self;
+            todo_panel.rows(todo, *todo_fold, width, budget).to_vec()
+        };
+        let body = usize::from(self.height)
+            .saturating_sub(pinned.len())
+            .max(1);
+        let spend = self.with_draw(|local, products, run, range, opts| {
+            range.rows(run, local, products, opts, body)
+        });
+        let top = spend.top;
+        self.with_draw(|_, _, run, _, _| run.trim(top, top + body));
+        for block in &spend.missing {
+            if let Some(turn) = self.turn_of(*block) {
+                self.ask_turn(turn);
+            }
+        }
+        let mut out = display::lines(&spend.rows, accent);
+        out.extend(pinned.iter().map(|row| row.paint(accent)));
+        out
+    }
+
+    /// One position grew: only its last segment is laid again.
+    pub(super) fn touch_turn(&mut self, at: usize) {
+        let idx = Idx::Turn(at as u32);
+        self.with_draw(|local, products, run, _, opts| {
+            run.touch(local, products, opts, idx);
+        });
+    }
+
+    /// One fixed position's content changed: its rows go.
+    pub(super) fn forget(&mut self, num: i64) {
+        self.run.forget(Idx::Fixed(num));
     }
 
     /// A line this front end has to say, on its own slot.
@@ -270,7 +297,10 @@ impl HistoryZone {
             return;
         };
         self.pending_focus = None;
-        self.with_scene(|view, scene| view::focus::focus(view, scene, idx));
+        let line = self.focus_line;
+        self.with_draw(|local, products, run, range, opts| {
+            range.focus(run, local, products, opts, idx, line)
+        });
     }
 
     /// `/new`: drop this conversation's section; the next attach asks for the new one.
@@ -278,16 +308,16 @@ impl HistoryZone {
         self.destroy();
     }
 
-    /// The local section goes, and the run, the checklist and the window with it.
+    /// The local section goes, and the run, the checklist and the range with it.
     pub(super) fn destroy(&mut self) {
         self.local.clear();
         self.products.clear();
         self.run.clear();
+        self.range.follow();
         self.structure.clear();
         self.asking.clear();
         self.todo.clear();
         self.todo_panel.changed();
-        self.view.follow();
         self.pending_focus = None;
         self.landed = 0;
         self.needs_layout = false;
@@ -300,12 +330,12 @@ impl HistoryZone {
 
     /// The block under the sight line, or the newest block when following.
     pub(super) fn anchor_block(&self) -> Option<i64> {
-        match self.view.at() {
-            Some(at) => match self.local.slot(at.idx)?.kind {
+        match self.range.start() {
+            Start::At(at, _) => match self.local.slot(at.idx)?.kind {
                 SlotKind::Block(id) => Some(id),
                 _ => None,
             },
-            None => {
+            Start::Latest => {
                 let num = self.local.newest()?;
                 match self.local.at(num)?.kind {
                     SlotKind::Block(id) => Some(id),
@@ -317,43 +347,48 @@ impl HistoryZone {
 
     /// The slot under the sight line, or the newest when following.
     fn anchor_slot(&self) -> Option<Idx> {
-        match self.view.at() {
-            Some(at) => Some(at.idx),
-            None => self.local.newest().map(Idx::Fixed),
+        match self.range.start() {
+            Start::At(at, _) => Some(at.idx),
+            Start::Latest => self.local.newest().map(Idx::Fixed),
         }
     }
 
     /// One whole slot older or newer: its head under the sight line.
-    pub(super) fn step_slot(&mut self, dir: Dir) {
+    pub(super) fn step_slot(&mut self, older: bool) {
         let Some(from) = self.anchor_slot() else {
             return;
         };
-        let mut cursor = match dir {
-            Dir::Older => walk::older(&self.local, from),
-            Dir::Newer => walk::newer(&self.local, from),
+        let mut cursor = if older {
+            walk::older(&self.local, from)
+        } else {
+            walk::newer(&self.local, from)
         };
         while let Some(idx) = cursor {
-            if self.run.head(idx).is_some() || self.local.block(idx).is_some() {
+            if self.local.block(idx).is_some() {
                 self.jump(idx);
                 return;
             }
-            cursor = match dir {
-                Dir::Older => walk::older(&self.local, idx),
-                Dir::Newer => walk::newer(&self.local, idx),
+            cursor = if older {
+                walk::older(&self.local, idx)
+            } else {
+                walk::newer(&self.local, idx)
             };
         }
-        if dir == Dir::Newer {
-            self.view.follow();
+        if !older {
+            self.range.follow();
         }
     }
 
     /// Put one slot's head under the sight line.
     pub(super) fn jump(&mut self, idx: Idx) {
-        self.with_scene(|view, scene| view::focus::focus(view, scene, idx));
+        let line = self.focus_line;
+        self.with_draw(|local, products, run, range, opts| {
+            range.focus(run, local, products, opts, idx, line)
+        });
     }
 
     /// One whole round older or newer: its first block under the sight line.
-    pub(super) fn turn_step(&mut self, dir: Dir) {
+    pub(super) fn turn_step(&mut self, older: bool) {
         let Some(block) = self.anchor_block() else {
             return;
         };
@@ -364,12 +399,13 @@ impl HistoryZone {
         let Some(at) = rounds.iter().position(|round| round.id == turn) else {
             return;
         };
-        let next = match dir {
-            Dir::Older => at + 1,
-            Dir::Newer => match at.checked_sub(1) {
+        let next = if older {
+            at + 1
+        } else {
+            match at.checked_sub(1) {
                 Some(index) => index,
                 None => return,
-            },
+            }
         };
         let Some([lo, _]) = rounds.get(next).and_then(|round| round.ranges.first()) else {
             return;
@@ -412,6 +448,19 @@ impl HistoryZone {
             self.focus(id);
         }
     }
+
+    /// One scroll by rows.
+    pub(super) fn scroll(&mut self, older: bool, rows: usize) {
+        let height = usize::from(self.height).max(1);
+        let missing = self.with_draw(|local, products, run, range, opts| {
+            range.scroll(run, local, products, opts, height, older, rows)
+        });
+        for block in missing {
+            if let Some(turn) = self.turn_of(block) {
+                self.ask_turn(turn);
+            }
+        }
+    }
 }
 
 impl SubZone for HistoryZone {
@@ -431,19 +480,19 @@ impl SubZone for HistoryZone {
     fn deliver_action(&mut self, action: &Action) -> bool {
         let handled = match action {
             Action::ScrollUp { shift: false } => {
-                self.scroll(Dir::Older, self.scroll_height.max(1));
+                self.scroll(true, self.scroll_height.max(1));
                 true
             }
             Action::ScrollDown { shift: false } => {
-                self.scroll(Dir::Newer, self.scroll_height.max(1));
+                self.scroll(false, self.scroll_height.max(1));
                 true
             }
             Action::ScrollUp { shift: true } => {
-                self.turn_step(Dir::Older);
+                self.turn_step(true);
                 true
             }
             Action::ScrollDown { shift: true } => {
-                self.turn_step(Dir::Newer);
+                self.turn_step(false);
                 true
             }
             Action::Paste(_) => false,
@@ -461,11 +510,11 @@ impl SubZone for HistoryZone {
                     true
                 }
                 KeyCode::Up if key.mods.ctrl => {
-                    self.step_slot(Dir::Older);
+                    self.step_slot(true);
                     true
                 }
                 KeyCode::Down if key.mods.ctrl => {
-                    self.step_slot(Dir::Newer);
+                    self.step_slot(false);
                     true
                 }
                 KeyCode::PageUp if key.mods.ctrl => {
@@ -473,17 +522,17 @@ impl SubZone for HistoryZone {
                     true
                 }
                 KeyCode::PageDown if key.mods.ctrl => {
-                    self.view.follow();
+                    self.range.follow();
                     true
                 }
                 KeyCode::PageUp => {
-                    let rows = usize::from(self.view.rows());
-                    self.scroll(Dir::Older, rows);
+                    let rows = usize::from(self.height);
+                    self.scroll(true, rows);
                     true
                 }
                 KeyCode::PageDown => {
-                    let rows = usize::from(self.view.rows());
-                    self.scroll(Dir::Newer, rows);
+                    let rows = usize::from(self.height);
+                    self.scroll(false, rows);
                     true
                 }
                 KeyCode::Home if key.mods.ctrl && key.mods.shift => {
@@ -506,7 +555,7 @@ impl SubZone for HistoryZone {
     fn attach(&mut self, _session: i64, _size: TermSize) {
         self.destroy();
         self.needs_layout = true;
-        self.view.follow();
+        self.range.follow();
         for key in CONFIG_KEYS {
             self.outbox.push(Request::Config {
                 key: (*key).to_string(),
@@ -540,11 +589,11 @@ impl SubZone for HistoryZone {
             }
             name::ECHO => {
                 if let Some(text) = content.get("text").and_then(Value::as_str) {
-                    self.local.live_mut().echo(text);
+                    self.local.running_mut().echo(text);
                 }
             }
             name::RETRACT => {
-                self.local.live_mut().retract();
+                self.local.running_mut().retract();
                 let reason = content
                     .get("reason")
                     .and_then(Value::as_str)
@@ -558,22 +607,16 @@ impl SubZone for HistoryZone {
 
 impl Pane for HistoryZone {
     fn assign(&mut self, term: TermSize, rows: u16) {
-        self.view.assign(rows);
+        self.height = rows;
         let width = usize::from(term.cols.max(1));
         if self.width != width {
             self.width = width;
-            self.run.set_width(width, &mut self.products);
+            let width = self.width;
+            self.with_draw(|_, products, run, _, _| run.set_width(width, products));
         }
     }
 
     fn on_height_changed(&mut self, rows: u16) {
-        self.view.assign(rows);
-    }
-}
-
-impl HistoryZone {
-    /// One scroll by rows.
-    pub(super) fn scroll(&mut self, dir: Dir, rows: usize) {
-        self.with_scene(|view, scene| view::scroll::step(view, scene, dir, rows));
+        self.height = rows;
     }
 }

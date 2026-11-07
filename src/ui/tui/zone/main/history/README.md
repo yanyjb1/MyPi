@@ -2,153 +2,108 @@
 
 ## 1. Design / Schema
 
-The decisions behind the three layers are recorded in `docs/display-design.md`.
+Four parts: the local section, the product layer, the prefetch layer, and a display step.
 
-### Three layers
+| part | holds | hands down | evicts |
+|---|---|---|---|
+| local section | positions, and the content behind them | a position, and the block it names | never; only a rewind empties a position |
+| product layer | a block as segments, or as folded rows | segments, or rows | by block, `cacheMargin` of them |
+| prefetch layer | laid segments and gaps | rows, in screen order | by segment, whole segments only |
+| display | nothing | screen lines | nothing |
 
-| layer | holds | depends on |
+### Local section
+
+A position is either `Fixed(i64)` or `Turn(u32)`.
+
+`Fixed` numbers the finished conversation: `-N..-1` is the restored past, newest at `-1`; `0..M` is
+this front end's own run. `Turn` numbers the entries of the running round while it grows; those
+numbers do not survive the handover.
+
+A position holds one of three things: a block id, a line this front end says (a notice), or `Next`.
+`Next` keeps its number, draws nothing, and takes no budget.
+
+Content is one `Block`: id, kind, text, name, arguments, intent, call id, ok, result, memo,
+duration, and whether it opens its round. Blocks are stored by id, not by position.
+
+The running round is an ordered list of entries; each entry is a block or a notice. A block entry
+takes an upstream id when the round's receipt arrives; a notice never does. The receipt is checked
+by type first: the number of ids must equal the number of block entries, notices are not counted.
+
+### Product layer
+
+Two lifetimes:
+
+| layer | content | on a width change |
 |---|---|---|
-| product | a block as pieces: segments and their natural lines, colored | nothing but the block |
-| prefetch | the rows laid around the sight line | the width, and the whole piece each row came from |
-| display | which row the window starts on | the reader |
+| first | segment to natural lines | untouched |
+| second | natural lines to folded rows | discarded and rebuilt |
 
-A product is one block's answer to "what am I made of":
+Two product kinds: text segments (prose, thinking, fences) and whole-block products (cards, user
+messages, notices, tables, task lists). A text product is a list of segments; a whole-block product
+is rows already folded at a width.
 
-| kind | a product is | folding |
-|---|---|---|
-| text (assistant, reasoning) | segments, each a run of natural lines | the prefetch layer folds them |
-| whole-block (tool card, user, wake) | the rows themselves, cut to a width | already cut |
+The cache is keyed by block id. Eviction compares admission time first, then the id; `Next`
+positions have no product, and a running round is never cached as a block. A width change drops every
+whole-block product and every laid row; text products survive.
 
-A whole-block product keeps a width, so a resize drops it; a text product keeps none, so a resize
-leaves it alone.
+A running block is rebuilt whenever content arrives. Only its last segment can still change.
 
-### Pieces, rows, numbers
+### Prefetch layer
 
-One block is a run of pieces in source order. Prose, code, a quote, a list and a hard break are one
-piece each; a table is a piece too, but its columns are only known at a width, so it is laid when the
-prefetch layer reaches it. A blank row separates neighbouring pieces, and neighbouring blocks the
-same way.
+The unit is the segment: it enters whole and leaves whole. A segment is colored once, then kept with
+the rows it took.
 
-The prefetch layer keeps a run of rows: contiguous, ordered, and each one remembering the piece it
-came from. It is built outwards from wherever the reader is, never over the whole conversation.
+Segments are laid in render order. A named position is `SegId { idx, piece }`. A row after each
+segment is a gap; the gap belongs to the segment's tail.
 
-### The display layer
+A segment whose content is not in hand draws one `…` row and reports the block id; nothing is
+cached for it.
 
-The window is a slice of that run. Two states:
+The display range is a start plus the rows the screen has. Two starts:
 
-| state | the window | new content |
-|---|---|---|
-| follow (`top` is `None`) | the last rows there are | pushes the top out, the reader stays at the bottom |
-| frozen (`top` is a row) | starts at that row | lands behind the reader, nothing moves |
+- `Latest`: the last rows of the run. New content lands on screen by itself.
+- `At(SegId, row)`: one fixed place. The screen does not move when content lands elsewhere.
 
-A frozen window names a row: the block it belongs to and how far into that block's own rows it
-sits. A piece shorter or taller than the window changes nothing; rows are what moves.
+### Display
 
-A scroll moves the start of the window by `scrollHeight` screen rows, or by a full window for a page.
-Rows already laid are reused; only the rows that walk past either end are laid. A scroll towards the
-newest content that runs out of content goes back to following.
+The display turns laid rows into screen lines: it resolves each color slot to a terminal color,
+puts the `▮` or `↳` mark in front of the row, and emits the line. It holds no state.
 
-A window is filled before it is placed: a run shorter than the screen is extended towards the older
-content until the screen has its rows. Following keeps its start at `rows - screen rows`, so blank
-rows never come after the newest row. A frozen window keeps the row it names, and may leave blank
-rows below it when there is nothing newer to fill them.
+### Rows and marks
 
-The sight line (`focusLine`, default 3, counted from one) is where a block's head is put when the
-reader asks for one: the head lands on that row. It also reads which block the anchor names, so
-"keep this turn's neighbours in hand" asks about the block under the line.
+One row is a list of runs; a run is text plus an optional foreground slot, an optional background
+slot, and modifiers. A row also carries a lead: `None` (the block draws its own edge), `First` (it
+opens a natural line), or `Wrapped` (it is a continuation).
 
-### Width
+## 2. Design Intent
 
-A width change drops every laid row and every whole-block product. Text products survive: their
-natural lines are re-folded, the block is not parsed again.
-
-### Blocks and the local section
-
-`wire::decode::Block` is one row of the block table: id, kind (user, wake, assistant, reasoning, tool
-request, tool result), text, name, arguments, intent, call id, whether it opens its round, ok, result,
-memo, duration, usage.
-
-`local::Local` is an append-only run of numbered slots. Numbers below zero are the past, newest at
--1; zero upwards are this conversation's messages. A slot holds a block id, a notice, or `Next` (a
-dead short-lived notice: no rows, no gap, no budget).
-
-`wire::live::Live` holds the blocks that have no id yet and are still growing; the prefetch layer
-treats it as the piece right after the newest slot, and re-lays it in place whenever it grows.
-
-### Tool cards
-
-A tool block becomes either a card or a one-line form; `card::node` decides by tool name, and by
-operation for `web`.
-
-| form | tools |
-|---|---|
-| card | `bash`, `edit`, `write`, `todo`, `web search`, `web net`, `context`, `memo`, `mcp call`, `kairos result`, `final` |
-| one line | `read`, `cd`, `alias`, `task`, `kairos` (every op but `result`), `mcp list`, `final submit`, every `web` op but `search` and `net` |
-
-A card is a frame: a top edge carrying the header (`status glyph`, bold tool name, then the title
-the renderer names), one section per call body and per result, and a bottom edge. The tail is a
-table when the tool answers rows: `card::Context`, `card::Memo` and the rest lay their table with
-`paint::table::cells` at the card's inner width.
-
-A one-line form is the status glyph, a bold label, and the values the call carried; `alias list`,
-`kairos list`, `mcp list` and `task` add `tree` rows under it (`|-- ` for a middle entry, `'-- `
-for the last, the spine under a non-last entry).
-
-Renderers read the result's memo, which is the structured form of an answer. A tool that hands back
-no memo (`web`) prints text its renderer parses instead.
-
-### The handover
-
-When a round closes, its structure arrives as id ranges. If the tail holds exactly as many blocks as
-the ranges cover, the tail hands its product over instead of being dropped: each block takes its id
-in order and becomes a numbered slot. Ranges the tail did not cover come back from `call blocks`; a
-row that differs from the handed-over block drops that block's product.
-
-### Keys
-
-| key | does |
-|---|---|
-| `Ctrl+T` / `Ctrl+O` | flip the thinking chain's / tool exchanges' copy |
-| `Ctrl+Shift+Home` / `End` | first / last block of the sight line's round |
-| `Ctrl+PageUp` / `PageDown` | oldest slot / follow the newest |
-| `PageUp` / `PageDown` | a window older / newer |
-| `Ctrl+↑` / `Ctrl+↓` | one slot older / newer |
-| wheel | `scrollHeight` rows |
-| `Shift+wheel` | one round: its first block, put below the sight line |
-
-### What it shouts
-
-`busy` (on for any round's piece, off when a structural snapshot lands), `usage` (one per request
-that carried a bill: the front end answers it with `call usage`, which owns the cost and the
-context), `tick` (one per live increment: the spinner steps on it) and `prefill` (`{text}` after a
-rewind). It hears `cwd`, `echo` and `retract`; the last two are the front end's own message and its
-withdrawal.
-
-## 2. Design intent
-
-- **A width is the prefetch layer's business alone.** Products are built once per block; only the
-  folding knows how wide the terminal is, so a resize costs one layer and no parsing.
-- **Take whole pieces, drop whole pieces.** A row is never half a piece, because a fence's colors and
-  a list's indentation are decided per segment.
-- **Predict nothing.** Nothing asks how tall an unseen block is: the window is always derived by
-  walking outwards from where the reader stands.
-- **A number, once handed out, never moves.** Landing keeps the order; only a rewind takes the tail.
-- **Colors resolve at the exit.** A row carries color slots, not colors, so the accent costs one
-  repaint of the visible rows.
+- **Indexes and content are separate** so that a position can exist before its content arrives. The
+  view can name anything in the structural window; content is fetched on demand.
+- **Blocks keep ids, not positions**: a rewind changes positions, never ids.
+- **`Next` keeps its number** so that a rewind does not renumber anything the reader has already
+  seen.
+- **The segment is the unit** because coloring depends on the whole run: a fence's syntax state and
+  a paragraph's spans cross row boundaries.
+- **Gaps belong to the segment's tail** so that laying one segment never has to look at its
+  neighbor.
+- **Folding lives in the product layer** because it depends on width, while segments do not.
+- **The range is a start plus a height** so that the screen is a slice of the run, and a growing
+  block only changes the rows after its last settled row.
+- **Display is stateless** so that the same rows always produce the same screen.
 
 ## 3. Unresolved
 
-1. Streaming animations per tool: only the finished layout exists.
-2. Every visible row is cloned into a ratatui `Line` per frame.
-3. A wake reminder has no style of its own: it is drawn as a notice row.
-4. Consecutive `read` calls are not folded into one tree: the paint path draws one block at a time.
+- The structural snapshot arrives through the host after `Request::Structure`; the zone lays its
+  positions from it.
+- Block content arrives through `Request::Blocks`; the zone asks per round, once per range.
+- The checklist is drawn from `call todo` and `call init`, pinned under the transcript.
 
 ## 4. Config fields
 
 | key | use |
 |---|---|
 | `config.ui.tui.zone.main.history.cacheMargin` | blocks kept in the product layer |
-| `config.ui.tui.zone.main.history.focusLine` | the sight line, in screen rows above it |
-| `config.ui.tui.zone.main.history.cardFoldBudget` | rows a card head or tail may take before folding |
-| `config.ui.tui.zone.main.history.scrollHeight` | screen rows one wheel notch walks |
+| `config.ui.tui.zone.main.history.focusLine` | rows above the sight line when a block is focused |
+| `config.ui.tui.zone.main.history.cardFoldBudget` | rows a card head or tail may take |
+| `config.ui.tui.zone.main.history.scrollHeight` | rows one wheel notch walks |
 | `config.ui.tui.zone.main.history.todoFold` | task-list folding policy |

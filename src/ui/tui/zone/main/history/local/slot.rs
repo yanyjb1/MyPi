@@ -22,7 +22,7 @@ pub enum Life {
 pub enum SlotKind {
     /// One block, named upstream by this id.
     Block(i64),
-    /// A line this front end has to say. It lives here and never goes upstream.
+    /// A line this front end says. It stays here and never goes upstream.
     Notice {
         text: String,
         level: Level,

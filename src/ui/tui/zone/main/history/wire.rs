@@ -3,7 +3,6 @@
 use serde_json::{Value, json};
 
 use super::local::content::Block;
-use super::local::section::Idx;
 use super::local::slot::{Level, Life};
 use super::product::Task;
 use super::zone::HistoryZone;
@@ -96,11 +95,14 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
             zone.shouts.push(Shout::new(name::USAGE, json!({})));
         }
     }
-    match kind {
-        "text" => zone.local.live_mut().text(text),
-        "thinking" => zone.local.live_mut().thinking(text),
-        "arguments" => zone.local.live_mut().arguments(call, text),
-        "boundary" => zone.local.live_mut().boundary(),
+    let touched = match kind {
+        "text" => Some(zone.local.running_mut().text(text)),
+        "thinking" => Some(zone.local.running_mut().thinking(text)),
+        "arguments" => Some(zone.local.running_mut().arguments(call, text)),
+        "boundary" => {
+            zone.local.running_mut().boundary();
+            None
+        }
         "tool_start" => {
             let name = content
                 .get("name")
@@ -111,10 +113,10 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let intent = content.get("intent").and_then(Value::as_str);
-            zone.local.live_mut().tool_start(call, name, args, intent);
+            Some(zone.local.running_mut().tool_start(call, name, args, intent))
         }
-        "tool_progress" => zone.local.live_mut().tool_progress(call, text),
-        "wake" => zone.local.live_mut().wake(text),
+        "tool_progress" => Some(zone.local.running_mut().tool_progress(call, text)),
+        "wake" => Some(zone.local.running_mut().wake(text)),
         "tool_end" => {
             let ok = content.get("ok").and_then(Value::as_bool).unwrap_or(false);
             let result = content
@@ -129,9 +131,12 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
             if ok {
                 moved(zone, memo);
             }
-            zone.local.live_mut().tool_end(call, ok, result, memo, took);
+            Some(zone.local.running_mut().tool_end(call, ok, result, memo, took))
         }
-        _ => {}
+        _ => None,
+    };
+    if let Some(at) = touched {
+        zone.touch_turn(at);
     }
     zone.shouts
         .push(Shout::new(name::BUSY, json!({"on": true})));
@@ -168,9 +173,9 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         let last = ranges.iter().map(|[_, hi]| *hi).max().unwrap_or(0);
         zone.landed = zone.landed.max(last);
     } else {
-        zone.local.live_mut().clear();
-        zone.run.clear();
+        zone.local.running_mut().clear();
     }
+    zone.run.clear();
     for [lo, hi] in ranges {
         if (lo..=hi).all(|id| zone.local.has(id)) {
             continue;
@@ -198,7 +203,7 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
         if absent || differs {
             zone.products.drop_block(id);
             if let Some(num) = zone.local.num_of(id) {
-                zone.run.forget(Idx::Fixed(num));
+                zone.forget(num);
             }
         }
         zone.local.put(block);
@@ -209,7 +214,7 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
         if zone.needs_layout {
             continue;
         }
-        zone.local.kill_short_lived();
+        zone.local.kill_short();
         zone.local.append_id(id);
     }
     zone.settle_focus();
@@ -246,8 +251,7 @@ fn read_config(zone: &mut HistoryZone, content: &Value) {
     match key {
         "config.ui.tui.zone.main.history.focusLine" => {
             if let Some(n) = number {
-                zone.view
-                    .set_focus_line(u16::try_from(n).unwrap_or(u16::MAX));
+                zone.focus_line = usize::try_from(n).unwrap_or(usize::MAX);
             }
         }
         "config.ui.tui.zone.main.history.cardFoldBudget" => {
@@ -305,13 +309,13 @@ fn lay_out(zone: &mut HistoryZone) {
             ids.extend(*lo..=*hi);
         }
     }
-    zone.local.clear();
+    zone.local.reset_positions();
     for id in ids.iter().rev() {
         zone.local.append_older(*id);
     }
     zone.landed = ids.last().copied().unwrap_or(0);
     zone.run.clear();
-    zone.view.follow();
+    zone.range.follow();
 }
 
 /// Slots whose blocks the conversation no longer owns go dark, and their content with them.
