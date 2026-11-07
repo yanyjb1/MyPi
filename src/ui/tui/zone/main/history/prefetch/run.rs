@@ -25,6 +25,16 @@ pub enum Placed {
     Missing(i64),
 }
 
+/// What laying one position's first row found.
+pub enum Head {
+    /// This segment holds the position's first row.
+    Laid(SegId),
+    /// The position's content is not in hand.
+    Missing(i64),
+    /// The position draws nothing.
+    Empty,
+}
+
 /// The run of laid segments, and the width it was laid at.
 #[derive(Default)]
 pub struct Run {
@@ -68,25 +78,67 @@ impl Run {
         None
     }
 
-    /// The run row where this position's first row sits, laying from it when it is absent.
+    /// The position's first row, laying whole pieces until one has rows.
     pub fn head(
         &mut self,
         local: &Local,
         products: &mut Products,
         opts: &Opts<'_>,
         idx: Idx,
-    ) -> Option<usize> {
-        if !self.has(idx) {
-            self.place(local, products, opts, SegId { idx, piece: 0 });
-        }
-        let mut at = 0usize;
-        for laid in &self.segs {
-            if laid.id.idx == idx && laid.id.piece == 0 {
-                return Some(at);
+    ) -> Head {
+        let count = self.count(local, products, opts, idx);
+        for piece in 0..count {
+            let id = SegId { idx, piece };
+            match self.place(local, products, opts, id) {
+                Placed::Laid => return Head::Laid(id),
+                Placed::Missing(block) => return Head::Missing(block),
+                Placed::Empty => {}
             }
-            at += laid.rows.len();
         }
-        None
+        Head::Empty
+    }
+
+    /// The place `rows` above this one, laying rows the run does not hold. Stops at the
+    /// oldest content instead of padding above it.
+    pub fn back(
+        &mut self,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        mut id: SegId,
+        mut row: usize,
+        mut rows: usize,
+    ) -> ((SegId, usize), Vec<i64>) {
+        let mut missing = Vec::new();
+        while rows > 0 {
+            if row > 0 {
+                let take = row.min(rows);
+                row -= take;
+                rows -= take;
+                continue;
+            }
+            let Some(prev) = self.prev(local, products, opts, id) else {
+                break;
+            };
+            match self.place(local, products, opts, prev) {
+                Placed::Missing(block) => {
+                    missing.push(block);
+                    return ((prev, 0), missing);
+                }
+                Placed::Empty => {
+                    id = prev;
+                    continue;
+                }
+                Placed::Laid => {}
+            }
+            let len = self.laid(prev).map_or(0, |laid| laid.rows.len());
+            if len > rows {
+                return ((prev, len - rows), missing);
+            }
+            rows -= len;
+            id = prev;
+        }
+        ((id, row), missing)
     }
 
     /// The run row this place names, when the segment is laid.
@@ -273,10 +325,6 @@ impl Run {
     /// The rows of one laid segment.
     pub fn laid(&self, id: SegId) -> Option<&Laid> {
         self.segs.iter().find(|laid| laid.id == id)
-    }
-
-    fn has(&self, idx: Idx) -> bool {
-        self.segs.iter().any(|laid| laid.id.idx == idx)
     }
 
     fn insert(&mut self, laid: Laid) {

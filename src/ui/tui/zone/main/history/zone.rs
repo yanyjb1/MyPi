@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use super::focus::{Focus, Target};
 use super::local::section::{Idx, Local};
 use super::local::slot::{Level, Life, SlotKind};
 use super::prefetch::{Range, Run, Start, walk};
@@ -159,8 +160,8 @@ pub struct HistoryZone {
     pub(super) landed: i64,
     /// A fresh attach lays the structure out again.
     pub(super) needs_layout: bool,
-    /// The block the sight line is waiting for, once it and its content are here.
-    pub(super) pending_focus: Option<i64>,
+    /// The place the window is waiting to point at, once its content is here.
+    pub(super) pending_focus: Option<Target>,
     /// What this frame owes the session.
     pub(super) outbox: Vec<Request>,
     /// What this frame owes the other zones.
@@ -201,7 +202,7 @@ impl Default for HistoryZone {
 
 impl HistoryZone {
     /// Run one operation that needs the local section, the products, the run and the range at once.
-    fn with_draw<R>(
+    pub(super) fn with_draw<R>(
         &mut self,
         f: impl FnOnce(&Local, &mut Products, &mut Run, &mut Range, &Opts<'_>) -> R,
     ) -> R {
@@ -278,33 +279,6 @@ impl HistoryZone {
         self.local.notice(text, level, life);
     }
 
-    /// Put a block's head one row below the sight line, asking for its round when needed.
-    pub fn focus(&mut self, block: i64) {
-        self.pending_focus = Some(block);
-        self.settle_focus();
-    }
-
-    /// Land the pending focus once the block and its content are in hand.
-    pub(super) fn settle_focus(&mut self) {
-        let Some(block) = self.pending_focus else {
-            return;
-        };
-        if !self.local.has(block) {
-            if let Some(turn) = self.turn_of(block) {
-                self.ask_turn(turn);
-            }
-            return;
-        }
-        let Some(idx) = self.local.idx_of(block) else {
-            return;
-        };
-        self.pending_focus = None;
-        let line = self.focus_line;
-        self.with_draw(|local, products, run, range, opts| {
-            range.focus(run, local, products, opts, idx, line)
-        });
-    }
-
     /// `/new`: drop this conversation's section; the next attach asks for the new one.
     pub fn reset(&mut self) {
         self.destroy();
@@ -330,31 +304,6 @@ impl HistoryZone {
         std::mem::take(&mut self.outbox)
     }
 
-    /// The block under the sight line, or the newest block when following.
-    pub(super) fn anchor_block(&self) -> Option<i64> {
-        match self.range.start() {
-            Start::At(at, _) => match self.local.slot(at.idx)?.kind {
-                SlotKind::Block(id) => Some(id),
-                _ => None,
-            },
-            Start::Latest => {
-                let num = self.local.newest()?;
-                match self.local.at(num)?.kind {
-                    SlotKind::Block(id) => Some(id),
-                    _ => None,
-                }
-            }
-        }
-    }
-
-    /// The slot under the sight line, or the newest when following.
-    fn anchor_slot(&self) -> Option<Idx> {
-        match self.range.start() {
-            Start::At(at, _) => Some(at.idx),
-            Start::Latest => self.local.newest().map(Idx::Fixed),
-        }
-    }
-
     /// One whole slot older or newer: its head under the sight line.
     pub(super) fn step_slot(&mut self, older: bool) {
         let Some(from) = self.anchor_slot() else {
@@ -366,8 +315,8 @@ impl HistoryZone {
             walk::newer(&self.local, from)
         };
         while let Some(idx) = cursor {
-            if self.local.block(idx).is_some() {
-                self.jump(idx);
+            if self.local.holds_block(idx) {
+                self.focus_at(idx, older);
                 return;
             }
             cursor = if older {
@@ -381,73 +330,112 @@ impl HistoryZone {
         }
     }
 
-    /// Put one slot's head under the sight line.
-    pub(super) fn jump(&mut self, idx: Idx) {
-        let line = self.focus_line;
-        self.with_draw(|local, products, run, range, opts| {
-            range.focus(run, local, products, opts, idx, line)
-        });
+    /// Point at the newest finished round's head.
+    fn focus_newest_round(&mut self) {
+        if let Some(turn) = self.structure.rounds().first().map(|round| round.id) {
+            self.focus(Focus::Round(turn));
+        }
     }
 
-    /// One whole round older or newer: its first block under the sight line.
+    /// One whole round older or newer: its head under the sight line.
     pub(super) fn turn_step(&mut self, older: bool) {
-        let Some(block) = self.anchor_block() else {
+        if matches!(self.range.start(), Start::Latest) {
+            if !older {
+                self.range.follow();
+                return;
+            }
+            if self.running_head().is_some() {
+                self.focus(Focus::Running);
+            } else {
+                self.focus_newest_round();
+            }
+            return;
+        }
+        let Some(slot) = self.anchor_slot() else {
+            return;
+        };
+        if let Idx::Turn(at) = slot {
+            if !older {
+                self.range.follow();
+                return;
+            }
+            match self.running_head() {
+                Some(head) if head != at => self.focus(Focus::Running),
+                _ => self.focus_newest_round(),
+            }
+            return;
+        }
+        let Idx::Fixed(num) = slot else {
+            return;
+        };
+        let direct = matches!(
+            self.local.slot(slot).map(|slot| &slot.kind),
+            Some(SlotKind::Block(_))
+        );
+        let Some(block) = self.block_near(num, older) else {
             return;
         };
         let Some(turn) = self.turn_of(block) else {
             return;
         };
-        let rounds = self.structure.rounds();
-        let Some(at) = rounds.iter().position(|round| round.id == turn) else {
-            return;
-        };
-        let next = if older {
-            at + 1
-        } else {
-            match at.checked_sub(1) {
-                Some(index) => index,
-                None => return,
+        let next = {
+            let rounds = self.structure.rounds();
+            let Some(at) = rounds.iter().position(|round| round.id == turn) else {
+                return;
+            };
+            if direct {
+                if older {
+                    rounds.get(at + 1).map(|round| round.id)
+                } else {
+                    at.checked_sub(1)
+                        .and_then(|index| rounds.get(index))
+                        .map(|round| round.id)
+                }
+            } else {
+                Some(turn)
             }
         };
-        let Some([lo, _]) = rounds.get(next).and_then(|round| round.ranges.first()) else {
-            return;
-        };
-        self.focus(*lo);
+        match next {
+            Some(turn) => self.focus(Focus::Round(turn)),
+            None if !older => self.range.follow(),
+            None => {}
+        }
     }
 
     /// Put the sight line on the first or last block of the anchor's round.
     pub(super) fn align(&mut self, last: bool) {
-        let Some(block) = self.anchor_block() else {
+        let Some(slot) = self.anchor_slot() else {
+            return;
+        };
+        let Idx::Fixed(num) = slot else {
+            return;
+        };
+        let Some(block) = self.block_near(num, true) else {
             return;
         };
         let Some(turn) = self.turn_of(block) else {
             return;
         };
-        let Some(id) = self
-            .structure
-            .rounds()
-            .iter()
-            .find(|round| round.id == turn)
-            .and_then(|round| {
-                let ids = round.ranges.iter().flat_map(|[lo, hi]| *lo..=*hi);
-                if last { ids.max() } else { ids.min() }
-            })
-        else {
+        if !last {
+            self.focus(Focus::Round(turn));
             return;
+        }
+        let id = {
+            let rounds = self.structure.rounds();
+            let Some(round) = rounds.iter().find(|round| round.id == turn) else {
+                return;
+            };
+            round.ranges.iter().flat_map(|[lo, hi]| *lo..=*hi).max()
         };
-        self.focus(id);
+        if let Some(id) = id {
+            self.focus_block(id, false);
+        }
     }
 
-    /// The oldest round's first block.
+    /// The oldest round's head.
     pub(super) fn first(&mut self) {
-        let id = self
-            .structure
-            .rounds()
-            .last()
-            .and_then(|round| round.ranges.first())
-            .map(|[lo, _]| *lo);
-        if let Some(id) = id {
-            self.focus(id);
+        if let Some(turn) = self.structure.rounds().last().map(|round| round.id) {
+            self.focus(Focus::Round(turn));
         }
     }
 
@@ -590,6 +578,8 @@ impl SubZone for HistoryZone {
             name::ECHO => {
                 if let Some(text) = content.get("text").and_then(Value::as_str) {
                     self.local.running_mut().echo(text);
+                    self.shouts
+                        .push(Shout::new(name::TICK, serde_json::json!({})));
                 }
             }
             name::RETRACT => {

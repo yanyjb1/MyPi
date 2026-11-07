@@ -7,5 +7,5 @@ mod segment;
 mod trim;
 pub(crate) mod walk;
 
-pub(crate) use range::{Range, Start};
-pub(crate) use run::{Placed, Run};
+pub(crate) use range::{Aim, Range, Start};
+pub(crate) use run::{Head, Placed, Run};

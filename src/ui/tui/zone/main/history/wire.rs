@@ -2,7 +2,9 @@
 
 use serde_json::{Value, json};
 
+use super::focus::Target;
 use super::local::content::Block;
+use super::local::section::Idx;
 use super::local::slot::{Level, Life};
 use super::product::Task;
 use super::zone::HistoryZone;
@@ -227,7 +229,9 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
             continue;
         }
         zone.local.kill_short();
-        zone.local.append_id(id);
+        if zone.local.num_of(id).is_none() {
+            zone.local.append_id(id);
+        }
     }
     zone.settle_focus();
 }
@@ -305,8 +309,40 @@ pub(super) fn apply_structure(zone: &mut HistoryZone, snapshot: &Turns) {
     } else {
         drop_unowned(zone);
     }
+    reconcile(zone);
+    drop_stale_focus(zone);
     zone.settle_focus();
     zone.ensure_around();
+}
+
+/// A snapshot is authoritative: a block it does not own cannot be focused.
+fn drop_stale_focus(zone: &mut HistoryZone) {
+    let stale = match zone.pending_focus {
+        Some(Target::Block { id, .. }) => !zone.structure.owns(id),
+        Some(Target::Round(turn)) => !zone.structure.rounds().iter().any(|round| round.id == turn),
+        Some(Target::Position { idx, .. }) => match idx {
+            Idx::Fixed(_) => zone.local.slot(idx).is_none(),
+            Idx::Turn(at) => at as usize >= zone.local.running().len(),
+        },
+        Some(Target::Running) | None => false,
+    };
+    if stale {
+        zone.pending_focus = None;
+    }
+}
+
+/// Give every block the structure owns a position, in render order.
+fn reconcile(zone: &mut HistoryZone) {
+    let floor = zone.local.max_id();
+    for round in zone.structure.rounds().iter().rev() {
+        for [lo, hi] in &round.ranges {
+            for id in *lo..=*hi {
+                if id > floor && zone.local.num_of(id).is_none() {
+                    zone.local.append_id(id);
+                }
+            }
+        }
+    }
 }
 
 /// Lay the whole structure out as the past, newest block at -1.
@@ -337,11 +373,11 @@ fn drop_unowned(zone: &mut HistoryZone) {
         zone.local.dead(*idx);
     }
     zone.local.retain(|id| zone.structure.owns(id));
-    zone.run.clear();
     zone.landed = zone.local.max_id();
     if gone.is_empty() {
         return;
     }
+    zone.run.clear();
     if let Some(text) = zone.local.last_user_text() {
         zone.shouts
             .push(Shout::new(name::PREFILL, json!({"text": text})));

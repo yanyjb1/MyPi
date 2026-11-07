@@ -4,7 +4,7 @@ use super::super::local::section::Local;
 use super::super::product::{Opts, Products};
 use super::super::row::{Ink, Lead, Row};
 use super::segment::SegId;
-use super::{Placed, Run};
+use super::{Head, Placed, Run};
 
 /// Where the screen starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +21,19 @@ pub struct Spend {
     pub missing: Vec<i64>,
     /// The run row the screen starts at.
     pub top: usize,
+}
+
+/// What one focus attempt found.
+pub enum Aim {
+    /// The position draws nothing.
+    Empty,
+    /// The position's content is not in hand.
+    Missing(Vec<i64>),
+    /// The window top, and the content missing from the rows above it.
+    Top {
+        top: (SegId, usize),
+        missing: Vec<i64>,
+    },
 }
 
 /// The display range.
@@ -106,8 +119,8 @@ impl Range {
         missing
     }
 
-    /// Put a block's head one row below the sight line.
-    pub fn focus(
+    /// Where a focus would put the window, and what it still needs before landing.
+    pub fn aim(
         &mut self,
         run: &mut Run,
         local: &Local,
@@ -115,17 +128,46 @@ impl Range {
         opts: &Opts<'_>,
         idx: super::super::local::section::Idx,
         focus_line: usize,
-    ) -> bool {
-        let Some(head) = run.head(local, products, opts, idx) else {
-            return false;
-        };
-        let top = head.saturating_sub(focus_line);
-        if let Some((id, row)) = run.at(top) {
-            self.start = Some(Start::At(id, row));
-            true
-        } else {
-            false
+    ) -> Aim {
+        match run.head(local, products, opts, idx) {
+            Head::Missing(block) => Aim::Missing(vec![block]),
+            Head::Empty => Aim::Empty,
+            Head::Laid(id) => {
+                let (top, missing) = run.back(local, products, opts, id, 0, focus_line);
+                Aim::Top { top, missing }
+            }
         }
+    }
+
+    /// Pin the window at an aim's top.
+    pub fn pin(&mut self, top: (SegId, usize)) {
+        self.start = Some(Start::At(top.0, top.1));
+    }
+
+    /// The position `rows` below the window top; the sight line's address.
+    pub fn sight(
+        &mut self,
+        run: &mut Run,
+        local: &Local,
+        products: &mut Products,
+        opts: &Opts<'_>,
+        rows: usize,
+    ) -> Option<super::super::local::section::Idx> {
+        let (mut id, mut row) = match self.start() {
+            Start::Latest => return None,
+            Start::At(id, row) => (id, row),
+        };
+        let mut missing = Vec::new();
+        for _ in 0..rows {
+            match step_down(run, local, products, opts, id, row, &mut missing) {
+                Some((next, at)) => {
+                    id = next;
+                    row = at;
+                }
+                None => break,
+            }
+        }
+        Some(id.idx)
     }
 
     fn top(

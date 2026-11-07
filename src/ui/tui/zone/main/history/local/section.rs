@@ -180,6 +180,17 @@ impl Local {
         self.blocks.contains_key(&id)
     }
 
+    /// Whether this position holds a block, content or not.
+    pub fn holds_block(&self, idx: Idx) -> bool {
+        match idx {
+            Idx::Fixed(num) => matches!(
+                self.fixed.at(num).map(|slot| &slot.kind),
+                Some(SlotKind::Block(_))
+            ),
+            Idx::Turn(at) => self.running.block(at as usize).is_some(),
+        }
+    }
+
     /// Whether the held copy of this block differs from the new one.
     pub fn differs(&self, block: &Block) -> bool {
         self.blocks.get(&block.id).is_some_and(|old| old != block)

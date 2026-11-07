@@ -131,12 +131,14 @@ impl Zone for MainZone {
         if let Some(focus) = memo.read("tree.focus") {
             memo.delete("tree.focus");
             if let Ok(block) = focus.parse::<i64>() {
-                self.history.focus(block);
+                self.history.focus(history::Focus::Block(block));
             }
         }
         self.input.boot();
         self.flush();
         let mut requests = vec![Request::Structure];
+        requests.extend(self.history.take_requests());
+        requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
         requests
     }
@@ -235,7 +237,10 @@ impl Zone for MainZone {
         self.input.structure(snapshot);
         self.reserved.structure(snapshot);
         self.flush();
-        Vec::new()
+        let mut requests = self.history.take_requests();
+        requests.extend(self.reserved.take_requests());
+        requests.extend(self.input.take_requests());
+        requests
     }
 
     fn render(&mut self) -> Vec<ratatui::text::Line<'static>> {
