@@ -55,7 +55,11 @@ impl Range {
                     self.start = Some(Start::Latest);
                     return latest(run, local, products, opts, height);
                 }
-                Spend { rows, missing, top: run.index_of(id, row).unwrap_or(0) }
+                Spend {
+                    rows,
+                    missing,
+                    top: run.index_of(id, row).unwrap_or(0),
+                }
             }
         }
     }
@@ -135,7 +139,7 @@ impl Range {
         match self.start() {
             Start::At(id, row) => Some((id, row)),
             Start::Latest => {
-                fill_tail(run, local, products, opts, height);
+                let _ = fill_tail(run, local, products, opts, height);
                 let len = tail_len(run);
                 run.at(len.saturating_sub(height))
             }
@@ -151,7 +155,7 @@ fn latest(
     opts: &Opts<'_>,
     height: usize,
 ) -> Spend {
-    fill_tail(run, local, products, opts, height);
+    let missing = fill_tail(run, local, products, opts, height);
     let len = tail_len(run);
     let top = len.saturating_sub(height);
     let shown = len.saturating_sub(top);
@@ -162,11 +166,7 @@ fn latest(
     while rows.len() < height {
         rows.push(Row::blank());
     }
-    Spend {
-        rows,
-        missing: Vec::new(),
-        top,
-    }
+    Spend { rows, missing, top }
 }
 
 /// One fixed place: lay forward from it until the screen is full.
@@ -217,26 +217,30 @@ fn at(
     (rows, missing, ended)
 }
 
+/// The rows a screen needs, laid towards the old side; and the block ids the run lacks.
 fn fill_tail(
     run: &mut Run,
     local: &Local,
     products: &mut Products,
     opts: &Opts<'_>,
     height: usize,
-) {
+) -> Vec<i64> {
+    let mut missing = Vec::new();
     let Some(mut id) = run.newest(local, products, opts) else {
-        return;
+        return missing;
     };
     let mut need = height;
     loop {
-        run.place(local, products, opts, id);
+        if let Placed::Missing(block) = run.place(local, products, opts, id) {
+            missing.push(block);
+        }
         let rows = run.laid(id).map_or(0, |laid| laid.rows.len());
         need = need.saturating_sub(rows);
         if need == 0 {
-            return;
+            return missing;
         }
         let Some(prev) = run.prev(local, products, opts, id) else {
-            return;
+            return missing;
         };
         id = prev;
     }
@@ -316,5 +320,9 @@ fn step_up(
 }
 
 fn mark() -> Row {
-    Row::text(Lead::None, "…", Some(Ink::Fixed(crate::ui::tui::theme::fixed::SYSTEM)))
+    Row::text(
+        Lead::None,
+        "…",
+        Some(Ink::Fixed(crate::ui::tui::theme::fixed::SYSTEM)),
+    )
 }

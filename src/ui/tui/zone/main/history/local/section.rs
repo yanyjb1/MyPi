@@ -1,6 +1,6 @@
 //! The local section: render order and the content each position holds.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::content::{Block, Kind as BlockKind};
 use super::immutable::Immutable;
@@ -16,12 +16,21 @@ pub enum Idx {
     Turn(u32),
 }
 
+/// The two sides of one tool exchange, as far as they are in hand.
+#[derive(Default, Clone, Copy)]
+struct Pair {
+    request: Option<i64>,
+    result: Option<i64>,
+}
+
 /// The whole conversation, in render order, and the content behind it.
 #[derive(Default)]
 pub struct Local {
     fixed: Immutable,
     running: Mutable,
     blocks: BTreeMap<i64, Block>,
+    /// `call_id` to the ids of the two blocks it ties.
+    pairs: HashMap<String, Pair>,
 }
 
 impl Local {
@@ -29,6 +38,7 @@ impl Local {
         self.fixed.clear();
         self.running.clear();
         self.blocks.clear();
+        self.pairs.clear();
     }
 
     /// Render order goes; the content already in hand stays.
@@ -40,7 +50,7 @@ impl Local {
     /// One finished block, appended above zero.
     pub fn append(&mut self, block: Block) -> Idx {
         let id = block.id;
-        self.blocks.insert(id, block);
+        self.put(block);
         Idx::Fixed(self.fixed.append(SlotKind::Block(id)))
     }
 
@@ -71,14 +81,35 @@ impl Local {
     /// A rewind: the position keeps its number and draws nothing.
     pub fn dead(&mut self, idx: Idx) {
         let Idx::Fixed(num) = idx else { return };
-        if let Some(Slot {
-            kind: SlotKind::Block(id),
-            ..
-        }) = self.fixed.at(num)
-        {
-            self.blocks.remove(id);
+        let gone = match self.fixed.at(num).map(|slot| &slot.kind) {
+            Some(SlotKind::Block(id)) => Some(*id),
+            _ => None,
+        };
+        if let Some(id) = gone {
+            self.drop_content(id);
         }
         self.fixed.dead(num);
+    }
+
+    /// A block's content goes, and the side it made in its exchange.
+    fn drop_content(&mut self, id: i64) {
+        let Some(block) = self.blocks.remove(&id) else {
+            return;
+        };
+        let Some(call) = block.call_id.as_deref() else {
+            return;
+        };
+        let Some(pair) = self.pairs.get_mut(call) else {
+            return;
+        };
+        match block.kind {
+            BlockKind::ToolRequest => pair.request = None,
+            BlockKind::ToolResult => pair.result = None,
+            _ => {}
+        }
+        if pair.request.is_none() && pair.result.is_none() {
+            self.pairs.remove(call);
+        }
     }
 
     pub fn block(&self, idx: Idx) -> Option<&Block> {
@@ -103,19 +134,44 @@ impl Local {
         self.fixed.at(num)
     }
 
-    /// The block after this position, for pairing a call with its result.
-    pub fn next_block(&self, idx: Idx) -> Option<&Block> {
+    /// The result that answers this position, when it is in hand.
+    pub fn result_of(&self, idx: Idx) -> Option<&Block> {
+        let block = self.block(idx)?;
+        if block.kind != BlockKind::ToolRequest {
+            return None;
+        }
+        let call = block.call_id.as_deref()?;
         match idx {
-            Idx::Fixed(num) => match self.fixed.at(num + 1)?.kind {
-                SlotKind::Block(id) => self.blocks.get(&id),
-                _ => None,
-            },
-            Idx::Turn(at) => self.running.block(at as usize + 1),
+            Idx::Fixed(_) => {
+                let result = self.pairs.get(call)?.result?;
+                self.blocks.get(&result)
+            }
+            Idx::Turn(_) => self.running.result_of(call),
+        }
+    }
+
+    /// The ids of the exchange this block belongs to, its own included.
+    pub fn exchange(&self, block: i64) -> [Option<i64>; 2] {
+        let call = self
+            .blocks
+            .get(&block)
+            .and_then(|held| held.call_id.as_deref());
+        match call.and_then(|call| self.pairs.get(call)) {
+            Some(pair) => [pair.request, pair.result],
+            None => [Some(block), None],
         }
     }
 
     /// A block's content, without giving it a slot: it may already have one.
     pub fn put(&mut self, block: Block) {
+        if let Some(call) = block.call_id.as_deref() {
+            let pair = self.pairs.entry(call.to_string()).or_default();
+            match block.kind {
+                BlockKind::ToolRequest => pair.request = Some(block.id),
+                BlockKind::ToolResult => pair.result = Some(block.id),
+                _ => {}
+            }
+        }
         self.blocks.insert(block.id, block);
     }
 
@@ -148,6 +204,12 @@ impl Local {
     /// Drop the content the conversation no longer owns.
     pub fn retain(&mut self, owns: impl Fn(i64) -> bool) {
         self.blocks.retain(|id, _| owns(*id));
+        let blocks = &self.blocks;
+        self.pairs.retain(|_, pair| {
+            pair.request = pair.request.filter(|id| blocks.contains_key(id));
+            pair.result = pair.result.filter(|id| blocks.contains_key(id));
+            pair.request.is_some() || pair.result.is_some()
+        });
     }
 
     /// The position this block id sits on, if it has one.

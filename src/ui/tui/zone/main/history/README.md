@@ -22,8 +22,13 @@ numbers do not survive the handover.
 A position holds one of three things: a block id, a line this front end says (a notice), or `Next`.
 `Next` keeps its number, draws nothing, and takes no budget.
 
-Content is one `Block`: id, kind, text, name, arguments, intent, call id, ok, result, memo,
-duration, and whether it opens its round. Blocks are stored by id, not by position.
+Content is one `Block`: id, kind, the text or arguments it carries, name, intent, call id, the
+result and its ok, memo, duration, and whether it opens its round. A tool exchange is two blocks: a
+request and the result that answers it.
+
+A request finds its result by call id, never by position: the upstream writes every request of a
+round before any of its results, so two calls in one round sit next to each other. The pairing index
+lives in the local section; the running round and the finished conversation both answer it.
 
 The running round is an ordered list of entries; each entry is a block or a notice. A block entry
 takes an upstream id when the round's receipt arrives; a notice never does. The receipt is checked
@@ -42,9 +47,11 @@ Two product kinds: text segments (prose, thinking, fences) and whole-block produ
 messages, notices, tables, task lists). A text product is a list of segments; a whole-block product
 is rows already folded at a width.
 
-The cache is keyed by block id. Eviction compares admission time first, then the id; `Next`
-positions have no product, and a running round is never cached as a block. A width change drops every
-whole-block product and every laid row; text products survive.
+The cache is keyed by block id and the result id it pairs with, and a block keeps one entry: a
+result that lands later replaces the copy built without it. A product that would draw nothing is not
+kept; eviction compares admission time first, then the ids; `Next` positions have no product, and a
+running round is never cached as a block. A width change drops every whole-block product and every
+laid row; text products survive.
 
 A running block is rebuilt whenever content arrives. Only its last segment can still change.
 
@@ -80,6 +87,8 @@ opens a natural line), or `Wrapped` (it is a continuation).
 - **Indexes and content are separate** so that a position can exist before its content arrives. The
   view can name anything in the structural window; content is fetched on demand.
 - **Blocks keep ids, not positions**: a rewind changes positions, never ids.
+- **A pair is a call id, not a neighbour** because a round commits every request before any result,
+  so the call and its answer are not adjacent.
 - **`Next` keeps its number** so that a rewind does not renumber anything the reader has already
   seen.
 - **The segment is the unit** because coloring depends on the whole run: a fence's syntax state and

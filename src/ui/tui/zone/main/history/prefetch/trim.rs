@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use super::segment::Laid;
 
-/// Keep the segments covering `from..to`, plus one segment of slack on each side.
+/// Keep the segments the screen touches, whole; a segment entirely outside it goes.
 pub fn trim(segs: &mut VecDeque<Laid>, from: usize, to: usize) {
     if segs.is_empty() {
         return;

@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use super::super::local::content::Block;
+use super::super::local::content::Kind;
 use super::super::local::mutable::Entry;
 use super::super::local::section::{Idx, Local};
 use super::super::local::slot::SlotKind;
@@ -340,23 +340,24 @@ impl Run {
     }
 
     fn shape(
-        &mut self,
+        &self,
         local: &Local,
         products: &mut Products,
         opts: &Opts<'_>,
         idx: Idx,
     ) -> Option<Shape> {
+        let width = self.width();
         match idx {
             Idx::Turn(at) => match local.running().get(at as usize)? {
                 Entry::Notice { text, level, .. } => {
                     Some(Shape::Rows(product::notice_rows(text, *level)))
                 }
-                Entry::Block(block) => {
-                    let paired = local.running().block(at as usize + 1);
-                    Some(turn_shape(block, paired, opts, self.width()))
-                }
+                Entry::Block(block) => Some(shape_of(
+                    product::of(block, local.result_of(idx), opts, width),
+                    block.kind == Kind::Reasoning,
+                )),
             },
-            Idx::Fixed(num) => match &local.slot(Idx::Fixed(num))?.kind {
+            Idx::Fixed(_) => match &local.slot(idx)?.kind {
                 SlotKind::Notice { text, level, .. } => {
                     Some(Shape::Rows(product::notice_rows(text, *level)))
                 }
@@ -365,36 +366,22 @@ impl Run {
                     if !local.has(*id) {
                         return Some(Shape::Missing(*id));
                     }
-                    let block = local.block(Idx::Fixed(num))?;
-                    let paired = local
-                        .next_block(Idx::Fixed(num))
-                        .filter(|next| block.answers(next));
-                    let product = products.get(*id, || product::of(block, paired, opts, self.width()));
-                    match product {
-                        Product::Text(segs) => Some(Shape::Segs(
-                            segs.clone(),
-                            block.kind == super::super::local::content::Kind::Reasoning,
-                        )),
-                        Product::Fixed(rows) => Some(Shape::Rows(rows.clone())),
-                    }
+                    let block = local.block(idx)?;
+                    let paired = local.result_of(idx);
+                    let product = products.get(*id, paired.map(|result| result.id), || {
+                        product::of(block, paired, opts, width)
+                    });
+                    Some(shape_of(product, block.kind == Kind::Reasoning))
                 }
             },
         }
     }
 }
 
-/// A growing position is never cached: its content changes under the cache.
-fn turn_shape(
-    block: &Block,
-    paired: Option<&Block>,
-    opts: &Opts<'_>,
-    width: usize,
-) -> Shape {
-    match product::of(block, paired, opts, width) {
-        Product::Text(segs) => Shape::Segs(
-            segs,
-            block.kind == super::super::local::content::Kind::Reasoning,
-        ),
+/// A product as the run takes it.
+fn shape_of(product: Product, thinking: bool) -> Shape {
+    match product {
+        Product::Text(segs) => Shape::Segs(segs, thinking),
         Product::Fixed(rows) => Shape::Rows(rows),
     }
 }

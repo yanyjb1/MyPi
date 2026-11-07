@@ -66,14 +66,6 @@ impl Block {
             duration_ms: row.get("duration_ms").and_then(Value::as_i64).unwrap_or(0),
         })
     }
-
-    /// The tool result that answers this request, by call id.
-    pub fn answers(&self, other: &Block) -> bool {
-        self.kind == Kind::ToolRequest
-            && other.kind == Kind::ToolResult
-            && self.call_id.is_some()
-            && self.call_id == other.call_id
-    }
 }
 
 fn text_of(row: &Value, key: &str) -> Option<String> {

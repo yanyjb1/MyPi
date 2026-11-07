@@ -12,7 +12,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `row.rs` | `Row`, `Run`, `Ink`, `Lead`, and how a color slot becomes a terminal style | private |
 | `markdown.rs` | markdown to runs: headings, lists, quotes, inline emphasis | private |
 | `display.rs` | laid rows to screen lines | private |
-| `local/` | `section` (`Local`, `Idx`), `slot` (`Slot`, `SlotKind`, `Level`, `Life`), `content` (`Block`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
+| `local/` | `section` (`Local`, `Idx`, `Pair`), `slot` (`Slot`, `SlotKind`, `Level`, `Life`), `content` (`Block`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
 | `product/` | `products` (the cache), `segment` (source to segments), `text`, `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `card` | private |
 | `product/card/` | `frame` (dispatch, the card frame, the renderer contract), one file per tool family | private |
 | `prefetch/` | `run` (the laid segments), `range` (the start and the budget), `segment` (`SegId`, `Laid`), `trim`, `walk`, `color` | private |
@@ -31,7 +31,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 ```text
 HistoryZone
  ├── local: Local               ── positions and the blocks behind them
- ├── products: Products         ── block id to segments or rows, `cacheMargin` of them
+ ├── products: Products         ── block id plus its pair to segments or rows, `cacheMargin` of them
  ├── run: Run                   ── the laid segments, in render order
  ├── range: Range               ── `Latest` or one fixed place, plus the screen height
  ├── todo_panel: TodoPanel      ── the checklist's rows
@@ -43,11 +43,15 @@ HistoryZone
 - `zone::render_rows` spends the budget from `range`, draws the checklist under the transcript, and
   reports any block whose content is missing.
 - `Range::rows` walks forward from the start, laying segments as it goes; `Range::scroll` moves the
-  start and reports missing content along the way.
+  start and reports missing content along the way; the follow start fills towards the old side and
+  reports the same way.
 - `Run` keeps whole segments only: `place` lays one, `touch` re-lays a growing entry's tail,
-  `forget` drops one position's rows, `trim` keeps what the screen and its slack cover.
-- `Products` is the only place a block becomes segments or rows; it keeps `cacheMargin` blocks and
-  drops the oldest admission first.
+  `forget` drops one position's rows, `trim` keeps every segment the screen touches and drops the
+  rest.
+- `Products` is the only place a block becomes segments or rows; a key is a block id plus the
+  result id it pairs with, and it keeps `cacheMargin` of them, oldest admission first.
+- `Local::result_of` is the one pairing rule: a tool request finds its result by call id, whichever
+  store holds the position. Nothing pairs by position.
 
 ## Must stay in sync
 
@@ -58,6 +62,8 @@ HistoryZone
 5. A tool's memo shape and its `product/card/` file: the renderer draws what the memo carries, or
    the result text when the tool hands back no memo.
 6. `Range::scroll` and the wheel bindings in `zone::deliver_action`.
+7. `Local::result_of`, `Products`' key and every `product::of` that takes a pair: the card is drawn
+   from the result its call names, so a new pairing source must reach all three.
 
 ## Not wired
 

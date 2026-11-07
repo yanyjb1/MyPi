@@ -113,7 +113,11 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let intent = content.get("intent").and_then(Value::as_str);
-            Some(zone.local.running_mut().tool_start(call, name, args, intent))
+            Some(
+                zone.local
+                    .running_mut()
+                    .tool_start(call, name, args, intent),
+            )
         }
         "tool_progress" => Some(zone.local.running_mut().tool_progress(call, text)),
         "wake" => Some(zone.local.running_mut().wake(text)),
@@ -131,7 +135,11 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
             if ok {
                 moved(zone, memo);
             }
-            Some(zone.local.running_mut().tool_end(call, ok, result, memo, took))
+            Some(
+                zone.local
+                    .running_mut()
+                    .tool_end(call, ok, result, memo, took),
+            )
         }
         _ => None,
     };
@@ -200,13 +208,15 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
         let fresh = id > zone.landed;
         let absent = !zone.local.has(id);
         let differs = zone.local.differs(&block);
+        zone.local.put(block);
         if absent || differs {
-            zone.products.drop_block(id);
-            if let Some(num) = zone.local.num_of(id) {
-                zone.forget(num);
+            for side in zone.local.exchange(id).into_iter().flatten() {
+                zone.products.drop_block(side);
+                if let Some(num) = zone.local.num_of(side) {
+                    zone.forget(num);
+                }
             }
         }
-        zone.local.put(block);
         if !fresh {
             continue;
         }

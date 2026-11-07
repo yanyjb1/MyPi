@@ -54,6 +54,12 @@ impl Mutable {
         }
     }
 
+    /// The result block of this call, when it is already in hand.
+    pub fn result_of(&self, call_id: &str) -> Option<&Block> {
+        let at = self.find(BlockKind::ToolResult, call_id)?;
+        self.block(at)
+    }
+
     pub fn take(&mut self) -> Vec<Entry> {
         self.open = None;
         std::mem::take(&mut self.entries)
@@ -118,7 +124,13 @@ impl Mutable {
         at
     }
 
-    pub fn tool_start(&mut self, call_id: &str, name: &str, args: &str, intent: Option<&str>) -> usize {
+    pub fn tool_start(
+        &mut self,
+        call_id: &str,
+        name: &str,
+        args: &str,
+        intent: Option<&str>,
+    ) -> usize {
         let at = self.request(call_id);
         let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
             return at;
@@ -206,9 +218,7 @@ impl Mutable {
 
     fn find(&self, kind: BlockKind, call_id: &str) -> Option<usize> {
         self.entries.iter().position(|entry| match entry {
-            Entry::Block(block) => {
-                block.kind == kind && block.call_id.as_deref() == Some(call_id)
-            }
+            Entry::Block(block) => block.kind == kind && block.call_id.as_deref() == Some(call_id),
             Entry::Notice { .. } => false,
         })
     }

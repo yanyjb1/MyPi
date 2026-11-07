@@ -9,6 +9,7 @@ use super::opts::Opts;
 use super::segment::Segment;
 
 /// What one block hands to the prefetch layer.
+#[derive(Clone)]
 pub enum Product {
     /// Segments; the color layer lays each at the width it has.
     Text(Vec<Segment>),
@@ -16,11 +17,24 @@ pub enum Product {
     Fixed(Vec<Row>),
 }
 
+impl Product {
+    /// Nothing to lay: a result block, or a block of empty text.
+    fn is_empty(&self) -> bool {
+        match self {
+            Product::Text(segs) => segs.is_empty(),
+            Product::Fixed(rows) => rows.is_empty(),
+        }
+    }
+}
+
+/// One cache key: the block, and the result it pairs with.
+type Key = (i64, Option<i64>);
+
 /// Which blocks are in hand, and how many may stay.
 #[derive(Default)]
 pub struct Products {
-    blocks: HashMap<i64, Product>,
-    order: HashMap<i64, u64>,
+    blocks: HashMap<Key, Product>,
+    order: HashMap<Key, u64>,
     seq: u64,
     margin: usize,
 }
@@ -31,29 +45,41 @@ impl Products {
         self.trim();
     }
 
-    /// One block's product, built on first use at this width.
-    pub(crate) fn get(&mut self, id: i64, make: impl FnOnce() -> Product) -> &Product {
-        if !self.blocks.contains_key(&id) {
-            self.admit(id, make());
+    /// One block's product, built on first use. An empty one is not kept.
+    pub(crate) fn get(
+        &mut self,
+        id: i64,
+        pair: Option<i64>,
+        make: impl FnOnce() -> Product,
+    ) -> Product {
+        let key = (id, pair);
+        if let Some(held) = self.blocks.get(&key) {
+            return held.clone();
         }
-        self.blocks.get(&id).expect("just admitted")
+        let product = make();
+        if !product.is_empty() {
+            self.admit(key, product.clone());
+        }
+        product
     }
 
+    /// Every product of this block goes, whichever result it paired with.
     pub(crate) fn drop_block(&mut self, id: i64) {
-        self.blocks.remove(&id);
-        self.order.remove(&id);
+        self.blocks.retain(|key, _| key.0 != id);
+        self.order.retain(|key, _| key.0 != id);
     }
 
     /// A resize: everything that kept a width goes.
     pub(crate) fn drop_fixed(&mut self) {
-        let gone: Vec<i64> = self
+        let gone: Vec<Key> = self
             .blocks
             .iter()
             .filter(|(_, product)| matches!(*product, Product::Fixed(_)))
-            .map(|(id, _)| *id)
+            .map(|(key, _)| *key)
             .collect();
-        for id in gone {
-            self.drop_block(id);
+        for key in gone {
+            self.blocks.remove(&key);
+            self.order.remove(&key);
         }
     }
 
@@ -63,10 +89,12 @@ impl Products {
         self.seq = 0;
     }
 
-    fn admit(&mut self, id: i64, product: Product) {
+    fn admit(&mut self, key: Key, product: Product) {
         self.seq += 1;
-        self.blocks.insert(id, product);
-        self.order.insert(id, self.seq);
+        self.blocks.retain(|other, _| other.0 != key.0);
+        self.order.retain(|other, _| other.0 != key.0);
+        self.blocks.insert(key, product);
+        self.order.insert(key, self.seq);
         self.trim();
     }
 
@@ -75,10 +103,17 @@ impl Products {
             let victim = self
                 .blocks
                 .keys()
-                .min_by_key(|id| (self.order.get(*id).copied().unwrap_or(0), **id))
+                .min_by_key(|key| {
+                    (
+                        self.order.get(*key).copied().unwrap_or(0),
+                        key.0,
+                        key.1.unwrap_or(i64::MIN),
+                    )
+                })
                 .copied();
-            let Some(id) = victim else { break };
-            self.drop_block(id);
+            let Some(key) = victim else { break };
+            self.blocks.remove(&key);
+            self.order.remove(&key);
         }
     }
 }

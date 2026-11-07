@@ -228,7 +228,11 @@ impl HistoryZone {
     }
 
     /// The screen: the transcript, then the checklist pinned under it.
-    pub fn render_rows(&mut self, term_w: u16, accent: Accent) -> Vec<ratatui::text::Line<'static>> {
+    pub fn render_rows(
+        &mut self,
+        term_w: u16,
+        accent: Accent,
+    ) -> Vec<ratatui::text::Line<'static>> {
         let width = usize::from(term_w.max(1));
         let budget = usize::from(self.height) / 2;
         let pinned = {
@@ -240,9 +244,7 @@ impl HistoryZone {
             } = self;
             todo_panel.rows(todo, *todo_fold, width, budget).to_vec()
         };
-        let body = usize::from(self.height)
-            .saturating_sub(pinned.len())
-            .max(1);
+        let body = usize::from(self.height).saturating_sub(pinned.len()).max(1);
         let spend = self.with_draw(|local, products, run, range, opts| {
             range.rows(run, local, products, opts, body)
         });
@@ -611,7 +613,6 @@ impl Pane for HistoryZone {
         let width = usize::from(term.cols.max(1));
         if self.width != width {
             self.width = width;
-            let width = self.width;
             self.with_draw(|_, products, run, _, _| run.set_width(width, products));
         }
     }
