@@ -1,3 +1,10 @@
+//! The engine contract: page addresses, hits, and the link shapes only the
+//! engine itself can resolve.
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
 use super::hit::Hit;
 use super::providers::PROVIDERS;
 
@@ -5,7 +12,10 @@ pub(crate) trait SearchProvider: Sync {
     fn name(&self) -> &'static str;
     fn page_url(&self, query: &str, page: u32) -> String;
     fn parse(&self, html: &str) -> Vec<Hit>;
-    fn challenge(&self, url: &str, html: &str) -> Option<&'static str>;
+    /// Whether this is the engine's own results page. Anything else — a
+    /// consent gate, a traffic challenge, a script check — is something a
+    /// human has to clear, so the caller keeps polling.
+    fn normal(&self, html: &str) -> bool;
 }
 
 pub(crate) fn get(name: &str) -> Option<&'static dyn SearchProvider> {
@@ -37,4 +47,154 @@ pub(crate) fn absolute(href: &str, base: &str) -> Option<String> {
     }
     let base = url::Url::parse(base).ok()?;
     base.join(href).ok().map(|u| u.to_string())
+}
+
+/// Redirect endpoints the engines mint into their result pages. The query value
+/// is an opaque token, not a destination; one request to the engine turns it
+/// into the real URL.
+const REDIRECTS: [(&str, &str); 4] = [
+    ("www.google.com", "/goto"),
+    ("www.google.com", "/url"),
+    ("www.baidu.com", "/link"),
+    ("baidu.com", "/link"),
+];
+
+/// Hosts that are never a destination: ad gateways, static assets, Bing's link
+/// shim. An engine's own content hosts (`baike.baidu.com`, `developers.google.com`)
+/// are not here: those are real results.
+const NOT_A_RESULT: [&str; 6] = [
+    "googleadservices.com",
+    "googlesyndication.com",
+    "googleusercontent.com",
+    "bdstatic.com",
+    "bdurl.net",
+    "ubs.baidu.com",
+];
+
+/// The engines' own search paths are navigation, not results. Only the site host
+/// is matched, so an engine page on a content host survives.
+const ENGINE_PAGES: [&str; 4] = [
+    "www.google.com",
+    "www.baidu.com",
+    "www.bing.com",
+    "bing.com",
+];
+const ENGINE_PATHS: [&str; 6] = ["/search", "/s", "/url", "/goto", "/link", "/ck"];
+
+/// How long one redirect lookup may take, and how many run at once.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(6);
+const LOOKUP_WORKERS: usize = 4;
+/// Enough of the redirect body to hold Google's meta-refresh fallback.
+const LOOKUP_BODY: u64 = 4096;
+
+fn is_redirect(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    REDIRECTS
+        .iter()
+        .any(|(h, path)| *h == host && parsed.path() == *path)
+}
+
+fn is_destination(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") || is_redirect(url) {
+        return false;
+    }
+    let host = parsed.host_str().unwrap_or_default().to_lowercase();
+    if NOT_A_RESULT
+        .iter()
+        .any(|blocked| host == *blocked || host.ends_with(&format!(".{blocked}")))
+    {
+        return false;
+    }
+    !(ENGINE_PAGES.contains(&host.as_str()) && ENGINE_PATHS.contains(&parsed.path()))
+}
+
+fn agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
+        ureq::Agent::config_builder()
+            .max_redirects(0)
+            .timeout_global(Some(LOOKUP_TIMEOUT))
+            .build()
+            .new_agent()
+    });
+    &AGENT
+}
+
+/// The destination named in a redirect body: Google answers some tokens with a
+/// 200 whose body is a meta refresh and one anchor instead of a `Location`.
+fn body_target(body: &str) -> Option<String> {
+    let lower = body.to_ascii_lowercase();
+    let open = lower.find("<a href=\"")? + "<a href=\"".len();
+    let end = body[open..].find('"')? + open;
+    Some(body[open..end].to_string())
+}
+
+/// Follow the engine's own redirect once, without keeping the body.
+fn resolve(url: &str) -> Option<String> {
+    let mut resp = agent().get(url).call().ok()?;
+    let target = match resp
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(location) => absolute(location, url)?,
+        None => {
+            let body = resp
+                .body_mut()
+                .with_config()
+                .limit(LOOKUP_BODY)
+                .read_to_string()
+                .ok()?;
+            body_target(&body)?
+        }
+    };
+    is_destination(&target).then_some(target)
+}
+
+fn clean(hit: Hit) -> Option<Hit> {
+    let url = if is_redirect(&hit.url) {
+        resolve(&hit.url)?
+    } else {
+        hit.url
+    };
+    is_destination(&url).then(|| Hit::new(hit.title, url, hit.snippet))
+}
+
+/// Turn parsed hits into final ones: resolve each engine redirect, and drop
+/// whatever the engine did not point at an external page.
+pub(crate) fn settle(hits: Vec<Hit>) -> Vec<Hit> {
+    let slots: Vec<Mutex<Option<Hit>>> =
+        hits.into_iter().map(|hit| Mutex::new(Some(hit))).collect();
+    let next = AtomicUsize::new(0);
+    let workers = slots.len().min(LOOKUP_WORKERS);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let at = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(slot) = slots.get(at) else {
+                        return;
+                    };
+                    let Some(hit) = slot.lock().ok().and_then(|mut s| s.take()) else {
+                        return;
+                    };
+                    let done = clean(hit);
+                    if let Ok(mut slot) = slot.lock() {
+                        *slot = done;
+                    }
+                }
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .filter_map(|slot| slot.into_inner().ok().flatten())
+        .collect()
 }

@@ -1,3 +1,5 @@
+//! Google's results page, as a browser sees it.
+
 use super::super::hit::Hit;
 use super::super::provider::{SearchProvider, absolute, is_external};
 use crate::web::html::{
@@ -10,27 +12,24 @@ pub(super) struct Google;
 const HOME: &str = "https://www.google.com/";
 const SEARCH_URL: &str = "https://www.google.com/search";
 const SNIPPET_CLASSES: [&str; 4] = ["VwiC3b", "IsZvec", "s3v9rd", "BNeawe"];
+/// The two phrases a real, empty results page carries.
+const EMPTY: [&str; 2] = ["did not match any documents", "No results found for"];
 
-fn has_traffic_warning(body: &str) -> bool {
-    let lower = body.to_lowercase();
-    lower.contains("unusual traffic") || lower.contains("g-recaptcha")
-}
-
-fn unwrap_result_url(href: &str) -> Option<String> {
+/// An anchor's href, when it can lead to a result: the engine's redirect shape
+/// or an external page. Nav links (`/search?…`, `/preferences`) are dropped here,
+/// so a gate page full of policy links parses to nothing.
+fn result_href(href: &str) -> Option<String> {
     let direct = absolute(href, HOME)?;
-    let mut url = url::Url::parse(&direct).ok()?;
-    let host = url.host_str().unwrap_or_default().to_lowercase();
-    if (host == "google.com" || host == "www.google.com") && url.path() == "/url" {
-        let target = url
+    let parsed = url::Url::parse(&direct).ok()?;
+    let host = parsed.host_str().unwrap_or_default().to_lowercase();
+    let on_google = host == "google.com" || host == "www.google.com";
+    if on_google && matches!(parsed.path(), "/goto" | "/url") {
+        let carries = parsed
             .query_pairs()
-            .find(|(k, _)| k == "q" || k == "url")
-            .map(|(_, v)| v.to_string())?;
-        url = url::Url::parse(&target).ok()?;
+            .any(|(key, _)| key == "url" || key == "q");
+        return carries.then_some(direct);
     }
-    if !is_external(url.as_str(), &["google.com"]) {
-        return None;
-    }
-    Some(url.to_string())
+    is_external(&direct, &["google.com"]).then_some(direct)
 }
 
 fn find_snippet(html: &str, h3: usize) -> Option<String> {
@@ -69,7 +68,7 @@ impl SearchProvider for Google {
             let Some(href) = extract_attr(&anchor, "href") else {
                 continue;
             };
-            let Some(url) = unwrap_result_url(&href) else {
+            let Some(url) = result_href(&href) else {
                 continue;
             };
             let title = extract_between(&html[h3..], "<h3", "</h3>")
@@ -87,13 +86,7 @@ impl SearchProvider for Google {
         hits
     }
 
-    fn challenge(&self, url: &str, html: &str) -> Option<&'static str> {
-        if html.contains("/httpservice/retry/enablejs") && !html.contains("<h3") {
-            return Some("returned its JavaScript challenge instead of results");
-        }
-        if url.contains("/sorry/") || has_traffic_warning(html) {
-            return Some("blocked the request with an automated-traffic challenge");
-        }
-        None
+    fn normal(&self, html: &str) -> bool {
+        !self.parse(html).is_empty() || EMPTY.iter().any(|marker| html.contains(marker))
     }
 }

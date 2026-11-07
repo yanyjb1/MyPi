@@ -51,14 +51,7 @@ const PARAMS: &[Param] = &[
     ),
     Param::req(
         "provider",
-        Kind::Choice(&[
-            "google",
-            "bing",
-            "duckduckgo",
-            "ecosia",
-            "startpage",
-            "mojeek",
-        ]),
+        Kind::Choice(&["google", "bing", "baidu"]),
         "search: the one provider this query runs against.",
     ),
     Param::df(

@@ -1,7 +1,9 @@
-//! One provider per call: pages 1..=N through the search tab, until a page comes back empty.
+//! One provider per call: pages 1..=N through the search tab, stopped as soon as a page adds
+//! nothing new.
 
 use anyhow::{Result, anyhow, bail};
 use std::collections::HashSet;
+use std::time::Duration;
 
 use self::hit::{Hit, dedup_key};
 use self::provider::SearchProvider;
@@ -12,70 +14,95 @@ mod hit;
 mod provider;
 mod providers;
 
+/// How long the tidy pass may take.
+const TIDY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A result the site or an ad blocker hides is still in the serialized DOM, so serialization
+/// alone cannot tell an ad card from a result. Ask the page which containers have no box, and
+/// delete them: what is left is what a human would see.
+///
+/// The container classes are the providers' own: rename one there and this list must follow.
+const TIDY: &str = r#"(() => {
+  let gone = 0;
+  for (const el of document.querySelectorAll('div.c-container, div.MjjYud, li.b_algo')) {
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || el.getClientRects().length === 0) {
+      el.remove();
+      gone += 1;
+    }
+  }
+  return gone;
+})()"#;
+
 pub(crate) fn run(session: i64, query: &str, provider_name: &str, page: u32) -> Result<String> {
     if page == 0 {
         bail!("page must be >= 1");
     }
-    let provider = provider::get(provider_name).ok_or_else(|| {
-        anyhow!(
-            "unknown provider {provider_name:?}; google|bing|duckduckgo|ecosia|startpage|mojeek"
-        )
-    })?;
+    let provider = provider::get(provider_name)
+        .ok_or_else(|| anyhow!("unknown provider {provider_name:?}; google|bing|baidu"))?;
     let name = provider.name();
 
     let mut hits: Vec<Hit> = Vec::new();
     let mut seen = HashSet::new();
     let mut current = 1u32;
+    let mut pages = 0u32;
     while current <= page {
         let url = provider.page_url(query, current);
         let mut html = fetch(session, &url, provider)?;
 
-        if provider.challenge(&url, &html).is_some() {
-            verify::await_human(session, |challenge_url, challenge_html| {
-                provider.challenge(challenge_url, challenge_html).is_none()
-            })
-            .map_err(|e| anyhow!("{name}: {e}"))?;
+        // A gate — verification, consent, a script check — is a page whose result body is not
+        // there. Hand it to the human and poll until the engine's own page is back.
+        if !provider.normal(&html) {
+            verify::await_human(session, |_url, html| provider.normal(html))
+                .map_err(|e| anyhow!("{name}: {e}"))?;
             html = fetch(session, &url, provider)?;
-            if provider.challenge(&url, &html).is_some() {
+            if !provider.normal(&html) {
                 bail!(
-                    "{name}: the verification page is still there. Ask the user to finish it, \
-                     then retry."
+                    "{name}: the page is still a gate. Finish it in the browser window, then \
+                     retry."
                 );
             }
         }
 
-        let parsed = provider.parse(&html);
+        let parsed = provider::settle(provider.parse(&html));
         if parsed.is_empty() {
             break;
         }
+        let mut fresh = 0usize;
         for hit in parsed {
             if seen.insert(dedup_key(&hit.url)) {
                 hits.push(hit);
+                fresh += 1;
             }
         }
+        if fresh == 0 {
+            break;
+        }
+        pages += 1;
         current += 1;
     }
 
-    Ok(render(name, page, &hits))
+    Ok(render(name, pages, &hits))
 }
 
 fn fetch(session: i64, url: &str, provider: &'static dyn SearchProvider) -> Result<String> {
     tabs::with_search(session, |page: &Page| {
         page.navigate(url)?;
-        page.wait(RENDER_WAIT, |html| {
-            if provider.challenge(url, html).is_some() {
-                return Some(Ok(()));
-            }
-            if !provider.parse(html).is_empty() {
-                return Some(Ok(()));
-            }
-            None
-        })
+        let html = page.wait(RENDER_WAIT, |html| provider.normal(html).then_some(Ok(())))?;
+        if !provider.normal(&html) {
+            return Ok(html);
+        }
+        let _ = page.evaluate(TIDY, TIDY_TIMEOUT);
+        page.dom_html()
     })
 }
 
-fn render(name: &str, page: u32, hits: &[Hit]) -> String {
-    let mut out = format!("{name}: pages 1-{page}, {} results\n", hits.len());
+fn render(name: &str, pages: u32, hits: &[Hit]) -> String {
+    let mut out = match pages {
+        0 => format!("{name}: no results\n"),
+        1 => format!("{name}: page 1, {} results\n", hits.len()),
+        n => format!("{name}: pages 1-{n}, {} results\n", hits.len()),
+    };
     for (i, hit) in hits.iter().enumerate() {
         out.push_str(&format!("\n{}. {}\n   {}\n", i + 1, hit.title, hit.url));
         if !hit.snippet.is_empty() {

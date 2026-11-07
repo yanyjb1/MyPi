@@ -1,4 +1,9 @@
-//! Tab pool: one target per session and kind, leased for one operation at a time.
+//! Tab pool: one target per session and kind, one call at a time.
+//!
+//! A session owns at most two tabs — search and work. The slot lock is held for the whole call,
+//! so two calls in one session queue on the tab instead of interleaving on it, and the global
+//! pool lock only ever guards the maps: `/json/list`, `/json/new` and the CDP handshake happen
+//! outside it.
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -22,12 +27,13 @@ struct Tab {
     target_id: String,
     last_used: Instant,
     active: usize,
-    reserved: bool,
 }
 
 struct Pool {
     tabs: HashMap<(i64, TabKind), Tab>,
-    locks: HashMap<i64, Arc<Mutex<()>>>,
+    slots: HashMap<(i64, TabKind), Arc<Mutex<()>>>,
+    /// The `about:blank` the launch argv opens has been reclaimed.
+    launch_tab: bool,
 }
 
 static POOL: Mutex<Option<Pool>> = Mutex::new(None);
@@ -35,16 +41,51 @@ static POOL: Mutex<Option<Pool>> = Mutex::new(None);
 fn ensure(pool: &mut Option<Pool>) -> &mut Pool {
     pool.get_or_insert_with(|| Pool {
         tabs: HashMap::new(),
-        locks: HashMap::new(),
+        slots: HashMap::new(),
+        launch_tab: false,
     })
 }
 
-struct Lease {
-    key: (i64, TabKind),
-    page: Page,
+impl Pool {
+    fn slot(&mut self, key: (i64, TabKind)) -> Arc<Mutex<()>> {
+        self.slots
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    fn mark(&mut self, key: (i64, TabKind), target_id: &str) {
+        let tab = self.tabs.entry(key).or_insert_with(|| Tab {
+            target_id: target_id.to_string(),
+            last_used: Instant::now(),
+            active: 0,
+        });
+        if tab.target_id != target_id {
+            tab.target_id = target_id.to_string();
+            tab.active = 0;
+        }
+        tab.last_used = Instant::now();
+    }
+
+    fn live_id(&self, key: (i64, TabKind)) -> Option<&str> {
+        self.tabs.get(&key).map(|tab| tab.target_id.as_str())
+    }
+
+    fn enter(&mut self, key: (i64, TabKind)) {
+        if let Some(tab) = self.tabs.get_mut(&key) {
+            tab.active += 1;
+            tab.last_used = Instant::now();
+        }
+    }
 }
 
-impl Drop for Lease {
+/// One call's claim on a tab. Taken before the CDP handshake, so a tab being connected to is
+/// never idle-reaped underneath the call.
+struct Active {
+    key: (i64, TabKind),
+}
+
+impl Drop for Active {
     fn drop(&mut self) {
         {
             let mut guard = POOL.lock();
@@ -53,60 +94,103 @@ impl Drop for Lease {
             {
                 tab.active = tab.active.saturating_sub(1);
                 tab.last_used = Instant::now();
-                if self.key.1 == TabKind::Work {
-                    tab.reserved = false;
-                }
             }
         }
         lifecycle::touch();
     }
 }
 
-fn with_tab<T>(
-    port: u16,
-    session: i64,
-    kind: TabKind,
-    reserve: bool,
-    f: impl FnOnce(&Page) -> anyhow::Result<T>,
-) -> anyhow::Result<T> {
-    let page = {
+struct Lease {
+    _active: Active,
+    page: Page,
+}
+
+/// Close the `about:blank` the launch argv opened, once, so a fresh browser shows the session's
+/// own tabs and nothing else. Never touches an attached browser: its tabs are the user's.
+fn reclaim_launch_tab(client: &Client) {
+    let first = {
         let mut guard = POOL.lock();
         let pool = ensure(&mut guard);
-        let client = Client::new(port);
-        let live = client.targets()?;
-        let key = (session, kind);
-        let target = match pool
-            .tabs
-            .get(&key)
-            .and_then(|tab| live.iter().find(|t| t.id == tab.target_id).cloned())
-        {
-            Some(target) => target,
-            None => {
-                pool.tabs.remove(&key);
-                let target = client.create_target("about:blank")?;
-                pool.tabs.insert(
-                    key,
-                    Tab {
-                        target_id: target.id.clone(),
-                        last_used: Instant::now(),
-                        active: 0,
-                        reserved: false,
-                    },
-                );
-                target
-            }
-        };
-        let page = page::connect(port, &target)?;
-        let tab = pool.tabs.get_mut(&key).expect("the tab was inserted above");
-        tab.active += 1;
-        tab.last_used = Instant::now();
-        if kind == TabKind::Work {
-            tab.reserved = reserve;
+        if pool.launch_tab {
+            false
+        } else {
+            pool.launch_tab = true;
+            true
         }
-        page
     };
+    if !first || !lifecycle::owned() {
+        return;
+    }
+    let Ok(live) = client.targets() else {
+        return;
+    };
+    let known: Vec<String> = {
+        let guard = POOL.lock();
+        guard
+            .as_ref()
+            .map(|pool| {
+                pool.tabs
+                    .values()
+                    .map(|tab| tab.target_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for target in live {
+        if target.url == "about:blank" && !known.contains(&target.id) {
+            let _ = client.close_target(&target.id);
+        }
+    }
+}
+
+fn with_tab<T>(
+    session: i64,
+    kind: TabKind,
+    f: impl FnOnce(&Page) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let key = (session, kind);
+    let slot = {
+        let mut guard = POOL.lock();
+        ensure(&mut guard).slot(key)
+    };
+    let _serial = slot.lock();
+
+    let port = lifecycle::port()?;
+    let client = Client::new(port);
+    let live = client.targets()?;
+
+    let known = {
+        let guard = POOL.lock();
+        let wanted = guard
+            .as_ref()
+            .and_then(|pool| pool.live_id(key))
+            .map(str::to_string);
+        wanted.and_then(|id| live.iter().find(|t| t.id == id).cloned())
+    };
+    let target = match known {
+        Some(target) => target,
+        None => {
+            // A vanished tab is replaced, never reused: the id in the pool is the only tab this
+            // session may drive.
+            let created = client.create_target("about:blank")?;
+            {
+                let mut guard = POOL.lock();
+                if let Some(pool) = guard.as_mut() {
+                    pool.mark(key, &created.id);
+                }
+            }
+            reclaim_launch_tab(&client);
+            created
+        }
+    };
+
+    if let Some(pool) = POOL.lock().as_mut() {
+        pool.enter(key);
+    }
+    let active = Active { key };
+    let page = page::connect(port, &target)?;
     let lease = Lease {
-        key: (session, kind),
+        _active: active,
         page,
     };
     f(&lease.page)
@@ -116,25 +200,14 @@ pub(crate) fn with_search<T>(
     session: i64,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let lock = {
-        let mut guard = POOL.lock();
-        ensure(&mut guard)
-            .locks
-            .entry(session)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    };
-    let _serial = lock.lock();
-    let port = lifecycle::port()?;
-    with_tab(port, session, TabKind::Search, false, f)
+    with_tab(session, TabKind::Search, f)
 }
 
 pub(crate) fn with_work<T>(
     session: i64,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let port = lifecycle::port()?;
-    with_tab(port, session, TabKind::Work, true, f)
+    with_tab(session, TabKind::Work, f)
 }
 
 pub fn close_session(session: i64) {
@@ -148,8 +221,8 @@ pub fn close_session(session: i64) {
             if let Some(tab) = pool.tabs.remove(&(session, kind)) {
                 closed.push(tab.target_id);
             }
+            pool.slots.remove(&(session, kind));
         }
-        pool.locks.remove(&session);
         closed
     };
     if let Some(port) = lifecycle::existing_port() {
@@ -172,15 +245,18 @@ pub(crate) fn reap() {
             .tabs
             .iter()
             .filter(|(_, tab)| {
-                tab.active == 0
-                    && !tab.reserved
-                    && now.saturating_duration_since(tab.last_used) >= IDLE
+                tab.active == 0 && now.saturating_duration_since(tab.last_used) >= IDLE
             })
             .map(|(key, _)| *key)
             .collect();
-        keys.into_iter()
-            .filter_map(|key| pool.tabs.remove(&key).map(|tab| tab.target_id))
-            .collect()
+        let mut gone = Vec::new();
+        for key in keys {
+            if let Some(tab) = pool.tabs.remove(&key) {
+                gone.push(tab.target_id);
+            }
+            pool.slots.remove(&key);
+        }
+        gone
     };
     let Some(port) = lifecycle::existing_port() else {
         clear();
@@ -196,5 +272,6 @@ pub(crate) fn reap() {
 pub(crate) fn clear() {
     if let Some(pool) = POOL.lock().as_mut() {
         pool.tabs.clear();
+        pool.launch_tab = false;
     }
 }

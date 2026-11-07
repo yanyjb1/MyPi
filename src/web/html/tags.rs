@@ -177,29 +177,6 @@ pub(crate) fn class_blocks<'a>(hay: &'a str, token: &str) -> Vec<&'a str> {
     blocks
 }
 
-/// Slices of `hay`, one per occurrence of `marker`, each to the next.
-pub(crate) fn marker_blocks<'a>(hay: &'a str, marker: &str) -> Vec<&'a str> {
-    let mut starts = Vec::new();
-    let mut from = 0usize;
-    while let Some(rel) = hay[from..].find(marker) {
-        starts.push(from + rel);
-        from += rel + marker.len();
-    }
-    let mut blocks = Vec::with_capacity(starts.len());
-    for (i, &start) in starts.iter().enumerate() {
-        let end = starts.get(i + 1).copied().unwrap_or(hay.len());
-        blocks.push(&hay[start..end]);
-    }
-    blocks
-}
-
-/// Byte offset of the `<` opening the element that carries `marker` (the
-/// reverse of [`marker_blocks`] for a single element).
-pub(crate) fn marker_element(hay: &str, marker: &str) -> Option<usize> {
-    let at = hay.find(marker)?;
-    hay[..at].rfind('<')
-}
-
 /// The opening tag of the element starting at `offset` (which must point at
 /// its `<`).
 pub(crate) fn open_tag_at(hay: &str, offset: usize) -> Option<&str> {

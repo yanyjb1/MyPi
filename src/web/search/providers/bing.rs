@@ -1,11 +1,18 @@
+//! Bing's results page, as a browser sees it.
+
 use super::super::hit::Hit;
 use super::super::provider::SearchProvider;
-use crate::web::html::{extract_attr, extract_between, strip_tags, unescape_entities};
+use crate::web::html::{
+    class_blocks, class_text, decode_text, extract_attr, extract_between, strip_tags,
+    unescape_entities,
+};
 use crate::web::url::{encode_query, percent_decode};
 
 pub(super) struct Bing;
 
 const SEARCH_URL: &str = "https://www.bing.com/search";
+/// What an empty Bing results page says.
+const EMPTY: [&str; 1] = ["There are no results for"];
 
 fn unwrap_tracking_href(href: &str) -> String {
     let href = unescape_entities(href);
@@ -74,17 +81,7 @@ impl SearchProvider for Bing {
 
     fn parse(&self, html: &str) -> Vec<Hit> {
         let mut hits = Vec::new();
-        let pat = "<li class=\"b_algo";
-        let mut from = 0usize;
-        while let Some(start) = html[from..].find(pat) {
-            let s = from + start;
-            let next = html[s + pat.len()..]
-                .find(pat)
-                .map(|n| s + pat.len() + n)
-                .unwrap_or(html.len());
-            let block = &html[s..next];
-            from = next;
-
+        for block in class_blocks(html, "b_algo") {
             let Some(h2) = extract_between(block, "<h2", "</h2>") else {
                 continue;
             };
@@ -94,7 +91,7 @@ impl SearchProvider for Bing {
             let Some(href) = extract_attr(&a_open, "href") else {
                 continue;
             };
-            let title = strip_tags(&h2.inner);
+            let title = decode_text(&h2.inner);
             if title.is_empty() {
                 continue;
             }
@@ -107,26 +104,18 @@ impl SearchProvider for Bing {
             .iter()
             .find_map(|marker| {
                 let pos = block.find(marker)?;
-                let seg = &block[pos..];
-                let p = extract_between(seg, "<p", "</p>")?;
+                let p = extract_between(&block[pos..], "<p", "</p>")?;
                 let text = unescape_entities(strip_tags(&p.inner).trim());
                 (!text.is_empty()).then_some(text)
             })
+            .or_else(|| class_text(block, "b_caption"))
             .unwrap_or_default();
             hits.push(Hit::new(title, url, snippet));
         }
         hits
     }
 
-    fn challenge(&self, url: &str, html: &str) -> Option<&'static str> {
-        let lower = html.to_lowercase();
-        if url.contains("/ck/")
-            || lower.contains("captcha")
-            || lower.contains("unusual traffic")
-            || lower.contains("verify you are human")
-        {
-            return Some("blocked the request with a bot challenge");
-        }
-        None
+    fn normal(&self, html: &str) -> bool {
+        !self.parse(html).is_empty() || EMPTY.iter().any(|marker| html.contains(marker))
     }
 }

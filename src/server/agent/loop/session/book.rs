@@ -265,6 +265,10 @@ pub(crate) fn unbook(inner: &Arc<Inner>, id: i64) {
         handle.gone.store(true, Ordering::Release);
         handle.interrupt();
     }
+    // A finished session keeps no browser tabs: the work and search tabs belong to the session's
+    // life, not to the browser's.
+    #[cfg(feature = "web")]
+    crate::web::close_session(id);
 }
 
 fn spawn_scheduler(inner: &Arc<Inner>, handle: Arc<Handle>) -> Result<()> {

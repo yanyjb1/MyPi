@@ -26,7 +26,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `browser/lifecycle/idle.rs` | the activity clock and the idle decision |
 | `browser/lifecycle/timer.rs` | the one 30-second thread: idle sweep, then tab reap |
 | `browser/lifecycle/signal.rs` | INT/TERM/HUP registration |
-| `browser/tabs.rs` | the tab pool, leases, per-session search locks, idle tab reclaim, `close_session` |
+| `browser/tabs.rs` | the tab pool, per-tab slots, leases, launch-tab reclaim, idle reap, `close_session` |
 | `browser/verify.rs` | the human-verification poll: 30 seconds, five minutes, caller's predicate |
 
 ### ops
@@ -44,10 +44,10 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 | file | holds |
 |---|---|
-| `search/mod.rs` | the page loop, deduplication, the challenge handoff, the output format |
-| `search/provider.rs` | `SearchProvider`, provider lookup, URL resolution, external-host filtering |
+| `search/mod.rs` | the page loop, deduplication, the gate handoff, the output format |
+| `search/provider.rs` | `SearchProvider`, provider lookup, redirect settling, external-host filtering |
 | `search/hit.rs` | `Hit`, the dedup key, first-seen deduplication |
-| `search/providers/` | one module per engine, and the static provider table |
+| `search/providers/` | Google, Bing and Baidu, and the static provider table |
 
 ### html
 
@@ -110,8 +110,13 @@ lifecycle::signal → shutdown
    the wait is what keeps the loop from reading a shell.
 6. `platform::proc::guard_orphan` and `process::launch`: the fork must happen on the resident
    thread for the Linux parent-death signal to mean the server.
+7. `tabs::close_session` and `loop::session::book::unbook`: every way a session ends must pass
+   through `unbook`, or that session's two tabs outlive it until the 30-minute reap.
 
 ## Not wired yet
 
-1. Provider selectors await live tuning.
-2. Windows has no Job Object yet; macOS has no parent-death equivalent.
+1. The three parsers are tuned against captured live pages, not guaranteed: the engines edit
+   their markup, and a parse that suddenly yields nothing is a selector problem, not a gate.
+2. Baidu's ads are not separated from organic results when they are visible: they are cards with
+   real destinations and no stable marker in the capture. Hidden ones are deleted before parsing.
+3. Windows has no Job Object yet; macOS has no parent-death equivalent.

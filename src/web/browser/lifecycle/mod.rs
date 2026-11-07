@@ -65,6 +65,14 @@ pub(crate) fn existing_port() -> Option<u16> {
     live.browser.alive().then(|| live.browser.port())
 }
 
+/// Whether the browser is this process's to close.
+pub(crate) fn owned() -> bool {
+    STATE
+        .lock()
+        .as_ref()
+        .is_some_and(|live| !live.browser.attached())
+}
+
 /// Whether a verification challenge should raise the window.
 pub(crate) fn bring_to_front() -> bool {
     STATE

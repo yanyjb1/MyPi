@@ -77,6 +77,37 @@ User-Agent is not overridden; a headed Chromium already reports `Chrome/<major>`
 `Sec-CH-UA`. `--disable-blink-features=AutomationControlled` is what keeps `navigator.webdriver`
 false while a CDP client is attached.
 
+### Search
+
+Three engines, one per call: `google`, `bing`, `baidu`. Each page yields hits, and the loop walks
+pages 1..=`page`, stopping at the first page that adds nothing new.
+
+```text
+google  https://www.google.com/search?q=…&udm=14&pws=0&start=10×(n-1)
+bing    https://www.bing.com/search?q=…&count=10&first=10×(n-1)+1
+baidu   https://www.baidu.com/s?wd=…&pn=10×(n-1)
+```
+
+- A result's `href` is not always a destination. Google mints `/goto?url=<token>`, Baidu mints
+  `/link?url=<token>`, and both only become the real URL through the engine's own answer: a `302`
+  with `Location`, or — for some Google tokens — a `200` whose body is a meta refresh and one
+  anchor. `provider::settle` asks once per hit (four lookups in flight, six seconds each) and drops
+  what does not resolve to an external page. Bing encodes the destination in
+  `ck/a?…&u=a1<base64url>`, so it is decoded locally.
+- An external host is not enough: ad gateways (`googleadservices`, `googlesyndication`, `ubs.baidu.com`,
+  `bdstatic`, `bdurl`) and the engines' own search paths (`/search`, `/s`, `/ck`, …) are not
+  destinations. Content hosts on an engine's own domain — `baike.baidu.com`,
+  `developers.google.com` — are kept.
+- Hiding is not removing. A card an ad blocker sets to `display: none` is still in the serialized
+  DOM, and `DOM.getOuterHTML` serializes the DOM, not what is drawn. So before parsing, the search
+  tab deletes every result container with no layout box — `display`, `visibility`, or a hidden
+  ancestor — and re-reads the document. Whatever a human sees is what the parser reads; no
+  per-engine ad marker is needed. A card that is *visible* is still a hit.
+- **A gate is not diagnosed.** `normal()` answers whether the DOM is the engine's own results page —
+  parsed hits, or the engine's own "no results" wording. Consent walls, `/sorry/` traffic
+  challenges, Baidu's security check and a half-rendered shell all answer "no", and the caller
+  waits for a human instead of reasoning about which gate it is.
+
 ### Tabs
 
 `tabs::POOL` is the process's only tab state.
@@ -88,20 +119,26 @@ false while a CDP client is attached.
 
 - Tabs are created on demand and keyed by session and kind.
 - A tab that vanished from the browser is recreated on the next call.
-- The search tab is serial per session through a lock held for the whole call, so two searches in
-  one session queue rather than interleave.
-- A tab closes after 30 minutes without an active call. The work tab is marked reserved for the
-  duration of a call, so the call in flight is never reclaimed underneath itself.
-- `close_session` closes both of a session's tabs.
+- Every tab — search and work — is serial per session through a slot lock held for the whole call,
+  so two calls in one session queue on the tab rather than interleave on it. The pool lock only
+  guards the maps; `/json/list`, `/json/new` and the CDP handshake happen outside it.
+- A tab closes after 30 minutes without an active call. `active` counts the call in flight, so a
+  busy tab is never reclaimed underneath itself.
+- `close_session` closes both of a session's tabs, and `unbook` calls it: a session that ends —
+  delete, or a sub-session finishing its task — takes its tabs with it.
+- The `about:blank` the launch argv opens is reclaimed once a pool tab exists, so an owned browser
+  shows the session's tabs and nothing else. An attached browser is never touched that way.
 
 ### Verification
 
-When a provider returns a challenge page, the domain waits instead of failing:
+A gate is not diagnosed: the provider only answers whether the DOM is its own results page
+(`normal()` — hits, or the engine's own "no results" wording). Anything else is something a human
+has to clear, and the domain waits instead of failing:
 
 1. If `config.web.bringToFront` is true, the tab is raised once. The flag only decides whether the
    window comes forward; polling happens either way.
 2. Every 30 seconds the current URL and DOM are handed to a predicate supplied by the caller; the
-   default predicate is the provider's `challenge()` answering "no longer a challenge page".
+   default predicate is the provider's `normal()` answering "the results page is back".
 3. Passing inside five minutes is silent: the page is fetched again and the operation continues as
    if nothing happened. The model never learns a verification occurred.
 4. Five minutes without passing returns an error saying the user may be away or may not have
@@ -139,9 +176,10 @@ entries, and `screenshot`, which names a file and its size.
 - **Idle close.** The profile is on disk, so closing costs only a relaunch. Leaving the process up
   costs an orphan every time the server goes away badly.
 - **Two tabs per session.** Search and interactive work have different lifetimes: a search tab may
-  be replaced freely, a work tab must survive between `open`, `click`, `fill` and `read`.
-- **A serial search tab.** One provider, one tab, one call at a time keeps a challenge attributable
-  to the engine that raised it.
+  be replaced freely, a work tab must survive between `open`, `click`, `fill` and `read`. A session
+  that ends closes both, so a long-lived browser never accumulates tabs from finished work.
+- **A serial tab.** One call at a time per tab keeps a gate attributable to the engine that raised
+  it, and keeps two calls from steering one page.
 - **A silent verification.** The model asked for results; a human solving a challenge is
   infrastructure, not an outcome. Only a timeout is worth reporting.
 - **30 seconds and five minutes are constants.** They are interaction pacing, not deployment
@@ -155,7 +193,9 @@ entries, and `screenshot`, which names a file and its size.
 - Windows needs a Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`); not written yet.
 - Attached mode cannot switch a user's browser between headed and headless — irrelevant now, since
   there is no headless mode.
-- Provider selectors are implemented but need live tuning against current result markup.
+- The parsers are tuned against captured live pages; the engines edit their markup, so a
+  parse that suddenly yields nothing is a selector problem, not a gate. Baidu's ads are not
+  separated from organic results.
 - A machine without a display cannot use this domain at all.
 - CDP Network, HAR and response bodies are intentionally absent.
 
