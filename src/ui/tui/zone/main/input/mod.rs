@@ -673,6 +673,10 @@ impl InputZone {
             return Vec::new();
         }
         self.last_mailbox_turn = Some(turn);
+        // A turn just opened: the box is busy before its first piece arrives.
+        self.data.busy = true;
+        self.shouts
+            .push(Shout::new(name::BUSY, serde_json::json!({"on": true})));
         let (taken, request) = self.queue.took();
         let out: Vec<Request> = request.into_iter().collect();
         self.shouts.push(Shout::new(

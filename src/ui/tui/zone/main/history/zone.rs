@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::local::section::{Idx, Local};
 use super::local::slot::{Level, Life, SlotKind};
@@ -571,8 +571,6 @@ impl SubZone for HistoryZone {
 
     fn structure(&mut self, snapshot: &Turns) {
         wire::apply_structure(self, snapshot);
-        self.shouts
-            .push(Shout::new(name::BUSY, json!({"on": false})));
     }
 
     fn take_shouts(&mut self) -> Vec<Shout> {

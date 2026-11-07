@@ -82,7 +82,8 @@ starts, and clearing the last one clears the slot. `Alt+Up` pops the tail, so th
 when the queue empties.
 
 The only `busy` source that matters is the bus: history shouts `busy` when any round says anything
-and `idle` when a structural snapshot lands, so a round another party opened is known too.
+and `idle` when a round closes; this zone shouts `busy` when a mailbox turn takes the slot and sets
+its own flag directly when it sends a message. A round another party opened is known too.
 
 ### The data it reads
 

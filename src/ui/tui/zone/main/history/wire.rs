@@ -193,6 +193,8 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         });
     }
     zone.outbox.push(Request::Structure);
+    zone.shouts
+        .push(Shout::new(name::BUSY, json!({"on": false})));
 }
 
 /// Decode a `blocks` array, keep the content, and number the fresh ones.

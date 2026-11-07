@@ -53,7 +53,8 @@ half's types, re-exported from this domain's root.
   through `tools::roster`, asks through `Ask::lap` with the session's shared snapshot, runs
   `Batch::run`, hands the finished calls back through `Ask::results`, appends the landed blocks and
   the effects anchored on their result blocks, flushes the lap, and settles through
-  `pen::turn::settle`. A compaction reloads the transcript after it settles.
+  `pen::turn::settle`. A lap that dies returns to `cycle::run`, which flushes its blocks and settles
+  the turn before the error goes up. A compaction reloads the transcript after it settles.
 - A child effect lands as an archive row, a session row and the result block in one submission; the
   session row points at the child's own archive. After the commit the loop attaches the child's
   `State` (draft, budget, answer path) and starts an `agent` job; `session::agent::AgentRunner`

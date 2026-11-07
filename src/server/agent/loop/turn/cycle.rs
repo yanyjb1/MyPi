@@ -44,7 +44,6 @@ pub(crate) fn run(
     mode: Mode,
     first_turn: bool,
 ) -> Result<Stop> {
-    let child = inner.source.child(handle.id);
     let transcript = handle.transcript().clone();
     let history: Arc<dyn History> = transcript.clone();
     if let Mode::Compact { retention, focus } = mode {
@@ -91,15 +90,64 @@ pub(crate) fn run(
     }
 
     let mut usage = Usage::default();
-    let mut fence = Fence::new(inner.settings.max_tool_rounds);
-    let stop;
-    let mut first_lap = true;
     let mut baseline = None;
+    let mut pen: Option<Arc<Pen>> = None;
+    let outcome = laps(
+        inner,
+        handle,
+        turn,
+        live,
+        &history,
+        &transcript,
+        &mut usage,
+        &mut baseline,
+        &mut pen,
+        first_turn,
+    );
+    match outcome {
+        Ok(stop) => {
+            pen::turn::settle(&inner.writer, turn, stop, usage, baseline, handle.meta())?;
+            Ok(stop)
+        }
+        Err(e) => {
+            keep_blocks(pen, handle);
+            if stopped(handle, &e) {
+                pen::turn::settle(
+                    &inner.writer,
+                    turn,
+                    Stop::User,
+                    usage,
+                    baseline,
+                    handle.meta(),
+                )?;
+                return Ok(Stop::User);
+            }
+            broken(inner, handle, turn, usage, baseline, &e);
+            Err(e)
+        }
+    }
+}
+
+/// One turn's laps. Every early return lands here; the caller owns the settle.
+fn laps(
+    inner: &Arc<Inner>,
+    handle: &Arc<Handle>,
+    turn: i64,
+    live: &mut Live,
+    history: &Arc<dyn History>,
+    transcript: &Arc<super::super::session::history::Transcript>,
+    usage: &mut Usage,
+    baseline: &mut Option<u64>,
+    pen: &mut Option<Arc<Pen>>,
+    first_turn: bool,
+) -> Result<Stop> {
+    let child = inner.source.child(handle.id);
+    let mut fence = Fence::new(inner.settings.max_tool_rounds);
+    let mut first_lap = true;
 
     loop {
         if handle.stop.load(Ordering::Acquire) {
-            stop = Stop::User;
-            break;
+            return Ok(Stop::User);
         }
         let wakes = drain(inner, handle, turn)?;
         let appended = !wakes.is_empty();
@@ -111,12 +159,12 @@ pub(crate) fn run(
             });
         }
         if fence.hit() {
-            stop = Stop::Fence;
-            break;
+            return Ok(Stop::Fence);
         }
 
         let blocks = Arc::new(Pen::new(inner.writer.clone(), turn));
-        let lap = match inner.ask.lap(LapInput {
+        *pen = Some(blocks.clone());
+        let lap = inner.ask.lap(LapInput {
             session: handle.id,
             history: history.clone(),
             blocks: blocks.clone(),
@@ -126,30 +174,13 @@ pub(crate) fn run(
             stop: handle.stop.clone(),
             worker: handle.worker.clone(),
             live: inner.out.clone(),
-        }) {
-            Ok(lap) => lap,
-            Err(e) => {
-                if stopped(handle, &e) {
-                    pen::turn::settle(
-                        &inner.writer,
-                        turn,
-                        Stop::User,
-                        usage,
-                        baseline,
-                        handle.meta(),
-                    )?;
-                    return Ok(Stop::User);
-                }
-                broken(inner, handle, turn, usage, baseline, &e);
-                return Err(e);
-            }
-        };
+        })?;
         if first_lap && first_turn {
-            baseline = Some(lap.usage.prompt);
+            *baseline = Some(lap.usage.prompt);
         }
         first_lap = false;
-        usage += lap.usage;
-        handle.publish(&usage, lap.usage.prompt + lap.usage.completion);
+        *usage += lap.usage;
+        handle.publish(usage, lap.usage.prompt + lap.usage.completion);
 
         if lap.calls.is_empty() {
             let (_, landed_blocks) = blocks.flush()?;
@@ -172,8 +203,7 @@ pub(crate) fn run(
                     });
                     continue;
                 }
-                stop = lap.stop;
-                break;
+                return Ok(lap.stop);
             }
             continue;
         }
@@ -187,23 +217,14 @@ pub(crate) fn run(
             stop: handle.stop.clone(),
             out: inner.out.clone(),
         };
-        let results = match inner.batch.run(input) {
-            Ok(results) => results,
-            Err(e) => {
-                broken(inner, handle, turn, usage, baseline, &e);
-                return Err(e);
-            }
-        };
+        let results = inner.batch.run(input)?;
         let reported = ResultsInput {
             session: handle.id,
             history: history.clone(),
             calls: lap.calls.clone(),
             results: results.iter().map(report).collect(),
         };
-        if let Err(e) = inner.ask.results(reported, &*blocks) {
-            broken(inner, handle, turn, usage, baseline, &e);
-            return Err(e);
-        }
+        inner.ask.results(reported, &*blocks)?;
         let (children, deletes) = effects(&blocks, &results, live)?;
         let (landed, landed_blocks) = blocks.flush()?;
         transcript.append(landed_blocks)?;
@@ -254,14 +275,37 @@ pub(crate) fn run(
             pen::effect::apply(&inner.writer, handle.id, &deletes)?;
         }
         if results.iter().any(|result| result.stop) {
-            stop = Stop::User;
-            break;
+            return Ok(Stop::User);
         }
         fence.count();
     }
+}
 
-    pen::turn::settle(&inner.writer, turn, stop, usage, baseline, handle.meta())?;
-    Ok(stop)
+/// Keep what a dead lap already produced: the stored turn matches what the front end showed.
+fn keep_blocks(pen: Option<Arc<Pen>>, handle: &Handle) {
+    let Some(pen) = pen else {
+        return;
+    };
+    match pen.flush() {
+        Ok((_, blocks)) => {
+            if let Err(e) = handle.transcript().append(blocks) {
+                crate::server::platform::log::error(
+                    "loop",
+                    format!(
+                        "session {}: a dead lap's blocks were not cached: {e:#}",
+                        handle.id
+                    ),
+                );
+            }
+        }
+        Err(e) => crate::server::platform::log::error(
+            "loop",
+            format!(
+                "session {}: a dead lap's blocks were not stored: {e:#}",
+                handle.id
+            ),
+        ),
+    }
 }
 
 /// A child's list: `task` is dropped silently, `final` is added because the parent never names it.

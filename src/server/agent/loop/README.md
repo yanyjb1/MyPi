@@ -66,6 +66,9 @@ loop only adds tool events to it.
 - **One write point.** `pen` turns request blocks, tool effects, artifacts, turn openings and
   settlements into `Row`s. A lap's blocks and the effects their results produced land in one
   submission, so an effect's anchor is a row index in that same commit.
+- **A turn always settles.** Every exit from the lap loop returns to the caller, which flushes what
+  the dead lap produced and writes `Row::Settle`; a front end hears one close frame per turn it
+  opened. A cancelled or broken lap keeps the pieces it already showed, without a bill.
 - **Each boundary is the other side's.** Request types are declared with the request half, tool
   types with the tool half; the loop re-exports both and imports neither private shape.
 - **One history read per session.** The transcript is read when the session opens; every block the

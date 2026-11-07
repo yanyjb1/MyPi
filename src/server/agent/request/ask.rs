@@ -107,8 +107,18 @@ impl Ask for Request {
 
         let line = Line::new(input.live.clone(), input.session);
         let mut forward = Forward::new(&line, input.blocks.as_ref(), self.options.streaming);
-        let message = client.complete(&req, &mut forward, &line, &input.stop, &input.worker)?;
-        forward.finish(message.usage)?;
+        let outcome = client.complete(&req, &mut forward, &line, &input.stop, &input.worker);
+        let message = match outcome {
+            Ok(message) => {
+                forward.finish(message.usage)?;
+                message
+            }
+            Err(e) => {
+                // The front end already saw these pieces; the turn keeps what it showed.
+                forward.abandon();
+                return Err(e);
+            }
+        };
 
         Ok(LapReply {
             stop: if message.interrupted {
@@ -239,6 +249,10 @@ struct Forward<'a> {
     streaming: Streaming,
     buffered: Vec<Stream>,
     pending: Option<Block>,
+    /// Streamed text no block has claimed yet: it lands if the lap dies.
+    text: String,
+    /// Streamed thinking no block has claimed yet.
+    thinking: String,
     ts: Option<String>,
     failure: Option<anyhow::Error>,
 }
@@ -251,6 +265,8 @@ impl<'a> Forward<'a> {
             streaming,
             buffered: Vec::new(),
             pending: None,
+            text: String::new(),
+            thinking: String::new(),
             ts: Some(crate::server::platform::time::now_stamp()),
             failure: None,
         }
@@ -287,27 +303,66 @@ impl<'a> Forward<'a> {
         self.sink.land(block, None)
     }
 
+    /// Land the held block; the bill rides it when there is one.
+    fn land_pending(&mut self, usage: Option<Usage>) {
+        let Some(mut block) = self.pending.take() else {
+            return;
+        };
+        if let Some(usage) = usage {
+            block.usage = Some(usage);
+            self.bill(&block, usage);
+        }
+        if let Err(e) = self.land(block)
+            && self.failure.is_none()
+        {
+            self.failure = Some(e);
+        }
+    }
+
     /// Close the lap: the held block takes the bill and lands. A write that failed mid-lap surfaces here.
     fn finish(&mut self, usage: Usage) -> Result<()> {
         self.flush();
-        if let Some(mut block) = self.pending.take() {
-            block.usage = Some(usage);
-            self.bill(&block, usage);
-            if let Err(e) = self.land(block)
-                && self.failure.is_none()
-            {
-                self.failure = Some(e);
-            }
-        }
+        self.land_pending(Some(usage));
         match self.failure.take() {
             Some(e) => Err(e),
             None => Ok(()),
+        }
+    }
+
+    /// The lap died: land the held block and the pieces already shown, without a bill.
+    fn abandon(&mut self) {
+        self.land_pending(None);
+        let ts = self.ts.clone();
+        if !self.thinking.is_empty() {
+            let content = std::mem::take(&mut self.thinking);
+            let block = Block {
+                kind: Kind::Reasoning,
+                content: Some(content),
+                ts: ts.clone(),
+                ..Block::default()
+            };
+            let _ = self.sink.land(block, None);
+        }
+        if !self.text.is_empty() {
+            let content = std::mem::take(&mut self.text);
+            let block = Block {
+                kind: Kind::Assistant,
+                content: Some(content),
+                ts,
+                ..Block::default()
+            };
+            let _ = self.sink.land(block, None);
         }
     }
 }
 
 impl Output for Forward<'_> {
     fn stream(&mut self, piece: Stream) {
+        match &piece {
+            Stream::Text { text, .. } => self.text.push_str(text),
+            Stream::Thinking { text, .. } => self.thinking.push_str(text),
+            _ => {}
+        }
         match self.streaming {
             Streaming::Immediate => self.line.stream(piece),
             Streaming::Buffered => self.buffered.push(piece),
@@ -315,6 +370,11 @@ impl Output for Forward<'_> {
     }
 
     fn block(&mut self, block: Block) {
+        match block.kind {
+            Kind::Assistant => self.text.clear(),
+            Kind::Reasoning => self.thinking.clear(),
+            _ => {}
+        }
         self.flush();
         self.line.stream(Stream::Boundary);
         if self.failure.is_some() {

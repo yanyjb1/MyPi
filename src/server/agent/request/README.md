@@ -43,7 +43,9 @@ Notice = { level, text }
 
 A stream has no total budget: one lap runs as long as the model keeps talking. The worker child
 holds it to the protocol's silence budget (600 s when the host names none) and reports a timeout when
-it expires. Cancellation is a kill: the session's worker dies and the reader sees its pipe close.
+it expires. Cancellation is a kill: the session's worker dies and the reader sees its pipe close. A
+closed pipe is the body's end, not a failure; the child sends a marker line before it closes when
+the request itself failed.
 
 The history read port has three queries: `messages(session)` — the session's messages, shared, so a
 lap never copies them; `turns(session)` — the same list as turns with their interval lists (a turn
@@ -73,7 +75,9 @@ pays.
 
 **Increments and blocks are two different things.** Pieces go to the live line as they arrive; a
 block is written once, when it closes. The last block of a reply is held back by one so it can carry
-the bill, because a row is written once and never patched.
+the bill, because a row is written once and never patched. A lap that dies lands the pieces it
+already showed as reasoning and assistant blocks without a bill, so the stored turn keeps the
+visible causal chain.
 
 **A citation names content.** The same text keeps its citation across sessions and restarts; only a
 real collision lengthens it. Retrieval therefore never depends on which block the text landed in.

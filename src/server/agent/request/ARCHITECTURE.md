@@ -24,7 +24,7 @@
 | `protocol/anthropic/` | the Messages line |
 | `transport/mod.rs` | `Provider`, and sending one call through the session's worker |
 | `transport/client.rs` | one provider connection: its protocol, retry loop, cancellable wait |
-| `transport/worker.rs` | `SessionWorker` (one child per session: spawn, kill, replace, in-flight), the child's line protocol, its persistent connection, and the stream's silence deadline |
+| `transport/worker.rs` | `SessionWorker` (one child per session: spawn, kill, replace, in-flight), the child's line protocol, its persistent connection, its greeting deadline, and the stream's silence deadline |
 
 ## Relations
 

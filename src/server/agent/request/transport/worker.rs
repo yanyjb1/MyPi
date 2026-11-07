@@ -118,6 +118,11 @@ impl SessionWorker {
             HttpWorker::kill_pid(pid);
         }
         let fresh = HttpWorker::spawn().ok();
+        if let Some(worker) = fresh.as_ref()
+            && let Some(pid) = HttpWorker::pid(worker)
+        {
+            self.pid.store(pid, Ordering::Release);
+        }
         if let Ok(mut slot) = self.slot.lock() {
             let old = std::mem::replace(&mut *slot, fresh);
             if let Some(old) = old {
@@ -173,24 +178,21 @@ impl HttpWorker {
             .stdin
             .take()
             .context("HTTP worker stdin unavailable")?;
-        let mut output = BufReader::new(
+        let output = BufReader::new(
             child
                 .stdout
                 .take()
                 .context("HTTP worker stdout unavailable")?,
         );
-        // Handshake: is the child really running a worker? If not, take it down and return Err.
-        let mut hello = String::new();
-        let ok = std::io::BufRead::read_line(&mut output, &mut hello).is_ok()
-            && matches!(
-                serde_json::from_str::<Response>(hello.trim()),
-                Ok(Response::Ready)
-            );
-        if !ok {
-            let _ = child.kill();
-            let _ = child.wait();
-            anyhow::bail!("HTTP worker never became ready");
-        }
+        // Handshake: is the child really running a worker? A silent child is not ours to wait for.
+        let output = match greet(output, HELLO_LIMIT) {
+            Ok(output) => output,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
         Ok(Arc::new(Mutex::new(Self {
             child,
             pid,
@@ -328,6 +330,29 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// The greeting deadline: a worker that never speaks is taken down.
+const HELLO_LIMIT: Duration = Duration::from_secs(10);
+
+/// Read the worker's greeting line, giving up after `limit`.
+fn greet(mut output: BufReader<ChildStdout>, limit: Duration) -> Result<BufReader<ChildStdout>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let n = std::io::BufRead::read_line(&mut output, &mut line).unwrap_or(0);
+        let ready = n > 0
+            && matches!(
+                serde_json::from_str::<Response>(line.trim()),
+                Ok(Response::Ready)
+            );
+        let _ = tx.send((ready, output));
+    });
+    match rx.recv_timeout(limit) {
+        Ok((true, output)) => Ok(output),
+        Ok((false, _)) => anyhow::bail!("HTTP worker answered something else"),
+        Err(_) => anyhow::bail!("HTTP worker never became ready"),
+    }
+}
+
 fn agent_for(timeout_ms: u64) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(30)))
@@ -442,9 +467,10 @@ pub(crate) struct ChannelReader {
 impl std::io::Read for ChannelReader {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         if self.pending.is_empty() {
-            let line = self.rx.recv().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "worker closed")
-            })?;
+            // A closed channel is the end of the body: failures arrive as a marker line first.
+            let Ok(line) = self.rx.recv() else {
+                return Ok(0);
+            };
             self.pending.extend_from_slice(line.as_bytes());
             self.pending.push(b'\n');
         }
