@@ -1,7 +1,11 @@
 //! The checklist's own product: it keeps its rows until the list or the width changes.
 
-use super::super::layout::line::Row;
-use super::super::paint::todo::{self, Task};
+use super::super::row::Row;
+pub(crate) mod rows;
+
+pub(crate) use rows::Task;
+
+use self::rows as todo;
 use crate::ui::tui::TodoFold;
 
 #[derive(Default)]
@@ -15,11 +19,6 @@ pub(crate) struct TodoPanel {
 impl TodoPanel {
     /// The list changed.
     pub(crate) fn changed(&mut self) {
-        self.dirty = true;
-    }
-
-    /// The width changed.
-    pub(crate) fn dropped(&mut self) {
         self.dirty = true;
     }
 
