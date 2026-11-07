@@ -24,6 +24,8 @@ pub(crate) struct Handle {
     pub stop: Arc<AtomicBool>,
     /// This session's HTTP worker: one child, killed and replaced on interrupt.
     pub worker: Arc<SessionWorker>,
+    /// This session's history: read once, appended as turns land.
+    pub transcript: Arc<super::history::Transcript>,
     pub busy: AtomicBool,
     pub gone: AtomicBool,
     pub live: Mutex<Option<Live>>,
@@ -32,18 +34,24 @@ pub(crate) struct Handle {
 }
 
 impl Handle {
-    pub(crate) fn new(birth: Birth) -> Self {
+    pub(crate) fn new(birth: Birth, transcript: Arc<super::history::Transcript>) -> Self {
         Self {
             id: birth.session,
             birth: Mutex::new(birth),
             mailbox: Arc::new(Mailbox::new()),
             stop: Arc::new(AtomicBool::new(false)),
             worker: SessionWorker::new(),
+            transcript,
             busy: AtomicBool::new(false),
             gone: AtomicBool::new(false),
             live: Mutex::new(None),
             partial: Mutex::new(None),
         }
+    }
+
+    /// This session's history cache.
+    pub(crate) fn transcript(&self) -> &Arc<super::history::Transcript> {
+        &self.transcript
     }
 
     /// One lap landed: the running turn's tally so far, and its context size.
@@ -94,9 +102,10 @@ impl Handle {
     }
 
     pub(crate) fn interrupt(&self) {
-        if self.busy.load(std::sync::atomic::Ordering::Acquire) {
-            self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if !self.busy.load(std::sync::atomic::Ordering::Acquire) {
+            return;
         }
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
         self.worker.interrupt();
         self.mailbox.notify();
     }

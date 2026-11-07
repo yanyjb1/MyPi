@@ -11,8 +11,8 @@ job/output.rs           the per-run temp file, an OutputSink; the per-session di
 job/cron.rs             five-field cron parse and next
 job/wake.rs             Wake, WakeSink, the command wake texts
 session/mod.rs          session types
-session/book.rs         Loop, Birth, Message, scheduler, turn start, book_child, unbook
-session/handle.rs       per-session state: birth, live, mailbox, flags
+session/book.rs         Loop, Birth, Message, scheduler, turn start, book_child, unbook, forget
+session/handle.rs       per-session state: birth, live, mailbox, transcript, flags
 session/jobs.rs         Slots (the wake router), the scheduler's values from config
 session/agent.rs        AgentRunner: books a child, waits for its turn, drops it
 session/live.rs         cwd handle, provider/model, system, tool names, compaction instruction, export dir
@@ -22,12 +22,10 @@ session/change.rs       Model and Cwd
 session/child.rs        a sub-session's draft, budget, answer path, submit flag, nudges
 session/source.rs       Source over storage's reader, plus the attached handles
 session/export.rs       Export: a full text out of the database as a file
-session/history.rs      Transcript: the request half's read port over storage's reader
+session/history.rs      Transcript: the session's cached history and the request half's read port
 turn/mod.rs             turn types (ask, cycle, fence)
 turn/cycle.rs           lap loop, mailbox drain, child nudge, settle
 turn/ask.rs             the request boundary, as re-exports
-turn/batch.rs           tool-boundary re-exports
-turn/env.rs             per-turn tool input
 turn/fence.rs           tool-round count
 pen/mod.rs              row writers
 pen/turn.rs             turn open, append, settle
@@ -41,21 +39,26 @@ half's types, re-exported from this domain's root.
 
 ## Relations
 
-- `Loop::book` inserts a handle, makes the session's job service and attaches it to `Source`, then
-  starts the turn scheduler. `Loop::drop` reverses all three through `unbook`.
+- `Loop::book` reads the session's transcript, inserts a handle, makes the session's job service and
+  attaches it to `Source`, then starts the turn scheduler. `Loop::drop` reverses all three through
+  `unbook`.
 - `Loop::deliver` refuses a sub-session and a busy session, and otherwise opens a turn through
   `pen::turn::open` and starts `turn::cycle::run`.
 - `Loop::write_mail` and `Loop::clear_mail` are the slot's only writers from outside.
+- `Loop::forget` reads a session's history again; the api calls it after a rewind.
 - The scheduler waits on `Mailbox::wait_any`; when idle it takes a wake text first, then the slot,
   and opens a turn. A turn the slot opens is announced on the live line so the api can name it.
-- `turn::cycle::run` takes the wake queue into the running turn, opens `Transcript`, expands the session's tool names
-  through `tools::roster`, asks through `Ask::lap`, runs `Batch::run`, hands the finished calls back
-  through `Ask::results`, appends the effects anchored on their result blocks, flushes the lap, and
-  settles through `pen::turn::settle`.
-- A child effect lands as a session row in the same submission as its result block. After the commit
-  the loop attaches the child's `State` (draft, budget, answer path) and starts an `agent` job;
-  `session::agent::AgentRunner` books the child, waits for `Handle::busy` to fall, reads the submit
-  flag, drops the child through `unbook` and reports the answer path in the wake.
+- `start_turn` appends the turn's opening message to the session's transcript; `turn::cycle::run`
+  takes the wake queue into the running turn, appends each wake, expands the session's tool names
+  through `tools::roster`, asks through `Ask::lap` with the session's shared snapshot, runs
+  `Batch::run`, hands the finished calls back through `Ask::results`, appends the landed blocks and
+  the effects anchored on their result blocks, flushes the lap, and settles through
+  `pen::turn::settle`. A compaction reloads the transcript after it settles.
+- A child effect lands as an archive row, a session row and the result block in one submission; the
+  session row points at the child's own archive. After the commit the loop attaches the child's
+  `State` (draft, budget, answer path) and starts an `agent` job; `session::agent::AgentRunner`
+  books the child, waits for `Handle::busy` to fall, reads the submit flag, drops the child through
+  `unbook` and reports the answer path in the wake.
 - A sub-session round that ends with an empty mailbox and no submit gets one more user block, at
   most three times, before the turn is allowed to end.
 - `job::JobService` answers `tools::contract::job::JobHost`; `session::jobs::Slots` holds the session
@@ -67,10 +70,12 @@ half's types, re-exported from this domain's root.
   deletions by name inside the session's visible blocks.
 - `session::source` answers the tool ports over storage's read plan (`Sheet`, `Cond`, `Query`): the
   filtering, ordering and limit run in SQL, and the caller names columns and values only.
-- `session::history::Transcript` answers `History`: the session's list from its newest compaction
-  marker on, every block decoded into the request half's messages, and the hash holding a citation.
-- `pen::turn::settle` writes `Row::Settle` and, when the first lap reported a prompt, a
-  `Row::Baseline`.
+- `session::history::Transcript` answers `History`: it holds the session's list from its newest
+  compaction marker on as one flat message list, hands it out as a shared snapshot, appends each
+  landed block, and reads the list again on `reload`. `turns` reads the database for compaction, and
+  `holder` holds a citation's hash.
+- `pen::turn::settle` writes `Row::Settle` and, when the session's first turn reported a prompt, a
+  `Row::Baseline`. Later turns and compaction turns never report one.
 - `pen::turn::borrow` writes one borrowed turn per kept original turn, each with its ranges and the
   `borrowed` stop reason.
 - `session::change` writes `Row::Switch` or `Row::MoveCwd` and updates the handle. A change never
@@ -80,7 +85,7 @@ half's types, re-exported from this domain's root.
 
 ## Callers
 
-- The API calls `Loop::book`, `deliver`, `interrupt`, `drop`, `change`, `write_mail`,
+- The API calls `Loop::book`, `deliver`, `interrupt`, `drop`, `forget`, `change`, `write_mail`,
   `clear_mail`.
 - The scheduler, turn and job threads live inside this domain.
 - The request half implements `Ask`; the tool half implements `Batch` and its ports are answered by

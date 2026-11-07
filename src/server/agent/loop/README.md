@@ -13,6 +13,7 @@ Loop::book(Birth) -> Result<SessionId>
 Loop::deliver(session, Message) -> Result<TurnId>
 Loop::interrupt(session)
 Loop::drop(session)
+Loop::forget(session)
 Loop::change(session, Change) -> Result<()>
 Loop::write_mail(session, Message) -> Result<()>
 Loop::clear_mail(session) -> Result<()>
@@ -30,41 +31,46 @@ from `request::contract`; tool shapes come from `agent::tools::contract`; both a
 so a caller names one vocabulary. `Retention` is `Chars(n)` or `Blocks(n)`.
 
 `book` only opens the session; the caller has already written the `sessions` row and resolved the
-system prompt, the tool names and the compaction instruction. It also starts the turn scheduler and
-attaches the session's job service to `Source`. `deliver` opens a turn and returns its id; a busy
-session and a sub-session both refuse it, nothing is queued.
+system prompt, the tool names and the compaction instruction. It reads the session's history once
+into its transcript, starts the turn scheduler, and attaches the session's job service to `Source`.
+`deliver` opens a turn and returns its id; a busy session and a sub-session both refuse it, nothing
+is queued.
 
 `interrupt` touches a busy session only: it sets the stop flag (the tools and the next lap read it)
 and kills the session's worker, which is what ends a blocking read. An idle session hears nothing.
 A turn stopped this way settles as `interrupted`, never as broken.
 
 `Mailbox` holds a wake queue and one user slot. A wake text is written as its own `wake` block when
-the loop takes it; consecutive wake blocks are joined into one user message only when a request is
-assembled. The slot is written whole by a front end, taken by the loop at a blocking point, and
-cleared by the take; the turn it opens is named after the slot. A turn stops when the user
-interrupts, or when the wake queue is empty and the model asks for no tools. A sub-session whose
-turn ends without `final submit` gets one more user message, up to three, before the turn is
-allowed to end.
+the loop takes it, and each wake block is its own user message. The slot is written whole by a front
+end, taken by the loop at a blocking point, and cleared by the take; the turn it opens is named after
+the slot. A turn stops when the user interrupts, or when the wake queue is empty and the model asks
+for no tools. A sub-session whose turn ends without `final submit` gets one more user message, up to
+three, before the turn is allowed to end.
 
 `job` is the scheduler behind every background task: a per-session service, a concurrency pool, a
 cron clock, one output file per run, and a wake that starts a turn. A tool describes a job and holds
 `JobHost`; the loop owns creation, cancellation and the runner — `kairos` and a child's runner are
 both clients.
 
-`pen` is the only writer of storage rows. `session::history::Transcript` is the read side: it
-implements `request::contract::History` over storage's reader. `turn/ask` is the request boundary,
-`turn/batch` the tool boundary. The live line is not this domain's vocabulary; it is the request
-half's, and the loop only adds tool events to it.
+`pen` writes the turn's rows: request blocks, tool effects, artifacts, openings and settlements.
+Session changes and a child's archive are their own rows. `session::history::Transcript` is the read
+side and the session's cache: the list is read when the session opens, appended as its own blocks
+land, and read again after a rewind or a compaction. `turn/ask` is the request boundary; `turn/cycle`
+is the lap loop. The live line is not this domain's vocabulary; it is the request half's, and the
+loop only adds tool events to it.
 
 ## 2. Design Intent
 
 - **One session owns its state.** No process-global current session; every lock is per session, and
   a batch runs with the live state taken out of the slot.
 - **One write point.** `pen` turns request blocks, tool effects, artifacts, turn openings and
-  settlements into `Row`s; no other module builds a `Ref`. A lap's blocks and the effects their
-  results produced land in one submission, so an effect's anchor is a row index in that same commit.
+  settlements into `Row`s. A lap's blocks and the effects their results produced land in one
+  submission, so an effect's anchor is a row index in that same commit.
 - **Each boundary is the other side's.** Request types are declared with the request half, tool
   types with the tool half; the loop re-exports both and imports neither private shape.
+- **One history read per session.** The transcript is read when the session opens; every block the
+  session writes is appended after it lands. A rewind asks for a reload; a compaction rewrites the
+  list and rebuilds it. A lap's request sees the same bytes a fresh read would give it.
 - **One scheduler per session.** Wake has to start a turn while the API is idle; the scheduler waits
   on the mailbox and starts only when the slot is free.
 - **The user's turns and the tool's wake share one mechanism but not one queue.** User text is
@@ -75,8 +81,11 @@ half's, and the loop only adds tool events to it.
 - **A child ends only by submitting.** A round that ends without `final submit` is not the end of
   the task: the loop nudges it, three times at most, then settles the job as failed. The answer file
   is what the parent reads, not the session row.
-- **Baseline is the first lap's prompt.** It is attached to the archive and only lowered; a later
-  model switch starts from a different archive and its own baseline.
+- **A child has its own archive.** The row pair — the child's `request_meta` and its `sessions` row —
+  lands in one submission; the child's baseline never touches its parent's.
+- **Baseline is the first request's prompt.** Only a session's first turn contributes, from its first
+  lap; the archive keeps the smallest such value across the sessions that share it. It never rises,
+  and later turns never contribute.
 - **Compaction is a turn mode.** Its first block is the user message carrying the focus, the summary
   lands as an assistant block, its list place carries the marker, and the retained region is
   borrowed by intervals, not copied blocks.
@@ -89,6 +98,7 @@ half's, and the loop only adds tool events to it.
 
 - `config.server.agent.loop.maxToolCalls` — tool-round fence; false turns it off.
 - `config.server.agent.loop.scrooge` — true forbids a mid-session model change.
+- `config.server.agent.loop.request.maxRetries` / `retryInterval` / `retryTimeout` — retries after the first attempt, seconds between them, and the response-head wait of one attempt.
 - `config.server.agent.tools.outputMaxLines` / `outputMaxBytes` — the inline budget handed to the tool layer.
 - `config.server.agent.tools.bashTimeout` — one command's wall-clock cap.
 - `config.server.agent.tools.browser.{bin,port,profileDir,idleSecs,userAgent,extraArgs}` — the web tool's launch values, and `config.web.bringToFront` for its challenge window.

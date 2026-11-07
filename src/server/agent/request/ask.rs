@@ -85,13 +85,9 @@ impl Request {
         Ok(client)
     }
 
-    /// Every message of the session, from the newest compaction marker on.
-    fn stored(history: &dyn History, session: i64) -> Result<Vec<Message>> {
-        let turns = history.turns(session)?;
-        Ok(turns
-            .into_iter()
-            .flat_map(|turn| turn.pieces.into_iter().map(|piece| piece.message))
-            .collect())
+    /// The session's messages, shared; the turn's snapshot is not copied per lap.
+    fn stored(history: &dyn History, session: i64) -> Result<Arc<Vec<Message>>> {
+        history.messages(session)
     }
 }
 
@@ -104,7 +100,7 @@ impl Ask for Request {
             self.options.cap(&input.transport),
             true,
             &input.system,
-            &stored,
+            &stored[..],
             &input.tools,
             input.session,
         )?;

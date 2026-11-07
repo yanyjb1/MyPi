@@ -252,8 +252,6 @@ pub enum Row {
         session: i64,
         model: Option<(String, String)>,
     },
-    /// `sessions.meta`.
-    Meta { session: i64, meta: Option<Ref> },
     /// `sessions.cwd`.
     MoveCwd { session: i64, cwd: String },
     /// A new round row.

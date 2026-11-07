@@ -63,6 +63,21 @@ impl Protocol for Completion {
         })
     }
 
+    fn budget(&self) -> protocol::stream::Budget {
+        protocol::stream::Budget {
+            first: self
+                .compat
+                .stream_first_event_timeout_ms
+                .filter(|ms| *ms > 0)
+                .map(std::time::Duration::from_millis),
+            idle: self
+                .compat
+                .stream_idle_timeout_ms
+                .filter(|ms| *ms > 0)
+                .map(std::time::Duration::from_millis),
+        }
+    }
+
     fn decode(
         &self,
         reader: Box<dyn BufRead>,

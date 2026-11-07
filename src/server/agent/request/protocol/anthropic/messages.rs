@@ -59,6 +59,10 @@ impl Protocol for Messages {
         })
     }
 
+    fn budget(&self) -> stream::Budget {
+        stream::Budget::default()
+    }
+
     fn decode(
         &self,
         reader: Box<dyn BufRead>,

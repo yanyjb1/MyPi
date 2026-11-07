@@ -17,19 +17,19 @@
 | `protocol/mod.rs` | `ProtocolId`, `Protocol`, `Endpoint`, `ProtocolRequest`, `WireRequest`, `Output` |
 | `protocol/blocks.rs` | block constructors |
 | `protocol/sse/` | `read` (one raw line), `frame` (`data:` frames and the worker's error line), `event` (`event:` + `data:` frames) |
-| `protocol/stream.rs` | the stream loop: cancel, the silent-connection budgets, `data:` or `event:` frames, how it ended |
+| `protocol/stream.rs` | the stream loop: cancel, `data:` or `event:` frames, how it ended |
 | `protocol/stitch.rs` | tool calls stitched out of stream deltas |
 | `protocol/openai/` | the OpenAI family: `completion`, `responses`, `deepseek`, each with its own body and decode |
 | `protocol/openai/completion/` | the completion dialect: its compatibility table, the text-embedded call scanner, the template-markup filter |
 | `protocol/anthropic/` | the Messages line |
-| `transport/mod.rs` | `Provider`, and sending one call to either the worker or a direct connection |
-| `transport/client.rs` | one provider connection: its agent, retry loop, cancel flag |
-| `transport/worker.rs` | `SessionWorker` (one child per session: spawn, kill, replace, in-flight) and the child's line protocol |
+| `transport/mod.rs` | `Provider`, and sending one call through the session's worker |
+| `transport/client.rs` | one provider connection: its protocol, retry loop, cancellable wait |
+| `transport/worker.rs` | `SessionWorker` (one child per session: spawn, kill, replace, in-flight), the child's line protocol, its persistent connection, and the stream's silence deadline |
 
 ## Relations
 
-- `ask::Request::lap` asks `History::turns`, flattens it, builds with `assembly::build`, and hands the
-  call to `Client::complete`.
+- `ask::Request::lap` asks `History::messages`, builds with `assembly::build`, and hands the call to
+  `Client::complete`.
 - `Client::complete` asks its `Protocol` for a `WireRequest`, sends it through `transport::send`, and
   decodes the reader through the same `Protocol`. It owns retry and the notices one failure produces;
   the kill belongs to the session's worker, not to this loop.
@@ -39,8 +39,8 @@
   lands one block per result.
 - `ask::Request::compact` plans the cut with `compact::plan`, builds with `assembly::compaction`,
   streams the summary, and checks the shrink before returning.
-- `transport::send` asks the session's worker for a child; a direct connection when the child could
-  not start. It never retries.
+- `transport::send` asks the session's worker for its child and hands over the protocol's silence
+  budget. It never retries.
 - `protocol::blocks` builds every block; no protocol builds one by hand.
 - The request half opens no database, reads no configuration file, and never names a tool.
 
@@ -52,8 +52,3 @@
 - The loop owns each session's `SessionWorker` on its handle: `LapInput` / `CompactInput` carry it,
   and `Handle::interrupt` is what kills the child.
 - Storage is reached by the loop, never from here.
-
-## Not wired
-
-- A session that could not start its child falls back to a direct connection; cancellation there
-  still waits on the reader, and the retry path tries the child again.

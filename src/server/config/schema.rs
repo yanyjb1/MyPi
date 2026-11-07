@@ -14,6 +14,9 @@ keys! {
     KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE = "config", "server.request.compact", "instructionFile", Text, DefaultValue::Null, "Compaction instruction file; a profile's compact.md wins.", true;
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS = "config", "server.agent.loop", "maxToolCalls", BoolOrInt, DefaultValue::Int(20000), "Fence on tool-call rounds; false turns it off.", true;
     KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE = "config", "server.agent.loop", "scrooge", Bool, DefaultValue::Bool(false), "Forbid a model change mid-session.", true;
+    KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES = "config", "server.agent.loop.request", "maxRetries", Int, DefaultValue::Int(10), "Attempts after the first before a request fails.", true;
+    KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_INTERVAL = "config", "server.agent.loop.request", "retryInterval", Int, DefaultValue::Int(30), "Seconds between retry attempts.", true;
+    KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_TIMEOUT = "config", "server.agent.loop.request", "retryTimeout", Int, DefaultValue::Int(120), "Seconds one attempt waits for the response head.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT = "config", "server.agent.tools", "bashTimeout", Int, DefaultValue::Int(600), "Cap on one bash command, in seconds.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES = "config", "server.agent.tools", "outputMaxLines", Int, DefaultValue::Int(512), "Lines of one tool result kept inline.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES = "config", "server.agent.tools", "outputMaxBytes", Int, DefaultValue::Int(262144), "Bytes of one tool result kept inline.", true;

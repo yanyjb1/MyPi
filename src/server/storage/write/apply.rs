@@ -61,14 +61,6 @@ fn one(
             sessions::switch(tx, *session, model.as_ref())?;
             0
         }
-        Row::Meta { session, meta } => {
-            let meta = match meta {
-                Some(meta) => Some(id_of(ids, meta)?),
-                None => None,
-            };
-            shared::set_meta(tx, *session, meta)?;
-            0
-        }
         Row::MoveCwd { session, cwd } => {
             sessions::move_cwd(tx, *session, cwd)?;
             0

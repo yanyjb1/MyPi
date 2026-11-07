@@ -34,7 +34,8 @@ Subscribe: `watch`, `submit`, `compact`.
 
 - `init` (post) writes the `sessions` row and its `request_meta` archive in one submission, then
   books the session. The archive is written exactly once per session; the model may change later,
-  the archive may not.
+  the archive may not. A child's archive is written by the loop, in the same submission as the
+  child's session row.
 - `init` (call), `blocks`, `meta`, `memo`, `children`, `sessions` read through `storage::Reader`
   only. The api holds no SQL and decodes no column.
 - `todo` answers the whole list `Loop::todo` replayed from the session's own `todo` calls.
@@ -48,15 +49,16 @@ Subscribe: `watch`, `submit`, `compact`.
   the next prompt is the summary plus the retained tail, so `usage` estimates it from the truncation
   point — `context` is the summary's completion plus each cut turn's own added tokens weighted by
   how much of its intervals the tail kept, plus the archive's floor — and says so with `estimated`.
-  `baseline_prompt` is that floor: the smallest prompt this session's request archive ever carried,
-  which is what a front end shows before the first request lands.
+  `baseline_prompt` is that floor: the smallest first-turn prompt among the sessions that share
+  this request archive, which is what a front end shows before the first request lands.
 - `submit` and `compact` open a turn; a session already in a turn answers `busy`. Nothing is queued
   by the api: a front end that wants a sentence to wait writes it to `mailbox` instead.
 - `mailbox` is the session's one pending message. `text` present and non-empty writes it whole over
   whatever was there; no `text` clears it. The loop takes it at a blocking point and opens a turn
   named `mailbox`, exactly as a `submit` would; taking it clears it.
 - `interrupt`, `cwd`, `switch`, `delete`, `rewind` act on the running session or its rows.
-  `interrupt` is silent: it stops what runs, and an idle session hears nothing.
+  `interrupt` is silent: it stops what runs, and an idle session hears nothing. A rewind tells the
+  loop to read that session's history again.
 - A refusal the user can actually cause is said in the session's own stream — one `stream notice`
   frame — instead of only in the answer the front end may drop. Today that is `delete` on a busy
   session and `cwd` on a path that does not exist or is not a workspace.
@@ -159,7 +161,9 @@ goes away.
 - **The writer is a turn, not a role.** It exists while a turn runs and only then, so it needs no
   takeover, no demotion, and no bookkeeping across turns.
 - **The archive is written once.** A session's system prompt and tool manuals are what the front end
-  chose when it opened the session; a later model switch changes the model, not the identity.
+  chose when it opened the session; a later model switch changes the model, not the identity. An
+  archive is identified by its system prompt, its tools, its provider and its model; an identical
+  one is reused, and a child's is its own.
 - **Config is read, never parsed, here.** `Config` owns the files; this domain asks for values and
   keeps no path.
 

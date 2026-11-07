@@ -65,6 +65,10 @@ impl Protocol for Deepseek {
         })
     }
 
+    fn budget(&self) -> Budget {
+        Budget::default()
+    }
+
     fn decode(
         &self,
         mut reader: Box<dyn BufRead>,
@@ -76,7 +80,7 @@ impl Protocol for Deepseek {
         let mut usage = Usage::default();
         let mut calls = Calls::default();
 
-        let end = stream::data(reader.as_mut(), cancel, Budget::default(), |payload| {
+        let end = stream::data(reader.as_mut(), cancel, |payload| {
             let chunk: Value = serde_json::from_str(payload)?;
 
             if let Some(u) = chunk.get("usage").filter(|v| !v.is_null()) {

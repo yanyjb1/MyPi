@@ -12,10 +12,10 @@ use crate::server::agent::r#loop::session::agent::AgentRunner;
 use crate::server::agent::r#loop::session::book::{Birth, Inner, Message, Retention};
 use crate::server::agent::r#loop::session::child::State as ChildState;
 use crate::server::agent::r#loop::session::handle::Handle;
-use crate::server::agent::r#loop::session::history::Transcript;
 use crate::server::agent::r#loop::session::live::Live;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
 use crate::server::agent::request::live::{Element, Event, Notice, NoticeLevel, Stream};
+use crate::server::agent::request::message::Message as Stored;
 use crate::server::agent::tools::contract::call::BatchInput;
 use crate::server::agent::tools::contract::job::{JobRunner, JobSpec, Schedule};
 use crate::server::agent::tools::contract::output::Effect;
@@ -24,7 +24,7 @@ use crate::server::agent::tools::contract::view::Source;
 use crate::server::agent::tools::registry::roster;
 use crate::server::agent::tools::subagent::{FINAL, TASK};
 use crate::server::platform::time::now_stamp;
-use crate::server::storage::Row;
+use crate::server::storage::{Ref, RequestMeta, Row};
 
 /// Which machine a turn runs.
 #[derive(Clone)]
@@ -42,12 +42,15 @@ pub(crate) fn run(
     turn: i64,
     live: &mut Live,
     mode: Mode,
+    first_turn: bool,
 ) -> Result<Stop> {
     let child = inner.source.child(handle.id);
+    let transcript = handle.transcript().clone();
+    let history: Arc<dyn History> = transcript.clone();
     if let Mode::Compact { retention, focus } = mode {
         let reply = match inner.ask.compact(CompactInput {
             session: handle.id,
-            history: Arc::new(Transcript::open(&inner.writer.path())?),
+            history: history.clone(),
             transport: live.transport(),
             system: live.system.clone(),
             tools: manuals(&live.tools),
@@ -82,21 +85,15 @@ pub(crate) fn run(
             pen::turn::append_summary(&inner.writer, turn, reply.text)?;
         }
         pen::turn::borrow(&inner.writer, handle.id, &reply.borrows)?;
-        pen::turn::settle(
-            &inner.writer,
-            turn,
-            Stop::Model,
-            usage,
-            Some(reply.usage.prompt).filter(|p| *p > 0),
-            handle.meta(),
-        )?;
+        pen::turn::settle(&inner.writer, turn, Stop::Model, usage, None, handle.meta())?;
+        transcript.reload()?;
         return Ok(Stop::Model);
     }
 
     let mut usage = Usage::default();
     let mut fence = Fence::new(inner.settings.max_tool_rounds);
     let stop;
-    let mut first = true;
+    let mut first_lap = true;
     let mut baseline = None;
 
     loop {
@@ -104,14 +101,21 @@ pub(crate) fn run(
             stop = Stop::User;
             break;
         }
-        let appended = drain(inner, handle, turn)?;
+        let wakes = drain(inner, handle, turn)?;
+        let appended = !wakes.is_empty();
+        for text in wakes {
+            transcript.append_user(Stored::User {
+                prefix: None,
+                content: text,
+                suffix: None,
+            });
+        }
         if fence.hit() {
             stop = Stop::Fence;
             break;
         }
 
         let blocks = Arc::new(Pen::new(inner.writer.clone(), turn));
-        let history: Arc<dyn History> = Arc::new(Transcript::open(&inner.writer.path())?);
         let lap = match inner.ask.lap(LapInput {
             session: handle.id,
             history: history.clone(),
@@ -140,15 +144,16 @@ pub(crate) fn run(
                 return Err(e);
             }
         };
-        if first {
+        if first_lap && first_turn {
             baseline = Some(lap.usage.prompt);
         }
-        first = false;
+        first_lap = false;
         usage += lap.usage;
         handle.publish(&usage, lap.usage.prompt + lap.usage.completion);
 
         if lap.calls.is_empty() {
-            blocks.flush()?;
+            let (_, landed_blocks) = blocks.flush()?;
+            transcript.append(landed_blocks)?;
             if !appended {
                 if let Some(text) = child.as_ref().and_then(|child| child.nag()) {
                     pen::turn::append_user(
@@ -160,6 +165,11 @@ pub(crate) fn run(
                             suffix: None,
                         },
                     )?;
+                    transcript.append_user(Stored::User {
+                        prefix: None,
+                        content: text.to_string(),
+                        suffix: None,
+                    });
                     continue;
                 }
                 stop = lap.stop;
@@ -195,11 +205,16 @@ pub(crate) fn run(
             return Err(e);
         }
         let (children, deletes) = effects(&blocks, &results, live)?;
-        let landed = blocks.flush()?;
+        let (landed, landed_blocks) = blocks.flush()?;
+        transcript.append(landed_blocks)?;
         for (at, spec) in children {
             let id = landed.ids.get(at).copied().unwrap_or(0);
             if id <= 0 {
                 return Err(anyhow!("a sub-session row was not created"));
+            }
+            let meta = landed.ids.get(spec.meta_at).copied().unwrap_or(0);
+            if meta <= 0 {
+                return Err(anyhow!("a sub-session archive was not created"));
             }
             let jobs = inner
                 .source
@@ -219,7 +234,7 @@ pub(crate) fn run(
                     system: live.system.clone(),
                     tools: spec.tools,
                     compact: live.compact.clone(),
-                    meta: handle.meta(),
+                    meta: Some(meta),
                     cwd: Some(spec.cwd),
                 },
                 spec.start,
@@ -267,6 +282,8 @@ struct Spawn {
     start: String,
     budget: u32,
     answer: std::path::PathBuf,
+    /// The row that holds the child's own request archive.
+    meta_at: usize,
 }
 
 /// Put every effect into the lap's commit; return what still needs acting after it lands.
@@ -293,23 +310,38 @@ fn effects(
                     max_tool_calls,
                     answer,
                 } => {
-                    let at = blocks.len();
-                    blocks.push(vec![Row::Session {
-                        started_at: now_stamp(),
-                        cwd: cwd.to_string_lossy().into_owned(),
-                        model: Some((live.provider.clone(), live.model.clone())),
-                        name: None,
-                        anchor: Some(anchor),
-                        meta: None,
-                    }]);
+                    let meta_at = blocks.len();
+                    let tools = child_tools(tools);
+                    let tools_json = serde_json::to_string(&roster(&tools))
+                        .map_err(|e| anyhow!("a child's tool manual is not JSON: {e}"))?;
+                    blocks.push(vec![
+                        Row::Request {
+                            meta: RequestMeta {
+                                model: live.model.clone(),
+                                provider: live.provider.clone(),
+                                system: live.system.clone(),
+                                tools_json,
+                                baseline_prompt: None,
+                            },
+                        },
+                        Row::Session {
+                            started_at: now_stamp(),
+                            cwd: cwd.to_string_lossy().into_owned(),
+                            model: Some((live.provider.clone(), live.model.clone())),
+                            name: None,
+                            anchor: Some(anchor),
+                            meta: Some(Ref::Batch(meta_at)),
+                        },
+                    ]);
                     children.push((
-                        at,
+                        meta_at + 1,
                         Spawn {
-                            tools: child_tools(tools),
+                            tools,
                             cwd: cwd.clone(),
                             start: start.clone(),
                             budget: *max_tool_calls,
                             answer: answer.clone(),
+                            meta_at,
                         },
                     ));
                 }
@@ -382,16 +414,16 @@ fn broken(
     );
 }
 
-/// Take every wake text into this turn. `true` = something was appended.
-fn drain(inner: &Arc<Inner>, handle: &Handle, turn: i64) -> Result<bool> {
-    let mut appended = false;
+/// Take every wake text into this turn; the texts are the ones already written as blocks.
+fn drain(inner: &Arc<Inner>, handle: &Handle, turn: i64) -> Result<Vec<String>> {
+    let mut out = Vec::new();
     while let Some(text) = handle.mailbox.take_wake() {
         pen::turn::append_wake(&inner.writer, turn, text.clone())?;
         let _ = inner.out.send(Event {
             session: handle.id,
-            element: Element::Stream(Stream::Wake(text)),
+            element: Element::Stream(Stream::Wake(text.clone())),
         });
-        appended = true;
+        out.push(text);
     }
-    Ok(appended)
+    Ok(out)
 }

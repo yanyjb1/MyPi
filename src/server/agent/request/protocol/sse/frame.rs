@@ -14,25 +14,31 @@ pub enum Frame {
     Skip,
 }
 
-/// Classify one line. A worker failure travels inside the stream, so it surfaces here.
+/// A worker failure travels inside the stream; classify it before anything else.
+pub fn worker_error(line: &str) -> Option<anyhow::Error> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let error = line.strip_prefix("__WORKER_ERROR__")?;
+    if let Some(rest) = error.strip_prefix("__HTTP__") {
+        let (status, body) = rest.split_once('\n').unwrap_or((rest, ""));
+        if let Ok(status) = status.parse::<u16>() {
+            return Some(anyhow::Error::new(Failure::Http {
+                status,
+                body: body.to_string(),
+            }));
+        }
+    }
+    Some(anyhow::Error::new(Failure::NoResponse {
+        source: error.to_string(),
+    }))
+}
+
+/// Classify one line.
 pub fn frame(line: &str) -> Result<Frame> {
+    if let Some(error) = worker_error(line) {
+        return Err(error);
+    }
     let line = line.strip_suffix('\n').unwrap_or(line);
     let line = line.strip_suffix('\r').unwrap_or(line);
-
-    if let Some(error) = line.strip_prefix("__WORKER_ERROR__") {
-        if let Some(rest) = error.strip_prefix("__HTTP__") {
-            let (status, body) = rest.split_once('\n').unwrap_or((rest, ""));
-            if let Ok(status) = status.parse::<u16>() {
-                return Err(anyhow::Error::new(Failure::Http {
-                    status,
-                    body: body.to_string(),
-                }));
-            }
-        }
-        return Err(anyhow::Error::new(Failure::NoResponse {
-            source: error.to_string(),
-        }));
-    }
 
     let Some(payload) = line.strip_prefix("data: ") else {
         return Ok(Frame::Skip);

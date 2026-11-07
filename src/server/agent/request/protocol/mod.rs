@@ -106,6 +106,9 @@ pub trait Protocol: Send + Sync {
     /// Serialize one call for this host.
     fn request(&self, endpoint: &Endpoint, req: &ProtocolRequest) -> Result<WireRequest>;
 
+    /// How long a silent stream may last; the worker child enforces it.
+    fn budget(&self) -> stream::Budget;
+
     /// Read the reply, emitting pieces as they arrive and each block as it closes.
     fn decode(
         &self,

@@ -184,6 +184,15 @@ pub struct Reference {
 pub trait History {
     /// From the newest compaction marker on, in list order.
     fn turns(&self, session: i64) -> Result<Vec<TurnView>>;
+    /// Every message the list carries, shared; a lap never copies them.
+    fn messages(&self, session: i64) -> Result<Arc<Vec<Message>>> {
+        Ok(Arc::new(
+            self.turns(session)?
+                .into_iter()
+                .flat_map(|turn| turn.pieces.into_iter().map(|piece| piece.message))
+                .collect(),
+        ))
+    }
     /// The hash that already holds this exact citation, if any.
     fn holder(&self, reference: &str) -> Result<Option<String>>;
 }

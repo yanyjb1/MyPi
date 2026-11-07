@@ -6,6 +6,7 @@ use anyhow::Result;
 
 use crate::server::agent::r#loop::session::{Message, Retention};
 use crate::server::agent::r#loop::turn::ask::{Stop, Usage};
+use crate::server::agent::request::message::Message as Stored;
 use crate::server::storage::{BlockKind, NewBlock, Ref, RoundUsage, Row, Submit, Writer};
 
 /// How a turn opens.
@@ -32,8 +33,8 @@ pub fn open(
     start: Start,
     cwd: &Path,
     model: Option<(String, String)>,
-) -> Result<i64> {
-    let (block, compaction) = match start {
+) -> Result<(i64, Stored)> {
+    let (block, compaction, message) = match start {
         Start::User {
             prefix,
             text,
@@ -41,31 +42,49 @@ pub fn open(
         } => (
             NewBlock {
                 kind: BlockKind::User,
-                content: Some(text),
-                prefix,
-                suffix,
+                content: Some(text.clone()),
+                prefix: prefix.clone(),
+                suffix: suffix.clone(),
                 ts: Some(crate::server::platform::time::now_stamp()),
                 ..NewBlock::default()
             },
             false,
-        ),
-        Start::Compact { focus, .. } => (
-            NewBlock {
-                kind: BlockKind::User,
-                content: Some(focus.unwrap_or_default()),
-                ts: Some(crate::server::platform::time::now_stamp()),
-                ..NewBlock::default()
+            Stored::User {
+                prefix,
+                content: text,
+                suffix,
             },
-            true,
         ),
+        Start::Compact { focus, .. } => {
+            let content = focus.unwrap_or_default();
+            (
+                NewBlock {
+                    kind: BlockKind::User,
+                    content: Some(content.clone()),
+                    ts: Some(crate::server::platform::time::now_stamp()),
+                    ..NewBlock::default()
+                },
+                true,
+                Stored::User {
+                    prefix: None,
+                    content,
+                    suffix: None,
+                },
+            )
+        }
         Start::Wake { text } => (
             NewBlock {
                 kind: BlockKind::Wake,
-                content: Some(text),
+                content: Some(text.clone()),
                 ts: Some(crate::server::platform::time::now_stamp()),
                 ..NewBlock::default()
             },
             false,
+            Stored::User {
+                prefix: None,
+                content: text,
+                suffix: None,
+            },
         ),
     };
     let rows = vec![
@@ -90,12 +109,13 @@ pub fn open(
         },
     ];
     let landed = w.push(Submit { rows })?;
-    landed
+    let turn = landed
         .ids
         .first()
         .copied()
         .filter(|id| *id > 0)
-        .ok_or_else(|| anyhow::anyhow!("the writer opened no turn"))
+        .ok_or_else(|| anyhow::anyhow!("the writer opened no turn"))?;
+    Ok((turn, message))
 }
 
 /// Append one user message to a running turn.

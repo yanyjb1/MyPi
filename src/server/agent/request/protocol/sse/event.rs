@@ -24,6 +24,9 @@ pub fn read_event(reader: &mut dyn BufRead) -> Result<Option<SseEvent>> {
                 Ok(Some(SseEvent { event, data }))
             };
         }
+        if let Some(error) = super::frame::worker_error(&line) {
+            return Err(error);
+        }
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
             if data.is_empty() && event.is_none() {

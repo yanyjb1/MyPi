@@ -41,15 +41,14 @@ Notice = { level, text }
 
 `ToolEvent` belongs to the loop.
 
-A stream has no total budget: one lap runs as long as the model keeps talking, and it ends only
-when no line has arrived for the provider's silence budget, or 600 s when the provider names none.
-Cancellation is a kill, not a poll: the session's worker dies and the reader sees its pipe close.
-Only the direct fallback polls once a second, because there the reader is a socket.
+A stream has no total budget: one lap runs as long as the model keeps talking. The worker child
+holds it to the protocol's silence budget (600 s when the host names none) and reports a timeout when
+it expires. Cancellation is a kill: the session's worker dies and the reader sees its pipe close.
 
-The history read port has two queries: `turns(session)` — from the newest compaction marker on, in
-list order, each turn carrying its interval list (a turn has several when other sessions wrote
-between its batches) and its messages keyed by block id; and `holder(reference)` — the content hash that already
-holds that exact citation, if any.
+The history read port has three queries: `messages(session)` — the session's messages, shared, so a
+lap never copies them; `turns(session)` — the same list as turns with their interval lists (a turn
+has several when other sessions wrote between its batches), used by compaction; and
+`holder(reference)` — the content hash that already holds that exact citation, if any.
 
 A tool result whose text exceeds the tools' own budget arrives with its full text. Request writes it
 under the artifact directory, appends a citation to the visible part, and hands the artifact to the
@@ -68,8 +67,9 @@ instruction last. A summary not smaller than its region is an error and leaves t
 reasoning replay and streaming quirks. The block types are decided here, once, so the loop and the
 storage never learn a wire format.
 
-**Every lap rebuilds from storage.** Nothing about a conversation is cached here, so a restarted
-process sends the same bytes and the prefix cache still pays.
+**The loop reads a session once.** The history port hands out one shared snapshot per session, so a
+lap never copies it. A restarted process seeds the same bytes from storage, so the prefix cache still
+pays.
 
 **Increments and blocks are two different things.** Pieces go to the live line as they arrive; a
 block is written once, when it closes. The last block of a reply is held back by one so it can carry
@@ -94,8 +94,6 @@ notice, no retry, and no error text.
 
 1. A worker's HTTP status reaches the decoder with its body split across lines; the status survives
    and the body may arrive empty.
-2. A session whose child could not start falls back to a direct connection; an interrupt there waits
-   on the reader, and only the next request tries for a child again.
 
 ## 4. Config Fields
 
@@ -108,6 +106,6 @@ file.
 | `config.server.request.compact.retainTail` | characters a compaction keeps when the caller names no budget |
 | `config.server.agent.loop.request.maxRetries` | retries after the first attempt |
 | `config.server.agent.loop.request.retryInterval` | fixed wait between attempts, in seconds |
-| `config.server.agent.loop.request.retryTimeout` | how long one attempt waits for the first byte, in seconds |
+| `config.server.agent.loop.request.retryTimeout` | how long one attempt waits for the response head, in seconds |
 
 The output cap is not a configuration key: the caller must hand one in at startup.

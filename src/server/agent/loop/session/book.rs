@@ -148,7 +148,11 @@ impl Loop {
     /// Open a session. It stays lazy until the first message arrives.
     pub fn book(&self, birth: Birth) -> Result<i64> {
         let id = birth.session;
-        let handle = Arc::new(Handle::new(birth));
+        let transcript = Arc::new(super::history::Transcript::open(
+            &self.inner.writer.path(),
+            id,
+        )?);
+        let handle = Arc::new(Handle::new(birth, transcript));
         if !self.inner.slots.insert(id, handle.clone()) {
             bail!("session {id} is already booked");
         }
@@ -196,6 +200,18 @@ impl Loop {
         unbook(&self.inner, id);
     }
 
+    /// A rewind rewrote this session's list: drop the cache and read it again.
+    pub fn forget(&self, session: i64) {
+        if let Ok(handle) = self.handle(session)
+            && let Err(e) = handle.transcript().reload()
+        {
+            crate::server::platform::log::warn(
+                "loop",
+                format!("session {session}: history reload failed: {e:#}"),
+            );
+        }
+    }
+
     /// Apply one change; a `Cwd` change answers the directory it landed on.
     pub fn change(&self, session: i64, change: Change) -> Result<Option<std::path::PathBuf>> {
         let handle = self.handle(session)?;
@@ -228,15 +244,11 @@ impl Loop {
 }
 
 pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Result<Arc<Handle>> {
-    if let Some(meta) = birth.meta {
-        inner.writer.push(crate::server::storage::Submit {
-            rows: vec![crate::server::storage::Row::Meta {
-                session: birth.session,
-                meta: Some(crate::server::storage::Ref::Known(meta)),
-            }],
-        })?;
-    }
-    let handle = Arc::new(Handle::new(birth));
+    let transcript = Arc::new(super::history::Transcript::open(
+        &inner.writer.path(),
+        birth.session,
+    )?);
+    let handle = Arc::new(Handle::new(birth, transcript));
     if !inner.slots.insert(handle.id, handle.clone()) {
         bail!("session {} is already booked", handle.id);
     }
@@ -334,6 +346,7 @@ fn start_turn(
     handle.stop.store(false, Ordering::Release);
     // A new turn spends its own tokens; the tally of the one before it is already in the rows.
     handle.clear_partial();
+    let first = handle.transcript().blank();
     let wake = match &start {
         pen::turn::Start::Wake { text } => Some(text.clone()),
         _ => None,
@@ -342,13 +355,15 @@ fn start_turn(
     let live = handle.take_live(&inner.dir);
     let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
     let model = Some((live.provider.clone(), live.model.clone()));
-    let turn = match pen::turn::open(&inner.writer, handle.id, start, &cwd, model) {
-        Ok(turn) => turn,
+    let (turn, opening) = match pen::turn::open(&inner.writer, handle.id, start, &cwd, model) {
+        Ok(pair) => pair,
         Err(e) => {
             handle.busy.store(false, Ordering::Release);
             return Err(e);
         }
     };
+    handle.transcript().append_user(opening);
+    handle.transcript().started();
     if queued {
         announce(inner, handle.id, turn);
     }
@@ -366,8 +381,18 @@ fn start_turn(
             let mut live = live;
             let mut current = turn;
             let mut mode = mode;
+            let mut first_turn = first;
             loop {
-                match turn::cycle::run(&inner, &thread_handle, current, &mut live, mode.clone()) {
+                let outcome = turn::cycle::run(
+                    &inner,
+                    &thread_handle,
+                    current,
+                    &mut live,
+                    mode.clone(),
+                    first_turn,
+                );
+                first_turn = false;
+                match outcome {
                     Ok(turn::Stop::User) => {
                         if thread_handle.gone.load(Ordering::Acquire) {
                             break;
@@ -382,7 +407,8 @@ fn start_turn(
                         let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
                         let model = Some((live.provider.clone(), live.model.clone()));
                         match pen::turn::open(&inner.writer, thread_handle.id, start, &cwd, model) {
-                            Ok(next) => {
+                            Ok((next, opening)) => {
+                                thread_handle.transcript().append_user(opening);
                                 if queued {
                                     announce(&inner, thread_handle.id, next);
                                 }

@@ -47,7 +47,7 @@ database lock, the endpoint, the register of front ends). Everything else is the
 2. **The api is the only surface.** Nothing else under `server/` is a front end's business.
 3. **One mouth per question.** Storage writes every row, config reads every file, platform asks the
    operating system, the loop runs rounds.
-4. **The request side rebuilds from storage every lap**, so a restarted process sends the same bytes.
+4. **The loop reads a session once, then appends**, so a restarted process sends the same bytes.
 5. **The server renders nothing**, and a front end holds no server state.
 
 ## 2. Design intent
@@ -62,11 +62,13 @@ a layer reaches the wrong way.
 **The api is the only surface.** A front end learns one vocabulary, and the wire carries the api's
 values — a second edge would only translate them.
 
-**The loop rebuilds from storage.** Identical bytes across laps, restarts and resumes are what a
-prefix cache is paid for.
+**The loop reads a session once.** It seeds a session's history when the session opens, appends each
+block after it lands, and reads it again only after a rewind or a compaction. Identical bytes across
+laps, restarts and resumes are what a prefix cache is paid for.
 
-**The server holds no conversation.** State has two homes — the database and the config — and what is
-in memory is the residue neither can carry.
+**The server holds no conversation of its own.** The loop's transcript is a cache of the rows; the
+database stays the authority, and a rewind or a compaction reads it again. State has two homes — the
+database and the config — and what is in memory is the residue neither can carry.
 
 **The server stops when nobody is watching.** A front end's death is noticed by its connection, not
 by a message, so nothing has to be timed out.

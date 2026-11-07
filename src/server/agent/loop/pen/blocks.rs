@@ -14,6 +14,7 @@ pub struct Pen {
     turn: i64,
     rows: Mutex<Vec<Row>>,
     at: Mutex<HashMap<String, usize>>,
+    blocks: Mutex<Vec<Block>>,
 }
 
 impl Pen {
@@ -23,6 +24,7 @@ impl Pen {
             turn,
             rows: Mutex::new(Vec::new()),
             at: Mutex::new(HashMap::new()),
+            blocks: Mutex::new(Vec::new()),
         }
     }
 
@@ -47,13 +49,15 @@ impl Pen {
             .extend(rows);
     }
 
-    /// Write everything held so far as one submission.
-    pub fn flush(&self) -> Result<Landed> {
+    /// Write everything held so far as one submission; the blocks land in row order.
+    pub fn flush(&self) -> Result<(Landed, Vec<Block>)> {
         let rows = std::mem::take(&mut *self.rows.lock().unwrap_or_else(|e| e.into_inner()));
+        let blocks = std::mem::take(&mut *self.blocks.lock().unwrap_or_else(|e| e.into_inner()));
         if rows.is_empty() {
-            return Ok(Landed::default());
+            return Ok((Landed::default(), Vec::new()));
         }
-        self.writer.push(Submit { rows })
+        let landed = self.writer.push(Submit { rows })?;
+        Ok((landed, blocks))
     }
 }
 
@@ -67,6 +71,10 @@ impl BlockSink for Pen {
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(call_id, at);
         }
+        self.blocks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(block.clone());
         rows.push(Row::Block {
             turn: Ref::Known(self.turn),
             block: land(block),

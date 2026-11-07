@@ -2,7 +2,6 @@
 
 use std::io::BufRead;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
 
 use anyhow::Context as _;
 use serde::Deserialize;
@@ -19,7 +18,7 @@ use crate::server::agent::request::protocol::openai::completion::compat::Resolve
 use crate::server::agent::request::protocol::openai::completion::inband::{ScanEvent, scanner_for};
 use crate::server::agent::request::protocol::openai::completion::markup::TemplateMarkupFilter;
 use crate::server::agent::request::protocol::stitch::Calls;
-use crate::server::agent::request::protocol::stream::{self, Budget};
+use crate::server::agent::request::protocol::stream;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ApiUsage {
@@ -113,18 +112,7 @@ pub(crate) fn decode(
     let mut usage = Usage::default();
     let mut calls = Calls::default();
 
-    let budget = Budget {
-        first: compat
-            .stream_first_event_timeout_ms
-            .filter(|ms| *ms > 0)
-            .map(Duration::from_millis),
-        idle: compat
-            .stream_idle_timeout_ms
-            .filter(|ms| *ms > 0)
-            .map(Duration::from_millis),
-    };
-
-    let end = stream::data(reader.as_mut(), cancel, budget, |payload| {
+    let end = stream::data(reader.as_mut(), cancel, |payload| {
         let chunk: Value = serde_json::from_str(payload)
             .with_context(|| format!("malformed stream chunk: {payload}"))?;
 

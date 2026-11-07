@@ -53,6 +53,8 @@ Relay::start
   session row and its archive, takes the tool names out of the archive's manuals, and books.
 - `submit` and `compact` share `submit::open`: the busy check, the booking, the delivery, and the
   writer slot.
+- `rewind` cuts the list and then calls `Loop::forget`, so the loop reads that session's history
+  again before its next turn.
 
 ## Must stay in step
 

@@ -88,7 +88,11 @@ impl Api {
         };
         let options = Options {
             providers: cfg.providers(),
-            retry: RetryPolicy::default(),
+            retry: RetryPolicy {
+                max_retries: cfg.retry_attempts(),
+                interval: cfg.retry_interval(),
+                timeout: cfg.retry_timeout(),
+            },
             output_caps: cfg.output_caps(),
             streaming: if cfg.streaming_immediate() {
                 Streaming::Immediate

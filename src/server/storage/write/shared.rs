@@ -141,19 +141,6 @@ pub(crate) fn put_request_meta(tx: &rusqlite::Transaction<'_>, r: &RequestMeta) 
     Ok(tx.last_insert_rowid())
 }
 
-/// Point one session at an archive, or clear the pointer.
-pub(crate) fn set_meta(
-    tx: &rusqlite::Transaction<'_>,
-    session: i64,
-    meta: Option<i64>,
-) -> Result<()> {
-    tx.execute(
-        "UPDATE sessions SET meta = ?1 WHERE id = ?2",
-        rusqlite::params![meta, session],
-    )?;
-    Ok(())
-}
-
 /// Lower one archive's prompt baseline; it never grows.
 pub(crate) fn lower_baseline(
     tx: &rusqlite::Transaction<'_>,

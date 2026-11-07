@@ -23,6 +23,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         turn,
         block,
     })?);
+    api.ledger().forget(session);
     api.relay().change(
         session,
         "rewind",

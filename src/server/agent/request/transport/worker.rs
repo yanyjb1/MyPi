@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -14,6 +15,8 @@ pub enum Request {
         body: serde_json::Value,
         headers: Vec<(String, String)>,
         timeout_ms: u64,
+        first_ms: u64,
+        idle_ms: u64,
     },
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,7 +74,7 @@ impl SessionWorker {
         })
     }
 
-    /// The child for one request, spawned on first use. `None` = this request goes direct.
+    /// The child for one request, spawned on first use.
     pub fn request(&self) -> Option<SharedWorker> {
         if self.pending.swap(false, Ordering::AcqRel) {
             self.restart();
@@ -202,12 +205,15 @@ impl HttpWorker {
         self.input.flush()?;
         Ok(())
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn stream<F>(
         &mut self,
         url: &str,
         body: serde_json::Value,
         headers: &[(String, String)],
         timeout_ms: u64,
+        first_ms: u64,
+        idle_ms: u64,
         mut on_line: F,
     ) -> Result<()>
     where
@@ -221,6 +227,8 @@ impl HttpWorker {
             body,
             headers: headers.to_vec(),
             timeout_ms,
+            first_ms,
+            idle_ms,
         })?;
         let mut raw = String::new();
         loop {
@@ -267,6 +275,7 @@ pub fn run() -> Result<()> {
     serde_json::to_writer(&mut out, &Response::Ready)?;
     out.write_all(b"\n")?;
     out.flush()?;
+    let mut agent: Option<(u64, ureq::Agent)> = None;
     let mut raw = String::new();
     while {
         raw.clear();
@@ -280,93 +289,168 @@ pub fn run() -> Result<()> {
                 body,
                 headers,
                 timeout_ms,
+                first_ms,
+                idle_ms,
             } => {
-                let agent: ureq::Agent = ureq::Agent::config_builder()
-                    .timeout_connect(Some(std::time::Duration::from_secs(30)))
-                    .timeout_recv_response(Some(std::time::Duration::from_millis(timeout_ms)))
-                    .timeout_recv_body(None)
-                    .http_status_as_error(false)
-                    .build()
-                    .into();
-                let mut req = agent.post(&url);
+                if agent.as_ref().map(|(ms, _)| *ms) != Some(timeout_ms) {
+                    agent = Some((timeout_ms, agent_for(timeout_ms)));
+                }
+                let client = &agent.as_ref().expect("just built").1;
+                let mut req = client.post(&url);
                 for (name, value) in &headers {
                     req = req.header(name, value);
                 }
-                let resp = req.send_json(&body);
-                match resp {
+                match req.send_json(&body) {
                     Ok(response) => {
                         let status = response.status().as_u16();
                         if (200..300).contains(&status) {
-                            let mut reader = BufReader::new(response.into_body().into_reader());
-                            let mut line = String::new();
-                            loop {
-                                line.clear();
-                                match reader.read_line(&mut line) {
-                                    Ok(0) => break,
-                                    Ok(_) => {
-                                        serde_json::to_writer(
-                                            &mut out,
-                                            &Response::Chunk {
-                                                id,
-                                                line: line.trim_end_matches(['\r', '\n']).into(),
-                                            },
-                                        )?;
-                                        out.write_all(b"\n")?;
-                                        out.flush()?;
-                                    }
-                                    Err(e) => {
-                                        serde_json::to_writer(
-                                            &mut out,
-                                            &Response::Error {
-                                                id,
-                                                message: e.to_string(),
-                                                status: None,
-                                                body: None,
-                                            },
-                                        )?;
-                                        out.write_all(b"\n")?;
-                                        break;
-                                    }
-                                }
+                            let body = response.into_body().into_reader();
+                            if let Err(e) = stream_body(body, id, first_ms, idle_ms, &mut out) {
+                                let _ = write_error(&mut out, id, e.to_string());
                             }
-                            serde_json::to_writer(&mut out, &Response::Done { id })?;
-                            out.write_all(b"\n")?;
-                            out.flush()?;
+                            let _ = write_done(&mut out, id);
                         } else {
                             // A status error: read the body (empty if unreadable; the status code must survive).
                             let text = response
                                 .into_body()
                                 .read_to_string()
                                 .unwrap_or_else(|_| String::new());
-                            serde_json::to_writer(
-                                &mut out,
-                                &Response::Error {
-                                    id,
-                                    message: format!("HTTP {status}"),
-                                    status: Some(status),
-                                    body: Some(text),
-                                },
-                            )?;
-                            out.write_all(b"\n")?;
-                            out.flush()?;
+                            let _ = write_status(&mut out, id, status, text);
                         }
                     }
                     Err(e) => {
-                        serde_json::to_writer(
-                            &mut out,
-                            &Response::Error {
-                                id,
-                                message: e.to_string(),
-                                status: None,
-                                body: None,
-                            },
-                        )?;
-                        out.write_all(b"\n")?;
-                        out.flush()?;
+                        let _ = write_error(&mut out, id, e.to_string());
                     }
                 }
             }
         }
     }
     Ok(())
+}
+
+fn agent_for(timeout_ms: u64) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(30)))
+        .timeout_recv_response(Some(Duration::from_millis(timeout_ms)))
+        .timeout_recv_body(None)
+        .http_status_as_error(false)
+        .build()
+        .into()
+}
+
+/// One response body, line by line, with the silence deadline the decoder no longer owns.
+fn stream_body(
+    body: impl std::io::Read + Send + 'static,
+    id: u64,
+    first_ms: u64,
+    idle_ms: u64,
+    out: &mut impl Write,
+) -> Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<String>>();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(body);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let text = line.trim_end_matches(['\r', '\n']).to_string();
+                    if tx.send(Ok(text)).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    break;
+                }
+            }
+        }
+    });
+    let mut first = true;
+    loop {
+        let wait = if first { first_ms } else { idle_ms };
+        match rx.recv_timeout(Duration::from_millis(wait)) {
+            Ok(Ok(line)) => {
+                serde_json::to_writer(&mut *out, &Response::Chunk { id, line })?;
+                out.write_all(b"\n")?;
+                out.flush()?;
+                first = false;
+            }
+            Ok(Err(e)) => {
+                write_error(&mut *out, id, e.to_string())?;
+                return Ok(());
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let _ = write_error(
+                    &mut *out,
+                    id,
+                    format!("no event from upstream within {wait} ms"),
+                );
+                let _ = out.flush();
+                // The body reader is blocked on the socket; only the process can drop it.
+                std::process::exit(1);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        }
+    }
+}
+
+fn write_done(out: &mut impl Write, id: u64) -> Result<()> {
+    serde_json::to_writer(&mut *out, &Response::Done { id })?;
+    out.write_all(b"\n")?;
+    out.flush()?;
+    Ok(())
+}
+
+fn write_error(out: &mut impl Write, id: u64, message: String) -> Result<()> {
+    serde_json::to_writer(
+        &mut *out,
+        &Response::Error {
+            id,
+            message,
+            status: None,
+            body: None,
+        },
+    )?;
+    out.write_all(b"\n")?;
+    out.flush()?;
+    Ok(())
+}
+
+fn write_status(out: &mut impl Write, id: u64, status: u16, body: String) -> Result<()> {
+    serde_json::to_writer(
+        &mut *out,
+        &Response::Error {
+            id,
+            message: format!("HTTP {status}"),
+            status: Some(status),
+            body: Some(body),
+        },
+    )?;
+    out.write_all(b"\n")?;
+    out.flush()?;
+    Ok(())
+}
+
+/// The child's stdout, one whole line at a time.
+pub(crate) struct ChannelReader {
+    pub(crate) rx: std::sync::mpsc::Receiver<String>,
+    pub(crate) pending: Vec<u8>,
+}
+
+impl std::io::Read for ChannelReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.pending.is_empty() {
+            let line = self.rx.recv().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "worker closed")
+            })?;
+            self.pending.extend_from_slice(line.as_bytes());
+            self.pending.push(b'\n');
+        }
+        let n = out.len().min(self.pending.len());
+        out[..n].copy_from_slice(&self.pending[..n]);
+        self.pending.drain(..n);
+        Ok(n)
+    }
 }

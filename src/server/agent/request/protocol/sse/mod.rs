@@ -5,5 +5,5 @@ mod frame;
 mod read;
 
 pub use event::{SseEvent, read_event};
-pub use frame::{Frame, frame};
+pub use frame::{Frame, frame, worker_error};
 pub use read::read;

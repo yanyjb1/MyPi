@@ -57,6 +57,10 @@ impl Protocol for Responses {
         })
     }
 
+    fn budget(&self) -> Budget {
+        Budget::default()
+    }
+
     fn decode(
         &self,
         reader: Box<dyn BufRead>,
@@ -134,7 +138,7 @@ fn decode(
     let mut order: Vec<String> = Vec::new();
     let mut usage = Usage::default();
 
-    let end = stream::data(reader.as_mut(), cancel, Budget::default(), |payload| {
+    let end = stream::data(reader.as_mut(), cancel, |payload| {
         let event: Value = serde_json::from_str(payload)?;
         match event.get("type").and_then(|v| v.as_str()).unwrap_or("") {
             "response.output_text.delta" => {

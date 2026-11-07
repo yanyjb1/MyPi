@@ -10,7 +10,9 @@ use super::super::paths::{self, ConfigPaths};
 use super::super::profile::{self, ResolvedProfile};
 use super::super::registry::{self, Value};
 use super::super::schema::{
-    KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE,
+    KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES,
+    KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_INTERVAL,
+    KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_TIMEOUT, KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE,
     KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_IDLE_SECS, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT,
@@ -242,6 +244,40 @@ impl Config {
             .get(KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE)
             .and_then(Value::as_bool)
             .unwrap_or(false)
+    }
+
+    /// Retries after the first attempt.
+    pub fn retry_attempts(&self) -> u32 {
+        self.effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES)
+            .and_then(Value::as_int)
+            .unwrap_or(10)
+            .max(0) as u32
+    }
+
+    /// How long to wait between attempts.
+    pub fn retry_interval(&self) -> std::time::Duration {
+        let seconds = self
+            .effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_INTERVAL)
+            .and_then(Value::as_int)
+            .unwrap_or(30)
+            .max(0) as u64;
+        std::time::Duration::from_secs(seconds)
+    }
+
+    /// How long one attempt waits for the response head.
+    pub fn retry_timeout(&self) -> std::time::Duration {
+        let seconds = self
+            .effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_TIMEOUT)
+            .and_then(Value::as_int)
+            .unwrap_or(120)
+            .max(1) as u64;
+        std::time::Duration::from_secs(seconds)
     }
 
     /// One piece per chunk rather than per block.

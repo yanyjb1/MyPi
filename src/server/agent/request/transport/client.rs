@@ -1,6 +1,5 @@
-//! One provider connection: its agent, its retry policy, its protocol.
+//! One provider connection: its protocol, its retry policy, and the child's output.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -8,38 +7,17 @@ use anyhow::Result;
 
 use crate::server::agent::request::live::Line;
 use crate::server::agent::request::message::AssistantMessage;
+use crate::server::agent::request::protocol::stream::Budget;
 use crate::server::agent::request::protocol::{Endpoint, Output, Protocol, ProtocolRequest};
 use crate::server::agent::request::retry::{self, Class, Failure, RetryPolicy};
 use crate::server::agent::request::transport::Provider;
 use crate::server::agent::request::transport::worker::SessionWorker;
-
-pub(crate) struct ChannelReader {
-    pub(crate) rx: std::sync::mpsc::Receiver<String>,
-    pub(crate) pending: Vec<u8>,
-}
-
-impl std::io::Read for ChannelReader {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        if self.pending.is_empty() {
-            let line = self.rx.recv().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "worker closed")
-            })?;
-            self.pending.extend_from_slice(line.as_bytes());
-            self.pending.push(b'\n');
-        }
-        let n = out.len().min(self.pending.len());
-        out[..n].copy_from_slice(&self.pending[..n]);
-        self.pending.drain(..n);
-        Ok(n)
-    }
-}
 
 /// One provider, one model, one protocol instance.
 pub struct Client {
     endpoint: Endpoint,
     protocol: Box<dyn Protocol>,
     model: String,
-    http: ureq::Agent,
     pub(crate) retry: RetryPolicy,
 }
 
@@ -54,7 +32,6 @@ impl Client {
             },
             protocol: provider.protocol.build(&base_url, model),
             model: model.to_string(),
-            http: agent(retry.timeout),
             retry,
         }
     }
@@ -63,8 +40,9 @@ impl Client {
         &self.model
     }
 
-    pub(crate) fn http(&self) -> &ureq::Agent {
-        &self.http
+    /// The deadlines the child holds a silent stream to.
+    pub(crate) fn budget(&self) -> Budget {
+        self.protocol.budget()
     }
 
     /// One call, retried per policy. Every failure is said out loud exactly once.
@@ -73,8 +51,8 @@ impl Client {
         req: &ProtocolRequest,
         out: &mut dyn Output,
         line: &Line,
-        cancel: &Arc<AtomicBool>,
-        worker: &Arc<SessionWorker>,
+        cancel: &AtomicBool,
+        worker: &std::sync::Arc<SessionWorker>,
     ) -> Result<AssistantMessage> {
         let mut emitted = false;
         let mut attempt = 0u32;
@@ -111,6 +89,9 @@ impl Client {
                         crate::server::platform::log::error(&self.model, format!("{e:#}"));
                         break Err(e);
                     }
+                    if cancel.load(Ordering::Relaxed) {
+                        break Err(anyhow::Error::new(Failure::Cancelled));
+                    }
                     line.send(crate::server::agent::request::live::Element::Notice(
                         retry::notice(failure, self.retry.timeout),
                     ));
@@ -126,13 +107,30 @@ impl Client {
                         break Err(e);
                     }
                     worker.restart();
-                    std::thread::sleep(self.retry.interval);
+                    if !wait(cancel, self.retry.interval) {
+                        break Err(anyhow::Error::new(Failure::Cancelled));
+                    }
                 }
             }
         };
 
         outcome
     }
+}
+
+/// Sleep in slices so an interrupt is heard before the interval ends.
+fn wait(cancel: &AtomicBool, total: Duration) -> bool {
+    const STEP: Duration = Duration::from_millis(50);
+    let mut left = total;
+    while !left.is_zero() {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        let slice = left.min(STEP);
+        std::thread::sleep(slice);
+        left = left.saturating_sub(slice);
+    }
+    !cancel.load(Ordering::Relaxed)
 }
 
 /// Counts whether anything reached the front end: after that, retrying would duplicate it.
@@ -151,22 +149,4 @@ impl Output for Tracked<'_> {
         *self.emitted = true;
         self.inner.block(block);
     }
-}
-
-fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(30)))
-        .timeout_recv_response(Some(timeout))
-        // No total budget for a body: one lap may run as long as the model keeps talking, and
-        // only the decoder's silence budget may end a stream.
-        .timeout_recv_body(None)
-        .http_status_as_error(false)
-        .build()
-        .into()
-}
-
-pub(crate) fn send_error(e: ureq::Error) -> anyhow::Error {
-    anyhow::Error::new(Failure::NoResponse {
-        source: e.to_string(),
-    })
 }
