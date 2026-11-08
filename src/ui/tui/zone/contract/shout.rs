@@ -34,4 +34,10 @@ pub mod name {
     pub const RETRACT: &str = "retract";
     /// History: one live increment arrived. No content; the spinner steps on it.
     pub const TICK: &str = "tick";
+    /// The display language the panel reads. `{lang}`.
+    pub const LANG: &str = "lang";
+    /// The display currency the panel prices in. `{currency}`.
+    pub const CURRENCY: &str = "currency";
+    /// One model's config entry, addressed by its display. `{address, name, provider}`.
+    pub const MODEL_ENTRY: &str = "model_entry";
 }

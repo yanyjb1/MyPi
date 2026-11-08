@@ -9,11 +9,11 @@ use crate::ui::tui::zone::main::input::Ctx;
 /// What the pill says before a session has a name.
 const NAMELESS: &str = "MyPi";
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Session;
 
 pub(super) fn make() -> Box<dyn Deco> {
-    Box::new(Session::default())
+    Box::new(Session)
 }
 
 impl Deco for Session {

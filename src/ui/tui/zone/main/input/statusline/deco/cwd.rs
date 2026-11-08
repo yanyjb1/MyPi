@@ -8,11 +8,11 @@ use super::super::Deco;
 use super::super::theme::{Slot, StatusTheme};
 use crate::ui::tui::zone::main::input::Ctx;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Cwd;
 
 pub(super) fn make() -> Box<dyn Deco> {
-    Box::new(Cwd::default())
+    Box::new(Cwd)
 }
 
 impl Deco for Cwd {

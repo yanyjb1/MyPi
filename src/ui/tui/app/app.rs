@@ -247,6 +247,16 @@ impl App {
             Request::PickProfile(profile) => self.pick_profile(profile),
             Request::Submit(text) => self.submit(text),
             Request::SetCwd(path) => self.set_cwd(path),
+            Request::SwitchModel(id) if self.session.attached().is_none() => {
+                self.model = Some(id);
+                let address = self
+                    .model
+                    .as_ref()
+                    .map(|id| format!("{}:{}", id.provider, id.model))
+                    .unwrap_or_default();
+                let frame = Frame::new("local", "model", json!({"address": address}));
+                self.deliver(&frame);
+            }
             other => wire::land(&mut self.session, other),
         }
     }

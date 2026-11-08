@@ -10,7 +10,7 @@ use crate::ui::tui::zone::main::input::Ctx;
 pub struct Model;
 
 pub(super) fn make() -> Box<dyn Deco> {
-    Box::new(Model::default())
+    Box::new(Model)
 }
 
 impl Deco for Model {
@@ -18,6 +18,10 @@ impl Deco for Model {
         let Some(name) = ctx.data.model.as_deref() else {
             return Vec::new();
         };
-        vec![t.capsule(format!("[M] {name}"), t.get(Slot::Accent))]
+        let text = match ctx.data.provider.as_deref() {
+            Some(provider) => format!("[M] {name} ({provider})"),
+            None => format!("[M] {name}"),
+        };
+        vec![t.capsule(text, t.get(Slot::Accent))]
     }
 }

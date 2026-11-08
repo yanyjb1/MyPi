@@ -6,11 +6,11 @@ use super::super::Deco;
 use super::super::theme::{Slot, StatusTheme};
 use crate::ui::tui::zone::main::input::Ctx;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Cost;
 
 pub(super) fn make() -> Box<dyn Deco> {
-    Box::new(Cost::default())
+    Box::new(Cost)
 }
 
 impl Deco for Cost {

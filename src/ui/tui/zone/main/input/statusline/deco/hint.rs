@@ -6,11 +6,11 @@ use super::super::Deco;
 use super::super::theme::{Slot, StatusTheme};
 use crate::ui::tui::zone::main::input::Ctx;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Hint;
 
 pub(super) fn make() -> Box<dyn Deco> {
-    Box::new(Hint::default())
+    Box::new(Hint)
 }
 
 impl Deco for Hint {

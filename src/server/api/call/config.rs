@@ -28,6 +28,7 @@ pub(crate) fn answer(api: &Api, key: &str) -> Result<Value, Refuse> {
 fn entry(model: &ResolvedModel) -> Value {
     let entry = &model.entry;
     json!({
+        "provider": model.provider_name,
         "address": format!("{}:{}", model.provider_name, entry.id),
         "id": entry.id,
         "name": entry.display_name(),

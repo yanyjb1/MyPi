@@ -4,6 +4,25 @@ use std::time::Duration;
 
 use super::super::num;
 
+/// The display language; the config answers, `en` until it does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Lang {
+    #[default]
+    En,
+    Zh,
+}
+
+impl Lang {
+    /// The config's spelling, `en` or `zh`; anything else leaves the choice alone.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "en" => Some(Self::En),
+            "zh" => Some(Self::Zh),
+            _ => None,
+        }
+    }
+}
+
 /// The currency the cost pill counts in; the config answers, `CNY` until it does.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Currency {
@@ -61,6 +80,10 @@ pub struct Context {
 pub struct Data {
     /// The model's display name; `None` while the config has not answered.
     pub model: Option<String>,
+    /// The model's provider, once the config entry has answered.
+    pub provider: Option<String>,
+    /// The display language, from `config.ui.lang`.
+    pub lang: Lang,
     /// The model's address, `<provider>:<model>`.
     pub address: Option<String>,
     /// The conversation's name; a draft session shows its directory instead.

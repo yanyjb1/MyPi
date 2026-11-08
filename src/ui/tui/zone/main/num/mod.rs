@@ -1,5 +1,7 @@
 //! Number and money formats owned by the Main zone.
 
+use crate::ui::tui::zone::main::input::Lang;
+
 mod compact;
 mod exact;
 mod money;

@@ -10,7 +10,7 @@ mod route;
 mod semantics;
 mod statusline;
 
-pub use ctx::{Context, Ctx, Currency, Data};
+pub use ctx::{Context, Ctx, Currency, Data, Lang};
 
 use super::desk::{Hire, Reply};
 use super::geometry;
@@ -44,6 +44,9 @@ const FX_CURRENCY_KEY: &str = "config.ui.tui.fx.currency";
 
 /// The model a draft opens with; a session row overrides it once there is one.
 const DEFAULT_MODEL_KEY: &str = "config.server.api.defaultModel";
+
+/// The display language the panel and number formats follow.
+const LANG_KEY: &str = "config.ui.lang";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitRequest {
@@ -267,7 +270,7 @@ impl InputZone {
             return;
         }
         self.booted = true;
-        for key in [GIT_SCAN_KEY, FX_CURRENCY_KEY, DEFAULT_MODEL_KEY] {
+        for key in [GIT_SCAN_KEY, FX_CURRENCY_KEY, DEFAULT_MODEL_KEY, LANG_KEY] {
             self.outbox.push(Request::Config {
                 key: key.to_string(),
             });
@@ -565,20 +568,11 @@ impl InputZone {
         self.hang = command::wants(&before, &word);
     }
 
-    /// A write the user just asked for: the widgets follow it at once, and the receipt has
-    /// the last word.
+    /// A write the user just asked for. A model switch paints nothing here: the
+    /// widgets follow the receipt, and a draft follows the app's `local model` frame.
     fn note_intent(&mut self, request: &Request) {
-        match request {
-            Request::SwitchModel(id) => {
-                let address = format!("{}:{}", id.provider, id.model);
-                let mut out = Vec::new();
-                self.model(&address, &mut out);
-                self.outbox.extend(out);
-            }
-            Request::Rename(name) => {
-                self.pending_name = Some(name.clone());
-            }
-            _ => {}
+        if let Request::Rename(name) = request {
+            self.pending_name = Some(name.clone());
         }
     }
 
@@ -624,8 +618,15 @@ impl InputZone {
                 }
             }
             ("post", "switch") => {
-                if frame.content.get("error").is_some() {
+                if frame.content.get("error").is_none() {
                     out.push(Request::Meta);
+                }
+            }
+            ("local", "model") => {
+                if let Some(address) = frame.content.get("address").and_then(Value::as_str) {
+                    let mut next = Vec::new();
+                    self.model(address, &mut next);
+                    return next;
                 }
             }
             ("call", "usage") => {
@@ -743,6 +744,18 @@ impl InputZone {
                 && let Some(currency) = Currency::parse(name)
             {
                 self.data.money.currency = currency;
+                self.shouts
+                    .push(Shout::new(name::CURRENCY, serde_json::json!({"currency": name})));
+            }
+            return;
+        }
+        if key == LANG_KEY {
+            if let Some(name) = value.and_then(Value::as_str)
+                && let Some(lang) = Lang::parse(name)
+            {
+                self.data.lang = lang;
+                self.shouts
+                    .push(Shout::new(name::LANG, serde_json::json!({"lang": name})));
             }
             return;
         }
@@ -754,6 +767,14 @@ impl InputZone {
         }
         if let Some(address) = key.strip_prefix("models.model.") {
             self.read_model(address, value);
+            // Any desk hand may want the entry's display facts; the panel is one.
+            if let Some(entry) = value {
+                let mut content = entry.clone();
+                if let Some(map) = content.as_object_mut() {
+                    map.insert("address".to_string(), serde_json::json!(address));
+                }
+                self.shouts.push(Shout::new(name::MODEL_ENTRY, content));
+            }
         }
     }
 
@@ -767,6 +788,10 @@ impl InputZone {
         };
         self.data.model = entry
             .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        self.data.provider = entry
+            .get("provider")
             .and_then(Value::as_str)
             .map(str::to_string);
         self.data.limit = entry

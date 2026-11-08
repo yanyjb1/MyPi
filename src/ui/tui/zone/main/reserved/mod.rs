@@ -14,6 +14,8 @@ use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::SubZone;
 use crate::ui::tui::zone::{Claim, Frame, Kind, Request, TermSize, name};
 
+use crate::ui::tui::zone::main::input::{Currency, Lang};
+
 use hand::{Hand, IDLE_ROWS, Report};
 use pools::Pools;
 
@@ -162,7 +164,8 @@ impl SubZone for ReservedZone {
                 }
             }
             ("call", "usage") => {
-                self.usage.take(&frame.content);
+                let asks = self.usage.take(&frame.content);
+                self.outbox.extend(asks);
             }
             ("stream", _) | ("local", _) => {
                 if let Some(who) = self.on_duty {
@@ -222,6 +225,23 @@ impl SubZone for ReservedZone {
                         self.hand(who).place(&cwd);
                     }
                 }
+            }
+            name::LANG => {
+                if let Some(code) = content.get("lang").and_then(Value::as_str)
+                    && let Some(lang) = Lang::parse(code)
+                {
+                    self.usage.set_lang(lang);
+                }
+            }
+            name::CURRENCY => {
+                if let Some(code) = content.get("currency").and_then(Value::as_str)
+                    && let Some(currency) = Currency::parse(code)
+                {
+                    self.usage.set_currency(currency);
+                }
+            }
+            name::MODEL_ENTRY => {
+                self.usage.display(content);
             }
             _ => {
                 if let Some(who) = self.on_duty {
