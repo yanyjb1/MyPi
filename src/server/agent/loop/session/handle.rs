@@ -106,7 +106,7 @@ impl Handle {
             return;
         }
         self.stop.store(true, std::sync::atomic::Ordering::Release);
-        self.worker.interrupt();
+        self.worker.kill();
         self.mailbox.notify();
     }
 

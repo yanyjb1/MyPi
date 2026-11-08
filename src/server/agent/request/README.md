@@ -94,6 +94,10 @@ the reader returns at once instead of waiting for the host to speak; a fresh chi
 before the next request. A cancelled lap is not a failure: it settles as interrupted, with no
 notice, no retry, and no error text.
 
+**A call is only what arrived whole.** A stream cut mid-arguments leaves no call block: the decoder
+drops it, so it is neither stored nor run, and the turn keeps the text it did say. The request side
+never carries a call whose arguments are not one object; an empty set goes out as `{}`.
+
 ## 3. Unresolved
 
 1. A worker's HTTP status reaches the decoder with its body split across lines; the status survives

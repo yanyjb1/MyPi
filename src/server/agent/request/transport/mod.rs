@@ -43,7 +43,6 @@ pub(crate) fn send(
     let (first, idle) = client.budget().resolved();
     let first_ms = first.as_millis() as u64;
     let idle_ms = idle.as_millis() as u64;
-    let slot = worker.clone();
     std::thread::spawn(move || {
         let result = shared
             .lock()
@@ -59,7 +58,6 @@ pub(crate) fn send(
                     |line| tx.send(line.to_string()).is_ok(),
                 )
             });
-        slot.end();
         if let Err(e) = result {
             let _ = tx.send(format!("__WORKER_ERROR__{e}"));
         }

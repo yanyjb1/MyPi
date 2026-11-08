@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::message::{FunctionCall, Message, WireCall, WireMessage};
+use super::message::{FunctionCall, Message, WireCall, WireMessage, complete_args};
 
 /// State that carries across one rebuild.
 #[derive(Default)]
@@ -105,22 +105,32 @@ fn one_batch(
     mut opening_text: Option<String>,
     answered: &BTreeSet<String>,
 ) {
-    // Pair the nth request with the nth result; rename duplicates; drop unusable pairs.
-    let mut wire_ids: BTreeMap<(String, u32), (String, bool)> = BTreeMap::new();
+    // Pair the nth request with the nth result; rename duplicates; drop pairs the wire cannot take.
+    let mut wire_ids: BTreeMap<(String, u32), (String, Option<String>)> = BTreeMap::new();
     let mut in_batch: BTreeMap<String, u32> = BTreeMap::new();
     for message in batch {
-        if let Message::Call { call_id, name, .. } = message {
+        if let Message::Call {
+            call_id,
+            name,
+            args,
+            ..
+        } = message
+        {
             let seen = *state.seen.entry(call_id.clone()).or_insert(0);
             *state.seen.get_mut(call_id).expect("just inserted") += 1;
             let local = *in_batch.entry(call_id.clone()).or_insert(0);
             *in_batch.get_mut(call_id).expect("just inserted") += 1;
-            let broken = call_id.trim().is_empty() || name.trim().is_empty();
+            let arguments = if call_id.trim().is_empty() || name.trim().is_empty() {
+                None
+            } else {
+                replayed_args(args)
+            };
             let wire = if seen == 0 {
                 call_id.clone()
             } else {
                 format!("{call_id}_dup{seen}")
             };
-            wire_ids.insert((call_id.clone(), local), (wire, broken));
+            wire_ids.insert((call_id.clone(), local), (wire, arguments));
         }
     }
 
@@ -142,19 +152,20 @@ fn one_batch(
         };
         let nth = *counter.entry(call_id.clone()).or_insert(0);
         *counter.get_mut(&call_id).expect("just inserted") += 1;
-        let (wire_id, broken) = wire_ids
+        let (wire_id, arguments) = wire_ids
             .get(&(call_id.clone(), nth))
-            .map(|(wire, broken)| (wire.clone(), *broken))
-            .unwrap_or_else(|| (call_id.clone(), false));
+            .map(|(wire, arguments)| (wire.clone(), arguments.clone()))
+            .unwrap_or_else(|| (call_id.clone(), None));
 
         match message {
-            Message::Call {
-                name, args, first, ..
-            } => {
+            Message::Call { name, first, .. } => {
                 if *first || groups.is_empty() {
                     groups.push((opening_text.take(), Vec::new(), Vec::new()));
                 }
-                if broken || !answered.contains(&call_id) {
+                let Some(arguments) = arguments else {
+                    continue;
+                };
+                if !answered.contains(&call_id) {
                     continue;
                 }
                 groups.last_mut().expect("just pushed").1.push(WireCall {
@@ -162,12 +173,13 @@ fn one_batch(
                     kind: "function".into(),
                     function: FunctionCall {
                         name: name.clone(),
-                        arguments: args.clone(),
+                        arguments,
                     },
                 });
             }
             Message::Result { result, .. } => {
-                if broken {
+                // A call the wire cannot carry takes its result with it: a lone tool reply is worse.
+                if arguments.is_none() {
                     continue;
                 }
                 if let Some(group) = groups.last_mut() {
@@ -195,4 +207,17 @@ fn one_batch(
             });
         }
     }
+}
+
+/// One call's arguments as the wire takes them: an empty set becomes `{}`, anything else goes out
+/// byte for byte, and a row that was never a whole call stays out.
+fn replayed_args(args: &str) -> Option<String> {
+    if !complete_args(args) {
+        return None;
+    }
+    Some(if args.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        args.to_string()
+    })
 }

@@ -106,7 +106,7 @@ impl Client {
                     if attempt > self.retry.max_retries {
                         break Err(e);
                     }
-                    worker.restart();
+                    worker.kill();
                     if !wait(cancel, self.retry.interval) {
                         break Err(anyhow::Error::new(Failure::Cancelled));
                     }

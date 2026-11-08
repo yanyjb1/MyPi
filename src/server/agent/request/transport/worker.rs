@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -55,13 +55,10 @@ pub type SharedWorker = Arc<Mutex<HttpWorker>>;
 /// The environment variable that turns this executable into a worker.
 pub const WORKER_ENV: &str = "MYPI_HTTP_WORKER";
 
-/// One session's worker: the child that owns its sockets, and whether a request is in flight.
+/// One session's worker: the child that owns its sockets, made on demand and killed on demand.
 pub struct SessionWorker {
     slot: Mutex<Option<SharedWorker>>,
     pid: Arc<AtomicU32>,
-    in_flight: AtomicBool,
-    /// An interrupt landed before the request it meant: the next request starts on a fresh child.
-    pending: AtomicBool,
 }
 
 impl SessionWorker {
@@ -69,23 +66,11 @@ impl SessionWorker {
         Arc::new(Self {
             slot: Mutex::new(None),
             pid: Arc::new(AtomicU32::new(0)),
-            in_flight: AtomicBool::new(false),
-            pending: AtomicBool::new(false),
         })
     }
 
     /// The child for one request, spawned on first use.
     pub fn request(&self) -> Option<SharedWorker> {
-        if self.pending.swap(false, Ordering::AcqRel) {
-            self.restart();
-        }
-        let shared = self.slot()?;
-        self.in_flight.store(true, Ordering::Release);
-        Some(shared)
-    }
-
-    /// The child, spawned on first use.
-    fn slot(&self) -> Option<SharedWorker> {
         let mut slot = self.slot.lock().ok()?;
         if slot.is_none() {
             let fresh = HttpWorker::spawn().ok()?;
@@ -96,42 +81,22 @@ impl SessionWorker {
         slot.clone()
     }
 
-    /// The request is over, one way or another.
-    pub fn end(&self) {
-        self.in_flight.store(false, Ordering::Release);
-    }
-
-    /// No request in flight: the interrupt may still be one moment early.
-    pub fn interrupt(&self) {
-        if self.in_flight.load(Ordering::Acquire) {
-            self.restart();
-        } else {
-            self.pending.store(true, Ordering::Release);
-        }
-    }
-
-    /// Kill the child that owns the sockets, then take a fresh one in its place.
-    pub fn restart(&self) {
-        self.in_flight.store(false, Ordering::Release);
+    /// Kill the child that owns the sockets. A later request spawns its own.
+    pub fn kill(&self) {
         let pid = self.pid.swap(0, Ordering::AcqRel);
-        if pid != 0 {
+        if pid == 0 {
+            crate::server::platform::log::info("worker", "no child to kill");
+        } else {
+            crate::server::platform::log::info("worker", format!("killed the child on {pid}"));
             HttpWorker::kill_pid(pid);
         }
-        let fresh = HttpWorker::spawn().ok();
-        if let Some(worker) = fresh.as_ref()
-            && let Some(pid) = HttpWorker::pid(worker)
-        {
-            self.pid.store(pid, Ordering::Release);
-        }
-        if let Ok(mut slot) = self.slot.lock() {
-            let old = std::mem::replace(&mut *slot, fresh);
-            if let Some(old) = old {
-                std::thread::spawn(move || {
-                    if let Ok(mut old) = old.lock() {
-                        old.reap();
-                    }
-                });
-            }
+        let old = self.slot.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(old) = old {
+            std::thread::spawn(move || {
+                if let Ok(mut old) = old.lock() {
+                    old.reap();
+                }
+            });
         }
     }
 }
@@ -159,19 +124,21 @@ impl HttpWorker {
             .map(|w| w.pid.load(Ordering::Relaxed))
             .filter(|p| *p != 0)
     }
+    /// The child leads its own group; a group already gone is the normal case.
     pub fn kill_pid(pid: u32) {
-        let _ = Command::new("kill")
-            .args(["-KILL", &pid.to_string()])
-            .status();
+        crate::server::platform::proc::signal_group(
+            pid,
+            crate::server::platform::proc::Signal::Kill,
+        );
     }
     pub fn spawn() -> Result<SharedWorker> {
         let exe = std::env::current_exe().context("cannot locate the mypi executable")?;
-        let mut child = Command::new(exe)
-            .env(WORKER_ENV, "1")
+        let mut cmd = Command::new(exe);
+        cmd.env(WORKER_ENV, "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        let mut child = crate::server::platform::proc::spawn_grouped(&mut cmd)
             .context("failed to start the HTTP worker")?;
         let pid = Arc::new(AtomicU32::new(child.id()));
         let input = child

@@ -251,6 +251,7 @@ pub(crate) fn decode(
 
     let mut placed = calls.finish();
     placed.extend(healed);
+    placed.retain(|call| call.complete());
 
     if !reasoning.is_empty() {
         out.block(blocks::text(Kind::Reasoning, &reasoning));

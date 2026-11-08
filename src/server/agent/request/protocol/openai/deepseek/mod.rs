@@ -115,7 +115,8 @@ impl Protocol for Deepseek {
         })?;
         let interrupted = end == stream::End::Canceled;
 
-        let placed = calls.finish();
+        let mut placed = calls.finish();
+        placed.retain(|call| call.complete());
         if !reasoning.is_empty() {
             out.block(blocks::text(Kind::Reasoning, &reasoning));
         }

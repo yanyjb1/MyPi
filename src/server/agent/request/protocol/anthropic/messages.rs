@@ -300,6 +300,7 @@ fn decode(
             Role::Tool => calls.push(WireCall::new(chunk.id, chunk.name, chunk.args)),
         }
     }
+    calls.retain(|call| call.complete());
 
     if !reasoning.is_empty() {
         out.block(blocks::text(Kind::Reasoning, &reasoning));

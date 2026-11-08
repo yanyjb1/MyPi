@@ -235,7 +235,8 @@ fn decode(
     })?;
     let interrupted = end == stream::End::Canceled;
 
-    let placed: Vec<WireCall> = order.into_iter().filter_map(|k| calls.remove(&k)).collect();
+    let mut placed: Vec<WireCall> = order.into_iter().filter_map(|k| calls.remove(&k)).collect();
+    placed.retain(|call| call.complete());
 
     if !reasoning.is_empty() {
         out.block(blocks::text(Kind::Reasoning, &reasoning));

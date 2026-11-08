@@ -150,6 +150,11 @@ impl WireCall {
         &self.function.name
     }
 
+    /// Whether the arguments are a whole call's; anything less never was a call.
+    pub fn complete(&self) -> bool {
+        complete_args(&self.function.arguments)
+    }
+
     pub fn arguments_json(&self) -> serde_json::Result<Value> {
         serde_json::from_str(&self.function.arguments)
     }
@@ -164,6 +169,13 @@ impl WireCall {
 
 fn function_kind() -> String {
     "function".to_string()
+}
+
+/// A call's arguments: empty, or one JSON object. A stream that stopped mid-arguments leaves
+/// neither, and no wire takes it.
+pub(super) fn complete_args(args: &str) -> bool {
+    let args = args.trim();
+    args.is_empty() || serde_json::from_str::<Value>(args).is_ok_and(|v| v.is_object())
 }
 
 fn serialize_content<S: serde::Serializer>(v: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
