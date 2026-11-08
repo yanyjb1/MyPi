@@ -34,7 +34,7 @@ impl ToolRenderer for Memo {
         let op = arg_str(b.args, "op").unwrap_or_default();
         let lines = match op.as_str() {
             "show" | "history" | "list" => table_of(&op, o.details, b.inner_width(), o.text),
-            _ if !o.ok => output_lines(o.text),
+            _ if o.ok == Some(false) => output_lines(o.text),
             _ => Vec::new(),
         };
         vec![Section { label: None, lines }]

@@ -55,6 +55,25 @@ laid row; text products survive.
 
 A running block is rebuilt whenever content arrives. Only its last segment can still change.
 
+### Tool cards
+
+A tool exchange draws as one card, built from the request and the result it pairs with. The card
+shows one of four phases: `Pending` (no result), `Running` (a result in hand, still unsettled), `Ok`,
+`Err`. Each phase picks the edge, the fill and the glyph.
+
+The call half is read from the arguments as they stream: `partial` decodes the fields a fragment has
+reached, so an edit draws its `old`/`new` text and a write its numbered content before the arguments
+finish. Only a key that is itself complete is trusted; a value cut mid-string is drawn as far as it
+arrived.
+
+The result half is read from the result text and the memo. A memued diff draws as numbered removed
+lines, then numbered added ones, red and green, with the changed run of a paired line reversed; a
+line-number jump inside one side is one `…` row. Tabs take four columns everywhere a gutter or a
+code body is drawn.
+
+The call half of a `todo` call is one row: the phase glyph, the operation, and the counts the result
+carries. The checklist itself is the pinned product, never part of the card.
+
 ### Prefetch layer
 
 The unit is the segment: it enters whole and leaves whole. A segment is colored once, then kept with
@@ -99,6 +118,10 @@ opens a natural line), or `Wrapped` (it is a continuation).
 - **The range is a start plus a height** so that the screen is a slice of the run, and a growing
   block only changes the rows after its last settled row.
 - **Display is stateless** so that the same rows always produce the same screen.
+- **A card is drawn from both halves of its exchange**, so the request's position owns the rows; a
+  result landing re-lays that position, not only its own.
+- **A card is rebuilt from the stream it has**, so partial arguments produce a partial card and
+  nothing waits for the call to finish.
 
 ## 3. Unresolved
 
@@ -106,6 +129,8 @@ opens a natural line), or `Wrapped` (it is a continuation).
   positions from it.
 - Block content arrives through `Request::Blocks`; the zone asks per round, once per range.
 - The checklist is drawn from `call todo` and `call init`, pinned under the transcript.
+- `write` carries no memo, so its card can only preview the new content; there is no old file to
+  diff against, and the edit diff's context lines are not in the edit memo either.
 
 ## 4. Config fields
 

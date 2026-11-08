@@ -32,7 +32,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
             if arg_bool(args, "raw") == Some(true) {
                 meta.push("raw".to_string());
             }
-            if let Some(o) = result.filter(|o| o.ok) {
+            if let Some(o) = result.filter(|o| o.ok == Some(true)) {
                 meta.push(format!("{} lines", non_empty_lines(o.text)));
             }
         }
@@ -61,7 +61,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
             if arg_bool(args, "full_page") == Some(true) {
                 meta.push("full page".to_string());
             }
-            if let Some(o) = result.filter(|o| o.ok)
+            if let Some(o) = result.filter(|o| o.ok == Some(true))
                 && let Some(path) = o.text.split(" -> ").nth(1)
             {
                 values.push(truncate(&one_line(path), 60));
@@ -125,7 +125,7 @@ impl ToolRenderer for Web {
     }
 
     fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
-        if !o.ok {
+        if o.ok == Some(false) {
             return vec![Section {
                 label: None,
                 lines: error_lines(Some(o)),

@@ -235,11 +235,12 @@ impl Relay {
                     }
                     Stream::Arguments {
                         call_id,
+                        name,
                         text,
                         usage,
                     } => (
                         "arguments",
-                        json!({"call_id": call_id, "text": text, "usage": bill(usage)}),
+                        json!({"call_id": call_id, "name": name, "text": text, "usage": bill(usage)}),
                     ),
                     Stream::Boundary => ("boundary", json!({})),
                     Stream::Wake(text) => ("wake", json!({"text": text})),

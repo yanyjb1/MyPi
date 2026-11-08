@@ -115,11 +115,14 @@ impl Mutable {
         self.entries.len() - 1
     }
 
-    pub fn arguments(&mut self, call_id: &str, piece: &str) -> usize {
+    pub fn arguments(&mut self, call_id: &str, name: &str, piece: &str) -> usize {
         let at = self.request(call_id);
         let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
             return at;
         };
+        if !name.is_empty() && block.name.as_deref().is_none_or(str::is_empty) {
+            block.name = Some(name.to_string());
+        }
         block.args.get_or_insert_with(String::new).push_str(piece);
         at
     }

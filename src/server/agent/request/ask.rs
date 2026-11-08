@@ -291,6 +291,7 @@ impl<'a> Forward<'a> {
             },
             _ => Stream::Arguments {
                 call_id: block.call_id.clone().unwrap_or_default(),
+                name: String::new(),
                 text: String::new(),
                 usage: Some(usage),
             },
@@ -451,15 +452,20 @@ fn coalesce(pieces: Vec<Stream>) -> Vec<Stream> {
             (
                 Some(Stream::Arguments {
                     call_id: held_id,
+                    name: held_name,
                     text: held,
                     usage,
                 }),
                 Stream::Arguments {
                     call_id,
+                    name,
                     text: more,
                     usage: bill,
                 },
             ) if *held_id == call_id => {
+                if held_name.is_empty() {
+                    *held_name = name;
+                }
                 held.push_str(&more);
                 if bill.is_some() {
                     *usage = bill;

@@ -5,7 +5,10 @@ use serde_json::Value;
 
 use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
-use super::{State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, path_meta, relativize};
+use super::{
+    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, expand_tabs, partial, path_meta,
+    relativize,
+};
 use crate::ui::tui::theme::fixed;
 
 const WRITE_GUTTER_MIN_WIDTH: usize = 3;
@@ -15,6 +18,12 @@ pub(crate) struct FileTools;
 impl ToolRenderer for FileTools {
     fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
         let mut out = path_meta(b);
+        if b.name == "write"
+            && let Some(content) = partial::text(b.args, "content")
+            && !content.is_empty()
+        {
+            out.push(format!("{} lines", content.lines().count()));
+        }
         if b.name == "read"
             && let Some(o) = b.result
             && let Some(d) = o.details
@@ -55,7 +64,7 @@ pub(crate) fn read_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) 
         runs.push(Run::fixed(format!(" {target}"), fixed::MUTED));
     }
     let mut out = vec![Row::of(Lead::None, runs)];
-    if let Some(o) = result.filter(|o| !o.ok) {
+    if let Some(o) = result.filter(|o| o.ok == Some(false)) {
         for part in o.text.lines().filter(|s| !s.trim().is_empty()) {
             out.push(Row::of(
                 Lead::None,
@@ -153,22 +162,23 @@ fn flush_numbered(numbered: &mut Vec<(usize, String)>, out: &mut Vec<Row>) {
 }
 
 pub(crate) fn write_preview(b: &ToolBlock<'_>) -> Vec<Row> {
-    let content = arg_str(b.args, "content").unwrap_or_default();
-    if content.is_empty() {
+    let content = partial::text(b.args, "content").unwrap_or_default();
+    if content.trim().is_empty() {
         return Vec::new();
     }
-    let lang = code::language_for_path(&arg_str(b.args, "path").unwrap_or_default());
+    let lang = code::language_for_path(&partial::text(b.args, "path").unwrap_or_default());
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
     let gutter = total.to_string().len().max(WRITE_GUTTER_MIN_WIDTH);
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let mut runs = vec![Run::fixed(format!("{:>gutter$} ", i + 1), fixed::DIM)];
-        let hl = code::line(line, lang);
-        if hl.runs.is_empty() {
-            runs.push(Run::plain(*line));
+        let body = expand_tabs(line);
+        let painted = code::line(&body, lang);
+        if painted.runs.is_empty() {
+            runs.push(Run::plain(body));
         } else {
-            runs.extend(hl.runs);
+            runs.extend(painted.runs);
         }
         out.push(Row::of(Lead::None, runs));
     }

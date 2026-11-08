@@ -23,7 +23,7 @@ pub fn node(block: &Block, paired: Option<&Block>, opts: &Opts, width: usize) ->
     let mut out = Vec::new();
 
     if name == "todo" {
-        out.extend(todo::marker(outcome));
+        out.extend(todo::marker(args, outcome));
         return out;
     }
     if name == "read" || name == "cd" {
@@ -73,7 +73,7 @@ pub fn node(block: &Block, paired: Option<&Block>, opts: &Opts, width: usize) ->
             expanded: opts.tool,
             width,
         },
-        block.ok.is_none(),
+        outcome.is_none_or(|o| o.ok.is_none()),
         opts.fold,
         width,
     ));
@@ -114,7 +114,8 @@ fn card(block: ToolBlock<'_>, tail: bool, budget: usize, width: usize) -> Vec<Ro
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ToolOutcome<'a> {
     pub text: &'a str,
-    pub ok: bool,
+    /// `None` while the call is still running.
+    pub ok: Option<bool>,
     pub details: Option<&'a Value>,
     pub duration_ms: u64,
 }
@@ -228,7 +229,10 @@ pub(crate) struct Section {
 /// How a card is colored, by the state of the exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum State {
+    /// No result yet: the call is queued or its arguments are still arriving.
     Pending,
+    /// The result is in hand but not settled: output is still streaming in.
+    Running,
     Ok,
     Err,
 }
@@ -237,14 +241,15 @@ impl State {
     pub(crate) fn of(result: Option<ToolOutcome<'_>>) -> State {
         match result {
             None => State::Pending,
-            Some(o) if o.ok => State::Ok,
+            Some(ToolOutcome { ok: None, .. }) => State::Running,
+            Some(ToolOutcome { ok: Some(true), .. }) => State::Ok,
             Some(_) => State::Err,
         }
     }
 
     pub(crate) fn glyph(self) -> &'static str {
         match self {
-            State::Pending => g::PENDING,
+            State::Pending | State::Running => g::PENDING,
             State::Ok => g::OK,
             State::Err => g::ERR,
         }
@@ -252,7 +257,7 @@ impl State {
 
     pub(crate) fn glyph_ink(self) -> Ink {
         match self {
-            State::Pending => Ink::Accent,
+            State::Pending | State::Running => Ink::Accent,
             State::Ok => Ink::Fixed(fixed::OK),
             State::Err => Ink::Fixed(fixed::ERR),
         }
@@ -260,7 +265,7 @@ impl State {
 
     fn edge(self) -> Ink {
         match self {
-            State::Pending => Ink::Accent,
+            State::Pending | State::Running => Ink::Accent,
             State::Ok => Ink::Fixed(fixed::TOOL_EDGE_OK),
             State::Err => Ink::Fixed(fixed::TOOL_EDGE_ERR),
         }
@@ -268,7 +273,7 @@ impl State {
 
     fn bg(self) -> Ink {
         Ink::Fixed(match self {
-            State::Pending => fixed::TOOL_BG_PENDING,
+            State::Pending | State::Running => fixed::TOOL_BG_PENDING,
             State::Ok => fixed::TOOL_BG_OK,
             State::Err => fixed::TOOL_BG_ERR,
         })
@@ -301,10 +306,10 @@ pub(crate) trait ToolRenderer {
     }
 
     fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
-        let lines = if b.name == "read" {
-            file::read_body(o)
-        } else {
-            output_lines(o.text)
+        let lines = match o.ok {
+            Some(false) => error_body(o.text),
+            _ if b.name == "read" => file::read_body(o),
+            _ => output_lines(o.text),
         };
         vec![Section { label: None, lines }]
     }
@@ -315,7 +320,6 @@ fn renderer_for(name: &str) -> &'static dyn ToolRenderer {
         "bash" => &bash::Bash,
         "edit" => &edit::Edit,
         "read" | "write" | "cd" => &file::FileTools,
-        "todo" => &todo::Todo,
         "web" => &web::Web,
         "context" => &context::Context,
         "memo" => &memo::Memo,
@@ -336,7 +340,7 @@ pub(crate) fn head(state: State, label: &str) -> Vec<Run> {
 
 /// The failure text under a one-line form, indented.
 pub(crate) fn error_lines(result: Option<ToolOutcome<'_>>) -> Vec<Row> {
-    let Some(o) = result.filter(|o| !o.ok) else {
+    let Some(o) = result.filter(|o| o.ok == Some(false)) else {
         return Vec::new();
     };
     o.text
@@ -351,6 +355,13 @@ pub(crate) fn error_lines(result: Option<ToolOutcome<'_>>) -> Vec<Row> {
         .collect()
 }
 
+/// One diff line: the line it sat on, and its text.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Numbered {
+    pub at: Option<usize>,
+    pub text: String,
+}
+
 /// The result text a diff-carrying edit replaces; a plain line otherwise.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ToolView {
@@ -358,9 +369,8 @@ pub(crate) enum ToolView {
         text: String,
     },
     Diff {
-        deletions: Vec<String>,
-        insertions: Vec<String>,
-        at_line: Option<usize>,
+        deletions: Vec<Numbered>,
+        insertions: Vec<Numbered>,
     },
 }
 
@@ -368,25 +378,33 @@ impl ToolView {
     pub(crate) fn from_details(details: Option<&Value>, text: &str) -> ToolView {
         let diff = details.filter(|d| d.get("kind").and_then(|k| k.as_str()) == Some("diff"));
         if let Some(d) = diff {
-            let lines = |key: &str| -> Vec<String> {
-                d.get(key)
+            let lines = |key: &str| -> Vec<Numbered> {
+                let mut out: Vec<Numbered> = d
+                    .get(key)
                     .and_then(|value| value.as_array())
                     .map(|items| {
                         items
                             .iter()
-                            .filter_map(|item| item.get("text").and_then(Value::as_str))
-                            .map(String::from)
-                            .collect::<Vec<_>>()
+                            .filter_map(|item| {
+                                Some(Numbered {
+                                    at: item
+                                        .get("line")
+                                        .and_then(Value::as_u64)
+                                        .map(|n| n as usize),
+                                    text: item.get("text").and_then(Value::as_str)?.to_string(),
+                                })
+                            })
+                            .collect()
                     })
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                out.sort_by_key(|line| line.at.unwrap_or(usize::MAX));
+                out
             };
             let (deletions, insertions) = (lines("deletions"), lines("insertions"));
-            let at_line = d.get("atLine").and_then(|v| v.as_u64()).map(|n| n as usize);
             if !deletions.is_empty() || !insertions.is_empty() {
                 return ToolView::Diff {
                     deletions,
                     insertions,
-                    at_line,
                 };
             }
         }
@@ -406,6 +424,16 @@ pub(crate) fn output_lines(text: &str) -> Vec<Row> {
     }
     text.lines()
         .map(|line| Row::of(Lead::None, vec![Run::fixed(line, fixed::TOOL_OUTPUT)]))
+        .collect()
+}
+
+/// The failure text inside a card: every line in the error color.
+pub(crate) fn error_body(text: &str) -> Vec<Row> {
+    if text.trim().is_empty() {
+        return output_lines(text);
+    }
+    text.lines()
+        .map(|line| Row::of(Lead::None, vec![Run::fixed(line, fixed::ERR)]))
         .collect()
 }
 
@@ -448,6 +476,11 @@ pub(crate) fn path_meta(b: &ToolBlock<'_>) -> Vec<String> {
         .filter(|p| !p.trim().is_empty())
         .map(|p| vec![one_line(&p)])
         .unwrap_or_default()
+}
+
+/// Tabs take four columns: the terminal's own stops would break every gutter.
+pub(crate) fn expand_tabs(text: &str) -> String {
+    text.replace('\t', "    ")
 }
 
 pub(crate) fn one_line(text: &str) -> String {
@@ -571,7 +604,7 @@ pub(crate) fn details_of(result: &Block) -> Option<Value> {
 pub(crate) fn outcome_of<'a>(result: &'a Block, details: Option<&'a Value>) -> ToolOutcome<'a> {
     ToolOutcome {
         text: result.result.as_deref().unwrap_or_default(),
-        ok: result.ok.unwrap_or(false),
+        ok: result.ok,
         details,
         duration_ms: result.duration_ms.max(0) as u64,
     }

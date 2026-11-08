@@ -7,7 +7,4 @@ pub(crate) const PENDING: &str = "[*]";
 pub(crate) const SEP: &str = "·";
 
 pub(crate) const TODO_PENDING: &str = "[ ]";
-pub(crate) const TODO_ACTIVE: &str = "[>]";
 pub(crate) const TODO_DONE: &str = "[x]";
-pub(crate) const TODO_BLOCKED: &str = "[!]";
-pub(crate) const TODO_DROPPED: &str = "[-]";

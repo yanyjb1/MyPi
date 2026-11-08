@@ -261,11 +261,15 @@ impl HistoryZone {
         out
     }
 
-    /// One position grew: only its last segment is laid again.
+    /// One position grew: its last segment is laid again, and its exchange's other half with it.
     pub(super) fn touch_turn(&mut self, at: usize) {
         let idx = Idx::Turn(at as u32);
+        let other = self.local.sibling(idx);
         self.with_draw(|local, products, run, _, opts| {
             run.touch(local, products, opts, idx);
+            if let Some(other) = other {
+                run.touch(local, products, opts, other);
+            }
         });
     }
 

@@ -199,8 +199,8 @@ fn decode(
                     && let Some(call) = calls.get_mut(&key)
                 {
                     call.function.arguments.push_str(d);
-                    let id = call.id.clone();
-                    out.stream(Stream::arguments(id, d.to_string()));
+                    let (id, name) = (call.id.clone(), call.function.name.clone());
+                    out.stream(Stream::arguments(id, name, d.to_string()));
                 }
             }
             "response.output_item.done" => {

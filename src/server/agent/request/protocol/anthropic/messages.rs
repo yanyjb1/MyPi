@@ -263,8 +263,8 @@ fn decode(
                 match chunk.role {
                     Role::Tool => {
                         chunk.args.push_str(piece);
-                        let id = chunk.id.clone();
-                        out.stream(Stream::arguments(id, piece.to_string()));
+                        let (id, name) = (chunk.id.clone(), chunk.name.clone());
+                        out.stream(Stream::arguments(id, name, piece.to_string()));
                     }
                     Role::Thinking => out.stream(Stream::thinking(piece.to_string())),
                     Role::Text => out.stream(Stream::text(piece.to_string())),

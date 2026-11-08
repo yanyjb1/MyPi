@@ -34,9 +34,10 @@ pub enum Stream {
         text: String,
         usage: Option<Usage>,
     },
-    /// Tool arguments, fragment by fragment; the call id is the only label they need.
+    /// Tool arguments, fragment by fragment; the name is empty until the provider states it.
     Arguments {
         call_id: String,
+        name: String,
         text: String,
         usage: Option<Usage>,
     },
@@ -61,9 +62,14 @@ impl Stream {
         }
     }
 
-    pub fn arguments(call_id: impl Into<String>, text: impl Into<String>) -> Stream {
+    pub fn arguments(
+        call_id: impl Into<String>,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Stream {
         Stream::Arguments {
             call_id: call_id.into(),
+            name: name.into(),
             text: text.into(),
             usage: None,
         }

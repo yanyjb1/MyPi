@@ -11,8 +11,8 @@ pub struct Calls {
 }
 
 impl Calls {
-    /// Absorb one delta. Every argument fragment is handed to `emit` with its call id.
-    pub fn feed(&mut self, delta: &Value, emit: &mut dyn FnMut(&str, &str)) {
+    /// Absorb one delta. Every argument fragment is handed to `emit` with its call id and name.
+    pub fn feed(&mut self, delta: &Value, emit: &mut dyn FnMut(&str, &str, &str)) {
         let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) else {
             return;
         };
@@ -46,8 +46,8 @@ impl Calls {
                     continue;
                 }
                 entry.function.arguments.push_str(piece);
-                let id = entry.id.clone();
-                emit(&id, piece);
+                let (id, name) = (entry.id.clone(), entry.function.name.clone());
+                emit(&id, &name, piece);
             }
         }
     }

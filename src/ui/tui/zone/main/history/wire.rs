@@ -100,7 +100,13 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
     let touched = match kind {
         "text" => Some(zone.local.running_mut().text(text)),
         "thinking" => Some(zone.local.running_mut().thinking(text)),
-        "arguments" => Some(zone.local.running_mut().arguments(call, text)),
+        "arguments" => {
+            let name = content
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some(zone.local.running_mut().arguments(call, name, text))
+        }
         "boundary" => {
             zone.local.running_mut().boundary();
             None

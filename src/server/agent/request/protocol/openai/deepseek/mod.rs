@@ -104,8 +104,12 @@ impl Protocol for Deepseek {
                 content.push_str(piece);
                 out.stream(Stream::text(piece.to_string()));
             }
-            calls.feed(delta, &mut |call_id, text| {
-                out.stream(Stream::arguments(call_id.to_string(), text.to_string()));
+            calls.feed(delta, &mut |call_id, name, text| {
+                out.stream(Stream::arguments(
+                    call_id.to_string(),
+                    name.to_string(),
+                    text.to_string(),
+                ));
             });
             Ok(true)
         })?;

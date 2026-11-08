@@ -14,7 +14,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `display.rs` | laid rows to screen lines | private |
 | `local/` | `section` (`Local`, `Idx`, `Pair`), `slot` (`Slot`, `SlotKind`, `Level`, `Life`), `content` (`Block`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
 | `product/` | `products` (the cache), `segment` (source to segments), `text`, `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `card` | private |
-| `product/card/` | `frame` (dispatch, the card frame, the renderer contract), one file per tool family | private |
+| `product/card/` | `frame` (dispatch, the card frame, the renderer contract), `partial` (fields of arguments still arriving), one file per tool family | private |
 | `prefetch/` | `run` (the laid segments), `range` (the start and the budget), `segment` (`SegId`, `Laid`), `trim`, `walk`, `color` | private |
 
 ## What it talks to
@@ -38,8 +38,9 @@ HistoryZone
  └── thinking / tool / fold / scroll_height / focus_line / placeholder / cwd
 ```
 
-- `wire::read_frame` decodes one frame. A piece appends to the running entry and re-lays only that
-  entry's last segment. A round close hands the entries over; the run starts again.
+- `wire::read_frame` decodes one frame. A piece appends to the running entry and re-lays that
+  entry's last segment, and the other half of its tool exchange with it. A round close hands the
+  entries over; the run starts again.
 - `zone::render_rows` spends the budget from `range`, draws the checklist under the transcript, and
   reports any block whose content is missing.
 - `Range::rows` walks forward from the start, laying segments as it goes; `Range::scroll` moves the
@@ -62,8 +63,10 @@ HistoryZone
 5. A tool's memo shape and its `product/card/` file: the renderer draws what the memo carries, or
    the result text when the tool hands back no memo.
 6. `Range::scroll` and the wheel bindings in `zone::deliver_action`.
-7. `Local::result_of`, `Products`' key and every `product::of` that takes a pair: the card is drawn
-   from the result its call names, so a new pairing source must reach all three.
+7. `Local::result_of`, `Local::sibling`, `Products`' key and every `product::of` that takes a pair:
+   the card is drawn from the result its call names, so a new pairing source must reach all of them.
+8. The wire's `stream / arguments` frame, its `name` field, `Mutable::arguments` and the family
+   renderer's `partial` reads: a new streamed field means those three move together.
 
 ## Not wired
 

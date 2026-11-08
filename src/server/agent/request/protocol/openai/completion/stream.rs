@@ -191,8 +191,12 @@ pub(crate) fn decode(
             }
         }
 
-        calls.feed(delta, &mut |call_id, text| {
-            out.stream(Stream::arguments(call_id.to_string(), text.to_string()));
+        calls.feed(delta, &mut |call_id, name, text| {
+            out.stream(Stream::arguments(
+                call_id.to_string(),
+                name.to_string(),
+                text.to_string(),
+            ));
         });
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             finish = Some(reason.to_string());
