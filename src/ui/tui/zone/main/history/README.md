@@ -58,18 +58,20 @@ A running block is rebuilt whenever content arrives. Only its last segment can s
 ### Tool cards
 
 A tool exchange draws as one card, built from the request and the result it pairs with. The card
-shows one of four phases: `Pending` (no result), `Running` (a result in hand, still unsettled), `Ok`,
-`Err`. Each phase picks the edge, the fill and the glyph.
+shows one of three phases: `Pending` (no settled result yet), `Ok`, `Err`. The phase picks the edge,
+the fill and the glyph. The file a call names sits in the header in the path color.
 
 The call half is read from the arguments as they stream: `partial` decodes the fields a fragment has
 reached, so an edit draws its `old`/`new` text and a write its numbered content before the arguments
 finish. Only a key that is itself complete is trusted; a value cut mid-string is drawn as far as it
 arrived.
 
-The result half is read from the result text and the memo. A memued diff draws as numbered removed
-lines, then numbered added ones, red and green, with the changed run of a paired line reversed; a
-line-number jump inside one side is one `…` row. Tabs take four columns everywhere a gutter or a
-code body is drawn.
+A diff line carries its text in one color end to end — marker, number, bar and body — and only the
+run that changed is reversed, with the indentation never part of it. Its sign and line number are
+padded together, so the bar sits in one column; a number the line above already printed is left out.
+A line-number jump inside one side is one `…` row. A tab takes three columns wherever a gutter or a
+code body is drawn, and the indentation of a diff line or a writer's preview draws one dim glyph per
+space and a dim arrow per tab.
 
 The call half of a `todo` call is one row: the phase glyph, the operation, and the counts the result
 carries. The checklist itself is the pinned product, never part of the card.

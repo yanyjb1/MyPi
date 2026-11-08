@@ -6,8 +6,8 @@ use super::super::super::row::{Lead, Row, Run};
 use super::super::table;
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_bool, arg_str, error_lines, head,
-    non_empty_lines, one_line, short_url, truncate,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_bool, arg_str, error_body,
+    error_under, head, non_empty_lines, one_line, short_url, truncate,
 };
 use crate::ui::tui::text::{display_width, glyphs as g};
 use crate::ui::tui::theme::fixed;
@@ -77,7 +77,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
         runs.push(Run::fixed(format!(" {} {m}", g::SEP), fixed::DIM));
     }
     let mut out = vec![Row::of(Lead::None, runs)];
-    out.extend(error_lines(result));
+    out.extend(error_under(result));
     Some(out)
 }
 
@@ -128,7 +128,7 @@ impl ToolRenderer for Web {
         if o.ok == Some(false) {
             return vec![Section {
                 label: None,
-                lines: error_lines(Some(o)),
+                lines: error_body(o.text),
             }];
         }
         let lines = match op_of(b.args).as_str() {

@@ -63,10 +63,10 @@ HistoryZone
 5. A tool's memo shape and its `product/card/` file: the renderer draws what the memo carries, or
    the result text when the tool hands back no memo.
 6. `Range::scroll` and the wheel bindings in `zone::deliver_action`.
-7. `Local::result_of`, `Local::sibling`, `Products`' key and every `product::of` that takes a pair:
+7. `Local::result_of`, `Local::card_at`, `Products`' key and every `product::of` that takes a pair:
    the card is drawn from the result its call names, so a new pairing source must reach all of them.
 8. The wire's `stream / arguments` frame, its `name` field, `Mutable::arguments` and the family
-   renderer's `partial` reads: a new streamed field means those three move together.
+   renderer's `partial` reads: a new streamed field means those four move together.
 
 ## Not wired
 

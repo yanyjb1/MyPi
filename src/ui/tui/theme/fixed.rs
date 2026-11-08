@@ -1,6 +1,6 @@
 //! The fixed palette: every color that is not the accent.
 //!
-//! Values come from the old bundled `titanium` theme, so nothing on screen moves.
+//! Values come from omp's bundled `titanium` theme; the accent is the only live color.
 
 use ratatui::style::Color;
 
@@ -25,12 +25,13 @@ pub const MUTED: Color = rgb(0x9c, 0xa3, 0xb0);
 pub const USER_BG: Color = rgb(0x0f, 0x12, 0x16);
 pub const USER_TEXT: Color = Color::Reset;
 pub const TOOL_TITLE: Color = Color::Reset;
-pub const TOOL_OUTPUT: Color = rgb(0x77, 0x7d, 0x88);
-pub const TOOL_BG_PENDING: Color = rgb(0x1d, 0x21, 0x29);
-pub const TOOL_BG_OK: Color = rgb(0x16, 0x1a, 0x1f);
-pub const TOOL_BG_ERR: Color = rgb(0x29, 0x1d, 0x1d);
-pub const TOOL_EDGE_OK: Color = rgb(0x3d, 0x42, 0x4a);
-pub const TOOL_EDGE_ERR: Color = rgb(0xfc, 0x3a, 0x4b);
+pub const TOOL_PATH: Color = rgb(0x00, 0xb4, 0xff);
+pub const TOOL_OUTPUT: Color = rgb(0x9c, 0xa3, 0xb0);
+pub const TOOL_BG_PENDING: Color = rgb(0x0f, 0x12, 0x16);
+pub const TOOL_BG_OK: Color = rgb(0x0f, 0x12, 0x16);
+pub const TOOL_BG_ERR: Color = rgb(0x1a, 0x0f, 0x10);
+pub const TOOL_EDGE_OK: Color = rgb(0x6b, 0x72, 0x80);
+pub const TOOL_EDGE_ERR: Color = rgb(0xff, 0x47, 0x57);
 
 // Markdown
 pub const MD_HEADING: Color = rgb(0x00, 0xb4, 0xff);
@@ -43,9 +44,9 @@ pub const MD_HR: Color = rgb(0x2a, 0x30, 0x38);
 pub const MD_LIST_BULLET: Color = rgb(0x00, 0xb4, 0xff);
 
 // Diffs
-pub const DIFF_ADDED: Color = rgb(0x89, 0xd2, 0x81);
-pub const DIFF_REMOVED: Color = rgb(0xfc, 0x3a, 0x4b);
-pub const DIFF_CONTEXT: Color = rgb(0x77, 0x7d, 0x88);
+pub const DIFF_ADDED: Color = rgb(0x00, 0xff, 0x88);
+pub const DIFF_REMOVED: Color = rgb(0xff, 0x47, 0x57);
+pub const DIFF_CONTEXT: Color = rgb(0x9c, 0xa3, 0xb0);
 
 // Syntax
 pub const SYN_COMMENT: Color = rgb(0x6b, 0x72, 0x80);

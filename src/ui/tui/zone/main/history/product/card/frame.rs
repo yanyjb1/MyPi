@@ -9,7 +9,7 @@ use super::super::super::row::{Ink, Lead, Row, Run};
 use super::super::opts::Opts;
 use super::fold;
 use super::{
-    alias, bash, context, draft, edit, fallback, file, kairos, mcp, memo, task, todo, web,
+    alias, bash, context, draft, edit, fallback, file, kairos, mcp, memo, partial, task, todo, web,
 };
 use crate::ui::tui::text::{display_width, glyphs as g, take_width};
 use crate::ui::tui::theme::fixed;
@@ -175,6 +175,10 @@ impl ToolBlock<'_> {
         if let Some(d) = description(self.args) {
             runs.push(Run::fixed(format!(": {d}"), fixed::MUTED));
         }
+        if let Some(path) = self.renderer().path(self) {
+            runs.push(Run::fixed(format!(" {} ", g::SEP), fixed::DIM));
+            runs.push(Run::fixed(path, fixed::TOOL_PATH));
+        }
         for m in self.meta() {
             runs.push(Run::fixed(format!(" {} {m}", g::SEP), fixed::DIM));
         }
@@ -229,27 +233,24 @@ pub(crate) struct Section {
 /// How a card is colored, by the state of the exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum State {
-    /// No result yet: the call is queued or its arguments are still arriving.
+    /// No settled result yet: the call is queued, its arguments still arrive, or its output streams.
     Pending,
-    /// The result is in hand but not settled: output is still streaming in.
-    Running,
     Ok,
     Err,
 }
 
 impl State {
     pub(crate) fn of(result: Option<ToolOutcome<'_>>) -> State {
-        match result {
+        match result.and_then(|o| o.ok) {
             None => State::Pending,
-            Some(ToolOutcome { ok: None, .. }) => State::Running,
-            Some(ToolOutcome { ok: Some(true), .. }) => State::Ok,
-            Some(_) => State::Err,
+            Some(true) => State::Ok,
+            Some(false) => State::Err,
         }
     }
 
     pub(crate) fn glyph(self) -> &'static str {
         match self {
-            State::Pending | State::Running => g::PENDING,
+            State::Pending => g::PENDING,
             State::Ok => g::OK,
             State::Err => g::ERR,
         }
@@ -257,7 +258,7 @@ impl State {
 
     pub(crate) fn glyph_ink(self) -> Ink {
         match self {
-            State::Pending | State::Running => Ink::Accent,
+            State::Pending => Ink::Accent,
             State::Ok => Ink::Fixed(fixed::OK),
             State::Err => Ink::Fixed(fixed::ERR),
         }
@@ -265,7 +266,7 @@ impl State {
 
     fn edge(self) -> Ink {
         match self {
-            State::Pending | State::Running => Ink::Accent,
+            State::Pending => Ink::Accent,
             State::Ok => Ink::Fixed(fixed::TOOL_EDGE_OK),
             State::Err => Ink::Fixed(fixed::TOOL_EDGE_ERR),
         }
@@ -273,7 +274,7 @@ impl State {
 
     fn bg(self) -> Ink {
         Ink::Fixed(match self {
-            State::Pending | State::Running => fixed::TOOL_BG_PENDING,
+            State::Pending => fixed::TOOL_BG_PENDING,
             State::Ok => fixed::TOOL_BG_OK,
             State::Err => fixed::TOOL_BG_ERR,
         })
@@ -294,6 +295,11 @@ pub(crate) trait ToolRenderer {
 
     fn meta(&self, _b: &ToolBlock<'_>) -> Vec<String> {
         Vec::new()
+    }
+
+    /// The file this call names, shown in the path color.
+    fn path(&self, _b: &ToolBlock<'_>) -> Option<String> {
+        None
     }
 
     fn result_measure(&self, o: ToolOutcome<'_>) -> Option<String> {
@@ -338,19 +344,18 @@ pub(crate) fn head(state: State, label: &str) -> Vec<Run> {
     ]
 }
 
-/// The failure text under a one-line form, indented.
-pub(crate) fn error_lines(result: Option<ToolOutcome<'_>>) -> Vec<Row> {
+/// The failure text under a one-line form: the card body, shifted under the title.
+pub(crate) fn error_under(result: Option<ToolOutcome<'_>>) -> Vec<Row> {
     let Some(o) = result.filter(|o| o.ok == Some(false)) else {
         return Vec::new();
     };
-    o.text
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            Row::of(
-                Lead::None,
-                vec![Run::fixed(format!("  {line}"), fixed::ERR)],
-            )
+    error_body(o.text)
+        .into_iter()
+        .map(|mut row| {
+            if let Some(first) = row.runs.first_mut() {
+                first.text.insert_str(0, "  ");
+            }
+            row
         })
         .collect()
 }
@@ -433,6 +438,7 @@ pub(crate) fn error_body(text: &str) -> Vec<Row> {
         return output_lines(text);
     }
     text.lines()
+        .filter(|line| !line.trim().is_empty())
         .map(|line| Row::of(Lead::None, vec![Run::fixed(line, fixed::ERR)]))
         .collect()
 }
@@ -471,16 +477,44 @@ fn description(args: &str) -> Option<String> {
 }
 
 /// The path a file tool names, on one line.
-pub(crate) fn path_meta(b: &ToolBlock<'_>) -> Vec<String> {
-    arg_str(b.args, "path")
-        .filter(|p| !p.trim().is_empty())
-        .map(|p| vec![one_line(&p)])
-        .unwrap_or_default()
+pub(crate) fn path_of(b: &ToolBlock<'_>) -> Option<String> {
+    partial::text(b.args, "path")
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| one_line(&path))
 }
 
-/// Tabs take four columns: the terminal's own stops would break every gutter.
+/// A tab takes three columns; the terminal's own stops would break every gutter.
 pub(crate) fn expand_tabs(text: &str) -> String {
-    text.replace('\t', "    ")
+    text.replace('\t', "   ")
+}
+
+/// The tab's glyph, padded to the columns `expand_tabs` gives it.
+const TAB_MARK: &str = " → ";
+
+/// Split off the indentation, drawn as one `·` per space and a three-column arrow per tab.
+pub(crate) fn indentation(text: &str) -> (String, String) {
+    let lead = text.len() - text.trim_start_matches([' ', '\t']).len();
+    let (head, rest) = text.split_at(lead);
+    let mut glyphs = String::new();
+    for ch in head.chars() {
+        match ch {
+            '\t' => glyphs.push_str(TAB_MARK),
+            _ => glyphs.push_str(g::INDENT),
+        }
+    }
+    (glyphs, expand_tabs(rest))
+}
+
+/// The sign and the line number, right-aligned together, then the bar.
+pub(crate) fn gutter(sign: char, at: Option<usize>, width: usize) -> String {
+    if width == 0 {
+        return format!("{sign} ");
+    }
+    let text = match at {
+        Some(number) => format!("{sign}{number}"),
+        None => sign.to_string(),
+    };
+    format!("{text:>pad$}│", pad = width + 1)
 }
 
 pub(crate) fn one_line(text: &str) -> String {

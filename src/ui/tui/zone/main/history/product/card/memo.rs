@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
 use super::super::table;
-use super::{Section, ToolBlock, ToolOutcome, ToolRenderer, arg_str, output_lines};
+use super::{Section, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_body, output_lines};
 use crate::ui::tui::theme::fixed;
 
 pub(crate) struct Memo;
@@ -31,10 +31,15 @@ impl ToolRenderer for Memo {
     }
 
     fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
+        if o.ok == Some(false) {
+            return vec![Section {
+                label: None,
+                lines: error_body(o.text),
+            }];
+        }
         let op = arg_str(b.args, "op").unwrap_or_default();
         let lines = match op.as_str() {
             "show" | "history" | "list" => table_of(&op, o.details, b.inner_width(), o.text),
-            _ if o.ok == Some(false) => output_lines(o.text),
             _ => Vec::new(),
         };
         vec![Section { label: None, lines }]

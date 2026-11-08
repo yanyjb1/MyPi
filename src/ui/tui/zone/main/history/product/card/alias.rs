@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
-use super::{State, ToolOutcome, arg_str, error_lines, head};
+use super::{State, ToolOutcome, arg_str, error_under, head};
 use crate::ui::tui::theme::fixed;
 
 /// The whole exchange: one line, or a tree of names.
@@ -30,7 +30,7 @@ pub(crate) fn block(args: &str, result: Option<ToolOutcome<'_>>) -> Vec<Row> {
             out.extend(list(result));
         }
     }
-    out.extend(error_lines(result));
+    out.extend(error_under(result));
     out
 }
 

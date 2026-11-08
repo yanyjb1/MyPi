@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_lines, head, output_lines,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head, output_lines,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -51,7 +51,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
             out.push(Row::of(Lead::None, runs));
         }
     }
-    out.extend(error_lines(result));
+    out.extend(error_under(result));
     Some(out)
 }
 

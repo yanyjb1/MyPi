@@ -60,6 +60,11 @@ impl Mutable {
         self.block(at)
     }
 
+    /// The position of this call's request, when it is already in hand.
+    pub fn request_at(&self, call_id: &str) -> Option<usize> {
+        self.find(BlockKind::ToolRequest, call_id)
+    }
+
     pub fn take(&mut self) -> Vec<Entry> {
         self.open = None;
         std::mem::take(&mut self.entries)

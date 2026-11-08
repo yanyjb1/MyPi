@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
-use super::{State, ToolOutcome, arg_scalar, arg_str, error_lines, head, relativize};
+use super::{State, ToolOutcome, arg_scalar, arg_str, error_under, head, relativize};
 use crate::ui::tui::theme::fixed;
 
 /// The whole exchange: one line, then the cwd and the variables.
@@ -20,7 +20,7 @@ pub(crate) fn block(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) -> V
     runs.push(Run::fixed(text, fixed::MUTED));
     let mut out = vec![Row::of(Lead::None, runs)];
     out.extend(children(args, cwd));
-    out.extend(error_lines(result));
+    out.extend(error_under(result));
     out
 }
 

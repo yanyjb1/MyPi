@@ -2,7 +2,7 @@
 
 use super::super::super::row::{Lead, Row};
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, edit, error_lines, file, head,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, edit, error_under, file, head,
     output_lines,
 };
 
@@ -13,7 +13,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
     }
     let state = State::of(result);
     let mut out = vec![Row::of(Lead::None, head(state, "Submit"))];
-    out.extend(error_lines(result));
+    out.extend(error_under(result));
     Some(out)
 }
 

@@ -4,7 +4,7 @@ use ratatui::style::Modifier;
 use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
-use super::{State, ToolOutcome, partial};
+use super::{State, ToolOutcome, error_under, partial};
 use crate::ui::tui::theme::fixed;
 
 /// The one row an exchange leaves: its state, its operation, and what it left behind.
@@ -29,14 +29,7 @@ pub(crate) fn marker(args: &str, outcome: Option<ToolOutcome<'_>>) -> Vec<Row> {
         runs.push(Run::fixed(format!(" {meta}"), fixed::DIM));
     }
     let mut out = vec![Row::of(Lead::None, runs)];
-    if let Some(o) = outcome.filter(|o| o.ok == Some(false)) {
-        for part in o.text.split('\n').filter(|part| !part.trim().is_empty()) {
-            out.push(Row::of(
-                Lead::None,
-                vec![Run::fixed(format!("  {part}"), fixed::ERR)],
-            ));
-        }
-    }
+    out.extend(error_under(outcome));
     out
 }
 

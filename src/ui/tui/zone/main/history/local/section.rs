@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::content::{Block, Kind as BlockKind};
 use super::immutable::Immutable;
-use super::mutable::{Entry, Mutable};
+use super::mutable::Mutable;
 use super::slot::{Level, Life, Slot, SlotKind};
 
 /// Where one render position sits.
@@ -150,28 +150,15 @@ impl Local {
         }
     }
 
-    /// The other half of this position's tool exchange, while both sit in the running turn.
-    pub fn sibling(&self, idx: Idx) -> Option<Idx> {
+    /// Where a result's card is drawn: its request's position, while both sit in the running turn.
+    pub fn card_at(&self, idx: Idx) -> Option<Idx> {
         let Idx::Turn(at) = idx else { return None };
         let block = self.running.block(at as usize)?;
-        if !matches!(block.kind, BlockKind::ToolRequest | BlockKind::ToolResult) {
+        if block.kind != BlockKind::ToolResult {
             return None;
         }
         let call = block.call_id.as_deref()?;
-        self.running
-            .entries()
-            .iter()
-            .enumerate()
-            .find_map(|(other, entry)| match entry {
-                Entry::Block(held)
-                    if other != at as usize
-                        && held.kind != block.kind
-                        && held.call_id.as_deref() == Some(call) =>
-                {
-                    Some(Idx::Turn(other as u32))
-                }
-                _ => None,
-            })
+        self.running.request_at(call).map(|at| Idx::Turn(at as u32))
     }
 
     /// The ids of the exchange this block belongs to, its own included.

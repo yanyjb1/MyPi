@@ -2,85 +2,74 @@
 
 /// The first string value of this key, complete or cut short by the stream.
 pub(crate) fn text(args: &str, key: &str) -> Option<String> {
-    let bytes = args.as_bytes();
-    let mut at = 0usize;
-    while at < bytes.len() {
-        if bytes[at] != b'"' {
-            at += 1;
-            continue;
+    let mut at = 0;
+    while let Some((name, value)) = next_pair(args, at) {
+        if name == key && args.as_bytes().get(value) == Some(&b'"') {
+            return string_at(args, value).map(|(body, _, _)| body);
         }
-        let (name, end, closed) = string_at(args, at)?;
-        at = end;
-        if !closed {
-            return None;
-        }
-        let Some(after) = skip(bytes, end) else {
-            continue;
-        };
-        if bytes[after] != b':' {
-            continue;
-        }
-        let Some(value) = skip(bytes, after + 1) else {
-            continue;
-        };
-        if bytes[value] != b'"' {
-            at = value;
-            continue;
-        }
-        let value = string_at(args, value)?;
-        if name == key {
-            return Some(value.0);
-        }
-        at = value.1;
+        at = value_end(args, value);
     }
     None
 }
 
 /// Every `(number, text)` pair of this object key, in the order the pairs arrive.
 pub(crate) fn records(args: &str, num: &str, text: &str) -> Vec<(Option<usize>, String)> {
-    let bytes = args.as_bytes();
     let mut out: Vec<(Option<usize>, String)> = Vec::new();
     let mut current: Option<usize> = None;
-    let mut at = 0usize;
+    let mut at = 0;
+    while let Some((name, value)) = next_pair(args, at) {
+        if name == num {
+            let (number, end) = digits(args.as_bytes(), value);
+            if let Some(number) = number {
+                current = Some(number);
+                at = end;
+            } else {
+                at = value_end(args, value);
+            }
+            continue;
+        }
+        if name == text && args.as_bytes().get(value) == Some(&b'"') {
+            let Some((body, end, _)) = string_at(args, value) else {
+                break;
+            };
+            out.push((current.take(), body));
+            at = end;
+            continue;
+        }
+        at = value_end(args, value);
+    }
+    out
+}
+
+/// The next key and the byte its value starts at, at or after `from`.
+fn next_pair(args: &str, from: usize) -> Option<(String, usize)> {
+    let bytes = args.as_bytes();
+    let mut at = from;
     while at < bytes.len() {
         if bytes[at] != b'"' {
             at += 1;
             continue;
         }
-        let Some((name, end, closed)) = string_at(args, at) else {
-            break;
-        };
+        let (name, end, closed) = string_at(args, at)?;
+        if !closed {
+            return None;
+        }
         at = end;
-        let Some(after) = skip(bytes, end).filter(|_| closed) else {
-            break;
-        };
-        if bytes[after] != b':' {
+        let colon = skip(bytes, end)?;
+        if bytes[colon] != b':' {
             continue;
         }
-        let Some(value) = skip(bytes, after + 1) else {
-            break;
-        };
-        if name == num {
-            let (number, end) = digits(bytes, value);
-            if let Some(n) = number {
-                current = Some(n);
-            }
-            at = end;
-            continue;
-        }
-        if name == text && bytes[value] == b'"' {
-            match string_at(args, value) {
-                Some((body, end, _)) => {
-                    out.push((current.take(), body));
-                    at = end;
-                    continue;
-                }
-                None => break,
-            }
-        }
-        at = value;
+        return Some((name, skip(bytes, colon + 1)?));
     }
-    out
+    None
+}
+
+/// Where the value starting at `at` ends; a non-string keeps its own position.
+fn value_end(args: &str, at: usize) -> usize {
+    if args.as_bytes().get(at) != Some(&b'"') {
+        return at;
+    }
+    string_at(args, at).map_or(args.len(), |(_, end, _)| end)
 }
 
 /// The decoded string that starts at this quote, and where it ends; `closed` is false at input end.
@@ -92,40 +81,37 @@ fn string_at(text: &str, quote: usize) -> Option<(String, usize, bool)> {
         match bytes[at] {
             b'"' => return Some((out, at + 1, true)),
             b'\\' => {
-                let next = *bytes.get(at + 1)?;
-                let simple = match next {
-                    b'"' => Some('"'),
-                    b'\\' => Some('\\'),
-                    b'/' => Some('/'),
-                    b'b' => Some('\u{8}'),
-                    b'f' => Some('\u{c}'),
-                    b'n' => Some('\n'),
-                    b'r' => Some('\r'),
-                    b't' => Some('\t'),
-                    _ => None,
+                let Some(&next) = bytes.get(at + 1) else {
+                    return Some((out, at, false));
                 };
-                if let Some(ch) = simple {
-                    out.push(ch);
-                    at += 2;
-                    continue;
-                }
-                if next != b'u' {
-                    out.push(next as char);
-                    at += 2;
-                    continue;
-                }
-                let mut code = u32::from_str_radix(text.get(at + 2..at + 6)?, 16).ok()?;
-                let mut width = 6usize;
-                if (0xD800..=0xDBFF).contains(&code) {
-                    let low = u32::from_str_radix(text.get(at + 8..at + 12)?, 16).ok()?;
-                    if !(0xDC00..=0xDFFF).contains(&low) {
-                        return None;
+                if next == b'u' {
+                    let mut code = hex4(text, at + 2)?;
+                    let mut width = 6usize;
+                    if (0xD800..=0xDBFF).contains(&code) {
+                        let low = hex4(text, at + 8)?;
+                        if !(0xDC00..=0xDFFF).contains(&low) {
+                            return None;
+                        }
+                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        width = 12;
                     }
-                    code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
-                    width = 12;
+                    out.push(char::from_u32(code)?);
+                    at += width;
+                    continue;
                 }
-                out.push(char::from_u32(code)?);
-                at += width;
+                let simple = match next {
+                    b'"' => '"',
+                    b'\\' => '\\',
+                    b'/' => '/',
+                    b'b' => '\u{8}',
+                    b'f' => '\u{c}',
+                    b'n' => '\n',
+                    b'r' => '\r',
+                    b't' => '\t',
+                    _ => return None,
+                };
+                out.push(simple);
+                at += 2;
             }
             _ => {
                 let ch = text[at..].chars().next()?;
@@ -135,6 +121,11 @@ fn string_at(text: &str, quote: usize) -> Option<(String, usize, bool)> {
         }
     }
     Some((out, at, false))
+}
+
+/// The four hex digits of one escape, when they are all there.
+fn hex4(text: &str, from: usize) -> Option<u32> {
+    u32::from_str_radix(text.get(from..from + 4)?, 16).ok()
 }
 
 fn skip(bytes: &[u8], from: usize) -> Option<usize> {
@@ -149,7 +140,13 @@ fn digits(bytes: &[u8], from: usize) -> (Option<usize>, usize) {
     let mut at = from;
     let mut out = 0usize;
     while at < bytes.len() && bytes[at].is_ascii_digit() {
-        out = out * 10 + usize::from(bytes[at] - b'0');
+        let Some(next) = out
+            .checked_mul(10)
+            .and_then(|held| held.checked_add(usize::from(bytes[at] - b'0')))
+        else {
+            break;
+        };
+        out = next;
         at += 1;
     }
     ((at > from).then_some(out), at)

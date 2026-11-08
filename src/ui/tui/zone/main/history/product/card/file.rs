@@ -6,8 +6,8 @@ use serde_json::Value;
 use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
 use super::{
-    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, expand_tabs, partial, path_meta,
-    relativize,
+    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, expand_tabs, indentation,
+    partial, path_of, relativize,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -16,26 +16,27 @@ const WRITE_GUTTER_MIN_WIDTH: usize = 3;
 pub(crate) struct FileTools;
 
 impl ToolRenderer for FileTools {
+    fn path(&self, b: &ToolBlock<'_>) -> Option<String> {
+        let path = path_of(b)?;
+        if b.name != "read" {
+            return Some(path);
+        }
+        let details = b.result?.details?;
+        let offset = details.get("offset").and_then(|v| v.as_u64()).unwrap_or(1);
+        let lines = details.get("lines").and_then(|v| v.as_u64()).unwrap_or(0);
+        if offset > 1 && lines > 0 {
+            return Some(format!("{path}:{}-{}", offset, offset + lines - 1));
+        }
+        Some(path)
+    }
+
     fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
-        let mut out = path_meta(b);
+        let mut out = Vec::new();
         if b.name == "write"
             && let Some(content) = partial::text(b.args, "content")
             && !content.is_empty()
         {
             out.push(format!("{} lines", content.lines().count()));
-        }
-        if b.name == "read"
-            && let Some(o) = b.result
-            && let Some(d) = o.details
-        {
-            let offset = d.get("offset").and_then(|v| v.as_u64()).unwrap_or(1);
-            let lines = d.get("lines").and_then(|v| v.as_u64()).unwrap_or(0);
-            if offset > 1 && lines > 0 {
-                let span = format!(":{}-{}", offset, offset + lines - 1);
-                if let Some(first) = out.first_mut() {
-                    first.push_str(&span);
-                }
-            }
         }
         out
     }
@@ -55,23 +56,16 @@ pub(crate) fn read_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) 
         Run::with(state.glyph(), Some(state.glyph_ink()), Modifier::empty()),
         Run::fixed(" Read", fixed::TOOL_TITLE).bold(),
     ];
-    let path = arg_str(args, "path").unwrap_or_default();
+    let path = partial::text(args, "path").unwrap_or_default();
     if !path.trim().is_empty() {
         let mut target = relativize(cwd, &path);
         if let Some(span) = read_range(args) {
             target.push_str(&span);
         }
-        runs.push(Run::fixed(format!(" {target}"), fixed::MUTED));
+        runs.push(Run::fixed(format!(" {target}"), fixed::TOOL_PATH));
     }
     let mut out = vec![Row::of(Lead::None, runs)];
-    if let Some(o) = result.filter(|o| o.ok == Some(false)) {
-        for part in o.text.lines().filter(|s| !s.trim().is_empty()) {
-            out.push(Row::of(
-                Lead::None,
-                vec![Run::fixed(format!("  {part}"), fixed::ERR)],
-            ));
-        }
-    }
+    out.extend(error_under(result));
     out
 }
 
@@ -92,7 +86,7 @@ pub(crate) fn cd_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) ->
     ];
     if let Some(p) = want.filter(|p| !p.trim().is_empty()) {
         let ink = match state {
-            State::Ok => Ink::Fixed(fixed::MUTED),
+            State::Ok => Ink::Fixed(fixed::TOOL_PATH),
             _ => Ink::Fixed(fixed::ERR),
         };
         runs.push(Run::with(
@@ -122,11 +116,10 @@ pub(crate) fn read_body(o: ToolOutcome<'_>) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::new();
     let mut numbered: Vec<(usize, String)> = Vec::new();
     for line in o.text.lines() {
-        let parsed = line.trim_start().split_once('\t').and_then(|(n, text)| {
-            n.parse::<usize>()
-                .ok()
-                .map(|n| (n, text.replace('\t', "    ")))
-        });
+        let parsed = line
+            .trim_start()
+            .split_once('\t')
+            .and_then(|(n, text)| n.parse::<usize>().ok().map(|n| (n, expand_tabs(text))));
         match parsed {
             Some((n, text)) => numbered.push((n, text)),
             None => {
@@ -173,7 +166,14 @@ pub(crate) fn write_preview(b: &ToolBlock<'_>) -> Vec<Row> {
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let mut runs = vec![Run::fixed(format!("{:>gutter$} ", i + 1), fixed::DIM)];
-        let body = expand_tabs(line);
+        let (glyphs, body) = indentation(line);
+        if !glyphs.is_empty() {
+            runs.push(Run::with(
+                glyphs,
+                Some(Ink::Fixed(fixed::DIM)),
+                Modifier::DIM,
+            ));
+        }
         let painted = code::line(&body, lang);
         if painted.runs.is_empty() {
             runs.push(Run::plain(body));

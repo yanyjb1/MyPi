@@ -4,19 +4,18 @@ use std::ops::Range;
 
 use ratatui::style::Modifier;
 
-use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
 use super::{
-    Section, ToolBlock, ToolOutcome, ToolRenderer, ToolView, error_body, expand_tabs, output_lines,
-    partial, path_meta,
+    Numbered, Section, ToolBlock, ToolOutcome, ToolRenderer, ToolView, error_body, gutter,
+    indentation, output_lines, partial, path_of,
 };
 use crate::ui::tui::theme::fixed;
 
 pub(crate) struct Edit;
 
 impl ToolRenderer for Edit {
-    fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
-        path_meta(b)
+    fn path(&self, b: &ToolBlock<'_>) -> Option<String> {
+        path_of(b)
     }
 
     fn call_body(&self, b: &ToolBlock<'_>) -> Vec<Row> {
@@ -36,53 +35,99 @@ fn edit_call(b: &ToolBlock<'_>) -> Vec<Row> {
     if b.result.is_some() {
         return Vec::new();
     }
-    let path = partial::text(b.args, "path").unwrap_or_default();
-    let lang = code::language_for_path(&path);
     let old = partial::text(b.args, "old").filter(|text| !text.is_empty());
     let new = partial::text(b.args, "new").filter(|text| !text.is_empty());
     let changed = match (old.as_deref(), new.as_deref()) {
-        (Some(o), Some(n)) if o.lines().count() == 1 && n.lines().count() == 1 => {
-            changed_spans(&expand_tabs(o), &expand_tabs(n))
-        }
+        (Some(old), Some(new)) => pair_spans(old, new),
         _ => None,
     };
     let mut out = Vec::new();
     if let Some(old) = old.as_deref() {
-        push_lines(
+        push_text(
             &mut out,
             '-',
             old,
-            lang,
-            changed.as_ref().map(|(r, _)| r.clone()),
+            changed.as_ref().map(|(removed, _)| removed.clone()),
         );
     }
     if let Some(new) = new.as_deref() {
-        push_lines(&mut out, '+', new, lang, changed.map(|(_, r)| r));
+        push_text(&mut out, '+', new, changed.map(|(_, added)| added));
     }
     if out.is_empty() {
-        for (at, text) in partial::records(b.args, "line", "text") {
-            out.push(mass_row(at, &text, lang));
-        }
+        push_edits(&mut out, b.args);
     }
     out
 }
 
-/// One row of a by-line edit: the number when it has arrived, the text always.
-fn mass_row(at: Option<usize>, text: &str, lang: Option<&str>) -> Row {
-    let body = expand_tabs(text);
-    let mut runs = match at {
-        Some(n) => vec![Run::fixed(format!("+{n}│"), fixed::DIM)],
-        None => vec![Run::fixed("+ ", fixed::DIM)],
-    };
-    let painted = code::line(&body, lang);
-    if painted.runs.is_empty() {
-        runs.push(Run::plain(body));
+/// Text that arrived whole: every line signed, without a number.
+fn push_text(out: &mut Vec<Row>, sign: char, text: &str, span: Option<Range<usize>>) {
+    for (i, line) in text.lines().enumerate() {
+        let span = if i == 0 { span.clone() } else { None };
+        out.push(diff_row(sign, None, line, span, 0));
+    }
+}
+
+/// A by-line edit: the numbers that arrived, so far.
+fn push_edits(out: &mut Vec<Row>, args: &str) {
+    let rows = partial::records(args, "line", "text");
+    let width = rows
+        .iter()
+        .filter_map(|(at, _)| at.map(|at| at.to_string().len()))
+        .max()
+        .unwrap_or(0);
+    for (at, text) in rows {
+        out.push(diff_row('+', at, &text, None, width));
+    }
+}
+
+/// One diff row: the sign and the number, the indentation, then the text.
+fn diff_row(
+    sign: char,
+    at: Option<usize>,
+    text: &str,
+    span: Option<Range<usize>>,
+    width: usize,
+) -> Row {
+    let ink = if sign == '-' {
+        fixed::DIFF_REMOVED
     } else {
-        runs.extend(painted.runs);
+        fixed::DIFF_ADDED
+    };
+    let mut runs = vec![Run::fixed(gutter(sign, at, width), ink)];
+    let (glyphs, body) = indentation(text);
+    if !glyphs.is_empty() {
+        runs.push(Run::with(glyphs, Some(Ink::Fixed(ink)), Modifier::DIM));
+    }
+    let span = span.filter(|span| span.start < span.end && span.end <= body.len());
+    if let Some(span) = span {
+        if span.start > 0 {
+            runs.push(Run::fixed(&body[..span.start], ink));
+        }
+        runs.push(Run::with(
+            &body[span.start..span.end],
+            Some(Ink::Fixed(ink)),
+            Modifier::REVERSED,
+        ));
+        if span.end < body.len() {
+            runs.push(Run::fixed(&body[span.end..], ink));
+        }
+    } else if !body.is_empty() {
+        runs.push(Run::fixed(body, ink));
     }
     Row::of(Lead::None, runs)
 }
 
+/// The two single lines' changed runs; the indentation is never part of them.
+fn pair_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
+    if old.lines().count() != 1 || new.lines().count() != 1 {
+        return None;
+    }
+    let old = indentation(old.lines().next().unwrap_or_default()).1;
+    let new = indentation(new.lines().next().unwrap_or_default()).1;
+    changed_spans(&old, &new)
+}
+
+/// The run one line has before and after its common prefix and suffix.
 fn changed_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
     if old == new {
         return None;
@@ -107,72 +152,6 @@ fn changed_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
     ))
 }
 
-fn split_at_bytes(runs: Vec<Run>, lo: usize, hi: usize) -> (Vec<Run>, Vec<Run>, Vec<Run>) {
-    let mut before = Vec::new();
-    let mut mid = Vec::new();
-    let mut after = Vec::new();
-    let mut at = 0usize;
-    for run in runs {
-        let (start, end) = (at, at + run.text.len());
-        at = end;
-        for (lo, hi, bucket) in [
-            (0, lo, &mut before),
-            (lo, hi, &mut mid),
-            (hi, usize::MAX, &mut after),
-        ] {
-            let (s, e) = (start.max(lo), end.min(hi));
-            if s < e {
-                bucket.push(Run {
-                    text: run.text[(s - start)..(e - start)].to_string(),
-                    ink: run.ink,
-                    bg: run.bg,
-                    attrs: run.attrs,
-                });
-            }
-        }
-    }
-    (before, mid, after)
-}
-
-/// The call's old or new text, every line signed and the changed run reversed.
-fn push_lines(
-    out: &mut Vec<Row>,
-    sign: char,
-    text: &str,
-    lang: Option<&str>,
-    span: Option<Range<usize>>,
-) {
-    let ink = if sign == '-' {
-        fixed::DIFF_REMOVED
-    } else {
-        fixed::DIFF_ADDED
-    };
-    for (i, line) in text.lines().enumerate() {
-        let body = expand_tabs(line);
-        let mut runs = vec![Run::fixed(format!("{sign} "), ink)];
-        let painted = code::line(&body, lang);
-        let parts = if painted.runs.is_empty() {
-            vec![Run::plain(body.clone())]
-        } else {
-            painted.runs
-        };
-        let span = if i == 0 { span.clone() } else { None };
-        match span {
-            Some(r) if r.start < r.end && r.end <= body.len() => {
-                let (pre, mid, post) = split_at_bytes(parts, r.start, r.end);
-                runs.extend(pre);
-                for mut run in mid {
-                    run.attrs |= Modifier::REVERSED;
-                    runs.push(run);
-                }
-                runs.extend(post);
-            }
-            _ => runs.extend(parts),
-        }
-        out.push(Row::of(Lead::None, runs));
-    }
-}
-
 fn edit_result(o: ToolOutcome<'_>) -> Vec<Row> {
     if o.ok == Some(false) {
         return error_body(o.text);
@@ -187,7 +166,7 @@ fn edit_result(o: ToolOutcome<'_>) -> Vec<Row> {
 }
 
 /// Removed lines, then added ones, each with the line it sat on.
-fn diff_rows(deletions: &[super::Numbered], insertions: &[super::Numbered]) -> Vec<Row> {
+fn diff_rows(deletions: &[Numbered], insertions: &[Numbered]) -> Vec<Row> {
     let width = deletions
         .iter()
         .chain(insertions)
@@ -198,16 +177,20 @@ fn diff_rows(deletions: &[super::Numbered], insertions: &[super::Numbered]) -> V
     let paired = deletions.len() == insertions.len();
     let mut out = Vec::new();
     let mut prev: Option<usize> = None;
+    let mut shown: Option<usize> = None;
     for (i, line) in deletions.iter().enumerate() {
         gap(&mut out, prev, line.at);
         prev = line.at;
         let span = paired
             .then(|| {
-                changed_spans(&expand_tabs(&line.text), &expand_tabs(&insertions[i].text))
-                    .map(|(r, _)| r)
+                changed_spans(
+                    &indentation(&line.text).1,
+                    &indentation(&insertions[i].text).1,
+                )
             })
-            .flatten();
-        push_row(&mut out, '-', line, span, width);
+            .flatten()
+            .map(|(removed, _)| removed);
+        push(&mut out, '-', line, span, width, &mut shown);
     }
     prev = None;
     for (i, line) in insertions.iter().enumerate() {
@@ -215,11 +198,14 @@ fn diff_rows(deletions: &[super::Numbered], insertions: &[super::Numbered]) -> V
         prev = line.at;
         let span = paired
             .then(|| {
-                changed_spans(&expand_tabs(&deletions[i].text), &expand_tabs(&line.text))
-                    .map(|(_, r)| r)
+                changed_spans(
+                    &indentation(&deletions[i].text).1,
+                    &indentation(&line.text).1,
+                )
             })
-            .flatten();
-        push_row(&mut out, '+', line, span, width);
+            .flatten()
+            .map(|(_, added)| added);
+        push(&mut out, '+', line, span, width, &mut shown);
     }
     if out.is_empty() {
         out.push(Row::text(
@@ -229,6 +215,25 @@ fn diff_rows(deletions: &[super::Numbered], insertions: &[super::Numbered]) -> V
         ));
     }
     out
+}
+
+/// A row whose number goes when the line above already printed it.
+fn push(
+    out: &mut Vec<Row>,
+    sign: char,
+    line: &Numbered,
+    span: Option<Range<usize>>,
+    width: usize,
+    shown: &mut Option<usize>,
+) {
+    let at = match line.at {
+        Some(number) if *shown != Some(number) => {
+            *shown = Some(number);
+            Some(number)
+        }
+        _ => None,
+    };
+    out.push(diff_row(sign, at, &line.text, span, width));
 }
 
 /// A jump in line numbers inside one side is a region boundary.
@@ -242,49 +247,4 @@ fn gap(out: &mut Vec<Row>, prev: Option<usize>, next: Option<usize>) {
             Some(Ink::Fixed(fixed::DIFF_CONTEXT)),
         ));
     }
-}
-
-fn push_row(
-    out: &mut Vec<Row>,
-    sign: char,
-    line: &super::Numbered,
-    span: Option<Range<usize>>,
-    width: usize,
-) {
-    let ink = if sign == '-' {
-        fixed::DIFF_REMOVED
-    } else {
-        fixed::DIFF_ADDED
-    };
-    let mut runs = Vec::new();
-    if width > 0 {
-        match line.at {
-            Some(at) => runs.push(Run::fixed(format!("{sign}{at:>width$}│"), fixed::DIM)),
-            None => runs.push(Run::fixed(format!("{sign} "), fixed::DIM)),
-        }
-    } else {
-        runs.push(Run::fixed(format!("{sign} "), fixed::DIM));
-    }
-    let body = expand_tabs(&line.text);
-    match span {
-        Some(r) if r.start < r.end && r.end <= body.len() => {
-            runs.push(Run::with(
-                body[..r.start].to_string(),
-                Some(Ink::Fixed(ink)),
-                Modifier::empty(),
-            ));
-            runs.push(Run::with(
-                body[r.start..r.end].to_string(),
-                Some(Ink::Fixed(ink)),
-                Modifier::REVERSED,
-            ));
-            runs.push(Run::with(
-                body[r.end..].to_string(),
-                Some(Ink::Fixed(ink)),
-                Modifier::empty(),
-            ));
-        }
-        _ => runs.push(Run::with(body, Some(Ink::Fixed(ink)), Modifier::empty())),
-    }
-    out.push(Row::of(Lead::None, runs));
 }
