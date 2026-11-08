@@ -1,12 +1,11 @@
 //! `usage` — tokens per model, the cache-hit share, what it cost, and where the context stands.
 //!
-//! Every measured lap leaves its bill on the last block it landed, so the session's bill is the
-//! union of stamped blocks; the running turn's part arrives from the loop's memory until it lands.
+//! The session's bill is the union of stamped blocks; the running turn's laps arrive from memory.
 
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::server::api::{Api, Refuse};
 use crate::server::config::ResolvedModel;
@@ -52,71 +51,30 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
             .rounds += 1;
     }
 
-    // One stamped block = one measured lap: its prompt is the request it carried, its completion
-    // the reply it produced. The model priced is the turn's, read off the round row. The newest
-    // compaction round's stamp is the summary, kept apart for the post-compaction estimate.
-    let compaction_at: Option<i64> = list
-        .iter()
-        .rev()
-        .find(|row| row["is_compaction"].as_bool() == Some(true))
-        .and_then(|row| row["turn_id"].as_i64());
-    let compaction_range: Option<[i64; 2]> = compaction_at.and_then(|id| {
-        turns
-            .iter()
-            .find(|turn| turn["turn_id"].as_i64() == Some(id))
-            .and_then(|turn| turn["ranges"].as_array())
-            .and_then(|items| items.first())
-            .and_then(|pair| pair.as_array())
-            .and_then(|pair| Some([pair.first()?.as_i64()?, pair.last()?.as_i64()?]))
-    });
-    let mut ranges: Vec<(&Value, [i64; 2])> = Vec::new();
-    for turn in &turns {
-        let Some(items) = turn["ranges"].as_array() else {
-            continue;
-        };
-        for item in items {
-            let Some(pair) = item.as_array().filter(|pair| pair.len() == 2) else {
+    // One stamped block bills one lap, priced at the turn found by interval coverage.
+    let mut stamps: Vec<estimate::Stamp> = Vec::new();
+    for (turn, span) in spans(&turns) {
+        for block in reader.blocks(&[span])? {
+            let Some(prompt) = block["usage_prompt"].as_i64() else {
                 continue;
             };
-            let (Some(lo), Some(hi)) = (pair[0].as_i64(), pair[1].as_i64()) else {
-                continue;
-            };
-            if hi >= lo {
-                ranges.push((turn, [lo, hi]));
-            }
+            let prompt = prompt.max(0) as u64;
+            let completion = block["usage_completion"].as_i64().unwrap_or(0).max(0) as u64;
+            stamps.push(estimate::Stamp {
+                at: block["id"].as_i64().unwrap_or(0),
+                prompt,
+                completion,
+            });
+            let address = pair_of(turn)
+                .map(|(provider, model)| format!("{provider}:{model}"))
+                .unwrap_or_default();
+            let tally = groups.entry(address).or_default();
+            tally.prompt += prompt as i64;
+            tally.completion += completion as i64;
+            tally.cached += block["usage_cached"].as_i64().unwrap_or(0);
+            tally.written += block["usage_cache_write"].as_i64().unwrap_or(0);
         }
     }
-    let by_range: BTreeMap<i64, &Value> =
-        ranges.iter().map(|(turn, [lo, _])| (*lo, *turn)).collect();
-    let spans: Vec<[i64; 2]> = ranges.iter().map(|(_, span)| *span).collect();
-    let mut measured: Option<u64> = None;
-    let mut measured_at: i64 = -1;
-    let mut summary: Option<u64> = None;
-    for block in reader.blocks(&spans)? {
-        let Some(prompt) = block["usage_prompt"].as_i64() else {
-            continue;
-        };
-        measured = Some(prompt.max(0) as u64);
-        measured_at = block["id"].as_i64().unwrap_or(0);
-        if let Some([lo, hi]) = compaction_range
-            && measured_at >= lo
-            && measured_at <= hi
-        {
-            summary = block["usage_completion"].as_i64().map(|c| c.max(0) as u64);
-            continue;
-        }
-        let turn = by_range.get(&measured_at);
-        let address = turn
-            .and_then(|turn| pair_of(turn))
-            .map(|(provider, model)| format!("{provider}:{model}"))
-            .unwrap_or_default();
-        let tally = groups.entry(address).or_default();
-        tally.prompt += prompt;
-        tally.completion += block["usage_completion"].as_i64().unwrap_or(0);
-        tally.cached += block["usage_cached"].as_i64().unwrap_or(0);
-        tally.written += block["usage_cache_write"].as_i64().unwrap_or(0);
-    }
-
     // The running turn is not stored yet: its laps arrive here, priced at the model in use.
     let running = api.ledger().running(session);
     if let Some((partial, (provider, model))) = &running {
@@ -190,10 +148,8 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     let (context, estimated) = estimate::context(
         &list,
         running.as_ref().map(|(partial, _)| partial),
+        &stamps,
         baseline,
-        measured,
-        measured_at,
-        summary,
     );
 
     Ok(json!({
@@ -215,6 +171,31 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
 /// `(provider, model)` of a round row, when it asked at all.
 fn pair_of(turn: &Value) -> Option<(&str, &str)> {
     Some((turn["provider"].as_str()?, turn["model"].as_str()?))
+}
+
+/// Every round's block intervals, paired with its row, in turn order.
+fn spans(turns: &[Value]) -> Vec<(&Value, [i64; 2])> {
+    let mut out = Vec::new();
+    for turn in turns {
+        let Some(items) = turn["ranges"].as_array() else {
+            continue;
+        };
+        for item in items {
+            let Some(pair) = item.as_array() else {
+                continue;
+            };
+            let (Some(lo), Some(hi)) = (
+                pair.first().and_then(Value::as_i64),
+                pair.get(1).and_then(Value::as_i64),
+            ) else {
+                continue;
+            };
+            if hi >= lo {
+                out.push((turn, [lo, hi]));
+            }
+        }
+    }
+    out
 }
 
 /// The smallest context this session's request archive ever carried; `None` until one is known.

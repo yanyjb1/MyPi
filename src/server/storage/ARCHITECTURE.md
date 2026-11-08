@@ -22,7 +22,7 @@ describes the code as it stands.
 | `writer/thread.rs` | the thread body |
 | `write/apply.rs` | one submission as one transaction: row dispatch, reference resolution, the structure it reports |
 | `write/sessions.rs` | session rows and the cwd history |
-| `write/turns.rs` | round rows and their usage columns |
+| `write/turns.rs` | round rows: insert, settle, the interval list |
 | `write/blocks.rs` | block rows, and the round's interval and byte count |
 | `write/artifacts.rs` | the row an oversized output lands |
 | `write/memos.rs` | memo rows |
