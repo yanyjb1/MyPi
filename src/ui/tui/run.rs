@@ -52,6 +52,11 @@ pub fn run(session: Session, startup: app::Startup) -> Result<()> {
             ))),
             None => {}
         }
+
+        // What the frame put on the clipboard leaves between draws, never inside one.
+        for text in app.take_copy() {
+            let _ = term.copy(&text);
+        }
     }
 
     app.bye();

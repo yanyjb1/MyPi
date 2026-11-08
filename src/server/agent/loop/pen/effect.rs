@@ -22,7 +22,7 @@ pub fn rows(anchor: Ref, effect: &Effect) -> (Vec<Row>, Option<Delete>) {
         } => match op {
             MemoOp::Set => (
                 vec![Row::Memo {
-                    anchor,
+                    anchor: Some(anchor),
                     name: name.clone(),
                     content: content.clone().unwrap_or_default(),
                     ts: ts.clone(),

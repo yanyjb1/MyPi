@@ -52,6 +52,8 @@ pub struct App {
     opening: Option<String>,
     /// The session each zone has last been told about; a zone hears it once.
     pub(super) told: Vec<Option<i64>>,
+    /// Text waiting for the loop to write it to the clipboard.
+    copy: Vec<String>,
     finished: bool,
 }
 
@@ -77,6 +79,7 @@ impl App {
             profile: None,
             opening: None,
             told,
+            copy: Vec::new(),
             finished: false,
         };
         app.reset_memo();
@@ -148,6 +151,11 @@ impl App {
     /// Say goodbye and let the connection go.
     pub fn bye(&mut self) {
         self.session.bye();
+    }
+
+    /// Take the text the loop still owes the clipboard.
+    pub fn take_copy(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.copy)
     }
 
     fn deliver(&mut self, frame: &Frame) {
@@ -245,6 +253,7 @@ impl App {
             Request::Structure => self.structure(),
             Request::Quit => self.settle(Outcome::Quit),
             Request::PickProfile(profile) => self.pick_profile(profile),
+            Request::Copy(text) => self.copy.push(text),
             Request::Submit(text) => self.submit(text),
             Request::SetCwd(path) => self.set_cwd(path),
             Request::SwitchModel(id) if self.session.attached().is_none() => {

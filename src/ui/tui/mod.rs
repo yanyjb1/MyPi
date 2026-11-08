@@ -4,6 +4,7 @@
 
 pub mod action;
 pub mod app;
+mod clipboard;
 mod config;
 mod run;
 mod signal;

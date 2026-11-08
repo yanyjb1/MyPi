@@ -14,7 +14,7 @@ What is here, what each file holds, who calls whom. Current state only.
 ## What it exposes
 
 - `App::boot(session, size, startup, zones)`.
-- `finished`, `size`, `pump`, `input`, `render`, `cursor`, `bye`.
+- `finished`, `size`, `pump`, `input`, `render`, `cursor`, `bye`, `take_copy`.
 - `attach`, `detach`.
 - `Startup::main`, `Startup::resume`, `Startup::attach`.
 
@@ -40,6 +40,7 @@ fields.
 3. `wire::land` and the session's actions (`ui/session/actions.rs`): one line per intent.
 4. `create`'s payload and api's `post init` arguments.
 5. `Startup` and the CLI's launch parameters.
+6. `wire::memo` and `MemoAsk`'s five shapes: the arguments each door expects.
 
 ## Not wired
 

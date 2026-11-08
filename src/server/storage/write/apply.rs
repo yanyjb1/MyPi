@@ -105,7 +105,11 @@ fn one(
             content,
             ts,
         } => {
-            memos::insert(tx, Some(id_of(ids, anchor)?), name, content, ts)?;
+            let anchor = match anchor {
+                Some(anchor) => Some(id_of(ids, anchor)?),
+                None => None,
+            };
+            memos::insert(tx, anchor, name, content, ts)?;
             0
         }
         Row::Alias {

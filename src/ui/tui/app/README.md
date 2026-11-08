@@ -17,6 +17,7 @@ The front end's centre: the registry, the display ledger, and the only exit to t
 | `told: Vec<Option<i64>>` | the session each zone has last been told about |
 | `cwd`, `model` | what a new session is created with |
 | `waiting` | a message sent before the session row existed |
+| `copy: Vec<String>` | text the loop still owes the terminal's clipboard |
 | `finished: bool` | nobody shows |
 
 ### Boot
@@ -38,10 +39,14 @@ memo but always write it back.
 
 Every delivery returns requests; they are landed at once, in order.
 
+`Request::Copy` is the one ask the app keeps for somebody else: it joins `copy`, and the frame loop
+takes it with `take_copy` and writes the terminal's clipboard between two draws.
+
 ### Landing
 
 A `Request` is an intent: the app names the door. `wire::land` carries every session action; the
-app keeps the six it owns — `Submit`, `Attach`, `Detach`, `Structure`, `Quit`, `PickProfile`.
+app keeps the seven it owns — `Submit`, `Copy`, `Attach`, `Detach`, `Structure`, `Quit`,
+`PickProfile`.
 A `Submit` with no session attached first creates the row (`post init` with `cwd`, `model` and the
 picked profile), parks the text, and sends it after the id lands. `Structure` asks the session for
 the structural window and hands one `Turns` snapshot to the zone that shows; a nested `Structure`

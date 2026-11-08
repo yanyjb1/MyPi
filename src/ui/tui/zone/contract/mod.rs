@@ -16,7 +16,7 @@ pub use frame::Frame;
 pub use kind::Kind;
 pub use memo::Memo;
 pub use outcome::{Outcome, ZoneId};
-pub use request::{ModelId, Request, Retention};
+pub use request::{MemoAsk, MemoScope, ModelId, Request, Retention};
 pub use shout::{Shout, name};
 pub use size::TermSize;
 pub use turns::{Round, Turns};

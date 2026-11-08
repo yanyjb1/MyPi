@@ -40,7 +40,7 @@ The app, the session, the socket, the database, the agent loop, the picker, and 
 MainZone
  ├── history  ── blocks, live tail, local section, viewport, cache
  ├── input    ── editor, statusline, exits, hires
- ├── reserved ── desk, completion, usage panel
+ ├── reserved ── desk, completion, usage panel, memo panel
  ├── keys     ── seats and loans
  ├── size / heights / shouts
 ```

@@ -12,7 +12,7 @@ use crate::ui::tui::theme::{Accent, fixed};
 use crate::ui::tui::zone::Claim;
 use crate::ui::tui::zone::main::input::{Currency, Lang};
 use crate::ui::tui::zone::main::num;
-use crate::ui::tui::zone::main::reserved::hand::{Hand, Report};
+use crate::ui::tui::zone::main::reserved::hand::{Hand, Report, window_start};
 
 /// No modifiers held.
 const PLAIN: Mods = Mods {
@@ -43,9 +43,6 @@ const PANEL_KEYS: &[Claim] = &[
 
 /// The config key that places the panel's block.
 pub const ALIGN_KEY: &str = "config.ui.tui.zone.main.reserved.usageAlign";
-
-/// The panel's row cap, table head included.
-const MAX_ROWS: usize = 24;
 
 /// Cells between two columns.
 const GAP: usize = 2;
@@ -249,13 +246,12 @@ impl UsagePanel {
         self.selected = next.rem_euclid(self.rows.len() as isize) as usize;
     }
 
-    /// Two summary rows, the blank, the head, and one row per model.
-    /// An empty bill keeps four rows: the note stands where the head and rows go.
+    /// Two summary rows, the blank, the head, and one row per model. The desk caps the body.
     fn height(&self) -> usize {
         if !self.loaded {
             return 1;
         }
-        (4 + self.rows.len()).min(MAX_ROWS)
+        4 + self.rows.len()
     }
 
     /// The header words of one face.
@@ -544,7 +540,8 @@ impl UsagePanel {
         out.push(Line::default());
         out.push(Line::from(format!("{pad}{}", self.head(&plan))));
         let room = rows.saturating_sub(out.len());
-        for (i, row) in self.rows.iter().take(room).enumerate() {
+        let start = window_start(self.rows.len(), room, self.selected);
+        for (i, row) in self.rows.iter().enumerate().skip(start).take(room) {
             let text = format!("{pad}{}", self.line(row, &plan));
             out.push(Line::from(match i == self.selected {
                 true => accent.span(text),

@@ -264,9 +264,9 @@ pub enum Row {
         hash: String,
         reference: String,
     },
-    /// One memo row.
+    /// One memo row; `None` = the global scope.
     Memo {
-        anchor: Ref,
+        anchor: Option<Ref>,
         name: String,
         content: String,
         ts: String,

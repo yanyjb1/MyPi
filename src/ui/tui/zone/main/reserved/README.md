@@ -1,8 +1,8 @@
 # reserved — the strip above the editor
 
-The reserved sub-zone is a desk for temporary hands. Today the roster has two: the completion
-popup and the usage panel. At most one hand is on duty, its height is frozen on arrival, and it
-leaves before another sits down.
+The reserved sub-zone is a desk for temporary hands. Today the roster has three: the completion
+popup, the usage panel, and the memo panel. At most one hand is on duty, its height is frozen on
+arrival, and it leaves before another sits down.
 
 ## 1. Design / Schema
 
@@ -12,6 +12,7 @@ leaves before another sits down.
 |---|---|
 | `completion: CompletionService` | the completion hand |
 | `usage: UsagePanel` | the usage hand |
+| `memo: MemoHand` | the memo hand |
 | `on_duty: Option<Hire>` | who is sitting at the desk |
 | `report: Option<Report>` | the frozen report: rows, keys, feeds |
 | `want: u16` | rows the main zone allocated |
@@ -20,8 +21,8 @@ leaves before another sits down.
 | `queued: usize` | sentences waiting in the slot, as the input zone counts them |
 | `outbox: Vec<Request>` | frames the desk owes the session |
 
-`Hire` is `Completion` or `Usage`. `ReservedZone::CLAIMS` is empty: the desk only borrows keys
-through a hand's report.
+`Hire` is `Completion`, `Usage`, or `Memo(MemoAsk)`. `ReservedZone::CLAIMS` is empty: the desk only
+borrows keys through a hand's report.
 
 ### The hand contract
 
@@ -43,6 +44,7 @@ A hand also has:
 - `place(cwd)` — the workspace, handed over on arrival and on every change;
 - `text(text, cursor)` and `col(col)`;
 - `on_key(key) -> Option<Reply>`;
+- `note() -> Option<String>` — the one line the desk draws under the body;
 - `draw(width, rows, palette) -> Vec<Line>`;
 - `left()`.
 
@@ -50,10 +52,14 @@ A hand also has:
 
 `IDLE_ROWS` is one blank row, so the layout does not jump when a hand arrives or leaves.
 
+`MAX_ROWS` is 8: whatever a hand reports, the desk clamps the strip to eight rows. A hand that
+wants a blank row or a note row counts them in its own report and draws them itself; the desk only
+pads or cuts what comes back.
+
 ### The usage panel
 
 `UsagePanel` draws two summary rows, a blank row, a head row, and one row per model; its height is
-`4 + models`, capped at 24. One tier is picked per frame, widest first:
+`4 + models`, which the desk clamps to the body cap. One tier is picked per frame, widest first:
 
 | tier | label | token columns | heads and summary words |
 |---|---|---|---|
@@ -75,10 +81,40 @@ the same row's total, so one row's four percentages add up to 100 whatever the o
 `ALIGN_KEY` is asked on every usage hire, and the answer reaches the panel through `("call",
 "config")`.
 
+### The memo panel
+
+`MemoHand` keeps two things: `items` — every name in both scopes with its newest text, decoded from
+`call memo list` — and one `face`.
+
+| face | what it draws |
+|---|---|
+| `List` | a head row and one row per name: scope (7 cells), name (4–24 cells), the newest text's first line |
+| `History { scope, name, versions, selected, loaded }` | the name and its versions, newest on top |
+
+The height is `3 + items` — a blank row, the head, one row per name, and the note row — frozen when
+the list first answers. A name or version that arrives later never resizes the strip; the faces
+scroll instead, and the window follows the selection. A write or a delete keeps the frozen height
+and leaves blank rows behind.
+
+Keys, borrowed while the panel is on duty: `↑↓` with `k`/`w`, `→` with `l`/`d`, `←` with `h`/`a`,
+`Enter`, `Shift+Enter`, `Esc`. In the list `Enter` and right open the selected name; `Shift+Enter`
+sends `del` for it. In the history `Enter` copies the selected version and left returns. `Esc` leaves.
+
+- **Reads.** `list` reaches both scopes in one answer; `history` asks for one name. Scope is not a
+  list argument.
+- **Writes.** `add` and `mod` append a version, `del` removes every version of that name. The write's
+  answer sets the note and asks for a fresh list; nothing lands in the transcript.
+- **Copy.** The hand puts `Request::Copy` in the desk's outbox; the app hands it to the loop, which
+  writes an OSC 52 sequence to the terminal.
+- **The note.** The last row of the strip: the result of a write, a delete or a copy, and the wording
+  of any refusal. It is cleared when the next ask arrives.
+
 ### Frames
 
 - Every completion hire asks `call pools`; the answer goes straight to the hand on duty.
 - Hiring the usage panel asks `call usage`; the panel decodes `groups` and keeps only what it draws.
+- Hiring the memo panel asks `call memo list` first — the height is read off it — then the ask that
+  opened the panel. `("call", "memo")` and `("post", "memo")` both reach the hand.
 - The desk hears `cwd` from the bus and hands it to the hand on duty.
 - The desk hears `queue` (`{count}`) and keeps the number. Idle, that number is the one row it
   draws: `N messages queued, alt+up to edit.`; with no hand on duty and nothing queued, the row is
@@ -87,15 +123,18 @@ the same row's total, so one row's four percentages add up to 100 whatever the o
 ### Lifecycle
 
 - `hire(who)` calls `left()` on a different current hand, records the new hire, clears the report,
-  calls `arrived`, asks the hand's pools, and feeds it the workspace.
+  calls `arrived`, asks the hand's pools, and feeds it the workspace. A memo ask that arrives while
+  the memo hand is on duty is handed to that hand instead: the seat and the height stay.
 - `settle()` drops a hand whose `stays()` is false and takes the report of a fresh hand once
   `ready()` is true.
-- `pane::Pane`'s `request_height` returns the frozen report's rows, or `IDLE_ROWS`.
+- `pane::Pane`'s `request_height` returns `min(report.rows, MAX_ROWS)`, or `IDLE_ROWS` while no
+  report is frozen.
 - `assign` records the allocated rows, at least `IDLE_ROWS`.
 - `borrowed` returns the report's keys.
-- `deliver_action` passes a key to the hand and stores any reply.
-- `detach` calls `left()`, then clears the seat, report, reply and rows; the workspace stays,
-  being where the app runs rather than a row's field.
+- `deliver_action` passes a key to the hand, stores any reply, and drains what the memo hand asked
+  for.
+- `detach` calls `left()`, then clears the seat, report, reply and rows, and drops the memo hand's
+  state; the workspace stays, being where the app runs rather than a row's field.
 
 ## 2. Design intent
 
@@ -115,12 +154,16 @@ the same row's total, so one row's four percentages add up to 100 whatever the o
   through every later level of the same completion, so narrowing the word never resizes the strip.
 - **Data flows down.** The desk owns the workspace; a hand is handed it, never
   reads them from a global.
+- **The strip is occasional.** Eight rows is the ceiling whatever sits in it: the transcript is
+  what the reader came for, and the strip must not push it away.
 
 ## 3. Unresolved
 
 1. The completion popup's anchor column is pushed after the first draw; the first frame of a hire
    draws at column zero.
 2. A failed `call pools` leaves completion without model or profile names until the next hire.
+3. Copy goes out as OSC 52 and the terminal answers nothing: one that refuses the sequence leaves
+   the note claiming a copy that never reached the clipboard.
 
 ## 4. Config fields
 

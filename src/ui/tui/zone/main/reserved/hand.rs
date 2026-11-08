@@ -64,3 +64,17 @@ pub trait Hand {
 
 /// Idle height: one blank row, so the layout never jumps on arrival or departure.
 pub const IDLE_ROWS: u16 = 1;
+
+/// Rows the desk may hold at once, whatever a hand reports.
+pub const MAX_ROWS: u16 = 8;
+
+/// Where a scrolling window starts, so the selected row stays inside it.
+pub(crate) fn window_start(len: usize, visible: usize, selected: usize) -> usize {
+    if len <= visible {
+        return 0;
+    }
+    selected
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(len - visible)
+}

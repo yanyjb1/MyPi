@@ -70,6 +70,15 @@ impl Term {
         Ok(())
     }
 
+    /// Put text on the system clipboard: the terminal carries it (OSC 52).
+    pub fn copy(&self, text: &str) -> Result<()> {
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        out.write_all(super::clipboard::osc52(text).as_bytes())?;
+        out.flush()?;
+        Ok(())
+    }
+
     /// Wait up to one frame for terminal input. `None` = nothing worth an action this frame.
     pub fn poll(&self) -> Result<Option<Input>> {
         if !event::poll(Duration::from_millis(16))? {

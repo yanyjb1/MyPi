@@ -4,6 +4,7 @@ mod call;
 mod cdp;
 mod compact;
 mod delete;
+mod memo;
 mod model;
 mod name;
 mod new;

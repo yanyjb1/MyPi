@@ -41,6 +41,38 @@ impl Session {
         self.act("call", "sessions", json!({"under": under}));
     }
 
+    /// `call memo`: every name in both scopes.
+    pub fn memo_list(&mut self) {
+        self.act("call", "memo", json!({"op": "list"}));
+    }
+
+    /// `call memo`: one name's versions.
+    pub fn memo_history(&mut self, scope: &str, name: &str) {
+        self.act(
+            "call",
+            "memo",
+            json!({"op": "history", "scope": scope, "name": name}),
+        );
+    }
+
+    /// `post memo`: one version appended.
+    pub fn memo_write(&mut self, op: &str, scope: &str, name: &str, content: &str) {
+        self.act(
+            "post",
+            "memo",
+            json!({"op": op, "scope": scope, "name": name, "content": content}),
+        );
+    }
+
+    /// `post memo`: every version of that name removed.
+    pub fn memo_delete(&mut self, scope: &str, name: &str) {
+        self.act(
+            "post",
+            "memo",
+            json!({"op": "del", "scope": scope, "name": name}),
+        );
+    }
+
     /// `subscribe watch`: follow one session without being answered.
     pub fn watch(&mut self, session: i64) {
         self.send("subscribe", "watch", json!({"session": session}), false);
