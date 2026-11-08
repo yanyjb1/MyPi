@@ -744,8 +744,10 @@ impl InputZone {
                 && let Some(currency) = Currency::parse(name)
             {
                 self.data.money.currency = currency;
-                self.shouts
-                    .push(Shout::new(name::CURRENCY, serde_json::json!({"currency": name})));
+                self.shouts.push(Shout::new(
+                    name::CURRENCY,
+                    serde_json::json!({"currency": name}),
+                ));
             }
             return;
         }

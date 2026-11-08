@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::server::api::{Api, Refuse};
 use crate::server::config::ResolvedModel;
