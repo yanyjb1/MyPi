@@ -50,6 +50,27 @@ A hand also has:
 
 `IDLE_ROWS` is one blank row, so the layout does not jump when a hand arrives or leaves.
 
+### The usage panel
+
+`UsagePanel` draws two summary rows, a blank row, a head row, and one row per model; its height is
+`4 + models`, capped at 24. One tier is picked per frame, widest first:
+
+| tier | label | token columns | heads and summary words |
+|---|---|---|---|
+| room | `provider:modelid` | exact counts | full |
+| narrowed | `display(provider)` | percentages | full |
+| shortened, English only | `display(provider)` | percentages | `Mo` `To` `In` `Ou` `CR` `CW`; `TT` `CHR` `Rds` |
+| columns leave, widest first | as above | cache write, cache read, output, input | as above |
+| last | the label is clipped | the total column alone | as above |
+
+Every cell is cut to the width the plan hands it, so no line is wider than the strip. The block keeps
+its natural width and `config.ui.tui.zone.main.reserved.usageAlign` places it: `left`, `center` (the
+default) or `right`. Tab swaps exact counts for percentages in the room tier only. The hit rate is
+`cached / (prompt + completion)` over the whole session.
+
+`ALIGN_KEY` is asked on every usage hire, and the answer reaches the panel through `("call",
+"config")`.
+
 ### Frames
 
 - Every completion hire asks `call pools`; the answer goes straight to the hand on duty.
@@ -101,4 +122,4 @@ A hand also has:
 
 | key | use |
 |---|---|
-None: the palette is fixed and the accent comes from the app.
+| `config.ui.tui.zone.main.reserved.usageAlign` | `left`, `center` or `right`: where the usage panel's block sits. |

@@ -48,7 +48,4 @@ loop, the picker, and the tree.
 4. The completion hand's `ready` / `stays` with the desk's report freeze: names land before a height
    is taken, and a hand still waiting holds the seat.
 5. `UsagePanel::take` with the `call usage` answer.
-
-## Not wired
-
-1. `/usage`'s alignment is not read from config.
+6. `ALIGN_KEY` with `config.ui.tui.zone.main.reserved.usageAlign` in the server's key table.

@@ -24,3 +24,20 @@
 `render/` 整片删除，渲染链换成段—自然行—宽行加两层缓存（`a160628`）。上表四个文件里，前两个已不存在；后两个的样式原样搬进了 `paint/markdown.rs` 与 `paint/code.rs`。
 
 越权行为本身留档不动。
+
+## 三、`cargo fmt` 扫到工作区外（2026-11-08）
+
+### 触发
+
+重写 `/usage` 面板后跑 `cargo fmt` 做语法检查，rustfmt 顺手重排了两个工作区外的文件。
+
+### 动过的文件
+
+| 文件 | 内容 |
+|---|---|
+| `src/server/api/call/usage.rs` | 只重排 `use serde_json::{json, Value}` 的花括号顺序 |
+| `src/ui/tui/zone/main/input/mod.rs` | 只把一处 `self.shouts.push(Shout::new(..))` 换成多行 |
+
+### 处置
+
+按用户规矩：不还原，两处只动格式，未提交。

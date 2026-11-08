@@ -67,7 +67,12 @@ impl ReservedZone {
         self.report = None;
         match who {
             Hire::Completion => self.outbox.push(Request::Pools),
-            Hire::Usage => self.outbox.push(Request::Usage),
+            Hire::Usage => {
+                self.outbox.push(Request::Usage);
+                self.outbox.push(Request::Config {
+                    key: hands::usage::ALIGN_KEY.to_string(),
+                });
+            }
         }
         self.hand(who).arrived();
         let cwd = self.cwd.clone();
@@ -166,6 +171,14 @@ impl SubZone for ReservedZone {
             ("call", "usage") => {
                 let asks = self.usage.take(&frame.content);
                 self.outbox.extend(asks);
+            }
+            ("call", "config") => {
+                if frame.content.get("key").and_then(Value::as_str) == Some(hands::usage::ALIGN_KEY)
+                    && let Some(name) = frame.content.get("value").and_then(Value::as_str)
+                    && let Some(align) = hands::usage::Align::parse(name)
+                {
+                    self.usage.set_align(align);
+                }
             }
             ("stream", _) | ("local", _) => {
                 if let Some(who) = self.on_duty {
