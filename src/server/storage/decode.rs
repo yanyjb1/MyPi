@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 
-use super::shape::{Block, BlockKind, RequestMeta, RoundUsage, SessionMeta, TurnRow};
+use super::shape::{Block, BlockKind, RequestMeta, SessionMeta, TurnRow};
 
 /// Decode a run of interval ids into `Vec<[i64; 2]>`. An unreadable value is
 /// a broken row: error, never silently empty.
@@ -75,34 +75,12 @@ fn flag(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<bool>> {
 pub(crate) fn turn_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> {
     let blocks: String = r.get(1)?;
     let blocks = parse_blocks(&blocks).unwrap_or_default();
-    // The four token columns live and die together: probe the prompt column
-    // and backfill zeros — no "half a usage" state exists.
-    let prompt: Option<i64> = r.get(3)?;
-    let usage = prompt.map(|p| RoundUsage {
-        prompt_tokens: p.max(0) as u64,
-        completion_tokens: r
-            .get::<_, Option<i64>>(4)
-            .unwrap_or(None)
-            .unwrap_or(0)
-            .max(0) as u64,
-        cached_tokens: r
-            .get::<_, Option<i64>>(5)
-            .unwrap_or(None)
-            .unwrap_or(0)
-            .max(0) as u64,
-        cache_write_tokens: r
-            .get::<_, Option<i64>>(6)
-            .unwrap_or(None)
-            .unwrap_or(0)
-            .max(0) as u64,
-    });
     Ok(TurnRow {
         turn_id: r.get(0)?,
         blocks,
         stop_reason: r.get(2)?,
-        provider: r.get(7)?,
-        model: r.get(8)?,
-        usage,
+        provider: r.get(3)?,
+        model: r.get(4)?,
     })
 }
 
@@ -139,9 +117,7 @@ pub(crate) fn request_from_row(
 }
 
 /// A round row's columns, in [`turn_from_row`] read order.
-pub(crate) const TURN_COLS: &str = "t.turn_id, t.blocks, t.stop_reason,
-     t.prompt_tokens, t.completion_tokens, t.cached_tokens, t.cache_write_tokens,
-     t.provider, t.model";
+pub(crate) const TURN_COLS: &str = "t.turn_id, t.blocks, t.stop_reason, t.provider, t.model";
 
 /// The round table, aliased `t`.
 pub(crate) const TURN_FROM: &str = "FROM turns t";

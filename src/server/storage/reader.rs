@@ -402,17 +402,12 @@ fn session_json(row: SessionMeta) -> Value {
 }
 
 fn turn_json(row: TurnRow) -> Value {
-    let usage = row.usage;
     json!({
         "turn_id": row.turn_id,
         "ranges": row.blocks,
         "stop_reason": row.stop_reason,
         "provider": row.provider,
         "model": row.model,
-        "prompt_tokens": usage.map(|u| u.prompt_tokens),
-        "completion_tokens": usage.map(|u| u.completion_tokens),
-        "cached_tokens": usage.map(|u| u.cached_tokens),
-        "cache_write_tokens": usage.map(|u| u.cache_write_tokens),
     })
 }
 

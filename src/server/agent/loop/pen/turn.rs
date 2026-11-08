@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::server::agent::r#loop::session::{Message, Retention};
 use crate::server::agent::r#loop::turn::ask::{Stop, Usage};
 use crate::server::agent::request::message::Message as Stored;
-use crate::server::storage::{BlockKind, NewBlock, Ref, RoundUsage, Row, Submit, Writer};
+use crate::server::storage::{BlockKind, NewBlock, Ref, Row, Submit, Writer};
 
 /// How a turn opens.
 #[derive(Clone)]
@@ -90,7 +90,6 @@ pub fn open(
     let rows = vec![
         Row::Turn {
             stop_reason: None,
-            usage: None,
             model,
         },
         Row::Block {
@@ -149,8 +148,8 @@ pub fn append_user(w: &Writer, turn: i64, msg: Message) -> Result<()> {
     Ok(())
 }
 
-/// Append the compacted summary to a running turn.
-pub fn append_summary(w: &Writer, turn: i64, text: String) -> Result<()> {
+/// Append the compacted summary to a running turn, carrying the compaction's bill.
+pub fn append_summary(w: &Writer, turn: i64, text: String, usage: Usage) -> Result<()> {
     w.push(Submit {
         rows: vec![Row::Block {
             turn: Ref::Known(turn),
@@ -158,6 +157,12 @@ pub fn append_summary(w: &Writer, turn: i64, text: String) -> Result<()> {
                 kind: BlockKind::Assistant,
                 content: Some(text),
                 ts: Some(crate::server::platform::time::now_stamp()),
+                usage_total: Some(usage.prompt + usage.completion),
+                usage_prompt: Some(usage.prompt),
+                usage_completion: Some(usage.completion),
+                usage_cached: Some(usage.cached),
+                usage_cache_write: Some(usage.cache_write),
+                usage_reasoning: Some(usage.reasoning),
                 ..NewBlock::default()
             },
         }],
@@ -192,7 +197,6 @@ pub fn borrow(
         let turn = rows.len();
         rows.push(Row::Turn {
             stop_reason: Some("borrowed".to_string()),
-            usage: None,
             model: None,
         });
         rows.push(Row::Borrow {
@@ -216,20 +220,12 @@ pub fn settle(
     w: &Writer,
     turn: i64,
     stop: Stop,
-    usage: Usage,
     baseline: Option<u64>,
     meta: Option<i64>,
 ) -> Result<()> {
-    let round = RoundUsage {
-        prompt_tokens: usage.prompt,
-        completion_tokens: usage.completion,
-        cached_tokens: usage.cached,
-        cache_write_tokens: usage.cache_write,
-    };
     let mut rows = vec![Row::Settle {
         turn: Ref::Known(turn),
         stop_reason: Some(stop.as_str().to_string()),
-        usage: Some(round),
     }];
     if let (Some(meta), Some(prompt)) = (meta, baseline.filter(|p| *p > 0)) {
         rows.push(Row::Baseline {

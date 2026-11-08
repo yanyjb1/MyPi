@@ -73,7 +73,7 @@ impl Store {
         } else {
             // Split in half: the kept head becomes a new round carrying the kept intervals.
             let kept = head(&turn.blocks, t.block);
-            let rescued = turns::insert(&tx, Some("rewind"), None, None)?;
+            let rescued = turns::insert(&tx, Some("rewind"), None)?;
             turns::set_blocks(&tx, rescued, &kept)?;
             shared::set_list_turn(&tx, t.session, idx, rescued)?;
             shared::delete_list_after(&tx, t.session, idx)?;

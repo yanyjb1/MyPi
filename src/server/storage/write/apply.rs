@@ -65,18 +65,12 @@ fn one(
             sessions::move_cwd(tx, *session, cwd)?;
             0
         }
-        Row::Turn {
-            stop_reason,
-            usage,
-            model,
-        } => turns::insert(tx, stop_reason.as_deref(), *usage, model.as_ref())?,
-        Row::Settle {
-            turn,
-            stop_reason,
-            usage,
-        } => {
+        Row::Turn { stop_reason, model } => {
+            turns::insert(tx, stop_reason.as_deref(), model.as_ref())?
+        }
+        Row::Settle { turn, stop_reason } => {
             let turn = id_of(ids, turn)?;
-            turns::settle(tx, turn, stop_reason.as_deref(), *usage)?;
+            turns::settle(tx, turn, stop_reason.as_deref())?;
             if let Some(session) = shared::session_of_turn(tx, turn)? {
                 pieces.push(Structure {
                     session,

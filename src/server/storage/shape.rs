@@ -168,18 +168,6 @@ pub struct SessionMeta {
     pub meta: Option<i64>,
 }
 
-/// One round's usage, stored per round. Only tokens are stored: whoever draws the bill turns them
-/// into money.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub struct RoundUsage {
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-    /// The cache-read part of `prompt_tokens`.
-    pub cached_tokens: u64,
-    /// The part of `prompt_tokens` written into the cache.
-    pub cache_write_tokens: u64,
-}
-
 /// The conversation-invariant part of one session anchor. It never enters the message list;
 /// one row per distinct anchor, deduplicated by `hash`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -209,9 +197,6 @@ pub struct TurnRow {
     /// The model this round ran on; `None` = the round never asked (borrowed, or died early).
     pub provider: Option<String>,
     pub model: Option<String>,
-    /// Usage; `None` = never received (died mid-flight, the gateway does not
-    /// report, or a borrowed row).
-    pub usage: Option<RoundUsage>,
 }
 
 impl TurnRow {
@@ -257,15 +242,13 @@ pub enum Row {
     /// A new round row.
     Turn {
         stop_reason: Option<String>,
-        usage: Option<RoundUsage>,
         /// The model this round runs on.
         model: Option<(String, String)>,
     },
-    /// `turns.stop_reason` + the four usage columns.
+    /// `turns.stop_reason`.
     Settle {
         turn: Ref,
         stop_reason: Option<String>,
-        usage: Option<RoundUsage>,
     },
     /// A session anchor, deduplicated by content.
     Request { meta: RequestMeta },

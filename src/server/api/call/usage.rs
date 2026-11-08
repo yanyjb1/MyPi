@@ -1,7 +1,7 @@
 //! `usage` — tokens per model, the cache-hit share, what it cost, and where the context stands.
 //!
-//! Answers the whole session by default; the running turn's part arrives from the loop's memory,
-//! so a front end can ask once per lap and always read the truth as of that moment.
+//! Every measured lap leaves its bill on the last block it landed, so the session's bill is the
+//! union of stamped blocks; the running turn's part arrives from the loop's memory until it lands.
 
 use std::collections::BTreeMap;
 
@@ -43,16 +43,78 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
 
     let mut groups: BTreeMap<String, Tally> = BTreeMap::new();
     for turn in &turns {
-        let (provider, model) = match (turn["provider"].as_str(), turn["model"].as_str()) {
-            (Some(provider), Some(model)) => (provider, model),
-            _ => continue,
+        let Some((provider, model)) = pair_of(turn) else {
+            continue;
         };
-        let tally = groups.entry(format!("{provider}:{model}")).or_default();
-        tally.rounds += 1;
-        tally.prompt += turn["prompt_tokens"].as_i64().unwrap_or(0);
-        tally.completion += turn["completion_tokens"].as_i64().unwrap_or(0);
-        tally.cached += turn["cached_tokens"].as_i64().unwrap_or(0);
-        tally.written += turn["cache_write_tokens"].as_i64().unwrap_or(0);
+        groups
+            .entry(format!("{provider}:{model}"))
+            .or_default()
+            .rounds += 1;
+    }
+
+    // One stamped block = one measured lap: its prompt is the request it carried, its completion
+    // the reply it produced. The model priced is the turn's, read off the round row. The newest
+    // compaction round's stamp is the summary, kept apart for the post-compaction estimate.
+    let compaction_at: Option<i64> = list
+        .iter()
+        .rev()
+        .find(|row| row["is_compaction"].as_bool() == Some(true))
+        .and_then(|row| row["turn_id"].as_i64());
+    let compaction_range: Option<[i64; 2]> = compaction_at.and_then(|id| {
+        turns
+            .iter()
+            .find(|turn| turn["turn_id"].as_i64() == Some(id))
+            .and_then(|turn| turn["ranges"].as_array())
+            .and_then(|items| items.first())
+            .and_then(|pair| pair.as_array())
+            .and_then(|pair| Some([pair.first()?.as_i64()?, pair.last()?.as_i64()?]))
+    });
+    let mut ranges: Vec<(&Value, [i64; 2])> = Vec::new();
+    for turn in &turns {
+        let Some(items) = turn["ranges"].as_array() else {
+            continue;
+        };
+        for item in items {
+            let Some(pair) = item.as_array().filter(|pair| pair.len() == 2) else {
+                continue;
+            };
+            let (Some(lo), Some(hi)) = (pair[0].as_i64(), pair[1].as_i64()) else {
+                continue;
+            };
+            if hi >= lo {
+                ranges.push((turn, [lo, hi]));
+            }
+        }
+    }
+    let by_range: BTreeMap<i64, &Value> =
+        ranges.iter().map(|(turn, [lo, _])| (*lo, *turn)).collect();
+    let spans: Vec<[i64; 2]> = ranges.iter().map(|(_, span)| *span).collect();
+    let mut measured: Option<u64> = None;
+    let mut measured_at: i64 = -1;
+    let mut summary: Option<u64> = None;
+    for block in reader.blocks(&spans)? {
+        let Some(prompt) = block["usage_prompt"].as_i64() else {
+            continue;
+        };
+        measured = Some(prompt.max(0) as u64);
+        measured_at = block["id"].as_i64().unwrap_or(0);
+        if let Some([lo, hi]) = compaction_range
+            && measured_at >= lo
+            && measured_at <= hi
+        {
+            summary = block["usage_completion"].as_i64().map(|c| c.max(0) as u64);
+            continue;
+        }
+        let turn = by_range.get(&measured_at);
+        let address = turn
+            .and_then(|turn| pair_of(turn))
+            .map(|(provider, model)| format!("{provider}:{model}"))
+            .unwrap_or_default();
+        let tally = groups.entry(address).or_default();
+        tally.prompt += prompt;
+        tally.completion += block["usage_completion"].as_i64().unwrap_or(0);
+        tally.cached += block["usage_cached"].as_i64().unwrap_or(0);
+        tally.written += block["usage_cache_write"].as_i64().unwrap_or(0);
     }
 
     // The running turn is not stored yet: its laps arrive here, priced at the model in use.
@@ -126,10 +188,12 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     });
 
     let (context, estimated) = estimate::context(
-        &turns,
         &list,
         running.as_ref().map(|(partial, _)| partial),
         baseline,
+        measured,
+        measured_at,
+        summary,
     );
 
     Ok(json!({
@@ -148,6 +212,11 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     }))
 }
 
+/// `(provider, model)` of a round row, when it asked at all.
+fn pair_of(turn: &Value) -> Option<(&str, &str)> {
+    Some((turn["provider"].as_str()?, turn["model"].as_str()?))
+}
+
 /// The smallest context this session's request archive ever carried; `None` until one is known.
 pub(crate) fn baseline_prompt(reader: &Reader, session: i64) -> Option<u64> {
     let meta = reader.session(session).ok()??["meta"].as_i64()?;
@@ -158,7 +227,8 @@ pub(crate) fn baseline_prompt(reader: &Reader, session: i64) -> Option<u64> {
 fn quote(model: &ResolvedModel, tally: &Tally, fx: f64) -> Quote {
     let per_million = |tokens: i64, price: f64| tokens as f64 / 1_000_000.0 * price;
     let cost = model.entry.cost;
-    let input = per_million(tally.prompt, cost.input);
+    let uncached = tally.prompt.saturating_sub(tally.cached);
+    let input = per_million(uncached, cost.input);
     let output = per_million(tally.completion, cost.output);
     let read = per_million(tally.cached, cost.cache_read);
     let write = per_million(tally.written, cost.cache_write);

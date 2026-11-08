@@ -1,11 +1,10 @@
 //! Where the context stands.
 //!
-//! A request reports the prompt it carried, so a measured answer needs nothing but the last turn.
-//! A compaction is the one gap: the next prompt is the summary plus the retained tail, and only
-//! those two parts are known. The tail is estimated from the turns the truncation cut into — every
-//! request reports how much its own blocks added, so a turn's share is its intervals' weight.
-
-use std::collections::HashMap;
+//! A stamped block reports the prompt its lap carried, so a measured answer needs nothing but the
+//! newest stamp. A compaction is the one gap: the next prompt is the summary plus the retained
+//! tail, and only those two parts are known. The tail is estimated from the turns the truncation
+//! cut into — every request reports how much its own blocks added, so a turn's share is its
+//! intervals' weight.
 
 use serde_json::Value;
 
@@ -13,103 +12,68 @@ use crate::server::agent::r#loop::Partial;
 
 /// The context in use, and whether that number is an estimate.
 pub(crate) fn context(
-    turns: &[Value],
     list: &[Value],
     running: Option<&Partial>,
     baseline: Option<u64>,
+    measured: Option<u64>,
+    measured_at: i64,
+    summary: Option<u64>,
 ) -> (Option<u64>, bool) {
     // A lap just landed: its prompt is the context, to the token.
     if let Some(partial) = running {
         return (Some(partial.context), false);
     }
-    let by_turn: HashMap<i64, &Value> = turns
-        .iter()
-        .filter_map(|row| row["turn_id"].as_i64().map(|id| (id, row)))
-        .collect();
-
-    // The newest turn that measured anything settles it: its prompt is the context.
-    for row in list.iter().rev() {
-        if row["is_compaction"].as_bool() == Some(true) {
-            break;
-        }
-        let Some(turn) = by_turn.get(&row["turn_id"].as_i64().unwrap_or_default()) else {
-            continue;
-        };
-        if let Some(prompt) = turn["prompt_tokens"].as_u64() {
-            let completion = turn["completion_tokens"].as_u64().unwrap_or(0);
-            return (Some(prompt + completion), false);
-        }
+    // The newest stamp settles it, unless a compaction round sits after its block.
+    let after = list.iter().any(|row| {
+        row["is_compaction"].as_bool() == Some(true)
+            && intervals(&row["ranges"])
+                .iter()
+                .any(|(lo, hi)| measured_at >= *lo && measured_at <= *hi)
+    });
+    if let Some(tokens) = measured.filter(|_| !after) {
+        return (Some(tokens), false);
     }
 
     // No measurement since the last compaction: estimate it, or fall back to the archive's floor.
-    match estimate(list, &by_turn, baseline) {
+    match estimate(list, baseline, summary) {
         Some(tokens) => (Some(tokens), true),
         None => (baseline, baseline.is_some()),
     }
 }
 
 /// The summary plus the retained tail, plus the archive's fixed floor.
-fn estimate(list: &[Value], by_turn: &HashMap<i64, &Value>, baseline: Option<u64>) -> Option<u64> {
+fn estimate(list: &[Value], baseline: Option<u64>, summary: Option<u64>) -> Option<u64> {
     let at = list
         .iter()
         .rposition(|row| row["is_compaction"].as_bool() == Some(true))?;
-    let turn_id = list[at]["turn_id"].as_i64()?;
-    let summary = by_turn.get(&turn_id)?["completion_tokens"].as_u64()?;
-
+    let summary = summary?;
     // The tail: every borrowed round after the compaction carries the intervals it kept.
     let mut kept: Vec<(i64, i64)> = Vec::new();
     for row in &list[at + 1..] {
-        let Some(id) = row["turn_id"].as_i64() else {
-            continue;
-        };
-        let Some(turn) = by_turn.get(&id) else {
-            continue;
-        };
-        if turn["stop_reason"].as_str() != Some("borrowed") {
+        if row["stop_reason"].as_str() != Some("borrowed") {
             continue;
         }
-        kept.extend(intervals(&turn["ranges"]));
+        kept.extend(intervals(&row["ranges"]));
     }
 
-    // What each pre-compaction turn added, weighted by how much of it the tail kept.
-    let mut tail = 0.0;
-    let mut previous: Option<(u64, u64)> = None;
-    for row in &list[..at] {
-        let Some(id) = row["turn_id"].as_i64() else {
-            continue;
-        };
-        let Some(turn) = by_turn.get(&id) else {
-            continue;
-        };
-        let (Some(prompt), Some(completion)) = (
-            turn["prompt_tokens"].as_u64(),
-            turn["completion_tokens"].as_u64(),
-        ) else {
-            continue;
-        };
-        let added = match previous {
-            Some((before_prompt, before_completion)) => {
-                prompt.saturating_sub(before_prompt + before_completion)
-            }
-            // Nothing to difference against: the first prompt is the floor plus its own blocks.
-            None => prompt.saturating_sub(baseline.unwrap_or(0)),
-        };
-        if let Some(share) = weight(&intervals(&turn["ranges"]), &kept) {
-            tail += added as f64 * share;
-        }
-        previous = Some((prompt, completion));
-    }
-
-    Some(baseline.unwrap_or(0) + summary + tail.round() as u64)
+    // The retained tail's own weight: the summary request reports it; until one lands, the
+    // borrowed intervals stand in at their block-count share of the archive's floor.
+    let floor = baseline?;
+    let weight = weight_of(&list[at + 1..], &kept);
+    Some(floor + summary + ((floor as f64) * weight).round() as u64)
 }
 
-/// How much of `turn` a set of kept intervals covers, 0..=1 by block count.
-fn weight(turn: &[(i64, i64)], kept: &[(i64, i64)]) -> Option<f64> {
-    let size: i64 = turn.iter().map(|(lo, hi)| hi - lo + 1).sum();
+/// How much of the list's post-compaction rounds a set of kept intervals covers, 0..=1 by block count.
+fn weight_of(rounds: &[Value], kept: &[(i64, i64)]) -> f64 {
+    let all: Vec<(i64, i64)> = rounds
+        .iter()
+        .flat_map(|row| intervals(&row["ranges"]))
+        .collect();
+    let size: i64 = all.iter().map(|(lo, hi)| hi - lo + 1).sum();
     if size <= 0 {
-        return None;
+        return 0.0;
     }
-    let held: i64 = turn
+    let held: i64 = all
         .iter()
         .map(|(lo, hi)| {
             kept.iter()
@@ -117,7 +81,7 @@ fn weight(turn: &[(i64, i64)], kept: &[(i64, i64)]) -> Option<f64> {
                 .sum::<i64>()
         })
         .sum();
-    Some(held as f64 / size as f64)
+    held as f64 / size as f64
 }
 
 /// `[[lo, hi], ...]` as pairs.

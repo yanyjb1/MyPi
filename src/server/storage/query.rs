@@ -79,10 +79,6 @@ impl Sheet {
                 ("turn_id", "turn_id"),
                 ("ranges", "blocks"),
                 ("stop_reason", "stop_reason"),
-                ("prompt_tokens", "prompt_tokens"),
-                ("completion_tokens", "completion_tokens"),
-                ("cached_tokens", "cached_tokens"),
-                ("cache_write_tokens", "cache_write_tokens"),
             ],
             Sheet::Cwds => &[
                 ("session_id", "session_id"),

@@ -63,28 +63,20 @@ pub(crate) fn run(
             Ok(reply) => reply,
             Err(e) => {
                 if stopped(handle, &e) {
-                    pen::turn::settle(
-                        &inner.writer,
-                        turn,
-                        Stop::User,
-                        Usage::default(),
-                        None,
-                        handle.meta(),
-                    )?;
+                    pen::turn::settle(&inner.writer, turn, Stop::User, None, handle.meta())?;
                     return Ok(Stop::User);
                 }
-                broken(inner, handle, turn, Usage::default(), None, &e);
+                broken(inner, handle, turn, None, &e);
                 return Err(e);
             }
         };
-        let mut usage = Usage::default();
-        usage += reply.usage;
-        handle.publish(&usage, reply.usage.prompt + reply.usage.completion);
+        let usage = reply.usage;
+        handle.publish(&usage, usage.prompt + usage.completion);
         if !reply.text.is_empty() {
-            pen::turn::append_summary(&inner.writer, turn, reply.text)?;
+            pen::turn::append_summary(&inner.writer, turn, reply.text, usage)?;
         }
         pen::turn::borrow(&inner.writer, handle.id, &reply.borrows)?;
-        pen::turn::settle(&inner.writer, turn, Stop::Model, usage, None, handle.meta())?;
+        pen::turn::settle(&inner.writer, turn, Stop::Model, None, handle.meta())?;
         transcript.reload()?;
         return Ok(Stop::Model);
     }
@@ -106,23 +98,16 @@ pub(crate) fn run(
     );
     match outcome {
         Ok(stop) => {
-            pen::turn::settle(&inner.writer, turn, stop, usage, baseline, handle.meta())?;
+            pen::turn::settle(&inner.writer, turn, stop, baseline, handle.meta())?;
             Ok(stop)
         }
         Err(e) => {
             keep_blocks(pen, handle);
             if stopped(handle, &e) {
-                pen::turn::settle(
-                    &inner.writer,
-                    turn,
-                    Stop::User,
-                    usage,
-                    baseline,
-                    handle.meta(),
-                )?;
+                pen::turn::settle(&inner.writer, turn, Stop::User, baseline, handle.meta())?;
                 return Ok(Stop::User);
             }
-            broken(inner, handle, turn, usage, baseline, &e);
+            broken(inner, handle, turn, baseline, &e);
             Err(e)
         }
     }
@@ -437,7 +422,6 @@ fn broken(
     inner: &Arc<Inner>,
     handle: &Handle,
     turn: i64,
-    usage: Usage,
     baseline: Option<u64>,
     why: &anyhow::Error,
 ) {
@@ -448,14 +432,7 @@ fn broken(
             text: format!("the turn broke: {why:#}"),
         }),
     });
-    let _ = pen::turn::settle(
-        &inner.writer,
-        turn,
-        Stop::Broken,
-        usage,
-        baseline,
-        handle.meta(),
-    );
+    let _ = pen::turn::settle(&inner.writer, turn, Stop::Broken, baseline, handle.meta());
 }
 
 /// Take every wake text into this turn; the texts are the ones already written as blocks.
