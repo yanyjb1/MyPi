@@ -68,6 +68,10 @@ its natural width and `config.ui.tui.zone.main.reserved.usageAlign` places it: `
 default) or `right`. Tab swaps exact counts for percentages in the room tier only. The hit rate is
 `cached / (prompt + completion)` over the whole session.
 
+The four token columns are one partition of that model's own total: `Input` is the prompt no cache
+reported, then `CacheRead` and `CacheWrite`, then `Output`. A percentage column is that column over
+the same row's total, so one row's four percentages add up to 100 whatever the other rows did.
+
 `ALIGN_KEY` is asked on every usage hire, and the answer reaches the panel through `("call",
 "config")`.
 

@@ -9,19 +9,16 @@
 来自用户，没有用户明确允许，不允许删除。
 
 /memo命令根本没做
-/usage的命令渲染纯一坨，得去找一下旧代码，以及还有一个对齐的config看看读了没有。
 
 main区：
 1. edit/write这些的渲染简直就是灾难，diff完全看不了。这个留着大后期一起抄omp作业吧，现在的拉完了。
-2. /switch命令根本没有正确切换模型，现在的乐观渲染大概要改成：明确拿到post的done回执后再乐观渲染，不然就是错误的。=-=
-3. 还需要检查其他部件的这个问题。
+2. 还需要检查其他部件的这个问题。
 
 工具卡的太抽象了，我不行了。。。这个渲染，我必须给每个工具都，赶紧抄一下专有的渲染样式以及动画样式了。
 
 记录一下工具卡为什么抽象，这里点名批评bash，捏吗的，模型都看到结果了，bash的渲染还没完成，一定要你妈的下一次http还是回合结束了才正常渲染，错误，大错误！！！😡
 
-渲染测试这个会话，你他妈总共才几轮工具调用啊，就特么15%了将近，什么鬼，call usage我和你拼了😡
-会话为测试1的，欸不是，我他妈才几条消息啊，就占用一个上下文1M大模型的6.5%长度了？？？？这合理吗？？？？检查一下call usage的计算到底吃了什么这么抽象
+
 
 /new的命令，切换后无法使用/profile，疑似判断有问题，输入区持有哪些东西需要重点整治一下。。。太特么难绷了。以及其他残缺的、无法正常运行的命令。😡
 
@@ -32,6 +29,9 @@ main区：
 2. 会话只book不unbook：`ledger.book`（`book.rs:149`、`ensure_booked`，api.rs:173）之后唯一unbook路径是删会话（`post/delete.rs:50`）。watch/mailbox/switch/cwd只增不减，会话句柄+每会话sched/jobs线程对无界累积。方案：relay维护每会话watcher计数，归零即unbook（busy时interrupt，`handle.gone`机制现成）；`ensure_booked`删除，book只留`post/init`与watcher出现两处。
 3. "前端退出服务器不死"原因未定案：退出条件只看relay连接数（`api.rs:164`），需复现时`top -H`看线程名+`ss`看连接抓现场。
 4. 会话存活判据统一为"有没有连接在看"，涉及api/relay/loop整体调度，故整体另开。
+
+Anthropic 的 usage 与其余三家不同义（2026-11-08，用户暂时不用 Anthropic，挂起）：
+`protocol/anthropic/messages.rs` 的 `usage_from` 取 `prompt = input_tokens`，而 Anthropic 的 `input_tokens` 不含 `cache_read_input_tokens` / `cache_creation_input_tokens`。其余三家（OpenAI completion、DeepSeek、Responses）的 `prompt_tokens` / `input_tokens` 都已包含缓存部分，于是 `Usage::prompt` 这一个字段在 Anthropic 上语义不同、数值偏小。连带三处：`api/call/usage.rs` 的 `quote()` 里 `uncached = prompt − cached` 在 Anthropic 上 saturating 到 0（输入费一分不收）；`cache_hit_rate = cached / (prompt + completion)` 分母偏小（命中率虚高）；`estimate::context` 把 `stamp.prompt` 直接当上下文（偏小）。修法：解码时 `prompt = input_tokens + cache_read + cache_creation`，`quote()` 的 `uncached` 同时减掉 `written`。存量的 `usage_prompt` 列不回算。
 
 ## 一、历史区
 
@@ -44,16 +44,12 @@ main区：
 
 ### 其余
 
-- 行级流式增量：现在按段增量（闭合段缓存、开段重算），段内还没到「只动新那一行」。
 - 转交的兜底：尾块数与结构区间数对不上时，清空可变区按收到的行重铺，会闪一帧。
-- 离屏轮次只在移动时按视线前后一轮取块；一屏跨三轮以上时，边缘仍是 `…` 直到视线走近。
-- 流式文本在轮次失败时丢失：块只在流结束时切出，lap 出错后已经流到前端的文本不落库（turn 落成 `broken`，只剩用户块）。
 
 ## 二、main 区
 
 - 内部各组件 shout→react 的行为没有核对过。
 - 写门被拒这件事仍有两处静默：另一条连接（不是本轮的写入者）发写门、`/compact` 的拒绝（走回合的 broken 提示，前缀不是给人看的）。`/profile` 已在输入区本机拒绝。
-- cost 与上下文只有一个来源：`call usage` 默认按最新答（库里的回合 + 正在跑那一圈的用量），一次回答同时喂给面板、cost pill 和上下文条。显示币种取自 `config.ui.tui.fx.currency`，不用模型的币种，也不用"第一个出现的币种"。
 - 状态栏的三次启动提问是 `gitScanInterval`、`fx.currency`、`api.defaultModel`；没有 Setup，也没有重建。会话还没名字时 session pill 显示 `MyPi`；cost 恒显示，未知即本币 `0.00`；git 扫描没落地前显示 `@ ?`。
 
 ## 三、已知代价（记录，暂不修）

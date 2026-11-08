@@ -107,6 +107,13 @@ impl Row {
         self.prompt + self.completion
     }
 
+    /// Input tokens no cache reported: the four columns are one partition of the total.
+    fn input(&self) -> u64 {
+        self.prompt
+            .saturating_sub(self.cached)
+            .saturating_sub(self.written)
+    }
+
     /// The narrowed label: the display name over the provider.
     fn named(&self) -> String {
         match (&self.display, &self.provider) {
@@ -278,7 +285,7 @@ impl UsagePanel {
             };
         }
         let part = match col {
-            1 => row.prompt,
+            1 => row.input(),
             2 => row.completion,
             3 => row.cached,
             _ => row.written,
