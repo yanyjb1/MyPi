@@ -231,17 +231,11 @@ impl Relay {
         }
     }
 
-    /// One change of the api's own: everybody but the issuer hears it.
-    pub(crate) fn change(&self, session: i64, action: &str, issuer: &str, extra: Value) {
-        let mut payload = json!({"session": session, "action": action, "by": issuer});
-        if let (Some(object), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
-            for (key, value) in extra {
-                object.insert(key.clone(), value.clone());
-            }
-        }
+    /// One change of the api's own: everybody but the issuer hears the field it changed.
+    pub(crate) fn change(&self, session: i64, changed: Value, issuer: &str) {
         self.deliver(
             session,
-            Frame::new("stream", "change", payload),
+            Frame::new("stream", "signal", changed),
             Some(issuer),
         );
     }
@@ -280,6 +274,11 @@ impl Relay {
         let element = match event.element {
             Element::Mailbox { turn } => {
                 self.slot_opened(session, turn);
+                self.deliver(
+                    session,
+                    Frame::new("stream", "signal", json!({"signal": "mailbox"})),
+                    None,
+                );
                 return;
             }
             other => other,

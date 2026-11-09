@@ -56,7 +56,8 @@ Subscribe: `watch`, `submit`, `compact`.
   by the api: a front end that wants a sentence to wait writes it to `mailbox` instead.
 - `mailbox` is the session's one pending message. `text` present and non-empty writes it whole over
   whatever was there; no `text` clears it. The loop takes it at a blocking point and opens a turn
-  named `mailbox`, exactly as a `submit` would; taking it clears it.
+  named `mailbox`, exactly as a `submit` would; taking it clears it and puts `signal: mailbox` on
+  the stream for every watcher.
 - `interrupt`, `cwd`, `switch`, `delete`, `rewind` act on the running session or its rows.
   `interrupt` is silent: it stops what runs, and an idle session hears nothing. A rewind tells the
   loop to read that session's history again.
@@ -120,7 +121,8 @@ api's own write doors ------------->  relay
 
 | event | `kind` | `name` | payload |
 |---|---|---|---|
-| write change | `stream` | `change` | `session`, `action`, `by`, the changed row |
+| write signal | `stream` | `signal` | the fields that write changed |
+| slot taken | `stream` | `signal` | `signal: mailbox` |
 | live output | `stream` | the door that opened the turn | `session`, `turn`, `kind`, the piece |
 | notice | `stream` | `notice` | `session`, `level`, `content` |
 | round structure | `stream` | the door that opened the turn | `session`, `turn`, `ranges` |
@@ -129,13 +131,15 @@ api's own write doors ------------->  relay
   `tool_progress`, `tool_end`, `wake`. A `wake` piece is one job's reminder and keeps its own block.
 - `text`, `thinking` and `arguments` carry `usage`: the bill of the request that just ended, on the
   one piece the decoder wrote it onto; `null` on every other piece.
-- `action` in a change payload is `name`, `cwd`, `switch`, `rewind` or `delete`; the rest of the
-  payload is that door's changed row.
-- A change frame skips the viewer that issued it; live output, notices and structure go to
-  everyone watching.
+- A write signal names the field its door changed: `cwd` with the landed path, `model` with the
+  address, `name` with the new name. `delete` and `rewind` say so in `signal` and carry their own
+  fields.
+- A write signal skips the viewer that issued it. The slot-taken signal, live output, notices and
+  structure go to everyone watching.
 - The turn a live frame carries is recorded when `submit` or `compact` opens it. A turn the slot
   opened is announced by the loop on the same channel and is recorded under the viewer that wrote
-  the slot, named `mailbox`. A turn a job woke names `wake`.
+  the slot, named `mailbox`; the same moment puts `signal: mailbox` on the stream. A turn a job
+  woke names `wake`.
 - The buffer belongs to the session, holds everything this turn said, and is handed to a connection
   that starts watching mid-turn. It is emptied when the round structure goes out, and dropped when
   the last watcher leaves.

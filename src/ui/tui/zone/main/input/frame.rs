@@ -16,11 +16,6 @@ impl InputZone {
             ("call", "meta") => {
                 self.read_meta(&frame.content, &mut out);
             }
-            ("stream", "change") => {
-                if let Some(row) = frame.content.get("meta") {
-                    self.read_meta(row, &mut out);
-                }
-            }
             ("call", "config") => {
                 self.read_config(&frame.content);
             }
@@ -51,9 +46,6 @@ impl InputZone {
                 } else {
                     self.in_flight = None;
                 }
-            }
-            ("stream", "mailbox") => {
-                out.extend(self.opened(&frame.content));
             }
             _ => {}
         }

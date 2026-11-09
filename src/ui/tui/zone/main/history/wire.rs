@@ -63,10 +63,11 @@ fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
             };
             zone.notice(text, level, life);
         }
-        "change" => {
-            if content.get("action").and_then(Value::as_str) == Some("rewind") {
+        "signal" => {
+            if content.get("signal").and_then(Value::as_str) == Some("rewind") {
                 zone.outbox.push(Request::Structure);
             }
+            zone.shouts.push(Shout::new(name::SIGNAL, content.clone()));
         }
         _ => {
             if content.get("ranges").is_some() {

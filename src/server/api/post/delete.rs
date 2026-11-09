@@ -43,8 +43,11 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         .filter_map(|row| row["id"].as_i64())
         .collect();
     ids.push(session);
-    api.relay()
-        .change(session, "delete", viewer, json!({"session": session}));
+    api.relay().change(
+        session,
+        json!({"signal": "delete", "session": session}),
+        viewer,
+    );
     api.writer().delete_rows(Table::Sessions, &ids)?;
     for id in &ids {
         api.ledger().drop(*id);

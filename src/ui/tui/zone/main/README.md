@@ -22,7 +22,7 @@ History above, the input box below, the desk between them.
 - `session(id)` — attach or detach the three children; on attach ask `call init`, `call meta` and
   the structural window.
 - `event(frame)` — keep the size on a resize, read the conversation's directory out of `call meta`
-  and `stream change`, hand the frame to every child that declared its class, seat a hand the
+  and `stream signal`, hand the frame to every child that declared its class, seat a hand the
   editor asked for, then flush the bus.
 - `action(action)` — resolve it to a seat, dispatch, carry the desk's requests, flush.
 - `render()` — history rows, one gap row, input rows, the desk's rows, and the cursor's column.

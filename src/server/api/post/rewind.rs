@@ -26,9 +26,8 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
     api.ledger().forget(session);
     api.relay().change(
         session,
-        "rewind",
+        json!({"signal": "rewind", "turn": turn, "block": block, "cut": cut.clone()}),
         viewer,
-        json!({"turn": turn, "block": block, "cut": cut.clone()}),
     );
     Ok(json!({"cut": cut}))
 }

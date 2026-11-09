@@ -22,6 +22,8 @@ pub mod name {
     pub const CWD: &str = "cwd";
     /// History: the last request's context size. `{used}`.
     pub const USAGE: &str = "usage";
+    /// History: one signal from the server, unchanged. `{signal | model | name | ...}`.
+    pub const SIGNAL: &str = "signal";
     /// A turn opened or closed. `{on}`.
     pub const BUSY: &str = "busy";
     /// A rewind put a message back: the editor takes it. `{text}`.

@@ -161,15 +161,8 @@ impl InputZone {
         }
     }
 
-    /// The slot became a turn: the head left the queue, and the next one takes the slot.
-    pub(super) fn opened(&mut self, content: &Value) -> Vec<Request> {
-        let Some(turn) = content.get("turn").and_then(Value::as_i64) else {
-            return Vec::new();
-        };
-        if self.last_mailbox_turn == Some(turn) {
-            return Vec::new();
-        }
-        self.last_mailbox_turn = Some(turn);
+    /// The server took the slot: the head left the queue, and the next one takes the slot.
+    pub(super) fn opened(&mut self) -> Vec<Request> {
         // A turn just opened: the box is busy before its first piece arrives.
         self.data.busy = true;
         self.shouts

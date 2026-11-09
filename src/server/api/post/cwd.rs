@@ -28,9 +28,9 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
             return Err(Refuse::Bad(text));
         }
     };
-    emit::changed(api, viewer, session, "cwd")?;
     let cwd = landed
         .map(|real| real.to_string_lossy().into_owned())
         .unwrap_or_default();
+    emit::changed(api, viewer, session, json!({"cwd": &cwd}));
     Ok(json!({ "cwd": cwd }))
 }

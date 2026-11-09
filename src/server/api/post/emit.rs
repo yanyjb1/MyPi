@@ -1,10 +1,9 @@
 //! What every write door shares: the writer gate, the event, and the model pair.
 
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::server::api::{Api, Refuse};
-use crate::server::storage::Reader;
 
 /// Only the viewer that opened the running turn may change the session while it runs.
 pub(crate) fn require_writer(api: &Api, viewer: &str, session: i64) -> Result<(), Refuse> {
@@ -17,16 +16,9 @@ pub(crate) fn require_writer(api: &Api, viewer: &str, session: i64) -> Result<()
     }
 }
 
-/// Announce a session-row change to everyone but the writer.
-pub(crate) fn changed(api: &Api, viewer: &str, session: i64, action: &str) -> Result<(), Refuse> {
-    let reader = Reader::open(api.db())?;
-    let row = reader.session(session)?;
-    drop(reader);
-    if let Some(row) = row {
-        api.relay()
-            .change(session, action, viewer, json!({"meta": row}));
-    }
-    Ok(())
+/// Announce the field one write changed to everyone but the writer.
+pub(crate) fn changed(api: &Api, viewer: &str, session: i64, changed: Value) {
+    api.relay().change(session, changed, viewer);
 }
 
 /// A model pair from `{"provider", "model"}`.

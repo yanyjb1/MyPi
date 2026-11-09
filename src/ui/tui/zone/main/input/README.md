@@ -28,7 +28,6 @@ finish itself.
 | `pending_name` | the name a `/name` asked for, until its receipt |
 | `queue: Queue` | sentences sent while a round was running, head first |
 | `in_flight` | the sentence a submit put out, until the door answers |
-| `last_mailbox_turn` | the slot-opened turn the queue has accounted for |
 | `shouts` | events this zone put out |
 
 ### Claims
@@ -101,9 +100,9 @@ closed: the hand remembers the spot until the word changes.
 ### The pending queue
 
 `queue::Queue` keeps the sentences in order and mirrors the head into the server's one slot: the
-head is written when the queue stops being empty, the next head is written when a `mailbox` turn
-starts, and clearing the last one clears the slot. `Alt+Up` pops the tail, so the head only moves
-when the queue empties.
+head is written when the queue stops being empty, the next head is written when the server says it
+took the slot, and clearing the last one clears the slot. `Alt+Up` pops the tail, so the head only
+moves when the queue empties.
 
 The only `busy` source that matters is the bus: history shouts `busy` when any round says anything
 and `idle` when a round closes; this zone also shouts `busy` when it sends a message, so the first
@@ -111,12 +110,12 @@ Enter after a send already knows a round is coming.
 
 ### The data it reads
 
-`call meta` and `stream change` name the model, the session's name and (through the bus) the
-directory. A model the zone has not seen makes it ask `call config` for `models.model.<address>`,
-which answers the whole entry; the pill takes the name, the gauge the window. In a draft the boot
-answer and the one taken on leaving a session name the model; `/model` moves the pill itself, from
-the address it wrote. `call usage` is the one answer for money and context, asked at attach, at
-every round's end and after each request.
+`call meta` names the session's model, name and directory. A model the zone has not seen makes it
+ask `call config` for `models.model.<address>`, which answers the whole entry; the pill takes the
+name, the gauge the window. A model or a name another front end changed reaches this zone as a
+`signal` on the bus. In a draft the boot answer and the one taken on leaving a session name the
+model; `/model` moves the pill itself, from the address it wrote. `call usage` is the one answer for
+money and context, asked at attach, at every round's end and after each request.
 
 ### Height and rendering
 

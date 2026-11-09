@@ -45,8 +45,6 @@ pub struct InputZone {
     pub(super) queue: Queue,
     /// The sentence a submit put out, kept only until its reply says it opened nothing.
     pub(super) in_flight: Option<String>,
-    /// The last slot-opened turn this queue has accounted for.
-    pub(super) last_mailbox_turn: Option<i64>,
     /// When the last un-lent Esc fired: another one inside the window opens the tree.
     pub(super) esc_armed: Option<Instant>,
     /// When a sentence last entered the mailbox: the next Enter interrupts.
@@ -89,7 +87,6 @@ impl Default for InputZone {
             pending_exits: Vec::new(),
             queue: Queue::default(),
             in_flight: None,
-            last_mailbox_turn: None,
             esc_armed: None,
             enter_armed: None,
             pending_notice: VecDeque::new(),
@@ -148,6 +145,20 @@ impl InputZone {
         let ctx = Ctx { data: &self.data };
         self.statusline.on_event(event, content, &ctx);
     }
+
+    /// One signal: the slot was taken, or a field this zone follows changed.
+    fn signal(&mut self, content: &Value, out: &mut Vec<Request>) {
+        if content.get("signal").and_then(Value::as_str) == Some("mailbox") {
+            out.extend(self.opened());
+            return;
+        }
+        if let Some(address) = content.get("model").and_then(Value::as_str) {
+            self.model(address, out);
+        }
+        if let Some(name) = content.get("name") {
+            self.data.name = name.as_str().map(str::to_string);
+        }
+    }
 }
 
 impl SubZone for InputZone {
@@ -156,13 +167,7 @@ impl SubZone for InputZone {
     }
 
     fn kinds(&self) -> &'static [Kind] {
-        &[
-            Kind::Call,
-            Kind::Post,
-            Kind::Subscribe,
-            Kind::Stream,
-            Kind::Notice,
-        ]
+        &[Kind::Call, Kind::Post, Kind::Subscribe]
     }
 
     fn deliver_event(&mut self, frame: &Frame, size: TermSize) -> Vec<Request> {
@@ -209,7 +214,6 @@ impl SubZone for InputZone {
         self.pending_name = None;
         self.queue.clear();
         self.in_flight = None;
-        self.last_mailbox_turn = None;
         self.pending_notice.clear();
         self.outbox.push(Request::Usage);
     }
@@ -229,7 +233,6 @@ impl SubZone for InputZone {
         self.reset_data();
         self.queue.clear();
         self.in_flight = None;
-        self.last_mailbox_turn = None;
         self.pending_notice.clear();
         self.outbox.push(Request::Config {
             key: DEFAULT_MODEL_KEY.to_string(),
@@ -271,6 +274,11 @@ impl SubZone for InputZone {
                     self.outbox.push(Request::Usage);
                 }
                 self.notify(event, content);
+            }
+            name::SIGNAL => {
+                let mut out = Vec::new();
+                self.signal(content, &mut out);
+                self.outbox.extend(out);
             }
             _ => {}
         }

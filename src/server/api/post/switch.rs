@@ -1,7 +1,7 @@
 //! `switch` — this session's model.
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::server::agent::r#loop::Change;
 use crate::server::api::route::i64_of;
@@ -24,8 +24,9 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
     }
     emit::require_writer(api, viewer, session)?;
     api.ensure_booked(session)?;
+    let address = format!("{provider}:{model}");
     api.ledger()
         .change(session, Change::Model { provider, model })?;
-    emit::changed(api, viewer, session, "switch")?;
+    emit::changed(api, viewer, session, json!({"model": address}));
     Ok(serde_json::json!({}))
 }

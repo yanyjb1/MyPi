@@ -57,7 +57,6 @@ impl InputZone {
         self.pending_exits.clear();
         self.queue.clear();
         self.in_flight = None;
-        self.last_mailbox_turn = None;
         self.pending_notice.clear();
         self.pending_name = None;
     }

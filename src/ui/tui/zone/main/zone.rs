@@ -86,17 +86,14 @@ impl MainZone {
         }
     }
 
-    /// The conversation's directory, out of the rows that carry it.
+    /// The conversation's directory, out of the row and the signals that carry it.
     fn read_cwd(&mut self, frame: &Frame) {
-        let row = match (frame.class.as_str(), frame.name.as_str()) {
-            ("call", "meta") => &frame.content,
-            ("stream", "change") => match frame.content.get("meta") {
-                Some(row) => row,
-                None => return,
-            },
+        let path = match (frame.class.as_str(), frame.name.as_str()) {
+            ("call", "meta") => frame.content.get("cwd").and_then(Value::as_str),
+            ("stream", "signal") => frame.content.get("cwd").and_then(Value::as_str),
             _ => return,
         };
-        let Some(path) = row.get("cwd").and_then(Value::as_str) else {
+        let Some(path) = path else {
             return;
         };
         if self.session_cwd.as_deref() == Some(path) {

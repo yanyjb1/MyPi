@@ -12,7 +12,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `relay.rs` | the stream: viewers per session, the running turn, the buffer, the frame shapes |
 | `convert.rs` | the rewind cut, the only storage shape this domain renames |
 | `call/` | the read doors: `init`, `blocks`, `meta`, `usage`, `todo`, `memo`, `children`, `config`, `pools`, `sessions` |
-| `post/` | the write doors: `init`, `name`, `cwd`, `switch`, `delete`, `interrupt`, `rewind`, `default_model`, `reload`; `emit.rs` holds the writer gate and the change event |
+| `post/` | the write doors: `init`, `name`, `cwd`, `switch`, `delete`, `interrupt`, `rewind`, `default_model`, `reload`; `emit.rs` holds the writer gate and the signal announcer |
 | `subscribe/` | `watch` (a session, or none), `submit`, `compact` |
 
 ## What it talks to
