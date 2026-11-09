@@ -14,8 +14,3 @@ pub fn omp_system() -> &'static str {
 pub fn compact_instruction() -> &'static str {
     text(include_str!("compact_instruction.md"))
 }
-
-/// The wrapper a compacted context starts with.
-pub fn compact_context() -> &'static str {
-    text(include_str!("compact_context.md"))
-}
