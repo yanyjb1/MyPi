@@ -885,7 +885,11 @@ impl SubZone for InputZone {
     }
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
-        self.restart_data();
+        // A draft turning real carries its own live state; only a session
+        // switch has old data to wipe.
+        if self.data.attached {
+            self.restart_data();
+        }
         self.pending_name = None;
         self.data.attached = true;
         self.queue.clear();

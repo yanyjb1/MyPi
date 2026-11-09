@@ -11,6 +11,7 @@ pub(crate) mod table;
 mod text;
 mod todo;
 mod user;
+mod wake;
 
 pub(crate) use notice::rows as notice_rows;
 pub(crate) use opts::Opts;

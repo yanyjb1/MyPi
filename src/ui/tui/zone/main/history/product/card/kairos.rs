@@ -16,10 +16,16 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
         return None;
     }
     let state = State::of(result);
-    let mut runs = head(state, "Kairos");
+    let label = |name: &str| head(state, name);
+    let mut runs = label(if op == "status" {
+        "Kairos-Inquiry"
+    } else {
+        "Kairos"
+    });
     let mut out = Vec::new();
     match op.as_str() {
         "now" => {
+            let mut runs = label("Kairos-Escrow");
             runs.push(Run::fixed(
                 format!(
                     ": escrowed {} (timeout: {})",
@@ -31,6 +37,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
             out.push(Row::of(Lead::None, runs));
         }
         "after" | "every" => {
+            let mut runs = label("Kairos-Escrow");
             runs.push(Run::fixed(
                 format!(": escrowed {}, {op} {}", content(args), at(result)),
                 fixed::MUTED,
@@ -38,7 +45,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
             out.push(Row::of(Lead::None, runs));
         }
         "list" => {
-            out.push(Row::of(Lead::None, runs));
+            out.push(Row::of(Lead::None, label("Kairos-Inquiry")));
             out.extend(listing(result));
         }
         "status" => {
@@ -47,6 +54,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
         }
         _ => {
             let id = arg_str(args, "id").unwrap_or_default();
+            let mut runs = label("Kairos-Rescind");
             runs.push(Run::fixed(format!(": {id} canceled"), fixed::MUTED));
             out.push(Row::of(Lead::None, runs));
         }

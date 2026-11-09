@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use super::super::local::content::{Block, Kind as BlockKind};
-use super::super::local::slot::Level;
+
 use super::super::row::Row;
 use super::opts::Opts;
 use super::segment::Segment;
@@ -124,13 +124,12 @@ pub(crate) fn of(block: &Block, paired: Option<&Block>, opts: &Opts, width: usiz
         BlockKind::ToolResult => Product::Fixed(Vec::new()),
         BlockKind::ToolRequest => Product::Fixed(super::card::rows(block, paired, opts, width)),
         BlockKind::User => Product::Fixed(super::user::rows(block, width)),
-        BlockKind::Wake => Product::Fixed(super::notice::rows(
+        BlockKind::Wake => Product::Fixed(super::wake::rows(
             block
                 .text
                 .as_deref()
                 .or(block.content.as_deref())
                 .unwrap_or(""),
-            Level::Info,
         )),
         BlockKind::Assistant | BlockKind::Reasoning => super::text::product(block, opts),
     }
