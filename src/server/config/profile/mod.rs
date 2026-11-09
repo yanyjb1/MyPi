@@ -5,5 +5,5 @@ mod resolve;
 mod types;
 
 pub use discover::{list, locate};
-pub use resolve::{compact_instruction, omp_system, resolve};
-pub use types::{DEFAULT_PROFILE, OMP_PROFILE, ResolvedProfile};
+pub use resolve::{compaction, resolve, system};
+pub use types::{DEFAULT_PROFILE, ResolvedProfile};

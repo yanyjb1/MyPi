@@ -5,12 +5,12 @@ fn text(raw: &'static str) -> &'static str {
     raw.strip_suffix('\n').unwrap_or(raw)
 }
 
-/// The default system prompt, also used by the built-in `oh-my-pi` profile.
-pub fn omp_system() -> &'static str {
-    text(include_str!("omp_system.md"))
+/// The default system prompt.
+pub fn system() -> &'static str {
+    text(include_str!("SYSTEM.md"))
 }
 
 /// The compaction instruction.
-pub fn compact_instruction() -> &'static str {
-    text(include_str!("compact_instruction.md"))
+pub fn compaction() -> &'static str {
+    text(include_str!("COMPACTION.md"))
 }

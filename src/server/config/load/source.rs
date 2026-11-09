@@ -96,8 +96,8 @@ pub(super) fn bootstrap(paths: &ConfigPaths, default_model: Option<&str>) -> any
         .join(profile::DEFAULT_PROFILE);
     std::fs::create_dir_all(&profile)?;
     for (name, body) in [
-        (paths::SYSTEM_FILE, profile::omp_system()),
-        (paths::COMPACT_FILE, profile::compact_instruction()),
+        (paths::SYSTEM_FILE, profile::system()),
+        (paths::COMPACT_FILE, profile::compaction()),
     ] {
         let path = profile.join(name);
         if !path.exists() {

@@ -28,8 +28,8 @@ search, no global search, and every source is read from under it. Paths are comp
 
 A profile is a directory under `profiles/`; its dotted relative path is its name. `system.md` is the
 prompt, `tools.yaml` is an optional tool list, `compact.md` an optional compaction instruction, and
-`config.yaml` an optional full configuration overlay. `default` is the default profile; `oh-my-pi`
-is a second built-in name. Both built-ins use the compiled prompt.
+`config.yaml` an optional full configuration overlay. `default` is the one built-in profile, and it
+uses the compiled prompt.
 
 The active profile is chosen by the session, not by a configuration key. The name is resolved
 project-first; the same name in both roots uses the project copy and warns; the same name twice in

@@ -13,7 +13,7 @@
 | `paths.rs` | `ConfigPaths`: project and global roots, the files and folders under them |
 | `notice.rs` | `ConfigNotice` and the shared warning constructor |
 | `write.rs` | textual `write_key` for `config.yaml` |
-| `prompts/` | compiled prompts: `omp_system`, `compact_instruction` |
+| `prompts/` | compiled prompts: `system`, `compaction` |
 
 ## Public surface
 
@@ -27,7 +27,7 @@
 - `ModelsConfig`, `Provider`, `ModelEntry`, `Cost`, `Currency`, `ResolvedModel`
 - `paths::ConfigPaths`
 - `KEY_*` constants from `schema.rs`; `registry::{lookup, template, model_key, provider_key}`
-- `prompts::{omp_system, compact_instruction}`
+- `prompts::{system, compaction}`
 
 ## Relationships
 

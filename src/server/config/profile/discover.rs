@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::super::notice::{ConfigNotice, warn};
 use super::super::paths::{self, ConfigPaths};
-use super::types::{DEFAULT_PROFILE, OMP_PROFILE};
+use super::types::DEFAULT_PROFILE;
 
 pub fn locate(paths: &ConfigPaths, name: &str, notices: &mut Vec<ConfigNotice>) -> Option<PathBuf> {
     let (found, unusable) = collect(paths, notices);
@@ -20,10 +20,8 @@ pub fn list(paths: &ConfigPaths, notices: &mut Vec<ConfigNotice>) -> Vec<String>
         .filter(|n| !unusable.contains(*n))
         .cloned()
         .collect();
-    for name in [DEFAULT_PROFILE, OMP_PROFILE] {
-        if !names.iter().any(|n| n.as_str() == name) {
-            names.push(name.to_string());
-        }
+    if !names.iter().any(|n| n == DEFAULT_PROFILE) {
+        names.push(DEFAULT_PROFILE.to_string());
     }
     names.sort();
     names

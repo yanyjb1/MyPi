@@ -5,18 +5,18 @@ use anyhow::{Context as _, bail};
 use super::super::notice::{ConfigNotice, warn};
 use super::super::paths::{self, ConfigPaths};
 use super::discover::collect;
-use super::types::{DEFAULT_PROFILE, OMP_PROFILE, ResolvedProfile};
+use super::types::{DEFAULT_PROFILE, ResolvedProfile};
 
-pub fn omp_system() -> &'static str {
-    super::super::prompts::omp_system()
+pub fn system() -> &'static str {
+    super::super::prompts::system()
 }
 
-pub fn compact_instruction() -> &'static str {
-    super::super::prompts::compact_instruction()
+pub fn compaction() -> &'static str {
+    super::super::prompts::compaction()
 }
 
 fn builtin(name: &str) -> bool {
-    name == DEFAULT_PROFILE || name == OMP_PROFILE
+    name == DEFAULT_PROFILE
 }
 
 pub fn resolve(
@@ -45,16 +45,14 @@ pub fn resolve(
     }
     if builtin(name) {
         return Ok(ResolvedProfile {
-            system: omp_system().to_string(),
+            system: system().to_string(),
             tools: None,
             compact_instruction: instruction(None, compact_file, notices),
         });
     }
     let mut names: Vec<String> = found.keys().cloned().collect();
-    for builtin in [DEFAULT_PROFILE, OMP_PROFILE] {
-        if !names.iter().any(|n| n.as_str() == builtin) {
-            names.push(builtin.to_string());
-        }
+    if !names.iter().any(|n| n == DEFAULT_PROFILE) {
+        names.push(DEFAULT_PROFILE.to_string());
     }
     names.sort();
     bail!("unknown profile: {name}. Available: {}", names.join(", "));
@@ -111,7 +109,7 @@ fn instruction(
             )),
         }
     }
-    compact_instruction().to_string()
+    compaction().to_string()
 }
 
 fn load_tools(path: &Path, notices: &mut Vec<ConfigNotice>) -> Vec<String> {
