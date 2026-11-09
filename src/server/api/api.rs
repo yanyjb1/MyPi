@@ -103,6 +103,11 @@ impl Api {
         };
         let ask = Arc::new(Request::new(options)?);
         let ledger = Loop::new(writer.clone(), settings, ask, events, &cfg);
+        // A session nobody watches any more is the loop's to unbook.
+        relay.close_with({
+            let ledger = ledger.clone();
+            Arc::new(move |session: i64| ledger.drop(session))
+        });
         Ok(Api {
             db,
             writer,

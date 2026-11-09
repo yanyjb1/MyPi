@@ -15,7 +15,7 @@ use crate::ipc::endpoint::{self, Endpoint};
 use crate::ipc::line::{self, Lines};
 use crate::ipc::stream;
 use crate::ipc::transport::{self, Listener, Stream};
-use crate::server::api::Api;
+use crate::server::api::{Api, Conn};
 
 /// A connection is watched for silence this long before the server may stop.
 const GRACE: Duration = Duration::from_millis(300);
@@ -137,13 +137,14 @@ fn accept_loop(listener: Listener, api: Arc<Api>, stopping: Arc<AtomicBool>) {
 
 fn handle(stream: Stream, api: Arc<Api>, id: u64) {
     let (conn, queue) = api.connect();
+    // The entry leaves the table however this thread ends, panic included.
+    let conn = Attached { api: &*api, conn };
     let out = BufWriter::new(stream.clone());
     if let Err(e) = std::thread::Builder::new()
         .name(format!("ipc-write-{id}"))
         .spawn(move || stream::write(out, queue))
     {
         eprintln!("mypi: cannot start connection {id}'s writer: {e}");
-        api.disconnect(&conn);
         return;
     }
 
@@ -170,9 +171,26 @@ fn handle(stream: Stream, api: Arc<Api>, id: u64) {
             break;
         }
     }
+}
 
-    api.disconnect(&conn);
-    drop(conn);
+/// One connection's claim on the api's table, released however the thread ends.
+struct Attached<'a> {
+    api: &'a Api,
+    conn: Conn,
+}
+
+impl std::ops::Deref for Attached<'_> {
+    type Target = Conn;
+
+    fn deref(&self) -> &Conn {
+        &self.conn
+    }
+}
+
+impl Drop for Attached<'_> {
+    fn drop(&mut self) {
+        self.api.disconnect(&self.conn);
+    }
 }
 
 fn set_private(endpoint: &Endpoint) {

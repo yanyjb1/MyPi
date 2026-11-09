@@ -80,10 +80,6 @@ const PARAMS: &[Param] = &[
     ),
 ];
 
-pub(crate) fn close_session(session: i64) {
-    crate::web::close_session(session);
-}
-
 pub(crate) const TOOL: Tool = Tool {
     name: "web",
     about: "Read, search, and drive a real browser. `read` returns Markdown or DOM HTML; `search` \

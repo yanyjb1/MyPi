@@ -9,7 +9,8 @@ door per name. Nothing here knows what a block means; it moves rows and frames.
 
 Every front end opens one connection and says `hello` with a viewer id. That id is what the
 session's writer slot is keyed by. A connection follows at most one session at a time; `watch`
-switches which one, and the previous session keeps whatever is already in its buffer.
+switches which one, and `watch` with no session stops following. A session nobody follows any
+longer is unbooked: its booking, its job schedules and its browser tabs go with it.
 
 ### Frames
 
@@ -94,7 +95,7 @@ Subscribe: `watch`, `submit`, `compact`.
 | `post` | `rewind` | `session`, `turn`, `block` | `cut` |
 | `post` | `default_model` | `model` | `path` of the file written |
 | `post` | `mailbox` | `session`, `text`, `prefix`, `suffix` (all but `session` optional) | `written`: whether a body was stored |
-| `subscribe` | `watch` | `session` | — |
+| `subscribe` | `watch` | `session`, or `null` to stop following | — |
 | `subscribe` | `submit` | `session`, `text`, `prefix`, `suffix` | `turn` |
 | `subscribe` | `compact` | `session`, `retention` (`{"chars"}` or `{"blocks"}`), `focus` | `turn` |
 
@@ -160,6 +161,9 @@ goes away.
   same turn; the buffer is what makes joining mid-turn possible.
 - **The writer is a turn, not a role.** It exists while a turn runs and only then, so it needs no
   takeover, no demotion, and no bookkeeping across turns.
+- **A booking follows the watchers.** The loop holds a session's runtime — handle, threads, worker
+  child, tabs — only while a connection follows it. The last watcher leaving unbooks it, and the
+  next message books it again from its own rows, so nothing accumulates across a long server life.
 - **The archive is written once.** A session's system prompt and tool manuals are what the front end
   chose when it opened the session; a later model switch changes the model, not the identity. An
   archive is identified by its system prompt, its tools, its provider and its model; an identical

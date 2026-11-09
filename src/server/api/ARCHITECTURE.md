@@ -13,7 +13,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `convert.rs` | the rewind cut, the only storage shape this domain renames |
 | `call/` | the read doors: `init`, `blocks`, `meta`, `usage`, `todo`, `memo`, `children`, `config`, `pools`, `sessions` |
 | `post/` | the write doors: `init`, `name`, `cwd`, `switch`, `delete`, `interrupt`, `rewind`, `default_model`, `reload`; `emit.rs` holds the writer gate and the change event |
-| `subscribe/` | `watch`, `submit`, `compact` |
+| `subscribe/` | `watch` (a session, or none), `submit`, `compact` |
 
 ## What it talks to
 
@@ -21,8 +21,7 @@ What is here, what each file holds, who talks to whom. Current state only.
   `Birth`, `Message`, `Change`, `Retention`, and the live line `Event`.
 - **`agent::request`**: `Request::new(Options)` once, at startup; `Options` carries the providers,
   the retry policy, the per-address output caps, the streaming mode and the compaction tail.
-- **`agent::tools`**: `registry::{names, roster}` when `init` writes the archive; `web::close_session`
-  when a session is deleted, under the `web` feature.
+- **`agent::tools`**: `registry::{names, roster}` when `init` writes the archive.
 - **`storage`**: `Writer` for every row and every deletion, `Reader` for every read,
   `query::{Sheet, Cond, Order, Query, Val}` for the filtered reads, `Structure` as the relay's
   second source.
@@ -51,6 +50,11 @@ Relay::start
   a dispatcher when the first turn opens.
 - `Api::ensure_booked` puts a session the loop has never seen back on the table: it reads the
   session row and its archive, takes the tool names out of the archive's manuals, and books.
+- `relay.rs` keeps the set of sessions some connection follows and hands back every session that
+  has just lost its last watcher; `Api::open` wires that to `Loop::drop`. A session nobody follows
+  therefore leaves the table, its jobs and its browser tabs with it. A child session is never
+  followed, so its booking stays with the sub-agent runner.
+- `watch` with no session stops following: it is how a front end says it left a conversation.
 - `submit` and `compact` share `submit::open`: the busy check, the booking, the delivery, and the
   writer slot.
 - `rewind` cuts the list and then calls `Loop::forget`, so the loop reads that session's history

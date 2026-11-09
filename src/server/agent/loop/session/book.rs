@@ -54,6 +54,7 @@ pub enum Message {
 pub use crate::server::agent::request::contract::Retention;
 
 /// The loop object. One per process; every session hangs off it.
+#[derive(Clone)]
 pub struct Loop {
     inner: Arc<Inner>,
 }
@@ -276,6 +277,8 @@ pub(crate) fn unbook(inner: &Arc<Inner>, id: i64) {
     if let Some(handle) = inner.slots.remove(id) {
         handle.gone.store(true, Ordering::Release);
         handle.interrupt();
+        // `interrupt` is a no-op on an idle session; the scheduler is parked either way.
+        handle.mailbox.notify();
     }
     // A finished session keeps no browser tabs: the work and search tabs belong to the session's
     // life, not to the browser's.

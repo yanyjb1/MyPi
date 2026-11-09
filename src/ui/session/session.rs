@@ -85,6 +85,7 @@ impl Session {
     pub fn detach(&mut self) {
         self.attached = None;
         self.client.clear();
+        self.unwatch();
         self.structure.clear();
         self.content.clear();
         self.pending.clear();

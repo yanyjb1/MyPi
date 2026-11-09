@@ -41,7 +41,8 @@ half's types, re-exported from this domain's root.
 
 - `Loop::book` reads the session's transcript, inserts a handle, makes the session's job service and
   attaches it to `Source`, then starts the turn scheduler. `Loop::drop` reverses all three through
-  `unbook`.
+  `unbook`, which also wakes the parked scheduler: `interrupt` alone does nothing to an idle
+  session, and a scheduler left parked keeps the handle alive.
 - `Loop::deliver` refuses a sub-session and a busy session, and otherwise opens a turn through
   `pen::turn::open` and starts `turn::cycle::run`.
 - `Loop::write_mail` and `Loop::clear_mail` are the slot's only writers from outside.

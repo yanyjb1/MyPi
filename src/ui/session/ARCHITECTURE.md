@@ -56,5 +56,4 @@ Session
 
 ## Not wired
 
-1. Nothing asks the session to stop watching; the server has no unwatch door.
-2. No reconnect: a dead read half leaves one `local / disconnected` and no further frames.
+1. No reconnect: a dead read half leaves one `local / disconnected` and no further frames.

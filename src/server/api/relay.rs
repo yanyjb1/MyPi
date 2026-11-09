@@ -34,12 +34,18 @@ struct State {
     /// The viewer that put a message in the slot, waiting for the turn it opens.
     pending: HashMap<i64, String>,
     buffers: HashMap<i64, Vec<Frame>>,
+    /// The sessions a connection followed at the last change.
+    watched: HashSet<i64>,
 }
+
+/// Told, outside the state lock, that a session has no watcher left.
+pub(crate) type Closer = Arc<dyn Fn(i64) + Send + Sync>;
 
 /// The stream: who follows which session, and what this turn has already said.
 #[derive(Clone)]
 pub(crate) struct Relay {
     state: Arc<Mutex<State>>,
+    closer: Arc<Mutex<Option<Closer>>>,
 }
 
 impl Relay {
@@ -47,6 +53,7 @@ impl Relay {
     pub(crate) fn start(writer: &Writer) -> Result<(Relay, Sender<Event>)> {
         let relay = Relay {
             state: Arc::new(Mutex::new(State::default())),
+            closer: Arc::new(Mutex::new(None)),
         };
         let (port, pieces) = mpsc::channel::<Structure>();
         writer
@@ -92,10 +99,36 @@ impl Relay {
         }
     }
 
+    /// Who to tell when a session's last watcher goes away.
+    pub(crate) fn close_with(&self, closer: Closer) {
+        *self.closer.lock().unwrap_or_else(|e| e.into_inner()) = Some(closer);
+    }
+
+    /// Tell the closer about every session that just lost its last watcher.
+    fn report(&self, gone: Vec<i64>) {
+        if gone.is_empty() {
+            return;
+        }
+        let closer = self
+            .closer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(closer) = closer {
+            let closer: &(dyn Fn(i64) + Send + Sync) = &*closer;
+            for session in gone {
+                closer(session);
+            }
+        }
+    }
+
     pub(crate) fn detach(&self, conn: u64) {
-        let mut state = self.state();
-        state.conns.remove(&conn);
-        drop_unfollowed(&mut state);
+        let gone = {
+            let mut state = self.state();
+            state.conns.remove(&conn);
+            drop_unfollowed(&mut state)
+        };
+        self.report(gone);
     }
 
     pub(crate) fn viewer_of(&self, conn: u64) -> Option<String> {
@@ -111,16 +144,32 @@ impl Relay {
 
     /// This connection follows this session, and hears whatever this turn already said.
     pub(crate) fn declare(&self, conn: u64, session: i64) {
-        let mut state = self.state();
-        if let Some(entry) = state.conns.get_mut(&conn) {
-            entry.session = Some(session);
-        }
-        let replay = state.buffers.get(&session).cloned().unwrap_or_default();
-        if let Some(tx) = state.conns.get(&conn).map(|entry| entry.tx.clone()) {
-            for frame in replay {
-                let _ = tx.send(frame);
+        let gone = {
+            let mut state = self.state();
+            if let Some(entry) = state.conns.get_mut(&conn) {
+                entry.session = Some(session);
             }
-        }
+            let replay = state.buffers.get(&session).cloned().unwrap_or_default();
+            if let Some(tx) = state.conns.get(&conn).map(|entry| entry.tx.clone()) {
+                for frame in replay {
+                    let _ = tx.send(frame);
+                }
+            }
+            drop_unfollowed(&mut state)
+        };
+        self.report(gone);
+    }
+
+    /// This connection stops following whatever it followed.
+    pub(crate) fn unwatch(&self, conn: u64) {
+        let gone = {
+            let mut state = self.state();
+            if let Some(entry) = state.conns.get_mut(&conn) {
+                entry.session = None;
+            }
+            drop_unfollowed(&mut state)
+        };
+        self.report(gone);
     }
 
     /// Is a turn already running on this session?
@@ -137,28 +186,36 @@ impl Relay {
         turn: i64,
         door: &'static str,
     ) {
-        let mut state = self.state();
-        if let Some(entry) = state.conns.get_mut(&conn) {
-            entry.session = Some(session);
-        }
-        state.pending.remove(&session);
-        state.active.insert(
-            session,
-            Active {
-                turn,
-                opened_by: door,
-                viewer: viewer.to_string(),
-            },
-        );
+        let gone = {
+            let mut state = self.state();
+            if let Some(entry) = state.conns.get_mut(&conn) {
+                entry.session = Some(session);
+            }
+            state.pending.remove(&session);
+            state.active.insert(
+                session,
+                Active {
+                    turn,
+                    opened_by: door,
+                    viewer: viewer.to_string(),
+                },
+            );
+            drop_unfollowed(&mut state)
+        };
+        self.report(gone);
     }
 
     /// Remember who wrote the slot; the turn it opens is named after the slot, nobody else.
     pub(crate) fn note_mail(&self, conn: u64, session: i64, viewer: &str) {
-        let mut state = self.state();
-        if let Some(entry) = state.conns.get_mut(&conn) {
-            entry.session = Some(session);
-        }
-        state.pending.insert(session, viewer.to_string());
+        let gone = {
+            let mut state = self.state();
+            if let Some(entry) = state.conns.get_mut(&conn) {
+                entry.session = Some(session);
+            }
+            state.pending.insert(session, viewer.to_string());
+            drop_unfollowed(&mut state)
+        };
+        self.report(gone);
     }
 
     /// The slot was cleared before the loop took it: nothing is owed a turn.
@@ -202,15 +259,19 @@ impl Relay {
 
     /// The session is gone: its buffer, its turn, and every watcher's claim on it.
     pub(crate) fn forget(&self, session: i64) {
-        let mut state = self.state();
-        state.buffers.remove(&session);
-        state.active.remove(&session);
-        state.pending.remove(&session);
-        for entry in state.conns.values_mut() {
-            if entry.session == Some(session) {
-                entry.session = None;
+        let gone = {
+            let mut state = self.state();
+            state.buffers.remove(&session);
+            state.active.remove(&session);
+            state.pending.remove(&session);
+            for entry in state.conns.values_mut() {
+                if entry.session == Some(session) {
+                    entry.session = None;
+                }
             }
-        }
+            drop_unfollowed(&mut state)
+        };
+        self.report(gone);
     }
 
     /// One live moment from the loop.
@@ -371,7 +432,9 @@ impl Relay {
         for id in dead {
             state.conns.remove(&id);
         }
-        drop_unfollowed(&mut state);
+        let gone = drop_unfollowed(&mut state);
+        drop(state);
+        self.report(gone);
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -393,14 +456,17 @@ fn bill(usage: Option<Usage>) -> Value {
     }
 }
 
-/// A session with no watcher left keeps no buffer.
-fn drop_unfollowed(state: &mut State) {
+/// A session with no watcher left keeps no buffer, and is handed back to be unbooked.
+fn drop_unfollowed(state: &mut State) -> Vec<i64> {
     let followed: HashSet<i64> = state
         .conns
         .values()
         .filter_map(|entry| entry.session)
         .collect();
+    let gone: Vec<i64> = state.watched.difference(&followed).copied().collect();
     state
         .buffers
         .retain(|session, _| followed.contains(session));
+    state.watched = followed;
+    gone
 }

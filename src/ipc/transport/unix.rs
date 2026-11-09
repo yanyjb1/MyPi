@@ -44,6 +44,13 @@ impl Listener {
     }
 }
 
+impl Stream {
+    /// Close both directions: a blocking read on any clone returns end of file.
+    pub fn shutdown(&self) {
+        let _ = self.0.shutdown(std::net::Shutdown::Both);
+    }
+}
+
 impl io::Read for Stream {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         io::Read::read(&mut self.0, out)

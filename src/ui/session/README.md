@@ -80,12 +80,11 @@ session in unless the caller named one, and expects a reply unless it is `watch`
 
 ## 3. Unresolved
 
-1. No door turns a watch off: a detached connection keeps receiving pushes and drops them.
-2. A refused `call blocks` leaves the window untouched; the refusal is forwarded as it came.
-3. `post rewind` is the one door this layer special-cases: the spot is read out of the request and
+1. A refused `call blocks` leaves the window untouched; the refusal is forwarded as it came.
+2. `post rewind` is the one door this layer special-cases: the spot is read out of the request and
    held, and the index is trimmed on the answer. Every other window change is read from the answer
    instead. The asymmetry is deliberate for now and the door is expected to be redesigned.
-4. A frame lost in the queue leaves its ledger entry behind, so a later rewind trims to the spot
+3. A frame lost in the queue leaves its ledger entry behind, so a later rewind trims to the spot
    of the frame that never landed.
 
 ## 4. Config fields

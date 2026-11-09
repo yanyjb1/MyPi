@@ -58,7 +58,7 @@ pub(crate) fn subscribe(
 ) -> Result<Option<Value>, Refuse> {
     let ask = &frame.payload;
     match frame.name.as_str() {
-        "watch" => subscribe::watch::apply(api, conn, i64_of(ask, "session")?).map(|_| None),
+        "watch" => subscribe::watch::apply(api, conn, opt_i64_of(ask, "session")?).map(|_| None),
         "submit" => subscribe::submit::apply(api, conn, viewer, ask).map(Some),
         "compact" => subscribe::compact::apply(api, conn, viewer, ask).map(Some),
         other => Err(Refuse::Unknown(format!("no such name: {other}"))),

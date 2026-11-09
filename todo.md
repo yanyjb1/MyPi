@@ -8,21 +8,18 @@
 
 来自用户，没有用户明确允许，不允许删除。
 
-/memo命令根本没做
+/memo命令，这个渲染太丑了。。。😭我要给它狠狠优化一下😡
+
+工具的打断似乎还需要检查一下，不是所有的工具都需要/已经做了这个打断检查。希望能针对不同的工具，设立不同的打断适配。
+Kairos的wake消息渲染太不起眼了，需要想一下其他的办法。=-=这个需要自己设计，不能抄作业。
 
 main区：
-1. edit/write这些的渲染简直就是灾难，diff完全看不了。这个留着大后期一起抄omp作业吧，现在的拉完了。
-2. 还需要检查其他部件的这个问题。
+1. 渲染样式正在抄omp（https://github.com/can1357/oh-my-pi）的作业，还没抄完，还没看其他工具的，目前暂定已经完事的有：Read、Edit、Write，其他的不确定。
 
-工具卡的太抽象了，我不行了。。。这个渲染，我必须给每个工具都，赶紧抄一下专有的渲染样式以及动画样式了。
-
-记录一下工具卡为什么抽象，这里点名批评bash，捏吗的，模型都看到结果了，bash的渲染还没完成，一定要你妈的下一次http还是回合结束了才正常渲染，错误，大错误！！！😡
-
-
+input区，需要加上一个，我不确定能不能加的功能：就是，举例，FuckUNvidia我日你先人 不同语言的字符之间应该有一道隐秘的坎，也即可以通过ctrl+左右跳跃时跳到a和我中间。
 
 /new的命令，切换后无法使用/profile，疑似判断有问题，输入区持有哪些东西需要重点整治一下。。。太特么难绷了。以及其他残缺的、无法正常运行的命令。😡
 
-可能还有一些问题，🤔总之，可以在解决渲染样式的时候，集中抄一下omp的作业。
 
 服务端CPU异常与退出问题（另开会话处理，调研结论2026-11-08）：
 1. CDP泵线程轮询：`src/web/browser/devtools/cdp.rs:22` 每条连接 read timeout 50ms（20Hz空转唤醒），连接随tab存活；附着型浏览器（`Browser::attach`，`src/web/browser/process/mod.rs:44`）被 `idle::sweep` 永不关闭（`idle.rs:27` 直接return），泵跟着活到进程死。修法：去掉50ms轮询（阻塞读+Drop关socket唤醒），或退一步拉到500ms。
@@ -30,8 +27,8 @@ main区：
 3. "前端退出服务器不死"原因未定案：退出条件只看relay连接数（`api.rs:164`），需复现时`top -H`看线程名+`ss`看连接抓现场。
 4. 会话存活判据统一为"有没有连接在看"，涉及api/relay/loop整体调度，故整体另开。
 
-Anthropic 的 usage 与其余三家不同义（2026-11-08，用户暂时不用 Anthropic，挂起）：
-`protocol/anthropic/messages.rs` 的 `usage_from` 取 `prompt = input_tokens`，而 Anthropic 的 `input_tokens` 不含 `cache_read_input_tokens` / `cache_creation_input_tokens`。其余三家（OpenAI completion、DeepSeek、Responses）的 `prompt_tokens` / `input_tokens` 都已包含缓存部分，于是 `Usage::prompt` 这一个字段在 Anthropic 上语义不同、数值偏小。连带三处：`api/call/usage.rs` 的 `quote()` 里 `uncached = prompt − cached` 在 Anthropic 上 saturating 到 0（输入费一分不收）；`cache_hit_rate = cached / (prompt + completion)` 分母偏小（命中率虚高）；`estimate::context` 把 `stamp.prompt` 直接当上下文（偏小）。修法：解码时 `prompt = input_tokens + cache_read + cache_creation`，`quote()` 的 `uncached` 同时减掉 `written`。存量的 `usage_prompt` 列不回算。
+已修（2026-11-09）：第3条收敛为通信层的一处缺口——写线程退出时不关套接字，读线程永远等不到 EOF，连接表项因此摘不掉。现在写线程退出即 `shutdown`，连接句柄用析构兜底摘表，不做心跳。第2、4条按"有没有连接在看"落地：relay 记账每会话 watcher，归零调 `Loop::drop`，`subscribe watch` 传 `null` 表示不再看，前端 detach 时发出。第1条与 usage 全扫不动，只在"已知代价"里记录。
+
 
 ## 一、历史区
 
@@ -65,6 +62,7 @@ Anthropic 的 usage 与其余三家不同义（2026-11-08，用户暂时不用 A
 - 压缩之后、下一次请求之前，上下文条是估的（摘要 + 按截断点权重推算的尾巴 + 档案地板），带 `~`；下次请求落地即换成实测值。
 - git 扫描在帧里同步跑：一次 `git status` + 一次 `git branch`，每间隔一次几十毫秒。
 - 临时 `cd` 只活在前端与内存：重启后以库里会话行的 cwd 为准。
+- `call usage` 每次都重扫整个会话：turns 一条条查、块正文全读出来算账。流式期间每遇到一块带 usage 就发一次，代价按块数线性涨，长会话上会变成每次全表扫描。
 
 ### web
 

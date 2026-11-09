@@ -50,9 +50,5 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         api.ledger().drop(*id);
         api.relay().forget(*id);
     }
-    #[cfg(feature = "web")]
-    for id in &ids {
-        crate::server::agent::tools::web::close_session(*id);
-    }
     Ok(json!({}))
 }

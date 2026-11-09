@@ -21,4 +21,7 @@ pub(crate) fn write(mut out: BufWriter<Stream>, queue: Receiver<Frame>) {
             break;
         }
     }
+    // However this ended, the connection is over: wake the read half instead of leaving it
+    // blocked on a peer that is already gone.
+    out.get_ref().shutdown();
 }

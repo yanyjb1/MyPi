@@ -65,9 +65,9 @@ What is here, what each file holds, who talks to whom. Current state only.
   a fork, and `proc::terminate_tree` to close a group.
 - **Crates**: `tungstenite` (WebSocket), `html-to-markdown-rs` (DOM to Markdown), `url`, `ureq`
   (DevTools HTTP), `signal-hook` (exit signals).
-- **Who calls it**: `server::agent::tools::web` — `run` for every operation, and its own
-  `close_session` forward for a finished session, called by `api`'s delete door. `main` calls
-  `shutdown` once the IPC server returns.
+- **Who calls it**: `server::agent::tools::web` — `run` for every operation. `main` calls
+  `shutdown` once the IPC server returns. `close_session` is called by the loop's `unbook`: a
+  session that ends takes its tabs with it.
 - **Knows nothing about**: `Env`, tools, sessions' rows, the api doors, the front end.
 
 ## Inside

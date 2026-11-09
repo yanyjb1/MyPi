@@ -33,6 +33,11 @@ impl Listener {
     }
 }
 
+impl Stream {
+    /// Nothing to close: the pipe transport has no implementation yet.
+    pub fn shutdown(&self) {}
+}
+
 impl io::Read for Stream {
     fn read(&mut self, _out: &mut [u8]) -> io::Result<usize> {
         Err(unsupported())
