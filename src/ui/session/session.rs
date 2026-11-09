@@ -1,8 +1,8 @@
 //! The session: one connection, two windows, one outbox.
 //!
 //! Every frame crosses unchanged. The only things read out of a frame are the ones the windows
-//! cannot be kept without: a push's session and turn, a round's ranges, a row's id, the spot a
-//! rewind was asked for.
+//! cannot be kept without: a push's turn, a round's ranges, a row's id, the spot a rewind was
+//! asked for.
 
 use std::collections::VecDeque;
 
@@ -29,7 +29,7 @@ enum Pending {
 
 pub struct Session {
     client: Client,
-    /// The session this connection follows; pushes for another are dropped.
+    /// The session this connection follows.
     attached: Option<i64>,
     structure: Structure,
     content: ContentCache,
@@ -194,10 +194,6 @@ impl Session {
     /// One unsolicited frame: keep the windows honest, forward it whole.
     fn push(&mut self, frame: Frame) {
         let content = frame.payload;
-        let session = content.get("session").and_then(Value::as_i64);
-        if session != self.attached {
-            return;
-        }
         if let Some(turn) = content.get("turn").and_then(Value::as_i64)
             && let Some(ranges) = content.get("ranges").and_then(ranges_of)
         {

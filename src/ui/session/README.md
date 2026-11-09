@@ -22,7 +22,6 @@ a type of its own, and nothing is rewritten on the way out.
 - A pushed stream frame carrying `turn` and `ranges` sets that round.
 - A `call init` answer replaces both windows; a `call blocks` answer merges rows; a `post delete`
   answer for the attached session detaches.
-- A push whose `content.session` is not the attached one is dropped.
 
 ### The rewind ledger
 
@@ -64,11 +63,10 @@ session in unless the caller named one, and expects a reply unless it is `watch`
 ### Invariants
 
 1. A frame is forwarded whole; the windows only read what they cannot be kept without.
-2. A push belongs to its session; another session's push is dropped.
-3. A reply is matched to the oldest queued frame with the same `kind` and `name`; a mismatch is
+2. A reply is matched to the oldest queued frame with the same `kind` and `name`; a mismatch is
    reported as `local / lost`.
-4. Both windows live exactly as long as one attachment.
-5. The rewind ledger is written from the request, never read out of the reply.
+3. Both windows live exactly as long as one attachment.
+4. The rewind ledger is written from the request, never read out of the reply.
 
 ## 2. Design intent
 
