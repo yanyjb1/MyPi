@@ -1,6 +1,7 @@
-//! The default MCP backend: one lazy stdio server per configured name.
-
+//! The default MCP backend: one lazy stdio server per configured name, keyed to where the
+//! session stands.
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
@@ -11,16 +12,28 @@ use super::setup::ServerConfig;
 use super::stdio::{self, Server};
 
 pub struct SyncMcpBridge {
-    config: BTreeMap<String, ServerConfig>,
+    cwd: Mutex<std::path::PathBuf>,
+    global: std::path::PathBuf,
+    config: Mutex<BTreeMap<String, ServerConfig>>,
     servers: Mutex<HashMap<String, Arc<Mutex<Server>>>>,
 }
 
 impl SyncMcpBridge {
-    pub fn new(config: BTreeMap<String, ServerConfig>) -> Self {
+    pub fn new(
+        cwd: std::path::PathBuf,
+        global: std::path::PathBuf,
+        config: BTreeMap<String, ServerConfig>,
+    ) -> Self {
         Self {
-            config,
+            cwd: Mutex::new(cwd),
+            global,
+            config: Mutex::new(config),
             servers: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn standing(&self) -> std::path::PathBuf {
+        self.cwd.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn server_for(&self, name: &str) -> Result<Arc<Mutex<Server>>> {
@@ -45,11 +58,15 @@ impl SyncMcpBridge {
                 .unwrap_or_else(|e| e.into_inner())
                 .remove(name);
         }
-        let config = self
+        let mut config = self
             .config
+            .lock()
+            .map_err(|_| anyhow!("MCP server table is poisoned"))?
             .get(name)
             .cloned()
             .ok_or_else(|| anyhow!("unknown MCP server `{name}`"))?;
+        // Relative paths anchor where the session stands, not where the process launched.
+        config.cwd = Some(self.standing());
         let mut server = stdio::spawn(name, &config)?;
         server
             .initialize()
@@ -191,8 +208,34 @@ fn content_of(server: &str, value: &Value) -> Result<McpContent> {
 }
 
 impl McpBridge for SyncMcpBridge {
+    fn rescan(&self, cwd: &Path) -> Result<()> {
+        let table = super::setup::table(cwd, &self.global)?;
+        {
+            let config = self
+                .config
+                .lock()
+                .map_err(|_| anyhow!("MCP server table is poisoned"))?;
+            if *config == table && *self.cwd.lock().unwrap_or_else(|e| e.into_inner()) == cwd {
+                return Ok(());
+            }
+        }
+        *self.cwd.lock().unwrap_or_else(|e| e.into_inner()) = cwd.to_path_buf();
+        *self
+            .config
+            .lock()
+            .map_err(|_| anyhow!("MCP server table is poisoned"))? = table;
+        let mut servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+        for (_, server) in servers.drain() {
+            let mut server = server.lock().unwrap_or_else(|e| e.into_inner());
+            server.shutdown();
+        }
+        Ok(())
+    }
+
     fn servers(&self) -> Vec<ServerInfo> {
         self.config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .keys()
             .map(|name| ServerInfo { name: name.clone() })
             .collect()

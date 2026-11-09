@@ -33,6 +33,14 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     let from = env.workspace.cwd().to_path_buf();
     let real = workspace::resolve_cwd(&from, &path)?;
     env.workspace.chdir(real.clone());
+    if let Some(mcp) = &env.mcp
+        && let Err(e) = mcp.rescan(&real)
+    {
+        crate::server::platform::log::warn(
+            "mcp",
+            format!("rescan after cd to {} failed: {e:#}", real.display()),
+        );
+    }
     Ok(ToolOutput::with_memo(
         format!("working directory changed to {}", real.display()),
         serde_json::json!({

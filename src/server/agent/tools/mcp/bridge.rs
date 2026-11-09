@@ -1,6 +1,7 @@
 //! The MCP backend seam: no rmcp or stdio types cross this boundary.
 
 use anyhow::Result;
+use std::path::Path;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
@@ -31,5 +32,7 @@ pub trait McpBridge: Send + Sync {
     fn servers(&self) -> Vec<ServerInfo>;
     fn tools(&self, server: &str) -> Result<Vec<ToolInfo>>;
     fn call(&self, server: &str, tool: &str, args: Value) -> Result<McpResult>;
+    /// Re-read the table for where the session stands; a no-op when the table is unchanged.
+    fn rescan(&self, cwd: &Path) -> Result<()>;
     fn shutdown(&self);
 }

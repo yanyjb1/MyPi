@@ -66,6 +66,7 @@ pub(crate) struct Inner {
     pub(crate) ask: Arc<dyn Ask>,
     pub(crate) batch: Arc<dyn Batch>,
     pub(crate) source: Arc<super::source::Db>,
+    pub(crate) global_mcp: PathBuf,
     pub(crate) dir: PathBuf,
     pub(crate) slots: Arc<super::jobs::Slots>,
     pub(crate) factory: job::Factory,
@@ -84,14 +85,13 @@ impl Loop {
         let dir = cfg.export_dir();
         let export = Arc::new(super::export::Files::new(path, dir.clone()));
         let (lines, bytes) = cfg.limits();
-        let project = cfg.project_paths();
-        let project_mcp = project.mcp.clone();
         let global_mcp = cfg
             .paths()
             .global_root()
             .map(|root| root.to_path_buf())
             .unwrap_or_default()
             .join("mcp.json");
+        let project = cfg.project_paths();
         let batch = crate::server::agent::tools::engine::Engine::new(
             crate::server::agent::tools::contract::env::Limits { lines, bytes },
             cfg.bash_timeout(),
@@ -109,14 +109,6 @@ impl Loop {
                     .join("agents"),
             },
         );
-        if let Ok(table) =
-            crate::server::agent::tools::mcp::setup::servers(&project_mcp, &global_mcp)
-            && !table.is_empty()
-        {
-            source.attach_mcp(Arc::new(
-                crate::server::agent::tools::mcp::sync::SyncMcpBridge::new(table),
-            ));
-        }
         let slots = super::jobs::Slots::new();
         let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
         Self {
@@ -127,6 +119,7 @@ impl Loop {
                 ask,
                 batch: Arc::new(batch),
                 source,
+                global_mcp,
                 dir,
                 slots,
                 factory,
@@ -216,12 +209,25 @@ impl Loop {
     /// Apply one change; a `Cwd` change answers the directory it landed on.
     pub fn change(&self, session: i64, change: Change) -> Result<Option<std::path::PathBuf>> {
         let handle = self.handle(session)?;
-        change::apply(
+        let landed = change::apply(
             &handle,
             change,
             &self.inner.writer,
             self.inner.settings.scrooge,
-        )
+        )?;
+        if let Some(real) = &landed
+            && let Some(mcp) = self.inner.source.mcp()
+            && let Err(e) = mcp.rescan(real)
+        {
+            crate::server::platform::log::warn(
+                "mcp",
+                format!(
+                    "rescan after cwd change to {} failed: {e:#}",
+                    real.display()
+                ),
+            );
+        }
+        Ok(landed)
     }
 
     /// Is this session on the table?
@@ -356,6 +362,19 @@ fn start_turn(
     };
     let mode = mode_of(&start);
     let live = handle.take_live(&inner.dir);
+    // MCP rides along only when this session actually runs the `mcp` tool.
+    if live.tools.iter().any(|t| t == "mcp") && inner.source.mcp().is_none() {
+        let root = live.root.clone();
+        let table = crate::server::agent::tools::mcp::setup::table(&root, &inner.global_mcp)
+            .unwrap_or_default();
+        inner.source.attach_mcp(Arc::new(
+            crate::server::agent::tools::mcp::sync::SyncMcpBridge::new(
+                root,
+                inner.global_mcp.clone(),
+                table,
+            ),
+        ));
+    }
     let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
     let model = Some((live.provider.clone(), live.model.clone()));
     let (turn, opening) = match pen::turn::open(&inner.writer, handle.id, start, &cwd, model) {
