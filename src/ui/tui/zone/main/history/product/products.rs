@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use super::super::local::content::{Block, Kind as BlockKind};
-
 use super::super::row::Row;
 use super::opts::Opts;
 use super::segment::Segment;

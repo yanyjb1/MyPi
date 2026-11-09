@@ -17,11 +17,6 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
     }
     let state = State::of(result);
     let label = |name: &str| head(state, name);
-    let mut runs = label(if op == "status" {
-        "Kairos-Inquiry"
-    } else {
-        "Kairos"
-    });
     let mut out = Vec::new();
     match op.as_str() {
         "now" => {
@@ -49,6 +44,7 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
             out.extend(listing(result));
         }
         "status" => {
+            let mut runs = label("Kairos-Inquiry");
             runs.push(Run::fixed(format!(": {}", status(result)), fixed::MUTED));
             out.push(Row::of(Lead::None, runs));
         }
