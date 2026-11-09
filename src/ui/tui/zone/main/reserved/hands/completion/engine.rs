@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::super::super::pools::Pools;
 use crate::ui::command::{Arg, Candidate, path_shaped, word, word_index};
+use crate::ui::lang::Lang;
 use crate::ui::tui::zone::main::input::command;
 
 /// How many candidates the popup shows at most.
@@ -50,6 +51,8 @@ pub struct Look<'a> {
     pub home: &'a Path,
     /// Model and profile names, asked for once at startup.
     pub pools: Option<&'a Pools>,
+    /// The language the command details read in.
+    pub lang: Lang,
 }
 
 /// Directory listings kept between keystrokes: one `read_dir` per directory.
@@ -148,7 +151,7 @@ fn command_line(
     scan: &mut Scan,
 ) -> (Vec<Completion>, bool, usize) {
     if word_index(before) == 0 {
-        return (command_items(word), false, command_total());
+        return (command_items(word, look.lang), false, command_total());
     }
     match command::slot(before) {
         Some(Some(Arg::Model)) => {
@@ -188,7 +191,7 @@ fn pools<'a>(look: &'a Look<'a>, models: bool) -> &'a [Candidate] {
 }
 
 /// Command names (and aliases) starting at the word.
-fn command_items(word: &str) -> Vec<Completion> {
+fn command_items(word: &str, lang: Lang) -> Vec<Completion> {
     let mut out: Vec<(Rank, Completion)> = Vec::new();
     for meta in command::TABLE {
         let names = std::iter::once(meta.name).chain(meta.aliases.iter().copied());
@@ -209,7 +212,7 @@ fn command_items(word: &str) -> Vec<Completion> {
                     kind: CandidateKind::Command,
                     name: name.to_string(),
                     hits,
-                    detail: meta.detail.to_string(),
+                    detail: meta.detail.get(lang).to_string(),
                     is_dir: false,
                     insert,
                 },

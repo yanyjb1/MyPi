@@ -14,9 +14,10 @@ The front end's centre: the registry, the display ledger, and the only exit to t
 | `memo: Memo` | what one zone leaves for the next |
 | `size: TermSize` | the last size handed down |
 | `attached: Option<i64>` | the session the zones were last told about |
-| `told: Vec<Option<i64>>` | the session each zone has last been told about |
+| `told: Vec<Option<Option<i64>>>` | per zone: `None` = never told, `Some(id or None)` = told |
 | `cwd`, `model` | what a new session is created with |
-| `waiting` | a message sent before the session row existed |
+| `profile`, `name` | the draft's picks; they travel with the row |
+| `opening` | a message sent before the session row existed |
 | `copy: Vec<String>` | text the loop still owes the terminal's clipboard |
 | `finished: bool` | nobody shows |
 
@@ -45,17 +46,21 @@ takes it with `take_copy` and writes the terminal's clipboard between two draws.
 ### Landing
 
 A `Request` is an intent: the app names the door. `wire::land` carries every session action; the
-app keeps the seven it owns — `Submit`, `Copy`, `Attach`, `Detach`, `Structure`, `Quit`,
-`PickProfile`.
-A `Submit` with no session attached first creates the row (`post init` with `cwd`, `model` and the
-picked profile), parks the text, and sends it after the id lands. `Structure` asks the session for
-the structural window and hands one `Turns` snapshot to the zone that shows; a nested `Structure`
-request is dropped.
+app keeps the ones that are its own — `Submit`, `SetCwd`, `Rename`, `SwitchModel` in a draft,
+`Copy`, `Attach`, `Detach`, `Structure`, `Quit`, `PickProfile`.
+A `Submit` with no session attached first creates the row (`post init` with `cwd`, `name`, `model`
+and the picked profile), parks the text, and sends it after the id lands. A draft's `SetCwd`,
+`Rename` and `SwitchModel` land here and answer with a `local` frame named after the same door, so
+the input zone can speak its receipt; a session's land on the server instead.
+`Structure` asks the session for the structural window and hands one `Turns` snapshot to the zone
+that shows; a nested `Structure` request is dropped.
 
 ### Lifecycle
 
-- `attach(id)`: follow, watch, clear the memo, tell the zone that shows, land.
-- `detach()`: stop following, clear the memo, tell the zone that shows, land.
+- `attach(id)`: follow, watch, clear the memo and the draft's picks, tell the zone that shows, land.
+- `detach()`: stop following, clear the memo and the draft's picks, tell the zone that shows, land.
+- `tell()` compares one zone's last told value with `attached`; `None` means never told, so a detach
+  reaches the zones exactly as an attach does.
 - `pump()` reconciles: if the session attached somewhere else (a delete landed upstream), the app
   detaches; a session the app attached itself is already consistent.
 
@@ -73,11 +78,12 @@ starts it. `Outcome::Quit` empties the owner and marks the app finished.
 - **Declaration, not inspection.** What a zone hears is what it declared.
 - **The memo is a transaction.** It exists between one handover and the next, and attach/detach
   clears it.
+- **A draft answers like the server.** What a draft lands itself is answered with a `local` frame
+  named after the same door, so a zone has one receipt rule.
 
 ## 3. Unresolved
 
 1. One waiting message at a time: a second submit before the row lands replaces the first.
-2. The draft carries no name or profile; both are sent as `null`.
 
 ## 4. Config fields
 

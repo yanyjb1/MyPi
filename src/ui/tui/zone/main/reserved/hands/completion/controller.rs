@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use super::engine::{self, Completion, CompletionPopup, Look, Scan};
+use crate::ui::lang::Lang;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
 use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::Claim;
@@ -18,6 +19,7 @@ pub struct InputCtx<'a> {
     pub cwd: &'a std::path::Path,
     pub home: &'a std::path::Path,
     pub pools: Option<&'a Pools>,
+    pub lang: Lang,
 }
 
 pub struct CompletionController {
@@ -64,6 +66,7 @@ impl CompletionController {
             cwd: cx.cwd,
             home: cx.home,
             pools: cx.pools,
+            lang: cx.lang,
         };
         let found = engine::suggest(cx.text, cx.cursor, &look, scan);
         let spot = (found.from, found.word.clone());
@@ -162,6 +165,8 @@ pub struct CompletionService {
     /// The editor's text and cursor, as last fed.
     last: (String, usize),
     scan: Scan,
+    /// The language the command details read in.
+    lang: Lang,
 }
 
 impl CompletionService {
@@ -179,7 +184,13 @@ impl CompletionService {
             anchor_col: 0,
             last: (String::new(), 0),
             scan: Scan::default(),
+            lang: Lang::default(),
         }
+    }
+
+    /// The language the command details read in; the next edit reads it.
+    pub fn set_lang(&mut self, lang: Lang) {
+        self.lang = lang;
     }
 
     /// Recompute candidates after an input change.
@@ -190,6 +201,7 @@ impl CompletionService {
             cwd: &self.cwd,
             home: &self.home,
             pools: self.pools.as_ref(),
+            lang: self.lang,
         };
         self.controller.refresh(&cx, &mut self.scan);
         self.awaiting = self.pools.is_none() && self.controller.wants_names();
@@ -203,6 +215,7 @@ impl CompletionService {
             cwd: &self.cwd,
             home: &self.home,
             pools: self.pools.as_ref(),
+            lang: self.lang,
         };
         self.controller
             .on_tab(&cx, &mut self.scan)

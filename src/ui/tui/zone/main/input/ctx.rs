@@ -3,25 +3,7 @@
 use std::time::Duration;
 
 use super::super::num;
-
-/// The display language; the config answers, `en` until it does.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Lang {
-    #[default]
-    En,
-    Zh,
-}
-
-impl Lang {
-    /// The config's spelling, `en` or `zh`; anything else leaves the choice alone.
-    pub fn parse(name: &str) -> Option<Self> {
-        match name.trim().to_ascii_lowercase().as_str() {
-            "en" => Some(Self::En),
-            "zh" => Some(Self::Zh),
-            _ => None,
-        }
-    }
-}
+use crate::ui::lang::Lang;
 
 /// The currency the cost pill counts in; the config answers, `CNY` until it does.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -104,10 +86,6 @@ pub struct Data {
     pub git_scan: Option<Duration>,
     /// A round is running.
     pub busy: bool,
-    /// A conversation is open; a profile can no longer be chosen.
-    pub attached: bool,
-    /// One line about the last command; an edit clears it.
-    pub hint: Option<String>,
 }
 
 /// What one part is handed: the zone's data.

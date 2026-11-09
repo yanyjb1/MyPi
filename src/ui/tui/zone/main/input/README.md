@@ -19,10 +19,13 @@ finish itself.
 | `hang: bool` | the cursor is in a completion trigger word |
 | `pending_hire` | the hand this zone wants this frame |
 | `pending_exits` | submit, interrupt, tree, resume, quit, new |
+| `pending_notice` | one notice per write, waiting for that write's receipt |
 | `esc_armed` / `enter_armed` | the two double-tap windows |
 | `cursor_col`, `cursor_row` | the cursor inside the container, recomputed on render |
 | `statusline: StatusLine` | the deco table and the row engine |
-| `data: Data` | model, name, directory, context size and window, money, busy, attachment, hint |
+| `session: Option<i64>` | the conversation this zone follows; `None` = a draft |
+| `data: Data` | model, name, directory, context size and window, money, busy |
+| `pending_name` | the name a `/name` asked for, until its receipt |
 | `queue: Queue` | sentences sent while a round was running, head first |
 | `in_flight` | the sentence a submit put out, until the door answers |
 | `last_mailbox_turn` | the slot-opened turn the queue has accounted for |
@@ -41,6 +44,10 @@ movement, line and document movement, undo/redo, paste insertion, and `replace_r
 reply. `text()` returns the display text with paste markers; `expanded_text()` returns the text
 with the paste store expanded and is what leaves on submit.
 
+A word ends at punctuation or whitespace, or where the script family changes: Latin, Han, Kana,
+Hangul, Greek and Cyrillic are distinct families, and `.`, `_`, `-` join whatever sits beside them.
+`Ctrl+←/→`, `Ctrl+W` and `Alt+D` all read that one table.
+
 A paste longer than the collapse thresholds becomes one marker; the marker is replaced on submit.
 
 ### Routing
@@ -49,22 +56,39 @@ A paste longer than the collapse thresholds becomes one marker; the marker is re
 `Command(meta, args)`, anything else `Message`. An unknown `/xxx` is a message.
 
 Every command is one file under `command/`, and every file declares its `META` and answers with one
-`Done`: an intent (a session action), an exit (`/q`, `/resume`, `/new`), a hire (`/usage`), the
-picked profile (`/profile`), a `Hint` line, or `Hold` when an argument is missing or unusable —
-`Hold` leaves the line in the box and sends nothing. A plain message leaves as
-`ExitRequest::Submit`.
+`Done`: a write plus the notice it owes, an exit (`/q`, `/resume`, `/new`), a hire (`/usage`), the
+picked profile (`/profile`), a refusal notice, or `Hold` when an argument is missing — `Hold` leaves
+the line in the box and sends nothing. A plain message leaves as `ExitRequest::Submit`.
+
+`/profile` is refused here once a session id exists. `/name`, `/cdp` and `/switch` work in a draft:
+the app keeps them until the row opens. `/compact` needs a session and is refused in a draft.
+Deletion has no command: the resume picker owns it.
 
 ### Submit, interrupt, Esc
 
-- `Enter` submits when the box is non-empty and no round is running.
-- While a round is running and the box holds a **message**, the first `Enter` interrupts; a second
-  inside the window takes the line as a message. A command skips that step: it executes at once, and
-  the server decides whether this connection may write.
-- A message taken while a round is running joins the queue and is written to the server's slot; it
-  opens nothing now. A reply that opened nothing puts the text back and shouts `retract`.
+- `Enter` with a non-empty box and no round running: the line leaves as a turn.
+- `Enter` with a non-empty box while a round runs, and the line is a **message**: it joins the queue
+  and its head is written to the server's one slot. Nothing opens now.
+- A second `Enter` inside 600 ms, the box now empty, interrupts the round; the sentence waiting in
+  the slot opens the next one. Any other key spends the arm.
+- A command skips all of that: it runs at once, and the server decides whether this connection may
+  write.
 - `Alt+Up` takes the newest queued sentence back into the box, above what is already there.
-- `Esc` interrupts. A second un-lent `Esc` inside the window asks for the tree.
+- `Esc` interrupts. A second un-lent `Esc` inside 300 ms asks for the tree.
 - `Alt+Enter` / `Shift+Enter` insert a newline; `Ctrl+J` is the fallback.
+
+### Notices
+
+A write (`/switch`, `/model`, `/cdp`, `/name`, `/compact`) owes one line. The text is built from what
+this zone sent, in the display language, and spoken only when the receipt for that door arrives:
+`cwd`, `name`, `switch`, `default_model`, `compact`. A receipt carrying an error speaks nothing.
+Draft writes are answered by the app with the same door names, prefixed `local`.
+
+A refusal decided here (no session for `/usage` or `/compact`, a profile asked for after the
+session started, `/memo` without a usable operation) speaks at once. The line leaves the box
+either way.
+
+Notices travel as a shout; the history zone draws them as short rows.
 
 ### Completion hire
 
@@ -82,23 +106,23 @@ starts, and clearing the last one clears the slot. `Alt+Up` pops the tail, so th
 when the queue empties.
 
 The only `busy` source that matters is the bus: history shouts `busy` when any round says anything
-and `idle` when a round closes; this zone shouts `busy` when a mailbox turn takes the slot and sets
-its own flag directly when it sends a message. A round another party opened is known too.
+and `idle` when a round closes; this zone also shouts `busy` when it sends a message, so the first
+Enter after a send already knows a round is coming.
 
 ### The data it reads
 
 `call meta` and `stream change` name the model, the session's name and (through the bus) the
 directory. A model the zone has not seen makes it ask `call config` for `models.model.<address>`,
-which answers the whole entry; the pill takes the name, the gauge the window. `call usage` is the
-one answer for money and context, asked at attach, at every round's end and after each request;
-the request's cost and the context it carried are the server's to compute, live turn included.
-The bus gives `busy` and `prefill`.
+which answers the whole entry; the pill takes the name, the gauge the window. In a draft the boot
+answer and the one taken on leaving a session name the model; `/model` moves the pill itself, from
+the address it wrote. `call usage` is the one answer for money and context, asked at attach, at
+every round's end and after each request.
 
 ### Height and rendering
 
 `pane::Pane`'s `request_height` wraps the text at the inner width, adds one row, and caps the
-result at one fifth of the terminal, at least two rows. `render_rows` wraps again, locates the cursor, adjusts the
-scroll with minimal movement, ticks the statusline, then draws the container.
+result at one fifth of the terminal, at least two rows. `render_rows` wraps again, locates the
+cursor, adjusts the scroll with minimal movement, ticks the statusline, then draws the container.
 
 ### Statusline
 
@@ -109,10 +133,9 @@ One row, exactly the terminal width. The deco table is `activity`, `model`, `cwd
 the `models.model.<address>` answer gives the model pill and the gauge's denominator; `call usage`
 gives the cost in both currencies and where the context stands. The display currency comes from
 `config.ui.tui.fx.currency`, never from a model. The gauge's first cell is its marker: `-` for a
-measured count, `~` for an estimate (before the first request, and between a compaction and the
-request that follows it). `activity` steps one glyph per `tick` shout, so the spinner tracks real
-increments. `git` scans on its own frame tick: the first frame at once, then once per configured
-interval, and once more whenever a round moved the tree.
+measured count, `~` for an estimate. `activity` steps one glyph per `tick` shout. `git` scans on its
+own frame tick: the first frame at once, then once per configured interval, and once more whenever
+a round moved the tree.
 
 ### Invariants
 
@@ -128,15 +151,21 @@ interval, and once more whenever a round moved the tree.
 - **One key, one meaning.** The semantics table is context-free; state lives in the editor or in
   the armed timers.
 - **Exits are data.** The zone declares what it cannot finish; the main zone decides.
+- **A receipt is a `done`.** The zone already knows what it sent, so the line it speaks is built
+  from its own request; the receipt only says when. A display that changes on a write waits for
+  the same receipt.
+- **Status is state, notices are events.** Refusals and write confirmations belong in the
+  transcript, not in a row of standing facts.
 - **Submission history is process-scoped.** It survives detach.
 - **The statusline is a table.** Adding a decoration is an entry plus a file.
 - **Completion is a hand.** The zone only signals a trigger; the desk owns the candidates.
 
 ## 3. Unresolved
 
-1. `Ctrl+C` clears the draft; its final meaning is undecided.
-2. The usage gauge is hidden until the model's window is known; a count with no window draws no bar.
-3. Terminal-too-small behaviour is a clamped container.
+1. A server refusal (an error receipt) speaks nothing; the server's own notice is the only trace.
+2. `Ctrl+C` clears the draft; its final meaning is undecided.
+3. The usage gauge is hidden until the model's window is known.
+4. Terminal-too-small behaviour is a clamped container.
 
 ## 4. Config fields
 
@@ -146,3 +175,4 @@ interval, and once more whenever a round moved the tree.
 | `config.ui.tui.fx.currency` | the currency the cost pill counts in (`CNY` / `USD`) |
 | `config.ui.tui.zone.main.input.deco.gitScanInterval` | seconds between git scans |
 | `config.server.api.defaultModel` | the model a draft opens with |
+| `config.ui.lang` | the language of notices, command details and number formats |

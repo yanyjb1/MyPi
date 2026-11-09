@@ -47,11 +47,13 @@ pub struct App {
     /// `--model`: the model a new session is created with; `None` = the configured default.
     model: Option<ModelId>,
     /// `/profile` before any session: the name travels with the row that opens.
-    profile: Option<String>,
+    pub(super) profile: Option<String>,
+    /// `/name` before any session: the name travels with the row that opens.
+    pub(super) name: Option<String>,
     /// The message whose opening `init` is in flight; it goes out as soon as the row answers.
     opening: Option<String>,
-    /// The session each zone has last been told about; a zone hears it once.
-    pub(super) told: Vec<Option<i64>>,
+    /// The session each zone has last been told about; `None` = never told.
+    pub(super) told: Vec<Option<Option<i64>>>,
     /// Text waiting for the loop to write it to the clipboard.
     copy: Vec<String>,
     finished: bool,
@@ -77,6 +79,7 @@ impl App {
             cwd: workspace(startup.cwd),
             model: startup.model,
             profile: None,
+            name: None,
             opening: None,
             told,
             copy: Vec::new(),
@@ -256,6 +259,7 @@ impl App {
             Request::Copy(text) => self.copy.push(text),
             Request::Submit(text) => self.submit(text),
             Request::SetCwd(path) => self.set_cwd(path),
+            Request::Rename(name) => self.rename(name),
             Request::SwitchModel(id) if self.session.attached().is_none() => {
                 self.model = Some(id);
                 let address = self
@@ -263,7 +267,7 @@ impl App {
                     .as_ref()
                     .map(|id| format!("{}:{}", id.provider, id.model))
                     .unwrap_or_default();
-                let frame = Frame::new("local", "model", json!({"address": address}));
+                let frame = Frame::new("local", "switch", json!({"address": address}));
                 self.deliver(&frame);
             }
             other => wire::land(&mut self.session, other),
@@ -284,6 +288,19 @@ impl App {
         };
         let target = target.canonicalize().unwrap_or(target);
         self.cwd = workspace(target);
+        let frame = Frame::new("local", "cwd", json!({"cwd": self.cwd.to_string_lossy()}));
+        self.deliver(&frame);
+    }
+
+    /// `/name` lands on the session when there is one; a draft keeps it for the row.
+    fn rename(&mut self, name: Option<String>) {
+        if self.session.attached().is_some() {
+            self.session.rename(name.as_deref());
+            return;
+        }
+        self.name = name;
+        let frame = Frame::new("local", "name", json!({}));
+        self.deliver(&frame);
     }
 
     /// A message: the row comes first when there is none, then the text, then its echo.
@@ -326,7 +343,7 @@ impl App {
         });
         let content = json!({
             "cwd": self.cwd.to_string_lossy(),
-            "name": Value::Null,
+            "name": self.name.clone(),
             "model": model,
             "profile": self.profile.clone(),
         });
@@ -345,7 +362,6 @@ impl App {
         let Some(id) = frame.content.get("session").and_then(Value::as_i64) else {
             return;
         };
-        self.profile = None;
         self.attach(id);
         if let Some(text) = self.opening.take() {
             self.session.submit(&text);

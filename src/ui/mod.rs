@@ -2,5 +2,6 @@
 //! on top.
 
 pub mod command;
+pub mod lang;
 pub mod session;
 pub mod tui;

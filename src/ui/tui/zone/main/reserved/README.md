@@ -134,7 +134,9 @@ sends `del` for it. In the history `Enter` copies the selected version and left 
 - `deliver_action` passes a key to the hand, stores any reply, and drains what the memo hand asked
   for.
 - `detach` calls `left()`, then clears the seat, report, reply and rows, and drops the memo hand's
-  state; the workspace stays, being where the app runs rather than a row's field.
+  state; the workspace stays, being where the app runs rather than a row's field. Both `attach` and
+  `detach` reset the usage panel: its rows, its load flag and its selection belong to one session,
+  while the language, the currency, the alignment and the model display names outlive it.
 
 ## 2. Design intent
 

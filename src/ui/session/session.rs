@@ -83,6 +83,13 @@ impl Session {
 
     /// Stop following. The watch is replaced by the next one.
     pub fn detach(&mut self) {
+        if let Some(id) = self.attached {
+            // The slot this front end wrote is cleared before the queue goes; no answer is owed.
+            self.client.clear();
+            self.client
+                .queue(Frame::new("post", "mailbox", json!({"session": id})), false);
+            let _ = self.client.pump();
+        }
         self.attached = None;
         self.client.clear();
         self.unwatch();

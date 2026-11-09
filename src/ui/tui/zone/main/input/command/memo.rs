@@ -1,20 +1,22 @@
 //! `/memo` — the notes panel: list, one name's versions, writes, and a delete.
 
 use crate::ui::command::{Arg, CommandMeta};
+use crate::ui::lang::Text;
 use crate::ui::tui::zone::main::desk::Hire;
 use crate::ui::tui::zone::{MemoAsk, MemoScope};
 
+use super::super::Notice;
 use super::{Call, Done};
 
 pub const META: CommandMeta = CommandMeta {
     name: "/memo",
     aliases: &[],
     args: &[Arg::Text],
-    detail: "备忘录：list、history、add、mod、del；scope 默认 global",
+    detail: Text {
+        en: "memos: list, history, add, mod, del; scope defaults to global",
+        zh: "备忘录：list、history、add、mod、del；scope 默认 global",
+    },
 };
-
-/// The line shown when the operation is not one of the five.
-const USAGE: &str = "/memo list|history|add|mod|del";
 
 pub fn run(call: &Call<'_>) -> Done {
     let rest = call.args.trim();
@@ -67,7 +69,7 @@ pub fn run(call: &Call<'_>) -> Done {
                 },
             })
         }
-        _ => Done::Hint(USAGE),
+        _ => Done::Notice(Notice::MemoUsage),
     }
 }
 

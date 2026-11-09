@@ -65,7 +65,7 @@ to the other two and repeats until the queue is dry; a shouter never hears its o
 shout raised while delivering lands on the same queue.
 
 The names in use: `cwd` (main), `usage`, `busy`, `prefill` (history and input), `queue`,
-`echo`, `retract` (input to history and the desk).
+`echo`, `retract`, `notice` (input to history).
 
 ### `Outcome`
 

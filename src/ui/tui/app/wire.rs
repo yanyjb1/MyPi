@@ -4,8 +4,8 @@ use crate::ui::session::Session;
 use crate::ui::tui::zone::MemoAsk;
 use crate::ui::tui::zone::Request;
 
-/// Land one ask on the session. The app keeps its own asks: submit, attach, detach, structure,
-/// quit, and the profile a session will open with.
+/// Land one ask on the session. The app keeps its own asks: submit, cwd, rename, a draft's
+/// switch, attach, detach, structure, quit, and the profile a session will open with.
 pub(super) fn land(session: &mut Session, request: Request) {
     match request {
         Request::Init => session.init(),
@@ -23,7 +23,6 @@ pub(super) fn land(session: &mut Session, request: Request) {
             suffix,
         } => session.write_mailbox(prefix.as_deref(), &text, suffix.as_deref()),
         Request::ClearMailbox => session.clear_mailbox(),
-        Request::Rename(name) => session.rename(name.as_deref()),
         Request::SwitchModel(id) => session.switch_model(&id),
         Request::SetDefaultModel(id) => session.set_default_model(&id),
         Request::Compact { retention, focus } => session.compact(retention, focus.as_deref()),
@@ -31,6 +30,7 @@ pub(super) fn land(session: &mut Session, request: Request) {
         Request::Rewind { turn, block } => session.rewind(turn, block),
         Request::Submit(_)
         | Request::SetCwd(_)
+        | Request::Rename(_)
         | Request::Copy(_)
         | Request::Attach(_)
         | Request::Detach

@@ -48,7 +48,6 @@ fn exits(zone: &mut MainZone) -> (Outcome, Vec<Request>) {
             ExitRequest::New => {
                 zone.history.reset();
                 zone.input.clear();
-                requests.push(Request::ClearMailbox);
                 requests.push(Request::Detach);
             }
         }

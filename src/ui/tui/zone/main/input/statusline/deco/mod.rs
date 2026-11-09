@@ -5,7 +5,6 @@ mod activity;
 mod cost;
 mod cwd;
 pub(super) mod git;
-mod hint;
 mod model;
 mod session;
 mod usage;
@@ -43,12 +42,6 @@ pub const ROW: &[Entry] = &[
         order: 40,
         priority: PRIORITY_BASE,
         make: cost::make,
-    },
-    Entry {
-        side: Side::Flex,
-        order: 0,
-        priority: 90,
-        make: hint::make,
     },
     Entry {
         side: Side::Flex,

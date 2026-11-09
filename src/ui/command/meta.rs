@@ -1,6 +1,8 @@
 //! The command vocabulary: a name, its argument kinds, one line of text, one candidate shape.
 //! Each front end declares its own table; this file never names a command.
 
+use crate::ui::lang::Text;
+
 /// Where the candidates for one argument position come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arg {
@@ -25,8 +27,8 @@ pub struct CommandMeta {
     pub aliases: &'static [&'static str],
     /// The argument positions, in order.
     pub args: &'static [Arg],
-    /// One line for help and completion.
-    pub detail: &'static str,
+    /// One line for help and completion, in both languages.
+    pub detail: Text,
 }
 
 impl CommandMeta {
@@ -116,7 +118,7 @@ pub const fn valid(table: &[CommandMeta]) -> bool {
         if c.name.is_empty() || c.name.as_bytes()[0] != b'/' {
             return false;
         }
-        if c.detail.is_empty() {
+        if c.detail.en.is_empty() || c.detail.zh.is_empty() {
             return false;
         }
         let mut k = 0;

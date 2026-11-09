@@ -14,10 +14,9 @@ impl App {
         self.session.set_cwd(&cwd);
         self.session.watch(id);
         self.attached = Some(id);
+        self.profile = None;
+        self.name = None;
         self.reset_memo();
-        for told in &mut self.told {
-            *told = None;
-        }
         self.tell();
     }
 
@@ -25,23 +24,22 @@ impl App {
     pub fn detach(&mut self) {
         self.session.detach();
         self.attached = None;
+        self.profile = None;
+        self.name = None;
         self.reset_memo();
-        for told in &mut self.told {
-            *told = None;
-        }
         self.tell();
     }
 
-    /// The zone that shows is the only one told about the attachment, and only once.
+    /// The zone that shows is the only one told about the attachment, and only when it changed.
     pub(super) fn tell(&mut self) {
         let Some(owner) = self.owner else {
             return;
         };
         let index = owner.index();
-        if self.told[index] == self.attached {
+        if self.told[index] == Some(self.attached) {
             return;
         }
-        self.told[index] = self.attached;
+        self.told[index] = Some(self.attached);
         let requests = self.zones[index].session(self.attached);
         self.land_all(requests);
     }

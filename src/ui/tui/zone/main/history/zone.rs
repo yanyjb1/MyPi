@@ -594,6 +594,19 @@ impl SubZone for HistoryZone {
                     .unwrap_or("the message never opened a round");
                 self.notice(reason.to_string(), Level::Warn, Life::Short);
             }
+            name::NOTICE => {
+                let level = match content.get("level").and_then(Value::as_str) {
+                    Some("error") => Level::Error,
+                    Some("warn") => Level::Warn,
+                    _ => Level::Info,
+                };
+                let text = content
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                self.notice(text, level, Life::Short);
+            }
             _ => {}
         }
     }

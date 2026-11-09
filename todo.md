@@ -9,17 +9,28 @@
 来自用户，没有用户明确允许，不允许删除。
 
 /memo命令，这个渲染太丑了。。。😭我要给它狠狠优化一下😡
+wake块的渲染还是不够有特色。🤔回头寻思一下。
 
 工具的打断似乎还需要检查一下，不是所有的工具都需要/已经做了这个打断检查。希望能针对不同的工具，设立不同的打断适配。
-Kairos的wake消息渲染太不起眼了，需要想一下其他的办法。=-=这个需要自己设计，不能抄作业。
-
 main区：
 1. 渲染样式正在抄omp（https://github.com/can1357/oh-my-pi）的作业，还没抄完，还没看其他工具的，目前暂定已经完事的有：Read、Edit、Write，其他的不确定。
 
 input区，需要加上一个，我不确定能不能加的功能：就是，举例，FuckUNvidia我日你先人 不同语言的字符之间应该有一道隐秘的坎，也即可以通过ctrl+左右跳跃时跳到a和我中间。
+input区的mod他妈的写了具体功能
+input的行为，两下连续enter打断+发送，没有做，现在他妈的只要会话在运行，按一下就他妈的打断。其次啊，在这个绘画运行过程中，它这个一次的enter进入这个mailbox的机制根本就没有做。
 
 /new的命令，切换后无法使用/profile，疑似判断有问题，输入区持有哪些东西需要重点整治一下。。。太特么难绷了。以及其他残缺的、无法正常运行的命令。😡
 
+##### 留档区
+
+来自Agent，需要及时清理。
+
+**mcp 工具 call 必挂：`` `args` must be a JSON object ``（2026-11-10）**
+现象：`mcp` 工具 `op=call` 无论 `args` 传 `{}` 还是带内容都稳定报错；`op=list` 正常（bridge、stdio 握手、tools/list 全链路 OK）。
+排查结论：
+1. MyPi 侧解析无误：`Args::fill`（`spec.rs:177`）按参数名取值（`from_map`，spec.rs:191），缺位压 `Null` 占位、空对象合法；`mcp/mod.rs:91-96` 对非对象 bail 是正确行为。
+2. MCP 服务端无误：绕开 harness 用 JSON-RPC 直连（initialize → initialized → tools/call `arguments:{}`）正常返回。
+3. 嫌疑收敛在调用方传输层：模型传出的 `args` 对象在到达 `engine.rs:126 Args::fill` 之前被降级成字符串（疑似调用方对嵌套对象做了一次多余 `to_string`，非对象即触发 mod.rs:95 的 bail）。该层在 MyPi 仓库之外（oh-my-pi 一侧的 mcp 工具序列化），需在调用方修：传给 JSON-RPC 前保持 `args` 为对象。
 
 服务端CPU异常与退出问题（另开会话处理，调研结论2026-11-08）：
 1. CDP泵线程轮询：`src/web/browser/devtools/cdp.rs:22` 每条连接 read timeout 50ms（20Hz空转唤醒），连接随tab存活；附着型浏览器（`Browser::attach`，`src/web/browser/process/mod.rs:44`）被 `idle::sweep` 永不关闭（`idle.rs:27` 直接return），泵跟着活到进程死。修法：去掉50ms轮询（阻塞读+Drop关socket唤醒），或退一步拉到500ms。
@@ -32,21 +43,21 @@ input区，需要加上一个，我不确定能不能加的功能：就是，举
 
 ## 一、历史区
 
-- 滚动到未取内容的块时，历史区仍用 `…` 占位，没有按需取块；树区已经按屏取。
 
 ### 待设计
 
-- wake 提醒的样式。现在一条 wake 一个块、一条一个 `stream` 帧，画成一行 notice（`wire/live.rs` 的 Wake 分支），落地后却画成用户块。
 - 每类工具的流式动画。历史区只提供位置，运行中的卡片还是完成态。
 
 ### 其余
 
 - 转交的兜底：尾块数与结构区间数对不上时，清空可变区按收到的行重铺，会闪一帧。
 
+来自用户：现在有做按块类型过滤再对数的吗？没做补一下。
+
 ## 二、main 区
 
 - 内部各组件 shout→react 的行为没有核对过。
-- 写门被拒这件事仍有两处静默：另一条连接（不是本轮的写入者）发写门、`/compact` 的拒绝（走回合的 broken 提示，前缀不是给人看的）。`/profile` 已在输入区本机拒绝。
+- 写门被拒这件事仍有两处静默：另一条连接（不是本轮的写入者）发写门、`/compact` 的拒绝（走回合的 broken 提示，前缀不是给人看的）。
 - 状态栏的三次启动提问是 `gitScanInterval`、`fx.currency`、`api.defaultModel`；没有 Setup，也没有重建。会话还没名字时 session pill 显示 `MyPi`；cost 恒显示，未知即本币 `0.00`；git 扫描没落地前显示 `@ ?`。
 
 ## 三、已知代价（记录，暂不修）

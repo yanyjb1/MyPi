@@ -14,7 +14,8 @@ use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::SubZone;
 use crate::ui::tui::zone::{Claim, Frame, Kind, MemoAsk, Request, TermSize, name};
 
-use crate::ui::tui::zone::main::input::{Currency, Lang};
+use crate::ui::lang::Lang;
+use crate::ui::tui::zone::main::input::Currency;
 
 use hand::{Hand, IDLE_ROWS, MAX_ROWS, Report};
 use pools::Pools;
@@ -250,6 +251,8 @@ impl SubZone for ReservedZone {
         self.reply = None;
         self.want = 0;
         self.memo = hands::memo::MemoHand::default();
+        // The bill belongs to one session: a different one starts from nothing.
+        self.usage.reset();
     }
 
     fn detach(&mut self) {
@@ -261,6 +264,7 @@ impl SubZone for ReservedZone {
         self.reply = None;
         self.want = 0;
         self.memo = hands::memo::MemoHand::default();
+        self.usage.reset();
     }
 
     fn hear(&mut self, event: &str, content: &Value) {
@@ -286,6 +290,7 @@ impl SubZone for ReservedZone {
                     && let Some(lang) = Lang::parse(code)
                 {
                     self.usage.set_lang(lang);
+                    self.completion.set_lang(lang);
                 }
             }
             name::CURRENCY => {

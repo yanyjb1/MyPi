@@ -32,6 +32,8 @@ pub mod name {
     pub const ECHO: &str = "echo";
     /// That message opened nothing: history takes the echo back. `{reason}`.
     pub const RETRACT: &str = "retract";
+    /// The input zone: one line the history zone draws. `{level, text}`.
+    pub const NOTICE: &str = "notice";
     /// History: one live increment arrived. No content; the spinner steps on it.
     pub const TICK: &str = "tick";
     /// The display language the panel reads. `{lang}`.

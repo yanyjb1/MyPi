@@ -306,23 +306,9 @@ impl Editor {
 
     // ---- fast deletion (Ctrl+W / Alt+D / Ctrl+U / Ctrl+K) ----
 
-    // Delete to the left: swallow adjacent whitespace first, then a run of non-separators.
-    //
-    // Same walk as `word_left`, except the traversed characters are deleted.
-    // Whitespace first so that on `foo bar|` one press removes `bar`,
-    // not just the space.
+    // Delete to the left: one word, the same walk `word_left` takes.
     pub fn delete_word_backward(&mut self) -> Effect {
-        let start = {
-            let mut i = self.cursor;
-            // Swallow the boundary first, then the whole block.
-            while i > 0 && self.separators.is_hard(self.chars[i - 1]) {
-                i -= 1;
-            }
-            while i > 0 && !self.separators.is_hard(self.chars[i - 1]) {
-                i -= 1;
-            }
-            i
-        };
+        let start = self.word_start();
         if start == self.cursor {
             return Effect::Nothing; // nothing deleted: no pointless undo step
         }
@@ -336,10 +322,7 @@ impl Editor {
 
     // Delete to the right: swallow a run of non-separators first, then adjacent whitespace.
     pub fn delete_word_forward(&mut self) -> Effect {
-        let mut end = self.cursor;
-        while end < self.chars.len() && !self.separators.is_hard(self.chars[end]) {
-            end += 1;
-        }
+        let mut end = self.run_end();
         // Swallow the trailing boundary, never a newline.
         while end < self.chars.len()
             && self.separators.is_hard(self.chars[end])
@@ -458,30 +441,64 @@ impl Editor {
         Effect::Motion
     }
 
-    // Ctrl+Left: skip whitespace leftward, then a run of non-separators or a run of separators.
+    // Ctrl+Left: one word back; a script change is a boundary.
     pub fn word_left(&mut self) -> Effect {
-        // Step over the boundary, then the whole block.
-        while self.cursor > 0 && self.separators.is_hard(self.chars[self.cursor - 1]) {
-            self.cursor -= 1;
-        }
-        while self.cursor > 0 && !self.separators.is_hard(self.chars[self.cursor - 1]) {
-            self.cursor -= 1;
-        }
+        self.cursor = self.word_start();
         self.note_cursor_move();
         Effect::Motion
     }
 
-    // Ctrl+Right: skip a run of non-separators, then a run of separators.
+    // Ctrl+Right: one word on; a script change is a boundary.
     pub fn word_right(&mut self) -> Effect {
-        let len = self.chars.len();
-        while self.cursor < len && !self.separators.is_hard(self.chars[self.cursor]) {
-            self.cursor += 1;
-        }
-        while self.cursor < len && self.separators.is_hard(self.chars[self.cursor]) {
-            self.cursor += 1;
-        }
+        self.cursor = self.word_finish();
         self.note_cursor_move();
         Effect::Motion
+    }
+
+    // One word back: the boundary run, then one script family.
+    fn word_start(&self) -> usize {
+        let mut at = self.cursor;
+        while at > 0 && self.separators.is_hard(self.chars[at - 1]) {
+            at -= 1;
+        }
+        if at > 0 {
+            let class = self.separators.class(self.chars[at - 1]);
+            while at > 0 {
+                let c = self.chars[at - 1];
+                if self.separators.is_hard(c) || !self.separators.joins(class, c) {
+                    break;
+                }
+                at -= 1;
+            }
+        }
+        at
+    }
+
+    // One script family forward, boundaries excluded.
+    fn run_end(&self) -> usize {
+        let len = self.chars.len();
+        let mut at = self.cursor;
+        if at < len {
+            let class = self.separators.class(self.chars[at]);
+            while at < len {
+                let c = self.chars[at];
+                if self.separators.is_hard(c) || !self.separators.joins(class, c) {
+                    break;
+                }
+                at += 1;
+            }
+        }
+        at
+    }
+
+    // One word on: a script family, then the boundary run after it.
+    fn word_finish(&self) -> usize {
+        let len = self.chars.len();
+        let mut at = self.run_end();
+        while at < len && self.separators.is_hard(self.chars[at]) {
+            at += 1;
+        }
+        at
     }
 
     // ---- vertical motion: jumps between wrapped visual rows; see layout/input ----

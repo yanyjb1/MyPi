@@ -3,7 +3,8 @@
 ## 1. Design / Schema
 
 ```text
-CommandMeta { name, aliases, args, detail }
+CommandMeta { name, aliases, args, detail: Text }
+Text { en, zh }
 Arg = Path | Model | Profile | Number | Text
 Candidate { value, detail }
 
@@ -12,8 +13,8 @@ split(table, input)        -> Option<(&CommandMeta, &str)>   // one line, name +
 valid(table)               -> bool                   // the table rules, checked at compile time
 ```
 
-- `name` and every alias start with `/`; names never collide with names or aliases; `detail` is
-  never empty.
+- `name` and every alias start with `/`; names never collide with names or aliases; both halves of
+  `detail` are never empty.
 - `args` is the command's argument positions in order. `Text` may only be last.
 - A candidate carries the text one level inserts and one line of gray text. There is no "more"
   flag: a level has a next one when its inserted text ends where the next level starts — a `/` for a

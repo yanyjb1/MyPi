@@ -6,11 +6,12 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use crate::ui::lang::Lang;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
 use crate::ui::tui::text::{display_width, take_width};
 use crate::ui::tui::theme::{Accent, fixed};
 use crate::ui::tui::zone::Claim;
-use crate::ui::tui::zone::main::input::{Currency, Lang};
+use crate::ui::tui::zone::main::input::Currency;
 use crate::ui::tui::zone::main::num;
 use crate::ui::tui::zone::main::reserved::hand::{Hand, Report, window_start};
 
@@ -192,6 +193,14 @@ impl UsagePanel {
                 key: format!("models.model.{}", row.address),
             })
             .collect()
+    }
+
+    /// A different session: the rows, the load flag and the selection go. What the
+    /// process owns stays: the language, the currency, the alignment, the display names.
+    pub fn reset(&mut self) {
+        self.selected = 0;
+        self.loaded = false;
+        self.rows.clear();
     }
 
     /// The display language the fixed rows and headers follow.
