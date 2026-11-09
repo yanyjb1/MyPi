@@ -125,7 +125,7 @@ Env {
   session: i64,
   batch_len: usize,
   tools: BTreeSet<String>,   // the session's list; the one gate
-  aliases: BTreeMap<String, String>,
+  aliases: Aliases,          // config layer above the session layer
   default_budget: u32,
   mcp: Option<Arc<dyn McpBridge>>,
   export: Arc<dyn Export>,   // a full text out of the database as a file
@@ -176,11 +176,17 @@ Workspace { cwd, root }
 ### Bash order
 
 ```text
-expand_alias  →  rewrite #<ref>  →  guard::classify  →  shell::run
+admit:  expand_alias  →  rewrite #<ref>  →  guard::classify     then  shell::run
 ```
 
-`guard` sees the final command. It returns `Allow`, `Warn(ids)` or `Block(ids)`; a blocked command
-never starts. `alias add` runs the same classifier on the command it stores.
+`admit` is the only way raw text becomes a spawnable line; `bash` and `kairos` both call it. `guard`
+sees the final command. It returns `Allow`, `Warn(ids)` or `Block(ids)`; a blocked command never
+starts. `kairos` admits at tool-call time and freezes the admitted line, so a job exists only for a
+command that already passed. `alias add` runs the same classifier on the command it stores.
+
+One call may carry several lines; the shell runs them in order. A bare newline is a separator to the
+guard, a backslash before a newline is a continuation, and `expand_alias` rewrites the head word of
+every segment once.
 
 The command itself runs in the session's shell (`Env.bash.shell`): `bash` or `zsh` on unix, `pwsh`
 or `niu` on windows. `platform::shell` builds the command line and the `#<ref>` read form;
@@ -228,13 +234,13 @@ time a front end renders the call; `line` is where each fragment sat, `atLine` t
 `mcp` is one static tool with a fixed schema. Which servers exist and which tools each exposes is
 decided at runtime, so a new server needs no Rust change — only a line in `mcp.json`.
 
-`mcp/setup.rs` reads the table. Two paths arrive in `Paths`:
-
-- `mcp` — `<project>/.mypi/mcp.json`.
-- `global_mcp` — `<global root>/mcp.json`.
+`mcp/setup.rs` reads the table for where the session stands: `<cwd>/.mypi/mcp.json` when it exists,
+else `<global root>/mcp.json`.
 
 **The project's file wins whole.** If it exists the global one is not read at all; the two are
-never merged. Neither existing means an empty table.
+never merged. Neither existing means an empty table, and an empty table still mounts the bridge.
+A `cd` or a cwd change rescans; a changed table or directory drops the process pool, an unchanged
+one is a no-op.
 
 ```json
 {
@@ -243,19 +249,19 @@ never merged. Neither existing means an empty table.
       "command": "uv",
       "args": ["run", "python", "service.py"],
       "env": {},
-      "cwd": "/path/to/service",
       "timeout_secs": 120
     }
   }
 }
 ```
 
-`McpBridge` is the seam: `servers()`, `tools(server)`, `call(server, tool, args)`, `shutdown()`.
-Nothing above it knows JSON-RPC. `SyncMcpBridge` is the built-in implementation: one child process
-per name, started lazily and kept for the process; stdout is one JSON-RPC object per line, a reader
-thread dispatches by id, stderr is drained into a 20-line tail that only surfaces in errors; every
-call carries a deadline; a dead process fails every waiting call and is started again on the next
-one. It uses threads and channels only — no async runtime enters this tree.
+`McpBridge` is the seam: `servers()`, `tools(server)`, `call(server, tool, args)`, `rescan(cwd)`,
+`shutdown()`. Nothing above it knows JSON-RPC. `SyncMcpBridge` is the built-in implementation: one
+child process per name, started lazily and kept until a rescan; a server spawns in the session's
+working directory, so a `cwd` key in the file is not used. stdout is one JSON-RPC object per line,
+a reader thread dispatches by id, stderr is drained into a 20-line tail that only surfaces in
+errors; every call carries a deadline; a dead process fails every waiting call and is started again
+on the next one. It uses threads and channels only — no async runtime enters this tree.
 
 An answer is text content, concatenated in order. `isError` makes the call failed. Images, audio
 and structured content are reported as unsupported. MCP's own schema is not passed to the model and
@@ -285,7 +291,9 @@ not checked here; a bad argument is the server's error to report.
 4. File tools read and write only inside the licensed zones; atomically, under a per-path lock.
 5. The roster is the only way the model learns a tool exists.
 6. `edit` has one path in, one read, one atomic write; `mass_edit` is not a tool.
-7. `alias` expands once, the first token only, and adds no variables, functions or multi-line forms.
+7. `alias` expands the head word of every command segment, once, and adds no variables, functions or
+   multi-line bodies. A name a session writes is one word the scanner accepts as a segment head; a
+   name the config fixes is read-only for the session.
 8. One call runs at a time inside a session; different sessions run concurrently.
 9. A tool starts no job and writes no session row; it describes both and the loop acts.
 10. The session's list is the whole gate; a tool adds no condition of its own.
@@ -333,6 +341,7 @@ not checked here; a bad argument is the server's error to report.
 | key | use |
 |---|---|
 | `config.server.agent.tools.bashTimeout` | one shell command's deadline; default 600 s |
+| `config.server.agent.tools.aliases` | user aliases as `name=command`; every session reads them, nothing shadows them |
 | `config.server.agent.tools.outputMaxLines` | inline line budget; also caps `read`'s `limit` |
 | `config.server.agent.tools.outputMaxBytes` | inline byte budget |
 | `config.server.agent.tools.browser.bin` | the browser executable; empty = `$MYPI_BROWSER_BIN`, else `/opt/helium/helium` |

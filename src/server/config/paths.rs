@@ -24,8 +24,6 @@ pub struct ProjectDirs {
     pub project: PathBuf,
     pub agents: PathBuf,
     pub answers: PathBuf,
-    /// The project's MCP server table; its presence replaces the global one.
-    pub mcp: PathBuf,
 }
 
 pub fn project_dirs() -> ProjectDirs {
@@ -37,7 +35,6 @@ pub fn project_dirs() -> ProjectDirs {
         project,
         agents: base.join("agents"),
         answers: base.join("answers"),
-        mcp: base.join("mcp.json"),
     }
 }
 

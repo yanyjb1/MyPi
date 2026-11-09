@@ -1,7 +1,8 @@
 //! The MCP backend seam: no rmcp or stdio types cross this boundary.
 
-use anyhow::Result;
 use std::path::Path;
+
+use anyhow::Result;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]

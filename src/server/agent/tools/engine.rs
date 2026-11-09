@@ -1,12 +1,13 @@
 //! The front door: one batch in, one result per call out. Gates, decode, run, stamp, measure.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
 use super::contract::call::{Batch, BatchInput};
-use super::contract::env::{BashEnv, Env, Limits, Paths};
+use super::contract::env::{Aliases, BashEnv, Env, Limits, Paths};
 use super::contract::output::{ToolOutput, ToolResult};
 use super::contract::view::{Child, Export, Source};
 use super::registry;
@@ -24,6 +25,7 @@ pub struct Engine {
     default_budget: u32,
     source: std::sync::Arc<dyn Source>,
     export: std::sync::Arc<dyn Export>,
+    aliases: BTreeMap<String, String>,
     paths: Paths,
 }
 
@@ -34,6 +36,7 @@ impl Engine {
         default_budget: u32,
         source: std::sync::Arc<dyn Source>,
         export: std::sync::Arc<dyn Export>,
+        aliases: BTreeMap<String, String>,
         paths: Paths,
     ) -> Self {
         Self {
@@ -42,6 +45,7 @@ impl Engine {
             default_budget,
             source,
             export,
+            aliases,
             paths,
         }
     }
@@ -58,7 +62,7 @@ impl Engine {
             session: input.session,
             batch_len: input.calls.len(),
             tools: input.tools.iter().cloned().collect(),
-            aliases: self.source.aliases(input.session)?,
+            aliases: Aliases::new(self.aliases.clone(), self.source.aliases(input.session)?),
             default_budget: self.default_budget,
             mcp: self.source.mcp(),
             export: self.export.clone(),

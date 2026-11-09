@@ -19,25 +19,27 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `registry.rs` | `TOOLS`, `spec`, `roster` |
 | `workspace.rs` | `Workspace`, the licensed zones, the per-path write lock, `write_atomic`, `canonicalize_lenient` |
 | `bash/mod.rs` | declares the bash family |
-| `bash/bash/mod.rs` | declares the command tool, its guard, its runner and the shared ref rewriting |
-| `bash/bash/tool.rs` | the `bash` tool, `expand_alias`, `rewrite_refs` |
+| `bash/bash/mod.rs` | declares the command tool, the admission gate, the segment scanner, the guard and the runner |
+| `bash/bash/tool.rs` | the `bash` tool |
+| `bash/bash/admit.rs` | `admit`: aliases → `#ref` → guard, and the line it hands the runner |
+| `bash/bash/segment.rs` | the separator set and the segment heads; the guard and the alias expansion share both |
 | `bash/bash/guard.rs` | the command classifier: `normalize`, `classify`, `Verdict`, `RuleHit` |
-| `bash/bash/shell.rs` | one command: `run`, `run_to`, `OutputSink`, `Exit`, `StopFlag`; spawn and stop through `platform::proc` |
+| `bash/bash/shell.rs` | one command line: `run`, `run_to`, `OutputSink`, `Exit`, `StopFlag`; spawn and stop through `platform::proc` |
 | `bash/read/{mod,tool}.rs` | `read` |
 | `bash/write/{mod,tool}.rs` | `write` |
 | `bash/edit/{mod,tool}.rs` | `edit` with `exact` and `mass`; `exact_text`, `mass_text` |
 | `bash/cd/{mod,tool}.rs` | `cd` |
-| `bash/alias/{mod,tool}.rs` | `alias` add/list/remove |
+| `bash/alias/{mod,tool}.rs` | `alias` add/list/remove; the config layer is read-only here |
 | `bash/context/{mod,tool}.rs` | `context`: `query` through `Source::history`, `show` through `Source::block`, long listings to `Export::dir` |
 | `kairos/mod.rs` | the `kairos` tool manual and parameters |
 | `kairos/service.rs` | `kairos` operation dispatch and rendering |
-| `kairos/command.rs` | a frozen shell command as a `JobRunner`: alias, guard, artifacts, `run_to` |
+| `kairos/command.rs` | a line admitted at call time as a `JobRunner`: only `run_to` is left |
 | `kairos/text.rs` | the text `JobRunner`: nothing to run, so only the clock makes it due |
 | `kairos/duration.rs` | relative duration parse (`10min`, `1h30m`) |
 | `mcp/mod.rs` | the `mcp` tool: list and call |
 | `mcp/bridge.rs` | `McpBridge`, `ServerInfo`, `ToolInfo`, `McpResult`, `McpContent` |
-| `mcp/setup.rs` | `mcp.json` → the server table; the project's file replaces the global one |
-| `mcp/sync.rs` | `SyncMcpBridge`: one lazy stdio server per name |
+| `mcp/setup.rs` | `mcp.json` → the server table, read for the session's cwd; the project's file replaces the global one |
+| `mcp/sync.rs` | `SyncMcpBridge`: one lazy stdio server per name; a rescan re-reads the table and drops the pool when the table or the directory changed |
 | `mcp/stdio.rs` | one stdio server process: spawn, JSON-RPC, pending map, stderr tail, shutdown |
 | `memo/mod.rs` | declares the memo family |
 | `memo/memo/{mod,tool}.rs` | the `memo` tool: writes as effects, reads through `MemoRead` |
@@ -65,7 +67,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 - **`web`**: `WebArgs`, `run` from the `web` tool; `shutdown` from `main`.
 - **Who calls it**: `loop/turn` (one batch at a time, `Batch::run`), `loop/turn/cycle` (`roster`
   for the manuals, and the child list correction), `loop/session/book` (builds `Engine` from
-  config, reads `mcp.json`, attaches the bridge).
+  config, mounts the MCP bridge when the session runs it).
 - **Knows nothing about**: the api doors, the database connection, the front end, rounds, streams.
 
 ## Inside
@@ -90,8 +92,9 @@ Engine::run
   it books a session and takes both off when it drops one. A job is only ever created by the loop.
 - The guard is used in two places — the `bash` tool and `alias add` — and judges the expanded
   command in both.
-- The MCP bridge is built once in `Loop::new` from `mcp.json` and attached to the loop's source; a
-  session sees it through `Source::mcp`. An empty table attaches nothing.
+- The MCP bridge is mounted at turn start, only for a session whose list holds `mcp`; it reads the
+  table for the session's root and a broken table fails the turn. A session sees it through
+  `Source::mcp`. An empty table still mounts the bridge.
 - A child's tool list is corrected once, where the child is spawned: `task` out, `final` in.
 
 ## Must stay in step
@@ -102,14 +105,15 @@ Engine::run
 3. `schema_of` and `Args::fill`: one `Param` table feeds both.
 4. `ToolOutput.effects` and `contract::output::Effect`: the front door stamps `ts`, so a tool must
    never fill it.
-5. `bash` and `kairos/command.rs`: both run alias → `#ref` → guard → shell, in that order.
+5. `bash` and `kairos`: every command goes through `admit`; the guard runs once, on the final text.
 6. `Workspace::zones` and `guard::escapes_zone`: two independent zone laws; changing one does not
    change the other.
 7. `subagent::template` and the parent roster: a template may only name tools the parent has.
 8. `contract::job::JobHost` and `loop/job`: the port is the whole surface a tool sees; a new job
    field starts there.
 9. `web` feature and two places: the `mod.rs` declaration and the `TOOLS` row.
-10. `mcp::setup::servers` and `contract::env::Paths`: the two file paths are the loop's to supply.
+10. `mcp::setup::table` and `loop/session/book`: the loop supplies the global path and the session's
+    root; the domain never decides where the session stands.
 11. The web domain's config keys and `src/web/README.md`: it reads them itself, so a rename here is
     a rename there.
 

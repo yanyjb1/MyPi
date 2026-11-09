@@ -20,6 +20,7 @@ keys! {
     KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT = "config", "server.agent.tools", "bashTimeout", Int, DefaultValue::Int(600), "Cap on one bash command, in seconds.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES = "config", "server.agent.tools", "outputMaxLines", Int, DefaultValue::Int(512), "Lines of one tool result kept inline.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES = "config", "server.agent.tools", "outputMaxBytes", Int, DefaultValue::Int(262144), "Bytes of one tool result kept inline.", true;
+    KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES = "config", "server.agent.tools", "aliases", List, DefaultValue::List(NO_ARGS), "User aliases as `name=command`; fixed for every session.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN = "config", "server.agent.tools.browser", "bin", Text, DefaultValue::Null, "Chromium-family executable; empty = $MYPI_BROWSER_BIN or a shipped default.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT = "config", "server.agent.tools.browser", "port", Int, DefaultValue::Null, "Attach to a running browser on this port instead of launching one.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PROFILE_DIR = "config", "server.agent.tools.browser", "profileDir", Text, DefaultValue::Null, "Persistent browser profile directory.", true;

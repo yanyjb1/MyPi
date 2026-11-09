@@ -1,4 +1,4 @@
-//! How one shell command runs, stops and reports. The group it leads is the unit of stopping:
+//! How one admitted command line runs, stops and reports. The group it leads is the unit of stopping:
 //! the backend supplies the program, `platform::proc` starts and signals the tree.
 
 use anyhow::{Context as _, Result};
@@ -8,8 +8,8 @@ use crate::server::agent::tools::spec::ToolProgress;
 use crate::server::platform::proc::{self, Signal};
 use crate::server::platform::shell::Shell;
 
-/// One command through the backend, collecting its output. The caller checked there are no
-/// newlines. Exit code and interrupt both live in the text (`[exit N]`, `[interrupted/timeout: …]`).
+/// One command line through the backend, collecting its output. Exit code and interrupt both live
+/// in the text (`[exit N]`, `[interrupted/timeout: …]`).
 pub(crate) fn run(
     shell: &Shell,
     cwd: &std::path::Path,
@@ -23,7 +23,7 @@ pub(crate) fn run(
     Ok(sink.text)
 }
 
-/// Run one command, feeding its two streams to `sink` as they arrive.
+/// Run one command line, feeding its two streams to `sink` as they arrive.
 pub(crate) fn run_to(
     shell: &Shell,
     cwd: &std::path::Path,

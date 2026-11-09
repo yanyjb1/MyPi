@@ -12,10 +12,15 @@ use super::setup::ServerConfig;
 use super::stdio::{self, Server};
 
 pub struct SyncMcpBridge {
-    cwd: Mutex<std::path::PathBuf>,
+    standing: Mutex<Standing>,
     global: std::path::PathBuf,
-    config: Mutex<BTreeMap<String, ServerConfig>>,
     servers: Mutex<HashMap<String, Arc<Mutex<Server>>>>,
+}
+
+/// Where the session stands and the table read for that place; the two change together.
+struct Standing {
+    cwd: std::path::PathBuf,
+    config: BTreeMap<String, ServerConfig>,
 }
 
 impl SyncMcpBridge {
@@ -25,15 +30,10 @@ impl SyncMcpBridge {
         config: BTreeMap<String, ServerConfig>,
     ) -> Self {
         Self {
-            cwd: Mutex::new(cwd),
+            standing: Mutex::new(Standing { cwd, config }),
             global,
-            config: Mutex::new(config),
             servers: Mutex::new(HashMap::new()),
         }
-    }
-
-    fn standing(&self) -> std::path::PathBuf {
-        self.cwd.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn server_for(&self, name: &str) -> Result<Arc<Mutex<Server>>> {
@@ -58,15 +58,20 @@ impl SyncMcpBridge {
                 .unwrap_or_else(|e| e.into_inner())
                 .remove(name);
         }
-        let mut config = self
-            .config
-            .lock()
-            .map_err(|_| anyhow!("MCP server table is poisoned"))?
-            .get(name)
-            .cloned()
-            .ok_or_else(|| anyhow!("unknown MCP server `{name}`"))?;
+        let (mut config, cwd) = {
+            let standing = self
+                .standing
+                .lock()
+                .map_err(|_| anyhow!("MCP server table is poisoned"))?;
+            let config = standing
+                .config
+                .get(name)
+                .cloned()
+                .ok_or_else(|| anyhow!("unknown MCP server `{name}`"))?;
+            (config, standing.cwd.clone())
+        };
         // Relative paths anchor where the session stands, not where the process launched.
-        config.cwd = Some(self.standing());
+        config.cwd = Some(cwd);
         let mut server = stdio::spawn(name, &config)?;
         server
             .initialize()
@@ -211,19 +216,16 @@ impl McpBridge for SyncMcpBridge {
     fn rescan(&self, cwd: &Path) -> Result<()> {
         let table = super::setup::table(cwd, &self.global)?;
         {
-            let config = self
-                .config
+            let mut standing = self
+                .standing
                 .lock()
                 .map_err(|_| anyhow!("MCP server table is poisoned"))?;
-            if *config == table && *self.cwd.lock().unwrap_or_else(|e| e.into_inner()) == cwd {
+            if standing.cwd.as_path() == cwd && standing.config == table {
                 return Ok(());
             }
+            standing.cwd = cwd.to_path_buf();
+            standing.config = table;
         }
-        *self.cwd.lock().unwrap_or_else(|e| e.into_inner()) = cwd.to_path_buf();
-        *self
-            .config
-            .lock()
-            .map_err(|_| anyhow!("MCP server table is poisoned"))? = table;
         let mut servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
         for (_, server) in servers.drain() {
             let mut server = server.lock().unwrap_or_else(|e| e.into_inner());
@@ -233,9 +235,10 @@ impl McpBridge for SyncMcpBridge {
     }
 
     fn servers(&self) -> Vec<ServerInfo> {
-        self.config
+        self.standing
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .config
             .keys()
             .map(|name| ServerInfo { name: name.clone() })
             .collect()

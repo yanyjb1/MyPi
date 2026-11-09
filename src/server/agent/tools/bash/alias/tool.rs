@@ -1,9 +1,9 @@
 //! The `alias` tool: name a shell command for later calls.
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use super::super::bash::guard;
+use super::super::bash::{guard, segment};
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::{AliasOp, Effect, ToolOutput};
 use crate::server::agent::tools::contract::view::CallRecord;
@@ -30,7 +30,7 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "alias",
-    about: "Maintain shell aliases. An alias expands only the first token, only once, and only before the guard. It cannot contain variables, functions, or newlines. `add` and `del` take effect for later bash calls in this round.",
+    about: "Maintain shell aliases. The head word of every command line expands once, before the guard. A name fixed by the config is read-only for the session: `add` and `del` refuse it. An alias cannot contain variables, functions, or newlines. `add` and `del` take effect for later bash calls in this round.",
     params: PARAMS,
     run,
     summary,
@@ -47,6 +47,10 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
 fn add(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     let name = alias_name(args)?;
+    anyhow::ensure!(
+        !env.aliases.fixed(&name),
+        "`{name}` is fixed by the config; pick another name"
+    );
     let command = args.str(COMMAND)?.trim().to_string();
     anyhow::ensure!(!command.is_empty(), "alias command must not be empty");
     anyhow::ensure!(
@@ -55,7 +59,7 @@ fn add(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     );
 
     let warning = vet(env, &command)?;
-    env.aliases.insert(name.clone(), command.clone());
+    env.aliases.set(name.clone(), command.clone());
     let mut text = format!("alias added: {name} = {command}");
     if let Some(w) = warning {
         text = format!("[warn: {w}]\n{text}");
@@ -70,10 +74,12 @@ fn add(env: &mut Env, args: &Args) -> Result<ToolOutput> {
 
 fn del(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     let name = alias_name(args)?;
-    anyhow::ensure!(
-        env.aliases.remove(&name).is_some(),
-        "no alias named `{name}`"
-    );
+    if env.aliases.unset(&name).is_none() {
+        if env.aliases.fixed(&name) {
+            bail!("`{name}` is fixed by the config; it is not the session's to delete");
+        }
+        bail!("no alias named `{name}`");
+    }
     Ok(
         ToolOutput::text(format!("alias deleted: {name}")).effect(Effect::Alias {
             op: AliasOp::Delete,
@@ -88,7 +94,9 @@ fn list(env: &Env) -> ToolOutput {
     let rows: Vec<Value> = env
         .aliases
         .iter()
-        .map(|(name, command)| json!({ "name": name, "command": command }))
+        .map(|(name, command, source)| {
+            json!({ "name": name, "command": command, "source": source.tag() })
+        })
         .collect();
     let memo = Value::Array(rows);
     let text = serde_json::to_string_pretty(&memo).unwrap_or_default();
@@ -117,15 +125,9 @@ fn vet(env: &Env, command: &str) -> Result<Option<String>> {
 
 fn alias_name(args: &Args) -> Result<String> {
     let name = args.str(NAME)?.trim().to_string();
-    let mut chars = name.chars();
-    anyhow::ensure!(
-        chars.next().is_some_and(|c| c.is_ascii_alphabetic()),
-        "alias name must start with an ASCII letter"
-    );
-    anyhow::ensure!(
-        chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-        "alias name allows only ASCII letters, digits, `_`, `-`"
-    );
+    // The scanner is the only judge of a name: it must be one whole segment head.
+    let usable = !name.contains('=') && segment::heads(&name) == [(0, name.len())];
+    anyhow::ensure!(usable, "alias name must be a word that can start a command");
     Ok(name)
 }
 

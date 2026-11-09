@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+use super::segment::is_sep;
+
 /// One classified hit. The id IS the message for the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleHit {
@@ -74,7 +76,7 @@ fn lexical_abs(p: &Path) -> std::path::PathBuf {
 }
 
 /// Normalize shell-obfuscated spacing so token matching is reliable: strip quotes, undo `\` escapes,
-/// fold `${IFS}`/`$IFS` and whitespace runs into single spaces. Ported from pi_agent_rust.
+/// fold `${IFS}`/`$IFS` and whitespace runs, and keep a bare newline as a separator.
 pub fn normalize(command: &str) -> String {
     let mut out = String::with_capacity(command.len());
     // Pending whitespace: set by any separator, flushed only when a real character follows.
@@ -119,7 +121,10 @@ pub fn normalize(command: &str) -> String {
             }
         }
 
-        if ch.is_ascii_whitespace() {
+        if ch == '\n' || ch == '\r' {
+            out.push(';');
+            pending_space = false;
+        } else if ch.is_ascii_whitespace() {
             pending_space = true;
         } else {
             if pending_space {
@@ -134,12 +139,6 @@ pub fn normalize(command: &str) -> String {
 }
 
 // ---- token stream analysis ----------------------------------------------
-
-/// Shell separators. They are tokenized as **their own tokens** so that glued
-/// forms (`x&&rm`, `a|b`) still expose the verb of every segment.
-fn is_sep(c: char) -> bool {
-    matches!(c, ';' | '&' | '|' | '(' | ')' | '`')
-}
 
 /// Split a command into shell-ish tokens: words, with separators standing alone. Positions are byte
 /// offsets, so lowercasing first keeps the two streams index-aligned.

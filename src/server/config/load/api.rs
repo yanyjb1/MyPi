@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::anyhow;
@@ -13,8 +13,9 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES,
     KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_INTERVAL,
     KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_TIMEOUT, KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE,
-    KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT,
-    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
+    KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES,
+    KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN,
+    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_IDLE_SECS, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PROFILE_DIR,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_USER_AGENT,
@@ -24,6 +25,7 @@ use super::super::schema::{
     KEY_CONFIG_WEB_BRING_TO_FRONT,
 };
 use super::super::write;
+use super::aliases;
 use super::source::child;
 use super::types::Config;
 
@@ -59,6 +61,18 @@ impl Config {
             .unwrap_or(600)
             .max(1);
         std::time::Duration::from_secs(seconds as u64)
+    }
+
+    /// The user's aliases from config, fixed for every session.
+    pub fn aliases(&self) -> BTreeMap<String, String> {
+        self.effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES)
+            .and_then(Value::as_list)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|entry| aliases::split(entry).ok())
+            .collect()
     }
 
     /// What the web tool launches with.

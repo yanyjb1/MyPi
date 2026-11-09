@@ -98,6 +98,7 @@ impl Loop {
             cfg.subagent_budget(),
             source.clone(),
             export,
+            cfg.aliases(),
             crate::server::agent::tools::contract::env::Paths {
                 agents: project.agents,
                 answers: project.answers,
@@ -365,8 +366,14 @@ fn start_turn(
     // MCP rides along only when this session actually runs the `mcp` tool.
     if live.tools.iter().any(|t| t == "mcp") && inner.source.mcp().is_none() {
         let root = live.root.clone();
-        let table = crate::server::agent::tools::mcp::setup::table(&root, &inner.global_mcp)
-            .unwrap_or_default();
+        // A broken table fails the turn; mounting nothing would read as "not configured".
+        let table = match crate::server::agent::tools::mcp::setup::table(&root, &inner.global_mcp) {
+            Ok(table) => table,
+            Err(e) => {
+                handle.busy.store(false, Ordering::Release);
+                return Err(e);
+            }
+        };
         inner.source.attach_mcp(Arc::new(
             crate::server::agent::tools::mcp::sync::SyncMcpBridge::new(
                 root,

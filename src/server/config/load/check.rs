@@ -6,10 +6,11 @@ use super::super::model::ModelsConfig;
 use super::super::notice::{ConfigNotice, warn};
 use super::super::registry::{self, Value};
 use super::super::schema::{
-    IPC_KINDS, KEY_CONFIG_SERVER_API_DEFAULT_MODEL, KEY_CONFIG_SERVER_PLATFORM_IPC,
-    KEY_CONFIG_SERVER_PRUNE_ON_REWIND, KEY_CONFIG_SERVER_REQUEST_STREAMING,
-    KEY_CONFIG_SERVER_STORAGE_BATCH_TOOLS, STREAMING,
+    IPC_KINDS, KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES, KEY_CONFIG_SERVER_API_DEFAULT_MODEL,
+    KEY_CONFIG_SERVER_PLATFORM_IPC, KEY_CONFIG_SERVER_PRUNE_ON_REWIND,
+    KEY_CONFIG_SERVER_REQUEST_STREAMING, KEY_CONFIG_SERVER_STORAGE_BATCH_TOOLS, STREAMING,
 };
+use super::aliases;
 
 pub(super) fn walk_unknown(
     map: &Mapping,
@@ -64,6 +65,19 @@ pub(super) fn check(
             "default",
         ));
         values.insert(KEY_CONFIG_SERVER_STORAGE_BATCH_TOOLS, fallback);
+    }
+    if let Some(Value::List(entries)) = values.get(KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES) {
+        let mut seen = HashSet::new();
+        for entry in entries {
+            match aliases::split(entry) {
+                Ok((name, _)) => {
+                    if !seen.insert(name.clone()) {
+                        panic!("config.server.agent.tools.aliases: `{name}` is defined twice");
+                    }
+                }
+                Err(e) => panic!("config.server.agent.tools.aliases: `{entry}`: {e}"),
+            }
+        }
     }
     if let Some(Value::Text(mode)) = values.get(KEY_CONFIG_SERVER_REQUEST_STREAMING).cloned()
         && !STREAMING.contains(&mode.as_str())
