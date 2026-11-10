@@ -11,7 +11,9 @@ use crate::server::agent::tools::summary;
 const PATH: usize = 0;
 const OFFSET: usize = 1;
 const LIMIT: usize = 2;
-const DEFAULT_LINES: usize = 500;
+
+/// The most one call may ask for; past it the call is cut and the footer says so.
+const MAX_LINES: usize = 500;
 
 const PARAMS: &[Param] = &[
     Param::new("path", Kind::Text, "File path."),
@@ -24,8 +26,8 @@ const PARAMS: &[Param] = &[
     Param::df(
         "limit",
         Kind::Number,
-        "Max lines this call; the configured output line limit caps it.",
-        "500",
+        "Max lines this call; 500 at most, and the configured output line limit caps it",
+        "200",
     ),
 ];
 
@@ -47,15 +49,13 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
     let path = args.str(PATH)?;
     let offset = args.line(OFFSET)?;
-    let limit = match args.opt_int(LIMIT)? {
-        Some(0) => return Err(anyhow!("`limit` must be at least 1")),
-        Some(n) => Some(n as usize),
-        None => None,
-    };
+    let limit = args.int(LIMIT)?;
+    anyhow::ensure!(limit >= 1, "`limit` must be at least 1");
+    let limit = limit as usize;
 
     let limits = env.limits;
     let p = env.workspace.resolve(&path, true)?;
-    let max_lines = limit.unwrap_or(DEFAULT_LINES).min(limits.lines).max(1);
+    let max_lines = limit.min(MAX_LINES).min(limits.lines).max(1);
 
     let file = std::fs::File::open(&p).context("failed to open file")?;
     let mut rdr = std::io::BufReader::new(file);
@@ -99,10 +99,19 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
             "(empty file)".to_string()
         };
     } else if more {
-        out.push_str(&format!(
-            "\n[more lines; continue with offset={}]",
-            offset + shown
-        ));
+        if limit > max_lines {
+            out.push_str(&format!(
+                "\n[{max_lines} lines at most per call; lines {}-{}, continue with offset={}]",
+                offset,
+                offset + shown.saturating_sub(1),
+                offset + shown
+            ));
+        } else {
+            out.push_str(&format!(
+                "\n[more lines; continue with offset={}]",
+                offset + shown
+            ));
+        }
         if by_bytes {
             out.push_str(&format!(
                 " (hit the {} byte cap before EOF; total line count unknown)",

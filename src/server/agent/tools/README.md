@@ -80,7 +80,7 @@ Every field is optional in the schema; `always` below marks the ones every call 
 
 | tool | parameters, in index order |
 |---|---|
-| `read` | `path` always, `offset` (1-based, default 1), `limit` (default 500, capped by the output line limit) |
+| `read` | `path` always, `offset` (1-based, default 1), `limit` (default 200, at most 500, capped by the output line limit) |
 | `edit` | `type` always (`exact`/`mass`), `path` always, `old`, `new`, `range` (`12-14` or `12`) |
 | `write` | `path` always, `content` always |
 | `cd` | `path` always |
@@ -90,7 +90,7 @@ Every field is optional in the schema; `always` below marks the ones every call 
 | `task` | `template` always, `vars` (object of strings), `cwd`, `maxToolCalls`, `name` |
 | `final` | `type` (`write`/`edit`/`read`/`submit`), `content`, `old`, `new`, `range` |
 | `mcp` | `type` (`list`/`call`), `server`, `tool`, `args` (object) |
-| `web` | `type` (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`screenshot`), `url`, `raw` (default false), `query`, `provider`, `page` (default 1), `selector`, `key`, `value`, `pixels` (default 600), `full_page` (default false) |
+| `web` | `type` (`read`/`search`/`open`/`click`/`fill`/`select`/`scroll`/`eval`/`screenshot`), `url`, `raw` (default false), `query`, `provider`, `pages` (default 1), `selector`, `value`, `pixels` (default 600), `full_page` (default false) |
 | `memo` | `type` (`add`/`mod`/`del`/`show`/`history`/`list`), `scope` (`current`/`global`, default `current`), `name`, `content` |
 | `todo` | `type` (`set`/`tick`/`view`), `items` (the whole list), `ids` (item numbers, 1-based), `done` (default true) |
 | `context` | `type` (`query`/`show`), `anchor` (a `#<ref>` hash or a block id), `direction` (`before`/`after`, default `after`), `limit` (default 3), `tool` (a name or `all`, default `bash`), `ids` |

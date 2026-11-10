@@ -12,18 +12,39 @@ use super::job::{Id, Job, State, TaskState};
 use super::output::OutputDir;
 use super::wake::{self, Wake, WakeSink};
 
+/// The scheduler's wake: a flag inside the condvar's own mutex, so a ring lands either before the
+/// wait or inside it, never between the two.
+pub(crate) type Bell = Arc<(Mutex<bool>, Condvar)>;
+
+/// Wake the scheduler: something it was waiting for has changed.
+pub(crate) fn ring(bell: &Bell) {
+    let mut rung = bell.0.lock().unwrap_or_else(|e| e.into_inner());
+    *rung = true;
+    bell.1.notify_all();
+}
+
 pub(crate) fn spawn(
     session: i64,
     values: Values,
     wake: Arc<dyn WakeSink>,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
-    bell: Arc<(Mutex<()>, Condvar)>,
+    bell: Bell,
     dir: OutputDir,
 ) {
     let _ = std::thread::Builder::new()
         .name(format!("mypi-jobs-{session}"))
         .spawn(move || run(session, values, wake, state, stop, bell, dir));
+}
+
+/// What the thread does after one pass.
+enum Next {
+    /// Something is scheduled: wake at this point.
+    At(Duration),
+    /// Nothing is due, but a running job or a schedule may still need this thread.
+    Idle,
+    /// Nothing left: the thread ends.
+    Done,
 }
 
 fn run(
@@ -32,16 +53,38 @@ fn run(
     wake: Arc<dyn WakeSink>,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
-    bell: Arc<(Mutex<()>, Condvar)>,
+    bell: Bell,
     dir: OutputDir,
 ) {
     while !stop.load(Ordering::Relaxed) {
-        tick(session, values, &wake, &state, &bell, &dir);
-        let guard = bell.0.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = bell
-            .1
-            .wait_timeout(guard, Duration::from_millis(1000))
-            .unwrap_or_else(|e| e.into_inner());
+        match tick(session, values, &wake, &state, &bell, &dir) {
+            Next::Done => return,
+            Next::Idle => park(&bell, None),
+            Next::At(wait) => park(&bell, Some(wait)),
+        }
+    }
+}
+
+/// Block on the bell: until the deadline, or until a job finishes or a schedule appears. A ring
+/// that arrived while this pass ran returns at once.
+fn park(bell: &Bell, wait: Option<Duration>) {
+    let mut rung = bell.0.lock().unwrap_or_else(|e| e.into_inner());
+    if *rung {
+        *rung = false;
+        return;
+    }
+    match wait {
+        Some(duration) => {
+            let (mut rung, _) = bell
+                .1
+                .wait_timeout(rung, duration)
+                .unwrap_or_else(|e| e.into_inner());
+            *rung = false;
+        }
+        None => {
+            let mut rung = bell.1.wait(rung).unwrap_or_else(|e| e.into_inner());
+            *rung = false;
+        }
     }
 }
 
@@ -50,29 +93,64 @@ fn tick(
     values: Values,
     wake: &Arc<dyn WakeSink>,
     state: &Arc<Mutex<State>>,
-    bell: &Arc<(Mutex<()>, Condvar)>,
+    bell: &Bell,
     dir: &OutputDir,
-) {
+) -> Next {
     let now = time::unix_now();
     let mut starts = Vec::new();
     let mut messages = Vec::new();
-    let pending = {
+    let (wakes, next, done) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         start_after(&mut st, values, now, &mut starts);
         start_every(&mut st, values, now, &mut starts, &mut messages, dir);
         prune(&mut st, dir);
         st.pending_wakes.append(&mut messages);
-        std::mem::take(&mut st.pending_wakes)
+        let wakes = std::mem::take(&mut st.pending_wakes);
+        let next = deadline(&st);
+        let done = !pending(&st);
+        if done {
+            st.alive = false;
+        }
+        (wakes, next, done)
     };
-    if !pending.is_empty() {
+    if !wakes.is_empty() {
         wake.wake(Wake {
             session,
-            text: pending.join("\n"),
+            text: wakes.join("\n"),
         });
     }
     for id in starts {
         run_job(state.clone(), bell.clone(), id);
     }
+    if done {
+        return Next::Done;
+    }
+    match next {
+        Some(at) => Next::At(Duration::from_secs((at - now).max(0) as u64)),
+        None => Next::Idle,
+    }
+}
+
+/// The earliest point at which a scheduled task or a cron entry becomes due.
+fn deadline(st: &State) -> Option<i64> {
+    let tasks = st
+        .tasks
+        .values()
+        .filter(|task| matches!(task.state, TaskState::Scheduled | TaskState::Waiting))
+        .filter_map(|task| task.start_at);
+    let schedules = st.schedules.values().filter_map(|entry| entry.next);
+    tasks.chain(schedules).min()
+}
+
+/// Whether anything could still need this thread: a schedule, or a task the pool has not finished.
+fn pending(st: &State) -> bool {
+    !st.schedules.is_empty()
+        || st.tasks.values().any(|task| {
+            matches!(
+                task.state,
+                TaskState::Scheduled | TaskState::Waiting | TaskState::Running
+            )
+        })
 }
 
 fn start_after(st: &mut State, values: Values, now: i64, starts: &mut Vec<Id>) {
@@ -249,7 +327,7 @@ fn prune(st: &mut State, dir: &OutputDir) {
     }
 }
 
-pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Arc<(Mutex<()>, Condvar)>, id: Id) {
+pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Bell, id: Id) {
     let worker_state = state.clone();
     let worker_bell = bell.clone();
     let _ = std::thread::Builder::new()
@@ -335,6 +413,6 @@ pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Arc<(Mutex<()>, Condvar)>,
                 st.pending_wakes.push(text);
             }
             drop(st);
-            worker_bell.1.notify_all();
+            ring(&worker_bell);
         });
 }

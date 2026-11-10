@@ -13,12 +13,11 @@ const URL: usize = 1;
 const RAW: usize = 2;
 const QUERY: usize = 3;
 const PROVIDER: usize = 4;
-const PAGE: usize = 5;
+const PAGES: usize = 5;
 const SELECTOR: usize = 6;
-const KEY: usize = 7;
-const VALUE: usize = 8;
-const PIXELS: usize = 9;
-const FULL_PAGE: usize = 10;
+const VALUE: usize = 7;
+const PIXELS: usize = 8;
+const FULL_PAGE: usize = 9;
 
 /// Every operation; the schema and the dispatch read this one list.
 const OPS: &[&str] = &[
@@ -27,7 +26,6 @@ const OPS: &[&str] = &[
     "open",
     "click",
     "fill",
-    "press",
     "select",
     "scroll",
     "eval",
@@ -40,7 +38,7 @@ const PARAMS: &[Param] = &[
     Param::df(
         "raw",
         Kind::Flag,
-        "Return DOM HTML instead of Markdown.",
+        "Read the DOM itself instead of Markdown; it is written to a file and the answer is its path",
         "false",
     ),
     Param::new(
@@ -50,18 +48,17 @@ const PARAMS: &[Param] = &[
     ),
     Param::new(
         "provider",
-        Kind::Choice(&["google", "bing", "baidu"]),
+        Kind::Choice(crate::web::ENGINES),
         "The one engine this query runs against.",
     ),
     Param::df(
-        "page",
+        "pages",
         Kind::Number,
-        "The last result page to fetch; pages 1..N are merged.",
+        "How many result pages to merge, starting at 1",
         "1",
     ),
     Param::new("selector", Kind::Text, "CSS selector."),
-    Param::new("key", Kind::Text, "Key name, e.g. `Enter`."),
-    Param::new("value", Kind::Text, "The text to put into the field."),
+    Param::new("value", Kind::Text, "Text for the field, or the JavaScript."),
     Param::df("pixels", Kind::Number, "How far to scroll down.", "600"),
     Param::df(
         "full_page",
@@ -73,14 +70,15 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "web",
-    about: "Read, search, and drive a real browser. `read` returns Markdown or DOM HTML; `search` \
-            runs one provider and merges pages 1..N; `open`/`click`/`fill`/`press`/`select`/\
-            `scroll`/`eval` operate the work tab; `screenshot` writes a PNG under the system temp \
-            directory.",
-    input: "type is always needed. read: url, or nothing to read the work tab as it stands. \
-            open: url, or nothing for a blank tab. search: query and provider. click: selector. \
-            fill: selector and value. press: key. select: selector and value. scroll: pixels. \
-            eval: value, the JavaScript to run. screenshot: nothing else.",
+    about: "Read, search, and drive a real browser. `read` answers Markdown, or the DOM as a file \
+            with `raw`; `search` runs one engine and merges pages 1..N; `open`/`click`/`fill`/\
+            `select`/`scroll`/`eval` operate the work tab; `screenshot` writes a PNG. Files land \
+            under the system temp directory.",
+    input: "type is always needed. read: url, or nothing to read the work tab as it stands; raw \
+            writes the DOM to a file and answers its path. open: url, or nothing for a blank tab. \
+            search: query and provider, pages to merge more than the first. click: selector. \
+            fill: selector and value. select: selector and value. scroll: pixels. eval: value, \
+            the JavaScript to run. screenshot: nothing else.",
     params: PARAMS,
     run,
     summary,
@@ -88,12 +86,11 @@ pub(crate) const TOOL: Tool = Tool {
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
     let kind = args.choice(TYPE)?;
-    let page = args.int(PAGE)?;
-    let page = u32::try_from(page).map_err(|_| anyhow::anyhow!("`page` must be >= 1"))?;
-    let selector = match kind.as_str() {
-        "press" => args.opt_str(KEY)?,
-        _ => args.opt_str(SELECTOR)?,
-    };
+    let pages = args.int(PAGES)?;
+    anyhow::ensure!(
+        (1..=u32::MAX as i64).contains(&pages),
+        "`pages` must be at least 1"
+    );
     let value = match kind.as_str() {
         "scroll" => Some(serde_json::Value::from(args.int(PIXELS)?)),
         _ => args.opt_str(VALUE)?.map(serde_json::Value::from),
@@ -104,8 +101,8 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         raw: args.flag(RAW)?,
         query: args.opt_str(QUERY)?,
         provider: args.opt_str(PROVIDER)?,
-        page,
-        selector,
+        pages: pages as u32,
+        selector: args.opt_str(SELECTOR)?,
         value,
         full_page: args.flag(FULL_PAGE)?,
     };
@@ -121,7 +118,6 @@ fn summary(call: &CallRecord) -> String {
         "open" => summary::field(call, "url").unwrap_or_default(),
         "search" => summary::field(call, "query").unwrap_or_default(),
         "click" | "fill" | "select" => summary::field(call, "selector").unwrap_or_default(),
-        "press" => summary::field(call, "key").unwrap_or_default(),
         "eval" => summary::field(call, "value").unwrap_or_default(),
         _ => String::new(),
     };

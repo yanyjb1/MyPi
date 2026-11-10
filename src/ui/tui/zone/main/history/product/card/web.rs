@@ -43,11 +43,6 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
                 values.push(truncate(&one_line(&sel), 48));
             }
         }
-        "press" => {
-            if let Some(key) = arg_str(args, "key").filter(|k| !k.trim().is_empty()) {
-                values.push(truncate(&one_line(&key), 48));
-            }
-        }
         "scroll" => {
             values.push(format!(
                 "{}px",

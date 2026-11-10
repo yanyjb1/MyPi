@@ -6,8 +6,9 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 | file | holds |
 |---|---|
-| `mod.rs` | declares the modules; exports `WebArgs`, `run`, `close_session`, `shutdown` |
+| `mod.rs` | declares the modules; exports `WebArgs`, `run`, `close_session`, `shutdown`, `ENGINES` |
 | `args.rs` | `WebArgs`: the shared input shape of every operation |
+| `artifact.rs` | the files the model reads back: `<temp>/mypi/web/<stamp>`, one writer |
 | `run.rs` | the two-operation permit, the in-flight count, and the `op` dispatch |
 | `url.rs` | URL normalisation, query encoding, percent and base64 decoding |
 
@@ -36,14 +37,15 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `ops/mod.rs` | declares the operations, and the shared action timeout |
 | `ops/read.rs` | `read` |
 | `ops/open.rs` | `open` |
-| `ops/drive.rs` | `click`, `fill`, `press`, `select`, `scroll`, `eval` |
+| `ops/drive.rs` | `click`, `fill`, `select`, `scroll`, `eval` |
 | `ops/screenshot.rs` | `screenshot` |
 
 ### search
 
 | file | holds |
 |---|---|
-| `search/mod.rs` | the page loop, deduplication, the gate handoff, the output format |
+| `search/mod.rs` | the page loop, deduplication, the gate handoff, the output format, the engine list |
+| `search/pace.rs` | the pauses between pages and between redirect lookups |
 | `search/provider.rs` | `SearchProvider`, provider lookup, redirect settling, external-host filtering |
 | `search/hit.rs` | `Hit`, the dedup key, first-seen deduplication |
 | `search/providers/` | Google, Bing and Baidu, and the static provider table |
@@ -73,7 +75,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 ```text
 run (permit)
-  → ops::read ────→ tabs::with_search | with_work → page
+  → ops::read ────→ tabs::with_work → page
   → search ───────→ tabs::with_search → verify::await_human
   → ops::open ────→ tabs::with_work → page
   → ops::drive ───→ tabs::with_work → page

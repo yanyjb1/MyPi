@@ -61,10 +61,9 @@ main区：
 真因在手册，不在传输层：`args` 只有描述、没有 `type`，模型把它当字符串写。session 16 的 10 次 call 里 8 次 `args` 是字符串（`"{}"`、`"{\"query\": …}"`、`"{query: …}"`、`"query=…&…"`），2 次干脆省掉了这个键，0 次是对象。
 已落地：schema 声明 `{"type": "object"}`；`Args::fill` 对“字符串里是对象”解析一次；两个对象参数（`mcp.args`、`task.vars`）都走这条。
 
-**工具懒加载（2026-11-10，待改）**
-工具层本身没有常驻成本：`registry::TOOLS` 是编译期常量，一次调用才读文件、起进程；mcp 服务、浏览器、job 都是首次使用才起。常驻的开销有两处，都在工具层外面：
-1. 每会话一个 1Hz 空转线程：`job/service.rs::Factory::make` 在 book 时就 `scheduler::spawn`，`job/scheduler.rs::run` 每 1000ms `wait_timeout` 后 `tick` 一次，一个 job 都没有也照转。改法：首个 job 落地才起线程，表空（无 schedule、无在跑）即停；涉及 `job/service.rs`、`job/scheduler.rs`、`loop/session/book.rs` 的 `attach_jobs`。
-2. 工具手册每 lap 重建：`loop/turn/cycle.rs:54`（compact）与 `:157`（每 lap）各调一次 `manuals(&live.tools)`，`manuals` → `roster` → 14 次 `schema_of` 加 `to_value`，每次请求约 15KB 的临时分配。改法：每会话建一次，工具列表变化（child 列表修正、profile 切换）时重建；同一串字节本来就存在 `request_meta.tools_json`。
+**工具懒加载（2026-11-10，已修）**
+1. 每会话的 `mypi-jobs-{id}` 线程不再在 book 时起：`JobService` 只在 `after`/`every` 落表时 `ensure()` 起线，`now` 不起线。线程按截止时间 `wait_timeout`，没有截止就无限 `wait`，表空即自行退出；任务收工时自己改状态、放槽、推 wake、通知线程，不再靠轮询复查。`OutputDir` 的目录也改到首次落任务才建。
+2. 工具手册每会话一份：`Birth` 带 `manuals: Arc<Vec<ToolDef>>`（init 按工具集建一次、子会话按修正后的列表建一次、resume 从 `request_meta.tools_json` 解析），`Live` 持有它，`LapInput`/`CompactInput` 一路传 `Arc` 到 `ProtocolRequest`，`cycle::manuals` 与 `assembly::manuals_to_tools` 删除。前缀的工具段此后不再重建。
 另一个会话线程 `sched-{id}` 停在条件变量上，没有唤醒，不用动。
 
 服务端CPU异常与退出问题（另开会话处理，调研结论2026-11-08）：
@@ -125,7 +124,6 @@ main区：
 - attach 路径对同一个端口探测两次（判断 `DevToolsActivePort` 是否陈旧、校验用户端口），多一次 TCP connect。
 - 换浏览器实例时（闲置关闭后重启、崩溃重启）别的前端在飞的 web 调用会拿到连接重置，只能由模型重试。
 - 验证轮询最长 5 分钟，期间占着一个 permit 和该会话的搜索锁。
-- 引擎名单在工具 schema、错误消息、静态表三处各写一遍，加一个引擎要改三处。
 - 服务端在启动浏览器的那十几秒里收到退出信号时，信号线程要等 `STATE` 锁释放后才开始关树。
 
 ## 四、树区

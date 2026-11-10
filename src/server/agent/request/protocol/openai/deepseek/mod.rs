@@ -45,7 +45,7 @@ impl Protocol for Deepseek {
         if !req.tools.is_empty() {
             body.insert(
                 "tools".to_string(),
-                serde_json::to_value(&req.tools).expect("tool serialization is infallible"),
+                serde_json::to_value(&*req.tools).expect("tool serialization is infallible"),
             );
         }
         let mut headers = Vec::new();

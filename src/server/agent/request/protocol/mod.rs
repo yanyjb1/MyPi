@@ -10,6 +10,7 @@ pub mod stream;
 use crate::server::platform::stop::Stop;
 use std::fmt;
 use std::io::BufRead;
+use std::sync::Arc;
 
 use anyhow::Result;
 
@@ -84,7 +85,7 @@ pub struct ProtocolRequest {
     pub max_output_tokens: u32,
     pub stream: bool,
     pub messages: Vec<WireMessage>,
-    pub tools: Vec<ToolDef>,
+    pub tools: Arc<Vec<ToolDef>>,
     pub session_id: Option<String>,
 }
 

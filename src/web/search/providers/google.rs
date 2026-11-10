@@ -7,6 +7,8 @@ use crate::web::html::{
 };
 use crate::web::url::encode_query;
 
+pub(super) const NAME: &str = "google";
+
 pub(super) struct Google;
 
 const HOME: &str = "https://www.google.com/";
@@ -45,7 +47,7 @@ fn find_snippet(html: &str, h3: usize) -> Option<String> {
 
 impl SearchProvider for Google {
     fn name(&self) -> &'static str {
-        "google"
+        NAME
     }
 
     fn page_url(&self, query: &str, page: u32) -> String {

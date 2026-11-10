@@ -6,7 +6,7 @@ use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
     Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, call_input, error_under, head,
-    output_lines,
+    loose, output_lines,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -52,7 +52,7 @@ fn arguments(args: &str) -> String {
         .and_then(|input| input.get("args"))
     {
         Some(Value::Null) | None => "{}".to_string(),
-        Some(other) => other.to_string(),
+        Some(other) => loose(other).to_string(),
     }
 }
 

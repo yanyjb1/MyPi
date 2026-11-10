@@ -42,19 +42,12 @@ impl Factory {
         );
         let state = Arc::new(Mutex::new(State::default()));
         let stop = Arc::new(AtomicBool::new(false));
-        let bell = Arc::new((Mutex::new(()), Condvar::new()));
-        scheduler::spawn(
-            session,
-            self.values,
-            self.wake.clone(),
-            state.clone(),
-            stop.clone(),
-            bell.clone(),
-            dir.clone(),
-        );
+        let bell: scheduler::Bell = Arc::new((Mutex::new(false), Condvar::new()));
         Arc::new(JobService {
             inner: Arc::new(Inner {
+                session,
                 values: self.values,
+                wake: self.wake.clone(),
                 state,
                 stop,
                 bell,
@@ -70,14 +63,36 @@ pub(crate) struct JobService {
 }
 
 struct Inner {
+    session: i64,
     values: Values,
+    wake: Arc<dyn WakeSink>,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
-    bell: Arc<(Mutex<()>, Condvar)>,
+    bell: scheduler::Bell,
     dir: OutputDir,
 }
 
 impl Inner {
+    /// Start the thread the first time something needs a clock; it ends itself once nothing does.
+    fn ensure(&self) {
+        {
+            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.alive {
+                return;
+            }
+            st.alive = true;
+        }
+        scheduler::spawn(
+            self.session,
+            self.values,
+            self.wake.clone(),
+            self.state.clone(),
+            self.stop.clone(),
+            self.bell.clone(),
+            self.dir.clone(),
+        );
+    }
+
     fn cancel_all(&self) {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         for task in st.tasks.values_mut() {
@@ -94,7 +109,7 @@ impl Inner {
         st.pending_wakes.clear();
         drop(st);
         self.dir.cleanup();
-        self.bell.1.notify_all();
+        scheduler::ring(&self.bell);
     }
 }
 
@@ -102,7 +117,7 @@ impl Drop for Inner {
     fn drop(&mut self) {
         self.cancel_all();
         self.stop.store(true, Ordering::Relaxed);
-        self.bell.1.notify_all();
+        scheduler::ring(&self.bell);
     }
 }
 
@@ -237,7 +252,7 @@ impl port::JobHost for JobService {
             }
         }
         drop(st);
-        self.inner.bell.1.notify_all();
+        scheduler::ring(&self.inner.bell);
         Ok(format!("{id} canceled"))
     }
 }
@@ -285,7 +300,8 @@ impl JobService {
         let task = Job::new(id, spec, output, Some(at));
         st.tasks.insert(id, task);
         drop(st);
-        self.inner.bell.1.notify_all();
+        self.inner.ensure();
+        scheduler::ring(&self.inner.bell);
         Ok(port::Receipt {
             id: id.to_string(),
             text: format!("{id} created for {}", stamp(at)),
@@ -315,7 +331,8 @@ impl JobService {
             },
         );
         drop(st);
-        self.inner.bell.1.notify_all();
+        self.inner.ensure();
+        scheduler::ring(&self.inner.bell);
         Ok(port::Receipt {
             id: Id::Schedule(sid).to_string(),
             text: format!("s{sid} created for {}", stamp(next)),

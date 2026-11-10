@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
-use super::{State, ToolOutcome, arg_scalar, arg_str, call_input, error_under, head, relativize};
+use super::{
+    State, ToolOutcome, arg_scalar, arg_str, call_input, error_under, head, loose, relativize,
+};
 use crate::ui::tui::theme::fixed;
 
 /// The whole exchange: one line, then the cwd and the variables.
@@ -59,7 +61,10 @@ fn children(args: &str, cwd: &str) -> Vec<Row> {
 fn variables(args: &str) -> Vec<(String, String)> {
     let Some(object) = call_input(args)
         .and_then(|input| input.get("vars").cloned())
-        .and_then(|vars| vars.as_object().cloned())
+        .and_then(|vars| match loose(&vars) {
+            Value::Object(map) => Some(map),
+            _ => None,
+        })
     else {
         return Vec::new();
     };

@@ -54,7 +54,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         "add" | "mod" => write(scope, &op, args, true),
         "del" => write(scope, &op, args, false),
         "show" | "history" | "list" => read(env, scope, &op, args),
-        _ => Err(anyhow!("unknown memo operation `{op}`")),
+        _ => Err(anyhow!("unknown memo type `{op}`")),
     }
 }
 

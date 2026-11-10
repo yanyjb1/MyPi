@@ -42,7 +42,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         "add" => add(env, args),
         "list" => Ok(list(env)),
         "del" => del(env, args),
-        other => Err(anyhow!("unknown alias op `{other}`")),
+        other => Err(anyhow!("unknown alias type `{other}`")),
     }
 }
 

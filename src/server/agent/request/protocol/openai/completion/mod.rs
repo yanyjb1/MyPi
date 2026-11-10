@@ -32,7 +32,7 @@ impl Completion {
 impl Protocol for Completion {
     fn request(&self, endpoint: &Endpoint, req: &ProtocolRequest) -> Result<WireRequest> {
         let messages = messages_to_wire(&req.messages, &self.compat);
-        let tools = serde_json::to_value(&req.tools).expect("tool serialization is infallible");
+        let tools = serde_json::to_value(&*req.tools).expect("tool serialization is infallible");
         let body = body_json(
             &req.model,
             req.max_output_tokens,

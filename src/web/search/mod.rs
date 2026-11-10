@@ -11,8 +11,12 @@ use super::browser::page::{Page, RENDER_WAIT};
 use super::browser::{tabs, verify};
 
 mod hit;
+mod pace;
 mod provider;
 mod providers;
+
+/// The engines, one list for the schema, the error text and the table.
+pub(crate) const ENGINES: &[&str] = providers::NAMES;
 
 /// How long the tidy pass may take.
 const TIDY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -34,19 +38,23 @@ const TIDY: &str = r#"(() => {
   return gone;
 })()"#;
 
-pub(crate) fn run(session: i64, query: &str, provider_name: &str, page: u32) -> Result<String> {
-    if page == 0 {
-        bail!("page must be >= 1");
-    }
-    let provider = provider::get(provider_name)
-        .ok_or_else(|| anyhow!("unknown provider {provider_name:?}; google|bing|baidu"))?;
+pub(crate) fn run(session: i64, query: &str, provider_name: &str, pages: u32) -> Result<String> {
+    let provider = provider::get(provider_name).ok_or_else(|| {
+        anyhow!(
+            "unknown provider {provider_name:?}; {}",
+            ENGINES.join("|")
+        )
+    })?;
     let name = provider.name();
 
     let mut hits: Vec<Hit> = Vec::new();
     let mut seen = HashSet::new();
     let mut current = 1u32;
-    let mut pages = 0u32;
-    while current <= page {
+    let mut fetched = 0u32;
+    while current <= pages {
+        if current > 1 {
+            pace::between_pages();
+        }
         let url = provider.page_url(query, current);
         let mut html = fetch(session, &url, provider)?;
 
@@ -78,11 +86,11 @@ pub(crate) fn run(session: i64, query: &str, provider_name: &str, page: u32) -> 
         if fresh == 0 {
             break;
         }
-        pages += 1;
+        fetched += 1;
         current += 1;
     }
 
-    Ok(render(name, pages, &hits))
+    Ok(render(name, fetched, &hits))
 }
 
 fn fetch(session: i64, url: &str, provider: &'static dyn SearchProvider) -> Result<String> {

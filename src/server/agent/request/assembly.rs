@@ -1,6 +1,8 @@
 //! One request's message list: the system prompt first, then the rebuilt history.
 
-use anyhow::{Context, Result};
+use std::sync::Arc;
+
+use anyhow::Result;
 
 use super::message::{Message, ToolDef, WireMessage};
 use super::protocol::ProtocolRequest;
@@ -14,7 +16,7 @@ pub fn build(
     stream: bool,
     system: &str,
     stored: &[Message],
-    manuals: &[serde_json::Value],
+    tools: Arc<Vec<ToolDef>>,
     session: i64,
 ) -> Result<ProtocolRequest> {
     let mut messages = Vec::with_capacity(stored.len() + 1);
@@ -29,7 +31,7 @@ pub fn build(
         max_output_tokens,
         stream,
         messages,
-        tools: manuals_to_tools(manuals)?,
+        tools,
         session_id: Some(session.to_string()),
     })
 }
@@ -43,7 +45,7 @@ pub fn compaction(
     system: &str,
     region: &[Message],
     instruction: &str,
-    manuals: &[serde_json::Value],
+    tools: Arc<Vec<ToolDef>>,
     session: i64,
 ) -> Result<ProtocolRequest> {
     let mut messages = Vec::with_capacity(region.len() + 2);
@@ -61,16 +63,7 @@ pub fn compaction(
         max_output_tokens,
         stream,
         messages,
-        tools: manuals_to_tools(manuals)?,
+        tools,
         session_id: Some(session.to_string()),
     })
-}
-
-fn manuals_to_tools(manuals: &[serde_json::Value]) -> Result<Vec<ToolDef>> {
-    manuals
-        .iter()
-        .map(|manual| {
-            serde_json::from_value(manual.clone()).context("a tool manual is not a function manual")
-        })
-        .collect()
 }

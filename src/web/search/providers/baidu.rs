@@ -7,6 +7,8 @@ use crate::web::html::{
 };
 use crate::web::url::encode_query;
 
+pub(super) const NAME: &str = "baidu";
+
 pub(super) struct Baidu;
 
 const HOME: &str = "https://www.baidu.com/";
@@ -40,7 +42,7 @@ fn block_href(block: &str) -> Option<String> {
 
 impl SearchProvider for Baidu {
     fn name(&self) -> &'static str {
-        "baidu"
+        NAME
     }
 
     fn page_url(&self, query: &str, page: u32) -> String {

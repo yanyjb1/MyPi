@@ -28,8 +28,10 @@ pub struct Birth {
     pub provider: String,
     pub model: String,
     pub system: String,
-    /// The session's tool names; manuals are expanded per request.
+    /// The session's tool names; manuals are built once, from `registry::roster`.
     pub tools: Vec<String>,
+    /// The request prefix's tool section: built when the session is booked, never rebuilt.
+    pub manuals: Arc<Vec<crate::server::agent::request::message::ToolDef>>,
     /// The compaction instruction template; `{{focus}}` marks where the focus goes.
     pub compact: String,
     pub meta: Option<i64>,

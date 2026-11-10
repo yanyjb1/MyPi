@@ -603,6 +603,14 @@ pub(crate) fn arg_bool(args: &str, key: &str) -> Option<bool> {
     call_input(args)?.get(key)?.as_bool()
 }
 
+/// A value that may have arrived as a string holding JSON; the server reads that shape too.
+pub(crate) fn loose(value: &Value) -> Value {
+    match value {
+        Value::String(text) => serde_json::from_str(text).unwrap_or_else(|_| value.clone()),
+        other => other.clone(),
+    }
+}
+
 pub(crate) fn arg_str(args: &str, key: &str) -> Option<String> {
     Some(call_input(args)?.get(key)?.as_str()?.to_string())
 }

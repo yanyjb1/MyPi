@@ -1,8 +1,6 @@
 //! The engine contract: page addresses, hits, and the link shapes only the
 //! engine itself can resolve.
 
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::hit::Hit;
@@ -81,9 +79,8 @@ const ENGINE_PAGES: [&str; 4] = [
 ];
 const ENGINE_PATHS: [&str; 6] = ["/search", "/s", "/url", "/goto", "/link", "/ck"];
 
-/// How long one redirect lookup may take, and how many run at once.
+/// How long one redirect lookup may take.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(6);
-const LOOKUP_WORKERS: usize = 4;
 /// Enough of the redirect body to hold Google's meta-refresh fallback.
 const LOOKUP_BODY: u64 = 4096;
 
@@ -168,33 +165,16 @@ fn clean(hit: Hit) -> Option<Hit> {
 }
 
 /// Turn parsed hits into final ones: resolve each engine redirect, and drop
-/// whatever the engine did not point at an external page.
+/// whatever the engine did not point at an external page. One lookup at a time, paced.
 pub(crate) fn settle(hits: Vec<Hit>) -> Vec<Hit> {
-    let slots: Vec<Mutex<Option<Hit>>> =
-        hits.into_iter().map(|hit| Mutex::new(Some(hit))).collect();
-    let next = AtomicUsize::new(0);
-    let workers = slots.len().min(LOOKUP_WORKERS);
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    let at = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(slot) = slots.get(at) else {
-                        return;
-                    };
-                    let Some(hit) = slot.lock().ok().and_then(|mut s| s.take()) else {
-                        return;
-                    };
-                    let done = clean(hit);
-                    if let Ok(mut slot) = slot.lock() {
-                        *slot = done;
-                    }
-                }
-            });
+    let mut settled = Vec::with_capacity(hits.len());
+    for hit in hits {
+        if is_redirect(&hit.url) {
+            super::pace::between_lookups();
         }
-    });
-    slots
-        .into_iter()
-        .filter_map(|slot| slot.into_inner().ok().flatten())
-        .collect()
+        if let Some(hit) = clean(hit) {
+            settled.push(hit);
+        }
+    }
+    settled
 }

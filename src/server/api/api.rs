@@ -12,6 +12,7 @@ use crate::ipc::contract::ErrorCode;
 use crate::ipc::contract::Frame;
 use crate::server::agent::r#loop::{Birth, Loop, Settings};
 use crate::server::agent::request::{Options, Request, RetryPolicy, Streaming};
+use crate::server::agent::request::message::ToolDef;
 use crate::server::config::Config;
 use crate::server::storage::{Reader, Writer};
 
@@ -197,7 +198,13 @@ impl Api {
             }
         };
         let system = archive["system"].as_str().unwrap_or_default().to_string();
-        let tools = names_of(&archive["tools"]);
+        let manuals: Vec<ToolDef> = serde_json::from_value(archive["tools"].clone())
+            .map_err(|e| Refuse::Internal(format!("the archive's tools are not manuals: {e}")))?;
+        let manuals = Arc::new(manuals);
+        let tools: Vec<String> = manuals
+            .iter()
+            .map(|manual| manual.function.name.clone())
+            .collect();
         let stated = match (row["provider"].as_str(), row["model"].as_str()) {
             (Some(provider), Some(model)) => Some((provider.to_string(), model.to_string())),
             _ => None,
@@ -223,6 +230,7 @@ impl Api {
             model,
             system,
             tools,
+            manuals,
             compact: profile.compact_instruction,
             meta,
             cwd,
@@ -279,18 +287,6 @@ impl Api {
             _ => None,
         }
     }
-}
-
-/// The tool names a request archive carries.
-fn names_of(manuals: &serde_json::Value) -> Vec<String> {
-    manuals
-        .as_array()
-        .map(|list| {
-            list.iter()
-                .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn error(request: &Frame, refuse: &Refuse) -> Frame {

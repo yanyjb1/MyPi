@@ -77,7 +77,9 @@ fn query(env: &Env, args: &Args) -> Result<ToolOutput> {
         .opt_str(ANCHOR)?
         .map(|anchor| anchor.trim().to_string())
         .filter(|anchor| !anchor.is_empty())
-        .ok_or_else(|| anyhow!("type=query needs `anchor`: a `#<ref>` hash or a block id"))?;
+        .ok_or_else(|| {
+            anyhow!("missing argument `anchor` for type=query (a `#<ref>` hash or a block id)")
+        })?;
     let direction = match args.choice(DIRECTION)?.as_str() {
         "before" => Direction::Before,
         _ => Direction::After,
@@ -125,7 +127,7 @@ fn query(env: &Env, args: &Args) -> Result<ToolOutput> {
 
 fn show(env: &Env, args: &Args) -> Result<ToolOutput> {
     let ids = block_ids(args)?;
-    anyhow::ensure!(!ids.is_empty(), "type=show needs `ids`");
+    anyhow::ensure!(!ids.is_empty(), "missing argument `ids` for type=show");
 
     let mut rows = Vec::with_capacity(ids.len());
     for id in &ids {

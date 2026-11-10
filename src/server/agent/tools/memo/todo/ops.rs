@@ -83,7 +83,7 @@ impl Call {
             Op::Set => anyhow::ensure!(self.ids.is_empty(), "`set` takes `items` only"),
             Op::Tick => anyhow::ensure!(
                 !self.ids.is_empty(),
-                "`tick` needs `ids`: the item numbers `view` printed, from 1"
+                "missing argument `ids` for type=tick: the item numbers `view` printed, from 1"
             ),
             Op::View => anyhow::ensure!(
                 self.items.is_empty() && self.ids.is_empty(),

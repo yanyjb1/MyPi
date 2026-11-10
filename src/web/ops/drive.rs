@@ -69,18 +69,6 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
             )?;
             matched(&r, "fill")
         }
-        "press" => {
-            let key = js_string(
-                args.selector
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("press requires selector=key name"))?,
-            );
-            let r = page.evaluate(
-                &format!("(() => {{ const el = document.activeElement; if (!el) return 'NOT_FOUND'; el.dispatchEvent(new KeyboardEvent('keydown', {{key: {key}, bubbles: true}})); el.dispatchEvent(new KeyboardEvent('keyup', {{key: {key}, bubbles: true}})); return 'pressed'; }})()"),
-                ACTION_TIMEOUT,
-            )?;
-            matched(&r, "press")
-        }
         "select" => {
             let sel = selector(args, "select")?;
             let value = js_string(&text(args, "select")?);
@@ -103,7 +91,7 @@ pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
             page.evaluate(&expr, ACTION_TIMEOUT)
         }
         other => Err(anyhow!(
-            "unknown op {other:?}; click|fill|press|select|scroll|eval"
+            "unknown op {other:?}; click|fill|select|scroll|eval"
         )),
     })
 }

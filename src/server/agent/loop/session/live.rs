@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use super::Transport;
 use super::book::Birth;
+use crate::server::agent::request::message::ToolDef;
 use crate::server::agent::tools::contract::call::Cwd;
 
 /// One session's live state.
@@ -12,8 +13,10 @@ pub struct Live {
     pub provider: String,
     pub model: String,
     pub system: String,
-    /// The session's tool names; the manuals are expanded per request.
+    /// The session's tool names; the front door's gate.
     pub tools: Vec<String>,
+    /// The manuals built when the session was booked; the request prefix reads these, never a rebuild.
+    pub manuals: Arc<Vec<ToolDef>>,
     /// The compaction instruction template; it comes from the profile the caller resolved.
     pub compact: String,
     /// The launch directory the front end handed `init`; this process never moves it.
@@ -33,6 +36,7 @@ impl Live {
             model: birth.model.clone(),
             system: birth.system.clone(),
             tools: birth.tools.clone(),
+            manuals: birth.manuals.clone(),
             compact: birth.compact.clone(),
             root: root.clone(),
             cwd: Arc::new(RwLock::new(root)),

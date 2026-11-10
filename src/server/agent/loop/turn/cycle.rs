@@ -51,7 +51,7 @@ pub(crate) fn run(
             history: history.clone(),
             transport: live.transport(),
             system: live.system.clone(),
-            tools: manuals(&live.tools),
+            tools: live.manuals.clone(),
             retention,
             focus,
             instruction: live.compact.clone(),
@@ -154,7 +154,7 @@ fn laps(
             blocks: blocks.clone(),
             transport: live.transport(),
             system: live.system.clone(),
-            tools: manuals(&live.tools),
+            tools: live.manuals.clone(),
             stop: handle.stop.clone(),
             worker: handle.worker.clone(),
             live: inner.out.clone(),
@@ -246,6 +246,7 @@ fn laps(
                     model: live.model.clone(),
                     system: live.system.clone(),
                     tools: spec.tools,
+                    manuals: spec.manuals,
                     compact: live.compact.clone(),
                     meta: Some(meta),
                     cwd: Some(spec.cwd),
@@ -314,6 +315,7 @@ fn child_tools(tools: &[String]) -> Vec<String> {
 /// One sub-session a batch asked for.
 struct Spawn {
     tools: Vec<String>,
+    manuals: Arc<Vec<crate::server::agent::request::message::ToolDef>>,
     cwd: std::path::PathBuf,
     start: String,
     budget: u32,
@@ -348,7 +350,8 @@ fn effects(
                 } => {
                     let meta_at = blocks.len();
                     let tools = child_tools(tools);
-                    let tools_json = serde_json::to_string(&roster(&tools))
+                    let manuals = Arc::new(roster(&tools));
+                    let tools_json = serde_json::to_string(&*manuals)
                         .map_err(|e| anyhow!("a child's tool manual is not JSON: {e}"))?;
                     blocks.push(vec![
                         Row::Request {
@@ -373,6 +376,7 @@ fn effects(
                         meta_at + 1,
                         Spawn {
                             tools,
+                            manuals,
                             cwd: cwd.clone(),
                             start: start.clone(),
                             budget: *max_tool_calls,
@@ -392,14 +396,6 @@ fn effects(
         }
     }
     Ok((children, deletes))
-}
-
-/// The session's names → the request's manuals, in table order.
-pub(crate) fn manuals(names: &[String]) -> Vec<serde_json::Value> {
-    roster(names)
-        .iter()
-        .filter_map(|tool| serde_json::to_value(tool).ok())
-        .collect()
 }
 
 /// One finished call, as the request half takes it.

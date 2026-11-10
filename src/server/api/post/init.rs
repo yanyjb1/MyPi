@@ -1,5 +1,7 @@
 //! `init` — the session row, its request archive, and the loop's booking.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::{Value, json};
 
@@ -34,8 +36,8 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
         }
     };
     let tools = resolved.tools.unwrap_or_else(registry::names);
-    let tools_json = serde_json::to_string(&registry::roster(&tools))
-        .map_err(|e| Refuse::Internal(e.to_string()))?;
+    let manuals = Arc::new(registry::roster(&tools));
+    let tools_json = serde_json::to_string(&*manuals).map_err(|e| Refuse::Internal(e.to_string()))?;
 
     let system = resolved.system;
     let landed = api.writer().push(Submit {
@@ -71,6 +73,7 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
         model,
         system,
         tools,
+        manuals,
         compact: resolved.compact_instruction,
         meta: Some(archive),
         cwd: Some(cwd),

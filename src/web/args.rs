@@ -5,7 +5,7 @@ pub struct WebArgs {
     pub raw: bool,
     pub query: Option<String>,
     pub provider: Option<String>,
-    pub page: u32,
+    pub pages: u32,
     pub selector: Option<String>,
     pub value: Option<serde_json::Value>,
     pub full_page: bool,

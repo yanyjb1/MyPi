@@ -4,7 +4,7 @@ use ratatui::style::Modifier;
 use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
-use super::{State, ToolOutcome, error_under, partial};
+use super::{State, ToolOutcome, call_input, error_under, partial};
 use crate::ui::tui::theme::fixed;
 
 /// The one row an exchange leaves: its state, its operation, and what it left behind.
@@ -49,7 +49,7 @@ fn meta(op: &str, outcome: Option<ToolOutcome<'_>>) -> Option<String> {
 }
 
 fn ids(args: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(args).ok()?;
+    let value = call_input(args)?;
     let list = value.get("ids")?.as_array()?;
     let ids: Vec<String> = list
         .iter()

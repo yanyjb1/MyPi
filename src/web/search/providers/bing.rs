@@ -8,6 +8,8 @@ use crate::web::html::{
 };
 use crate::web::url::{encode_query, percent_decode};
 
+pub(super) const NAME: &str = "bing";
+
 pub(super) struct Bing;
 
 const SEARCH_URL: &str = "https://www.bing.com/search";
@@ -68,7 +70,7 @@ fn base64url_decode(s: &str) -> Option<Vec<u8>> {
 
 impl SearchProvider for Bing {
     fn name(&self) -> &'static str {
-        "bing"
+        NAME
     }
 
     fn page_url(&self, query: &str, page: u32) -> String {

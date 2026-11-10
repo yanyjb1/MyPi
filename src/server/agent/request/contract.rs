@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use super::live::Event;
 use super::message::Message;
+use super::message::ToolDef;
 pub use super::message::Usage;
 use super::transport::worker::SessionWorker;
 
@@ -65,7 +66,8 @@ pub struct LapInput {
     pub blocks: Arc<dyn BlockSink>,
     pub transport: Transport,
     pub system: String,
-    pub tools: Vec<serde_json::Value>,
+    /// The session's manuals, built once when it was booked.
+    pub tools: Arc<Vec<ToolDef>>,
     pub stop: Arc<crate::server::platform::stop::Stop>,
     /// This session's worker: the child that owns its sockets.
     pub worker: Arc<SessionWorker>,
@@ -204,7 +206,7 @@ pub struct CompactInput {
     pub history: Arc<dyn History>,
     pub transport: Transport,
     pub system: String,
-    pub tools: Vec<serde_json::Value>,
+    pub tools: Arc<Vec<ToolDef>>,
     /// How much to keep verbatim; `None` takes the configured default.
     pub retention: Option<Retention>,
     /// What the summary should stress.

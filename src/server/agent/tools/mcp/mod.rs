@@ -89,11 +89,11 @@ fn call(bridge: &dyn McpBridge, args: &Args) -> Result<ToolOutput> {
     let server = args
         .opt_str(1)?
         .filter(|server| !server.trim().is_empty())
-        .ok_or_else(|| anyhow!("type=call needs `server`"))?;
+        .ok_or_else(|| anyhow!("missing argument `server` for type=call"))?;
     let tool = args
         .opt_str(2)?
         .filter(|tool| !tool.trim().is_empty())
-        .ok_or_else(|| anyhow!("type=call needs `tool`"))?;
+        .ok_or_else(|| anyhow!("missing argument `tool` for type=call"))?;
     let arguments = match args.opt_any(3) {
         None => json!({}),
         Some(value) if value.is_null() => json!({}),

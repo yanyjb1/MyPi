@@ -175,6 +175,8 @@ pub(crate) struct State {
     pub(crate) next_task: u64,
     pub(crate) next_schedule: u64,
     pub(crate) pending_wakes: Vec<String>,
+    /// Whether a scheduler thread exists; read and written under this state's own lock.
+    pub(crate) alive: bool,
 }
 
 impl State {

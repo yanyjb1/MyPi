@@ -1,13 +1,12 @@
 //! read, write and cd: the one-line forms, the numbered body, the preview.
 
 use ratatui::style::Modifier;
-use serde_json::Value;
 
 use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
 use super::{
-    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, expand_tabs, indentation,
-    partial, path_of, relativize,
+    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, call_input, error_under, expand_tabs,
+    indentation, partial, path_of, relativize,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -84,7 +83,7 @@ pub(crate) fn cd_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) ->
 }
 
 fn read_range(args: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(args).ok()?;
+    let v = call_input(args)?;
     let offset = v.get("offset").and_then(|o| o.as_u64());
     let limit = v.get("limit").and_then(|l| l.as_u64());
     if offset.is_none() && limit.is_none() {

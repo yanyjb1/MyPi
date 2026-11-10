@@ -15,16 +15,15 @@ which is why it reads its own configuration instead of receiving it through `Env
 
 | op | input | tab | output |
 |---|---|---|---|
-| `read` | `url`, `raw` | search when `url` is set, work otherwise | Markdown or DOM HTML |
-| `search` | `query`, `provider`, `page` | search | provider name, page range, result count, numbered hits |
+| `read` | `url`, `raw` | work | Markdown, or the DOM written to a file |
+| `search` | `query`, `provider`, `pages` | search | provider name, page range, result count, numbered hits |
 | `open` | `url` | work | one status line |
 | `click` | `selector` | work | one status line |
 | `fill` | `selector`, `value` | work | one status line |
-| `press` | `selector` (key name) | work | one status line |
 | `select` | `selector`, `value` | work | one status line |
 | `scroll` | `value` (pixels, default 600) | work | one status line |
 | `eval` | `value` (JS expression) | work | evaluation result |
-| `screenshot` | `full_page` | work | temp path and byte count |
+| `screenshot` | `full_page` | work | file path and byte count |
 
 `run(args, session)` is the whole entry. It takes one of two permits, dispatches on `op`, and
 returns the text the model reads.
@@ -79,7 +78,8 @@ false while a CDP client is attached.
 ### Search
 
 Three engines, one per call: `google`, `bing`, `baidu`. Each page yields hits, and the loop walks
-pages 1..=`page`, stopping at the first page that adds nothing new.
+pages 1..=`pages`, stopping at the first page that adds nothing new. Pages are fetched one at a
+time, with a 1.5–3 s pause between them.
 
 ```text
 google  https://www.google.com/search?q=…&udm=14&pws=0&start=10×(n-1)
@@ -90,8 +90,8 @@ baidu   https://www.baidu.com/s?wd=…&pn=10×(n-1)
 - A result's `href` is not always a destination. Google mints `/goto?url=<token>`, Baidu mints
   `/link?url=<token>`, and both only become the real URL through the engine's own answer: a `302`
   with `Location`, or — for some Google tokens — a `200` whose body is a meta refresh and one
-  anchor. `provider::settle` asks once per hit (four lookups in flight, six seconds each) and drops
-  what does not resolve to an external page. Bing encodes the destination in
+  anchor. `provider::settle` asks once per hit — one at a time, 300–800 ms apart, six seconds each
+  — and drops what does not resolve to an external page. Bing encodes the destination in
   `ck/a?…&u=a1<base64url>`, so it is decoded locally.
 - An external host is not enough: ad gateways (`googleadservices`, `googlesyndication`, `ubs.baidu.com`,
   `bdstatic`, `bdurl`) and the engines' own search paths (`/search`, `/s`, `/ck`, …) are not
@@ -153,9 +153,9 @@ sweep reads: a browser with an operation in flight is never closed.
 
 ### Output
 
-`read` answers Markdown, or the DOM HTML with `raw`. `search` answers the provider, the page range,
-the count and a numbered list. The rest answer a status line, except `screenshot`, which names a
-file and its size.
+`read` answers Markdown; with `raw` it writes the DOM to `<temp>/mypi/web/<stamp>.html` and answers
+that path. `search` answers the provider, the page range, the count and a numbered list. The rest
+answer a status line, except `screenshot`, which names its file and its size.
 
 ## 2. Design intent
 

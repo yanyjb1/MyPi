@@ -101,7 +101,7 @@ impl Ask for Request {
             true,
             &input.system,
             &stored[..],
-            &input.tools,
+            input.tools,
             input.session,
         )?;
 
@@ -203,7 +203,7 @@ impl Ask for Request {
             &input.system,
             &plan.region,
             &instruction,
-            &input.tools,
+            input.tools,
             input.session,
         )?;
 

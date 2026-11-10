@@ -21,7 +21,6 @@ impl OutputDir {
         let root = crate::server::platform::env::temp_dir()
             .join("mypi-jobs")
             .join(session.to_string());
-        let _ = std::fs::create_dir_all(&root);
         Self {
             root,
             max_output_bytes,

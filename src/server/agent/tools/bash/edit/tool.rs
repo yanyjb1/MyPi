@@ -86,7 +86,7 @@ fn exact(text: &str, args: &Args) -> Result<(String, Value, String)> {
 fn mass(text: &str, args: &Args) -> Result<(String, Value, String)> {
     anyhow::ensure!(args.opt_str(OLD)?.is_none(), "`old` is only for type=exact");
     let (from, to) = parse_range(&args.str(RANGE)?)?;
-    let block = args.opt_str(NEW)?.unwrap_or_default();
+    let block = args.str(NEW)?;
     mass_text(text, from, to, &block)
 }
 
