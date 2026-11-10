@@ -160,10 +160,17 @@ fn tool_of(server: &str, value: &Value) -> Result<ToolInfo> {
                 .collect()
         })
         .unwrap_or_default();
+    let parameters = object
+        .get("inputSchema")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     Ok(ToolInfo {
         name: name.to_string(),
         description,
         required,
+        parameters,
     })
 }
 

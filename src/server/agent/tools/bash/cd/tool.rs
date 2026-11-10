@@ -21,7 +21,7 @@ pub(crate) const TOOL: Tool = Tool {
     name: "cd",
     about: "Change the working directory for the rest of the session. Later tool calls and relative paths resolve from\n\
             the new one. Directories only: not the filesystem root, not a top-level directory (the temp dir excepted),\n\
-            and nowhere under the home tree; confirm with `pwd` or `ls`.",
+            and not a home directory; confirm with `pwd` or `ls`.",
     input: "path is the only field.",
     params: PARAMS,
     run,

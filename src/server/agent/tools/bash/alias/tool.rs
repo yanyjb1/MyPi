@@ -27,9 +27,9 @@ const PARAMS: &[Param] = &[
 pub(crate) const TOOL: Tool = Tool {
     name: "alias",
     about: "Maintain shell aliases: `add` defines one, `list` shows them, `del` deletes one. The head \
-            word of every command line expands once, before the guard. A name fixed by the config is \
-            read-only for the session: `add` and `del` refuse it. An alias cannot contain variables, \
-            functions, or newlines. Changes take effect for later bash calls in this round.",
+            word of every command segment expands once, as text, before the guard. A name fixed by \
+            the config is read-only for the session: `add` and `del` refuse it. `add` takes one \
+            line. Changes take effect for later bash calls in this session.",
     input: "type is always needed. type=add: name and command. type=del: name. \
             type=list: nothing else.",
     params: PARAMS,

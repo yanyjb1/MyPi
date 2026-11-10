@@ -23,8 +23,8 @@ pub trait Source: Send + Sync {
         tool: Option<&str>,
     ) -> Result<Vec<CallRecord>>;
     fn calls_after(&self, session: i64, block: i64, tool: &str) -> Result<Vec<CallRecord>>;
-    /// The newest result block whose memo carries `marker`, with that memo: where a replay restarts.
-    fn last_reset(&self, session: i64, marker: &str) -> Result<Option<(i64, String)>>;
+    /// The newest result block whose memo carries `marker`, with that memo: a replay's anchor.
+    fn last_memo(&self, session: i64, marker: &str) -> Result<Option<(i64, String)>>;
     fn block(&self, session: i64, id: i64) -> Result<Option<BlockPair>>;
     fn jobs(&self, session: i64) -> Option<Arc<dyn job::JobHost>>;
     fn child(&self, session: i64) -> Option<Arc<dyn Child>>;

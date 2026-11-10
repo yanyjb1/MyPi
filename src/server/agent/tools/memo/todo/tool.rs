@@ -11,9 +11,6 @@ use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
 
-/// The marker a `set` result carries: the newest one is where a replay starts.
-pub(crate) const RESET: &str = "\"todo_reset\":true";
-
 pub(super) const PARAMS: &[Param] = &[
     Param::new(
         "type",
@@ -40,8 +37,8 @@ pub(crate) const TOOL: Tool = Tool {
             replaces the whole list in order; an empty `items` clears it. `tick` marks the given item \
             numbers done, or clears their tick with `done: false`. `view` prints the list with the \
             numbers `tick` takes, 1-based; an unknown number fails the call and changes nothing.",
-    input: "type is always needed. set: items (empty clears the list). tick: ids, and done=false \
-            to clear their tick. view: nothing else.",
+    input: "type is always needed. set: items, the whole list; send [] to clear it. tick: ids, \
+            and done=false to clear their tick. view: nothing else.",
     params: PARAMS,
     run,
     summary,

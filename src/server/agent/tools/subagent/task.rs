@@ -53,8 +53,9 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Spawn one subagent from a template and return at once. The child works in its own \
             session and writes an answer file; a wake reports when it ends. A child never gets \
             `task`: the tool cannot be handed down, so a template's tool list must not name it.",
-    input: "template is always needed. vars fills the template's slots, cwd and maxToolCalls \
-            override the config, name fixes the answer file.",
+    input: "template is always needed. vars fills the template's slots. cwd sets the child's \
+            directory and needs the parent's cd. maxToolCalls overrides the config budget. name \
+            is the answer-file stem; a taken name gets a suffix.",
     params: PARAMS,
     run,
     summary,

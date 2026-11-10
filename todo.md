@@ -28,12 +28,6 @@ bug:mailbox，我当时的设计是，在阻塞点到来时，loop会自行检�
 ▮ - stderr 却抱怨有个叫 cat 的文件打不开：唯一合理解释是 #9c4c 展开成了两个词 cat /home/Arisha/Downloads/9c4c，而不是单纯的路径；
 ▮ - 于是 wc -l 变成了 wc -l cat /home/.../9c4c——真文件数完了（49999 行）
 
-瑕疵：
-
-1. context工具需要在kind还是toolname哪个参数的描述里说明，缺省值是bash。
-2. context工具，超出阈值后落盘应该落在tmp下。现在是下载文件夹。
-3. #<ref> 锚点 需要说明是溢出时的hash ref，否则存在与块号混用的风险。
-
 性能：
 1. 一个前端，会话test，总共才多少内容，为什么内存占用从7MB涨到30+MB？无法无天了是吗？
 2. 服务端为什么43.8MB？？？？
@@ -56,28 +50,8 @@ main区：
 
 来自Agent，需要及时清理。
 
-**mcp 的 `args` 必挂（2026-11-10，已修）**
-现象：`op=call` 无论 `args` 传 `{}` 还是带内容都报 `` `args` must be a JSON object ``，`op=list` 正常。
-真因在手册，不在传输层：`args` 只有描述、没有 `type`，模型把它当字符串写。session 16 的 10 次 call 里 8 次 `args` 是字符串（`"{}"`、`"{\"query\": …}"`、`"{query: …}"`、`"query=…&…"`），2 次干脆省掉了这个键，0 次是对象。
-已落地：schema 声明 `{"type": "object"}`；`Args::fill` 对“字符串里是对象”解析一次；两个对象参数（`mcp.args`、`task.vars`）都走这条。
-
-**工具懒加载（2026-11-10，已修）**
-1. 每会话的 `mypi-jobs-{id}` 线程不再在 book 时起：`JobService` 只在 `after`/`every` 落表时 `ensure()` 起线，`now` 不起线。线程按截止时间 `wait_timeout`，没有截止就无限 `wait`，表空即自行退出；任务收工时自己改状态、放槽、推 wake、通知线程，不再靠轮询复查。`OutputDir` 的目录也改到首次落任务才建。
-2. 工具手册每会话一份：`Birth` 带 `manuals: Arc<Vec<ToolDef>>`（init 按工具集建一次、子会话按修正后的列表建一次、resume 从 `request_meta.tools_json` 解析），`Live` 持有它，`LapInput`/`CompactInput` 一路传 `Arc` 到 `ProtocolRequest`，`cycle::manuals` 与 `assembly::manuals_to_tools` 删除。前缀的工具段此后不再重建。
-另一个会话线程 `sched-{id}` 停在条件变量上，没有唤醒，不用动。
-
 服务端CPU异常与退出问题（另开会话处理，调研结论2026-11-08）：
 1. CDP泵线程轮询：`src/web/browser/devtools/cdp.rs:22` 每条连接 read timeout 50ms（20Hz空转唤醒），连接随tab存活；附着型浏览器（`Browser::attach`，`src/web/browser/process/mod.rs:44`）被 `idle::sweep` 永不关闭（`idle.rs:27` 直接return），泵跟着活到进程死。修法：去掉50ms轮询（阻塞读+Drop关socket唤醒），或退一步拉到500ms。
-2. 会话只book不unbook：`ledger.book`（`book.rs:149`、`ensure_booked`，api.rs:173）之后唯一unbook路径是删会话（`post/delete.rs:50`）。watch/mailbox/switch/cwd只增不减，会话句柄+每会话sched/jobs线程对无界累积。方案：relay维护每会话watcher计数，归零即unbook（busy时interrupt，`handle.gone`机制现成）；`ensure_booked`删除，book只留`post/init`与watcher出现两处。
-3. "前端退出服务器不死"原因未定案：退出条件只看relay连接数（`api.rs:164`），需复现时`top -H`看线程名+`ss`看连接抓现场。
-4. 会话存活判据统一为"有没有连接在看"，涉及api/relay/loop整体调度，故整体另开。
-
-已修（2026-11-09）：第3条收敛为通信层的一处缺口——写线程退出时不关套接字，读线程永远等不到 EOF，连接表项因此摘不掉。现在写线程退出即 `shutdown`，连接句柄用析构兜底摘表，不做心跳。第2、4条按"有没有连接在看"落地：relay 记账每会话 watcher，归零调 `Loop::drop`，`subscribe watch` 传 `null` 表示不再看，前端 detach 时发出。第1条与 usage 全扫不动，只在"已知代价"里记录。
-
-
-
-**`todo` 的 `todo_reset` 锚点永不命中（2026-11-10）**
-`memo/todo/tool.rs` 的 `set` 只回 `{"items": …}`，而 `replay.rs` 用 `last_reset(session, "\"todo_reset\":true")` 找锚点，于是每次 `view`/`tick` 都从会话第一笔 `todo` 开始折叠。结果不受影响（`set` 自己会被折叠进去），只是白扫一遍。修法：`set` 的 memo 加回这个键，或让 replay 认 `{"items": …}` 的块。
 
 ## 一、历史区
 

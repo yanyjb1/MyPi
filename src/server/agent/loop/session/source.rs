@@ -150,7 +150,7 @@ impl Source for Db {
         Ok(records(&reader, requests)?)
     }
 
-    fn last_reset(&self, session: i64, marker: &str) -> Result<Option<(i64, String)>> {
+    fn last_memo(&self, session: i64, marker: &str) -> Result<Option<(i64, String)>> {
         let reader = self.reader()?;
         let ranges = ranges(&reader, session)?;
         let rows = reader.query(

@@ -77,8 +77,8 @@ pub(crate) const TOOL: Tool = Tool {
     input: "type is always needed. read: url, or nothing to read the work tab as it stands; raw \
             writes the DOM to a file and answers its path. open: url, or nothing for a blank tab. \
             search: query and provider, pages to merge more than the first. click: selector. \
-            fill: selector and value. select: selector and value. scroll: pixels. eval: value, \
-            the JavaScript to run. screenshot: nothing else.",
+            fill, select: selector and value. scroll: pixels. eval: value, the JavaScript to run. \
+            screenshot: full_page for the whole page.",
     params: PARAMS,
     run,
     summary,

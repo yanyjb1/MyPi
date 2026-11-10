@@ -55,6 +55,8 @@ pub struct Call {
     pub op: Op,
     /// `set`: the whole list, in order.
     pub items: Vec<String>,
+    /// `set`: whether `items` was given at all; an omitted list is not an empty one.
+    pub items_given: bool,
     /// `tick`: the item numbers to change, 1-based.
     pub ids: Vec<i64>,
     /// `tick`: mark done (true) or clear the tick (false).
@@ -70,6 +72,7 @@ impl Call {
         let call = Call {
             op,
             items: args.str_list(ITEMS)?,
+            items_given: args.opt_any(ITEMS).is_some(),
             ids: numbers(args)?,
             done: args.flag(DONE)?,
         };
@@ -80,7 +83,13 @@ impl Call {
     /// Check the shape per op — errors the model can act on.
     fn validate(&self) -> Result<()> {
         match self.op {
-            Op::Set => anyhow::ensure!(self.ids.is_empty(), "`set` takes `items` only"),
+            Op::Set => {
+                anyhow::ensure!(
+                    self.items_given,
+                    "missing argument `items` for type=set; send [] to clear the list"
+                );
+                anyhow::ensure!(self.ids.is_empty(), "`set` takes `items` only");
+            }
             Op::Tick => anyhow::ensure!(
                 !self.ids.is_empty(),
                 "missing argument `ids` for type=tick: the item numbers `view` printed, from 1"

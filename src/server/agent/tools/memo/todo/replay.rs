@@ -4,10 +4,13 @@ use anyhow::Result;
 
 use super::ops::{self, Call};
 use super::state::TodoItem;
-use super::tool::{PARAMS, RESET};
+use super::tool::PARAMS;
 use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::contract::view::Source;
 use crate::server::agent::tools::spec::Args;
+
+/// The list a `todo` result leaves in its memo; the newest such result is the replay's anchor.
+const LIST: &str = "\"items\":";
 
 /// The list a sequence of calls adds up to, starting from `seed`; failed, unreadable and read-only
 /// calls are skipped.
@@ -34,21 +37,21 @@ pub(crate) fn fold(seed: Vec<TodoItem>, calls: &[CallRecord]) -> Vec<TodoItem> {
     items
 }
 
-/// The list a session holds: the newest `set` memo is the anchor, everything after it is folded in.
+/// The list a session holds: the newest list-carrying result is the anchor, and only the calls
+/// after it are folded in.
 pub(crate) fn current(source: &dyn Source, session: i64) -> Result<Vec<TodoItem>> {
-    let (seed, from) = match source.last_reset(session, RESET)? {
-        Some((block, memo)) => (seed_of(&memo), block),
+    let anchor = source
+        .last_memo(session, LIST)?
+        .and_then(|(block, memo)| Some((block, seed_of(&memo)?)));
+    let (seed, from) = match anchor {
+        Some((block, items)) => (items, block),
         None => (Vec::new(), 0),
     };
-    let calls = source.calls_after(session, from, "todo")?;
-    Ok(fold(seed, &calls))
+    Ok(fold(seed, &source.calls_after(session, from, "todo")?))
 }
 
-/// The list a `set` result carried, read back from its memo.
-fn seed_of(memo: &str) -> Vec<TodoItem> {
-    serde_json::from_str::<serde_json::Value>(memo)
-        .ok()
-        .and_then(|value| value.get("items").cloned())
-        .and_then(|items| serde_json::from_value(items).ok())
-        .unwrap_or_default()
+/// The list a result memo carried, when it parses as one.
+fn seed_of(memo: &str) -> Option<Vec<TodoItem>> {
+    let value = serde_json::from_str::<serde_json::Value>(memo).ok()?;
+    serde_json::from_value(value.get("items")?.clone()).ok()
 }

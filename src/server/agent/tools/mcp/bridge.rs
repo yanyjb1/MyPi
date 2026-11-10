@@ -15,6 +15,8 @@ pub struct ToolInfo {
     pub name: String,
     pub description: String,
     pub required: Vec<String>,
+    /// The tool's declared parameter map, verbatim from its `inputSchema`.
+    pub parameters: Value,
 }
 
 #[derive(Debug, Clone)]

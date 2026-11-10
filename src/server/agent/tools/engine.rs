@@ -122,6 +122,14 @@ impl Engine {
             let why = "tool-call budget exhausted; finish with `final submit`";
             return self.refused(input, call, why, started);
         }
+        let stated = call
+            .intent
+            .as_deref()
+            .is_some_and(|intent| !intent.trim().is_empty());
+        if !stated {
+            let why = "missing argument `intent`: 2-6 capitalized words, present participle";
+            return self.refused(input, call, why, started);
+        }
         let args = match Args::fill(tool.params, &call.args) {
             Ok(args) => args,
             Err(e) => {

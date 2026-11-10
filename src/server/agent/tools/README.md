@@ -74,6 +74,8 @@ Every call is one envelope: `intent` beside `input`, both required, everything e
 - No `required` array inside `input`: which fields are needed depends on `type`, and only the tool
   knows that. `Args::fill` unwraps the envelope and fills defaults; a tool that needs a field errors
   where it reads it, naming the field.
+- The front door refuses a call whose `intent` is missing or blank; a field placed outside `input`
+  is refused by name.
 
 Every field is optional in the schema; `always` below marks the ones every call of that tool needs
 (the tool checks them, not the schema).
@@ -181,9 +183,6 @@ Workspace { cwd, root }
 - A memo write returns placeholder text and one `Memo` effect; the loop lands it in the same
   commit as the result block, so the tool itself never stores a note.
 - `memo` reads go through `Source::memo`; the tool never opens the database.
-- `todo` keeps no state at all: no table, no column, no session flag. A `set` result's memo carries
-  the list and the marker `"todo_reset":true`; the newest such block is the anchor, and everything
-  after it is folded in. With no anchor the replay starts at the session's first call.
 - Three operations: `set` replaces the list (`items: []` clears it), `tick` marks item numbers done
   or, with `done: false`, clears the tick, and `view` prints the list with those numbers. Numbers
   are positions; an out-of-range number drops the whole call and nothing changes.

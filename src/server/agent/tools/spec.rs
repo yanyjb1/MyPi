@@ -172,6 +172,16 @@ impl Args {
             },
             Some(other) => bail!("`input` must be an object; got {other}"),
         };
+        if map.keys().any(|key| key != "intent") {
+            for p in params {
+                if map.contains_key(p.name) && !input.contains_key(p.name) {
+                    bail!(
+                        "`{}` belongs inside `input`; only `intent` sits beside it",
+                        p.name
+                    );
+                }
+            }
+        }
         Self::from_map(params, &input)
     }
 
