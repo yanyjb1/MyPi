@@ -44,6 +44,8 @@ impl Lead {
 pub enum Ink {
     Fixed(Color),
     Accent,
+    /// The accent mixed toward the card fill; `0` is no mix.
+    AccentShade(u8),
 }
 
 /// One run of text and how it is colored.
@@ -170,11 +172,13 @@ impl Row {
             style = match run.ink {
                 Some(Ink::Fixed(color)) => style.fg(color),
                 Some(Ink::Accent) => style.fg(accent.color()),
+                Some(Ink::AccentShade(level)) => style.fg(accent.shade(level)),
                 None => style,
             };
             style = match run.bg {
                 Some(Ink::Fixed(color)) => style.bg(color),
                 Some(Ink::Accent) => style.bg(accent.color()),
+                Some(Ink::AccentShade(_)) => style,
                 None => style,
             };
             spans.push(Span::styled(run.text.clone(), style));

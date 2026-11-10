@@ -22,15 +22,9 @@ impl TodoPanel {
         self.dirty = true;
     }
 
-    pub(crate) fn rows(
-        &mut self,
-        tasks: &[Task],
-        fold: TodoFold,
-        width: usize,
-        budget: usize,
-    ) -> &[Row] {
+    pub(crate) fn rows(&mut self, tasks: &[Task], fold: TodoFold, width: usize) -> &[Row] {
         if !self.laid || self.dirty || self.width != width {
-            self.rows = todo::rows(tasks, fold, width, budget);
+            self.rows = todo::rows(tasks, fold, width);
             self.width = width;
             self.dirty = false;
             self.laid = true;

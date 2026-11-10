@@ -3,6 +3,8 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
+use super::fixed;
+
 /// A pool wide enough to notice, narrow enough that every entry works on a dark terminal.
 const POOL: &[(u8, u8, u8)] = &[
     (0x00, 0xb4, 0xff),
@@ -64,6 +66,22 @@ impl Accent {
 
     pub fn color(self) -> Color {
         self.color
+    }
+
+    /// This color mixed toward the card's pending fill; `level` 0 is the color itself.
+    pub fn shade(self, level: u8) -> Color {
+        if level == 0 {
+            return self.color;
+        }
+        let (Color::Rgb(r, g, b), Color::Rgb(br, bg, bb)) = (self.color, fixed::TOOL_BG_PENDING)
+        else {
+            return self.color;
+        };
+        let step = i32::from(level.min(3));
+        let mix = |from: u8, to: u8| {
+            (i32::from(from) + (i32::from(to) - i32::from(from)) * step / 3) as u8
+        };
+        Color::Rgb(mix(r, br), mix(g, bg), mix(b, bb))
     }
 
     pub fn span(self, text: impl Into<String>) -> Span<'static> {

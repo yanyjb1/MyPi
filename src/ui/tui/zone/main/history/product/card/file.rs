@@ -70,8 +70,8 @@ pub(crate) fn cd_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) ->
     ];
     if let Some(p) = want.filter(|p| !p.trim().is_empty()) {
         let ink = match state {
-            State::Ok => Ink::Fixed(fixed::TOOL_PATH),
-            _ => Ink::Fixed(fixed::ERR),
+            State::Err => Ink::Fixed(fixed::ERR),
+            _ => Ink::Fixed(fixed::TOOL_PATH),
         };
         runs.push(Run::with(
             format!(" {}", relativize(&base, &p)),

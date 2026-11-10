@@ -39,6 +39,8 @@ pub enum Head {
 #[derive(Default)]
 pub struct Run {
     segs: VecDeque<Laid>,
+    /// The rows pinned under the newest segment: rebuilt every frame, never cached.
+    pin: Vec<Row>,
     width: usize,
 }
 
@@ -63,7 +65,27 @@ impl Run {
 
     /// Rows in the run; a gap row is one of them.
     pub fn len(&self) -> usize {
+        self.body_len() + self.pin.len()
+    }
+
+    /// Rows the segments take, the pin excluded.
+    pub fn body_len(&self) -> usize {
         self.segs.iter().map(|laid| laid.rows.len()).sum()
+    }
+
+    /// Rows the pin takes.
+    pub fn pin_len(&self) -> usize {
+        self.pin.len()
+    }
+
+    /// One pinned row.
+    pub fn pin_row(&self, at: usize) -> Option<&Row> {
+        self.pin.get(at)
+    }
+
+    /// Replace the pinned rows under the newest segment.
+    pub fn set_pin(&mut self, rows: Vec<Row>) {
+        self.pin = rows;
     }
 
     /// One row of the run.
@@ -75,7 +97,7 @@ impl Run {
             }
             at -= laid.rows.len();
         }
-        None
+        self.pin.get(at)
     }
 
     /// The position's first row, laying whole pieces until one has rows.

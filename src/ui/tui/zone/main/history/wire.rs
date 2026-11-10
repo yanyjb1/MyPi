@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::focus::Target;
-use super::local::content::{Block, Kind as BlockKind};
+use super::local::content::{Block, Kind as BlockKind, Truncation};
 use super::local::mutable::Entry;
 use super::local::section::Idx;
 use super::local::slot::{Level, Life};
@@ -34,11 +34,6 @@ pub(super) fn read_frame(zone: &mut HistoryZone, frame: &Frame) {
                 .retain(|[lo, hi]| !(*lo..=*hi).all(|id| zone.local.has(id)));
         }
         ("call", "config") => read_config(zone, &frame.content),
-        ("call", "todo") => {
-            if let Some(todo) = frame.content.get("todo") {
-                take_todo(zone, todo);
-            }
-        }
         _ => {}
     }
 }
@@ -66,6 +61,8 @@ fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
         }
         "signal" => {
             if content.get("signal").and_then(Value::as_str) == Some("rewind") {
+                zone.pin.clear();
+                zone.tick = 0;
                 zone.outbox.push(Request::Structure);
             }
             zone.shouts.push(Shout::new(name::SIGNAL, content.clone()));
@@ -81,6 +78,7 @@ fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
 }
 
 fn piece(zone: &mut HistoryZone, content: &Value) {
+    zone.tick += 1;
     let kind = content
         .get("kind")
         .and_then(Value::as_str)
@@ -100,8 +98,14 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
         }
     }
     let touched = match kind {
-        "text" => Some(zone.local.running_mut().text(text)),
-        "thinking" => Some(zone.local.running_mut().thinking(text)),
+        "text" => {
+            zone.thinking_ended();
+            Some(zone.local.running_mut().text(text))
+        }
+        "thinking" => {
+            zone.thinking_started();
+            Some(zone.local.running_mut().thinking(text))
+        }
         "arguments" => {
             let name = content
                 .get("name")
@@ -110,6 +114,7 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
             Some(zone.local.running_mut().arguments(call, name, text))
         }
         "boundary" => {
+            zone.thinking_ended();
             zone.local.running_mut().boundary();
             None
         }
@@ -123,6 +128,7 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let intent = content.get("intent").and_then(Value::as_str);
+            zone.call_started(call, intent);
             Some(
                 zone.local
                     .running_mut()
@@ -142,13 +148,18 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
                 .get("duration_ms")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
+            let truncated = Truncation::of(content.get("truncated"));
+            zone.call_ended(call);
             if ok {
                 moved(zone, memo);
+            }
+            if let Some(memo) = memo {
+                take_todo_memo(zone, call, memo);
             }
             Some(
                 zone.local
                     .running_mut()
-                    .tool_end(call, ok, result, memo, took),
+                    .tool_end(call, ok, result, memo, took, truncated),
             )
         }
         _ => None,
@@ -159,6 +170,26 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
     zone.shouts
         .push(Shout::new(name::BUSY, json!({"on": true})));
     zone.shouts.push(Shout::new(name::TICK, json!({})));
+}
+
+/// A todo result answers with the whole list: the panel takes it.
+fn take_todo_memo(zone: &mut HistoryZone, call: &str, memo: &str) {
+    let name = zone
+        .local
+        .running()
+        .request_at(call)
+        .and_then(|at| zone.local.running().block(at))
+        .and_then(|block| block.name.clone());
+    if name.as_deref() != Some("todo") {
+        return;
+    }
+    let Some(items) = serde_json::from_str::<Value>(memo)
+        .ok()
+        .and_then(|value| value.get("items").cloned())
+    else {
+        return;
+    };
+    take_todo(zone, &items);
 }
 
 /// A tool that moved the session: the cards after it relativize from the new directory.
@@ -207,6 +238,7 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         zone.pending = Some(ranges);
         settle_pending(zone);
     }
+    zone.pin.clear();
     zone.shouts
         .push(Shout::new(name::BUSY, json!({"on": false})));
 }

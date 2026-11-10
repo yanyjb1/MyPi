@@ -6,6 +6,8 @@ use crate::ui::tui::zone::main::history::row::Row;
 
 pub(crate) mod fold;
 mod frame;
+mod state;
+mod tool;
 
 pub(crate) mod alias;
 pub(crate) mod bash;
@@ -24,6 +26,8 @@ pub(crate) mod tree;
 pub(crate) mod web;
 
 pub(crate) use frame::*;
+pub(crate) use state::State;
+pub(crate) use tool::*;
 
 /// One tool call as rows at a width.
 pub(crate) fn rows(block: &Block, paired: Option<&Block>, opts: &Opts, width: usize) -> Vec<Row> {

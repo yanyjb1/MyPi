@@ -62,12 +62,16 @@ A running block is rebuilt whenever content arrives. Only its last segment can s
 ### Tool cards
 
 A tool exchange draws as one card, built from the request and the result it pairs with. The card
-shows one of five phases: `Pending` (no settled result yet), `Ok`, `Err`, `Stopped` (the user ended
-the turn while it ran) and `Timeout` (its own deadline cut it). The phase picks the edge, the fill
-and the glyph. The two cut-short phases read the result's last line, which names the reason in
-brackets; that line is drawn in the warning color and everything above it keeps the output color,
-so a killed command's output is not repainted as an error. The file a call names sits in the header
-in the path color.
+shows one of three phases: `Pending` (no settled result yet), `Ok`, `Err`. The phase picks the edge,
+the fill and the glyph; a call the user interrupted or a deadline cut short is `Err` like any other
+failure, and its card body is the error color end to end. The file a call names sits in the header
+in the path color, red when the call failed.
+
+A live result that was cut adds one row after the family's own rows, outside every fold:
+`[N lines & M truncated, see the #ref later]`, where M is the full text's byte count in KB or MB. It belongs to the live block alone; once the
+result lands, the stored text carries the same fact in its last line.
+
+The header prints the call's `intent` after the colon, as the request carried it.
 
 The call half is read from the arguments as they stream: `partial` decodes the fields a fragment has
 reached, so an edit draws its `old`/`new` text and a write its numbered content before the arguments
@@ -85,8 +89,10 @@ A line-number jump inside one side is one `…` row. A tab takes three columns w
 code body is drawn, and the indentation of a diff line or a writer's preview draws one dim glyph per
 space and a dim arrow per tab.
 
-The call half of a `todo` call is one row: the phase glyph, the operation, and the counts the result
-carries. The checklist itself is the pinned product, never part of the card.
+The call half of a `todo` call is one row: the phase glyph, the operation, the numbers a `tick`
+named with their item text, and the counts the result carries. A `tick` with `done: false` reads as
+`untick` and leaves the text uncrossed. The checklist itself is the pinned product, never part of
+the card.
 
 ### Prefetch layer
 
@@ -99,10 +105,21 @@ segment is a gap; the gap belongs to the segment's tail.
 A segment whose content is not in hand draws one `…` row and reports the block id; nothing is
 cached for it.
 
-The display range is a start plus the rows the screen has. Two starts:
+The run keeps one reserved tail slot: the pin, a list of rows laid under the newest segment. It is
+not a segment and takes no `SegId`; `len` and `row` count it, `trim` and `at` do not. The zone
+rebuilds it every frame from the checklist and from what is still running, so a round close never
+has to clear it.
+
+The pin is the checklist, then the ESC row while a call or a thought runs. It scrolls like any other
+row: it is not an overlay, and going up walks into the transcript above it. The ESC row reads
+`spinner ESC <elapsed> · <label>`; the label is the intent of the earliest unfinished call, or
+`thinking` while only reasoning arrives, swept by the accent at the speed content arrives.
+
+The display range is a start plus the rows the screen has. Three starts:
 
 - `Latest`: the last rows of the run. New content lands on screen by itself.
 - `At(SegId, row)`: one fixed place. The screen does not move when content lands elsewhere.
+- `Pin(row)`: a row of the pin. It only happens when the screen is shorter than the pin itself.
 
 ### Display
 
@@ -131,6 +148,10 @@ opens a natural line), or `Wrapped` (it is a continuation).
 - **Folding lives in the product layer** because it depends on width, while segments do not.
 - **The range is a start plus a height** so that the screen is a slice of the run, and a growing
   block only changes the rows after its last settled row.
+- **The pin is a row set after the segments, not a layer above them** so that one scroll model
+  covers the checklist and the transcript, and a short screen still shows the checklist.
+- **The pin is rebuilt every frame** so that no handover, width change or round close has to know
+  about it.
 - **Display is stateless** so that the same rows always produce the same screen.
 - **A card is drawn from both halves of its exchange**, so the request's position owns the rows; a
   result landing re-lays that position, not only its own.
@@ -142,7 +163,10 @@ opens a natural line), or `Wrapped` (it is a continuation).
 - The structural snapshot arrives through the host after `Request::Structure`; the zone lays its
   positions from it.
 - Block content arrives through `Request::Blocks`; the zone asks per round, once per range.
-- The checklist is drawn from `call todo` and `call init`, pinned under the transcript.
+- The checklist follows `call init` and the memo of every todo result; nothing asks for it
+  separately.
+- The full text of a truncated result lives in `artifacts`; the front end has no way to read it, and
+  a stored block carries no truncation field, only the result text's last line.
 - `write` carries no memo, so its card can only preview the new content; there is no old file to
   diff against. An `edit` card draws its diff from the request plus one memo field, so context
   lines outside the replaced range are not shown.

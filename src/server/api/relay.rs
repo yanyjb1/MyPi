@@ -327,6 +327,7 @@ impl Relay {
                         result,
                         memo,
                         duration_ms,
+                        truncated,
                     } => (
                         "tool_end",
                         json!({
@@ -335,6 +336,7 @@ impl Relay {
                             "result": result,
                             "memo": memo,
                             "duration_ms": duration_ms,
+                            "truncated": truncated.map(|t| json!({"lines": t.lines, "bytes": t.bytes})),
                         }),
                     ),
                 };

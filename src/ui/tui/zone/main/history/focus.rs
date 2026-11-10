@@ -201,7 +201,7 @@ impl HistoryZone {
                 if self.ask_blocks(&missing) {
                     return Step::Wait;
                 }
-                self.with_draw(|_, _, _, range, _| range.pin(top));
+                self.with_draw(|_, _, _, range, _| range.anchor(top));
                 Step::Land
             }
         }
@@ -274,7 +274,7 @@ impl HistoryZone {
     /// The position under the sight line; the newest when following.
     pub(super) fn anchor_slot(&mut self) -> Option<Idx> {
         match self.range.start() {
-            Start::Latest => {
+            Start::Latest | Start::Pin(_) => {
                 let len = self.local.running().len();
                 if len > 0 {
                     Some(Idx::Turn((len - 1) as u32))

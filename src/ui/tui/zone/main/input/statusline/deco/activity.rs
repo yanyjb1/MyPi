@@ -5,10 +5,8 @@ use serde_json::Value;
 
 use super::super::Deco;
 use super::super::theme::{Slot, StatusTheme};
+use crate::ui::tui::text::glyphs::SPINNER;
 use crate::ui::tui::zone::main::input::Ctx;
-
-/// Animation frames.
-const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
 
 #[derive(Debug, Default)]
 pub struct Activity {

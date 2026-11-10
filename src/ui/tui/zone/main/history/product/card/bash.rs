@@ -2,7 +2,7 @@
 
 use super::super::super::prefetch::color::code;
 use super::super::super::row::{Lead, Row, Run};
-use super::{ToolBlock, ToolRenderer, arg_str};
+use super::{ToolBlock, ToolRenderer, partial};
 use crate::ui::tui::theme::fixed;
 
 pub(crate) struct Bash;
@@ -14,7 +14,7 @@ impl ToolRenderer for Bash {
 }
 
 fn bash_call(args: &str) -> Vec<Row> {
-    let cmd = arg_str(args, "command").unwrap_or_default();
+    let cmd = partial::text(args, "command").unwrap_or_default();
     if cmd.trim().is_empty() {
         return Vec::new();
     }

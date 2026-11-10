@@ -1,4 +1,6 @@
-//! The task list, pinned under the transcript.
+//! The checklist as pinned rows: numbered, the last finished item kept for context.
+
+use ratatui::style::Modifier;
 
 use super::super::super::row::{Ink, Lead, Row, Run};
 use crate::ui::tui::TodoFold;
@@ -12,9 +14,9 @@ pub struct Task {
     pub done: bool,
 }
 
-/// A title, the open items, then a done count. Capped by the fold policy.
-pub(crate) fn rows(tasks: &[Task], fold: TodoFold, width: usize, budget: usize) -> Vec<Row> {
-    if tasks.is_empty() || budget < 2 {
+/// A title, then the window of items the fold policy allows, numbered by position.
+pub(crate) fn rows(tasks: &[Task], fold: TodoFold, width: usize) -> Vec<Row> {
+    if tasks.is_empty() {
         return Vec::new();
     }
     let mut out = vec![clip(
@@ -24,42 +26,54 @@ pub(crate) fn rows(tasks: &[Task], fold: TodoFold, width: usize, budget: usize) 
         ),
         width,
     )];
-    let room = budget.saturating_sub(1);
-    let cap = fold.cap().min(room);
-    for task in tasks.iter().filter(|task| !task.done).take(cap) {
-        out.push(clip(
-            Row::of(
-                Lead::None,
-                vec![
-                    Run::plain(format!("{TODO_PENDING} ")),
-                    Run::fixed(task.text.clone(), fixed::DIM),
-                ],
+    let window = window(tasks);
+    let shown = window.len().min(fold.cap());
+    let pad = window
+        .iter()
+        .take(shown)
+        .map(|(at, _)| (at + 1).to_string().len())
+        .max()
+        .unwrap_or(1);
+    for (number, task) in window.iter().take(shown) {
+        let mut runs = vec![Run::fixed(
+            format!(
+                "{} {:>pad$}  ",
+                if task.done { TODO_DONE } else { TODO_PENDING },
+                number + 1
             ),
-            width,
-        ));
+            fixed::DIM,
+        )];
+        runs.push(if task.done {
+            Run::with(
+                task.text.clone(),
+                Some(Ink::Fixed(fixed::DIM)),
+                Modifier::CROSSED_OUT,
+            )
+        } else {
+            Run::plain(task.text.clone())
+        });
+        out.push(clip(Row::of(Lead::None, runs), width));
     }
-    let open = tasks.iter().filter(|task| !task.done).count();
-    if open > cap {
+    if window.len() > shown {
         out.push(clip(
             Row::text(
                 Lead::None,
-                format!("… {} more", open - cap),
+                format!("… {} more", window.len() - shown),
                 Some(Ink::Fixed(fixed::DIM)),
             ),
             width,
         ));
     }
-    let done = tasks.iter().filter(|task| task.done).count();
-    if done > 0 && out.len() < budget {
-        out.push(clip(
-            Row::text(
-                Lead::None,
-                format!("{TODO_DONE} {done} done"),
-                Some(Ink::Fixed(fixed::DIM)),
-            ),
-            width,
-        ));
+    out
+}
+
+/// The window: the last finished item for context, then every open one in order.
+fn window(tasks: &[Task]) -> Vec<(usize, &Task)> {
+    let mut out: Vec<(usize, &Task)> = Vec::new();
+    if let Some(at) = tasks.iter().rposition(|task| task.done) {
+        out.push((at, &tasks[at]));
     }
+    out.extend(tasks.iter().enumerate().filter(|(_, task)| !task.done));
     out
 }
 

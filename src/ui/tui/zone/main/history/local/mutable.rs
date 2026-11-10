@@ -3,7 +3,7 @@
 //! Blocks here have no upstream id yet; the round's receipt gives them one. A notice is a line
 //! only this front end says: it takes no id and never goes upstream.
 
-use super::content::{Block, Kind as BlockKind};
+use super::content::{Block, Kind as BlockKind, Truncation};
 use super::slot::{Level, Life};
 
 /// One entry of the running turn, in source order.
@@ -191,6 +191,7 @@ impl Mutable {
         result: &str,
         memo: Option<&str>,
         duration_ms: i64,
+        truncated: Option<Truncation>,
     ) -> usize {
         let region = self.target();
         let at = region.result(call_id);
@@ -201,6 +202,7 @@ impl Mutable {
         block.result = Some(result.to_string());
         block.memo = memo.map(str::to_string);
         block.duration_ms = duration_ms;
+        block.truncated = truncated;
         at
     }
 
@@ -281,5 +283,6 @@ fn blank(kind: BlockKind, call_id: Option<&str>) -> Block {
         result: None,
         memo: None,
         duration_ms: 0,
+        truncated: None,
     }
 }

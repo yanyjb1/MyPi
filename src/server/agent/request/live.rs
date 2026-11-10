@@ -109,7 +109,15 @@ pub enum ToolEvent {
         result: String,
         memo: Option<String>,
         duration_ms: u64,
+        truncated: Option<Truncation>,
     },
+}
+
+/// The full text a truncated result left behind: the amount that was cut, not what stayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Truncation {
+    pub lines: u64,
+    pub bytes: u64,
 }
 
 /// The sending end, bound to one session.

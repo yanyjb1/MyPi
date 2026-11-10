@@ -3,10 +3,10 @@
 pub(crate) const OK: &str = "[ok]";
 pub(crate) const ERR: &str = "[!!]";
 pub(crate) const PENDING: &str = "[*]";
-/// The user stopped the turn.
-pub(crate) const STOPPED: &str = "[-]";
-/// The call's own deadline passed.
-pub(crate) const TIMEOUT: &str = "[!]";
+
+/// Four phases, for anything that turns while the session is busy.
+pub(crate) const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+pub(crate) const ESC: &str = "ESC";
 
 pub(crate) const SEP: &str = "·";
 

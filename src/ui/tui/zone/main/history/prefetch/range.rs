@@ -13,6 +13,8 @@ pub enum Start {
     Latest,
     /// One fixed place: this segment, this row inside it.
     At(SegId, usize),
+    /// Inside the pinned rows, this one at the top.
+    Pin(usize),
 }
 
 /// What one spend produced.
@@ -62,6 +64,13 @@ impl Range {
     ) -> Spend {
         match self.start() {
             Start::Latest => latest(run, local, products, opts, height),
+            Start::Pin(at) => {
+                if at >= run.pin_len() {
+                    self.start = Some(Start::Latest);
+                    return latest(run, local, products, opts, height);
+                }
+                pinned(run, at, height)
+            }
             Start::At(id, row) => {
                 let (rows, missing, ended) = at(run, local, products, opts, height, id, row);
                 if ended {
@@ -89,21 +98,38 @@ impl Range {
         count: usize,
     ) -> Vec<i64> {
         let mut missing = Vec::new();
-        let Some((mut id, mut row)) = self.top(run, local, products, opts, height) else {
+        let Some(mut at) = self.top(run, local, products, opts, height) else {
             return missing;
         };
         let mut reached_end = false;
         for _ in 0..count.max(1) {
-            let moved = if older {
-                step_up(run, local, products, opts, id, row, &mut missing)
-            } else {
-                step_down(run, local, products, opts, id, row, &mut missing)
+            let moved = match (at, older) {
+                (Start::Pin(0), true) => pin_up(run, local, products, opts, &mut missing),
+                (Start::Pin(row), true) => Some(Start::Pin(row - 1)),
+                (Start::Pin(row), false) => {
+                    if row + 1 < run.pin_len() {
+                        Some(Start::Pin(row + 1))
+                    } else {
+                        reached_end = true;
+                        None
+                    }
+                }
+                (Start::At(id, row), _) => {
+                    let moved = if older {
+                        step_up(run, local, products, opts, id, row, &mut missing)
+                    } else {
+                        step_down(run, local, products, opts, id, row, &mut missing)
+                    };
+                    match moved {
+                        Some((next, at)) => Some(Start::At(next, at)),
+                        None if !older && run.pin_len() > 0 => Some(Start::Pin(0)),
+                        None => None,
+                    }
+                }
+                (Start::Latest, _) => Some(Start::Latest),
             };
             match moved {
-                Some((next, at)) => {
-                    id = next;
-                    row = at;
-                }
+                Some(next) => at = next,
                 None if !older => {
                     reached_end = true;
                     break;
@@ -111,11 +137,7 @@ impl Range {
                 None => break,
             }
         }
-        self.start = Some(if reached_end {
-            Start::Latest
-        } else {
-            Start::At(id, row)
-        });
+        self.start = Some(if reached_end { Start::Latest } else { at });
         missing
     }
 
@@ -139,8 +161,8 @@ impl Range {
         }
     }
 
-    /// Pin the window at an aim's top.
-    pub fn pin(&mut self, top: (SegId, usize)) {
+    /// Anchor the window at an aim's top.
+    pub fn anchor(&mut self, top: (SegId, usize)) {
         self.start = Some(Start::At(top.0, top.1));
     }
 
@@ -154,7 +176,7 @@ impl Range {
         rows: usize,
     ) -> Option<super::super::local::section::Idx> {
         let (mut id, mut row) = match self.start() {
-            Start::Latest => return None,
+            Start::Latest | Start::Pin(_) => return None,
             Start::At(id, row) => (id, row),
         };
         let mut missing = Vec::new();
@@ -177,13 +199,21 @@ impl Range {
         products: &mut Products,
         opts: &Opts<'_>,
         height: usize,
-    ) -> Option<(SegId, usize)> {
+    ) -> Option<Start> {
         match self.start() {
-            Start::At(id, row) => Some((id, row)),
+            Start::At(id, row) => Some(Start::At(id, row)),
+            Start::Pin(at) => Some(Start::Pin(at)),
             Start::Latest => {
                 let _ = fill_tail(run, local, products, opts, height);
-                let len = tail_len(run);
-                run.at(len.saturating_sub(height))
+                let index = run.len().saturating_sub(height);
+                if index >= run.body_len() {
+                    let pin = run.pin_len();
+                    if pin == 0 {
+                        return Some(Start::Latest);
+                    }
+                    return Some(Start::Pin((index - run.body_len()).min(pin - 1)));
+                }
+                run.at(index).map(|(id, row)| Start::At(id, row))
             }
         }
     }
@@ -198,7 +228,7 @@ fn latest(
     height: usize,
 ) -> Spend {
     let missing = fill_tail(run, local, products, opts, height);
-    let len = tail_len(run);
+    let len = run.len();
     let top = len.saturating_sub(height);
     let shown = len.saturating_sub(top);
     let mut rows: Vec<Row> = Vec::with_capacity(height);
@@ -209,6 +239,25 @@ fn latest(
         rows.push(Row::blank());
     }
     Spend { rows, missing, top }
+}
+
+/// A screen that starts inside the pinned rows.
+fn pinned(run: &Run, at: usize, height: usize) -> Spend {
+    let mut rows: Vec<Row> = Vec::with_capacity(height);
+    for index in at..run.pin_len() {
+        if rows.len() >= height {
+            break;
+        }
+        rows.push(run.pin_row(index).cloned().unwrap_or_default());
+    }
+    while rows.len() < height {
+        rows.push(Row::blank());
+    }
+    Spend {
+        rows,
+        missing: Vec::new(),
+        top: run.body_len() + at,
+    }
 }
 
 /// One fixed place: lay forward from it until the screen is full.
@@ -226,7 +275,6 @@ fn at(
     let mut missing: Vec<i64> = Vec::new();
     let mut cursor = Some(id);
     let mut skip = row;
-    let mut ended = false;
     while let Some(seg) = cursor {
         if rows.len() >= height {
             break;
@@ -252,11 +300,13 @@ fn at(
         }
         cursor = run.next(local, products, opts, seg);
         skip = 0;
-        if cursor.is_none() {
-            ended = true;
-        }
     }
-    (rows, missing, ended)
+    let mut at_pin = 0usize;
+    while rows.len() < height && at_pin < run.pin_len() {
+        rows.push(run.pin_row(at_pin).cloned().unwrap_or_default());
+        at_pin += 1;
+    }
+    (rows, missing, cursor.is_none() && at_pin == run.pin_len())
 }
 
 /// The rows a screen needs, laid towards the old side; and the block ids the run lacks.
@@ -268,10 +318,13 @@ fn fill_tail(
     height: usize,
 ) -> Vec<i64> {
     let mut missing = Vec::new();
+    let mut need = height.saturating_sub(run.pin_len());
+    if need == 0 {
+        return missing;
+    }
     let Some(mut id) = run.newest(local, products, opts) else {
         return missing;
     };
-    let mut need = height;
     loop {
         if let Placed::Missing(block) = run.place(local, products, opts, id) {
             missing.push(block);
@@ -288,13 +341,25 @@ fn fill_tail(
     }
 }
 
-/// The run length without the gap that closes the newest segment.
-fn tail_len(run: &Run) -> usize {
-    let len = run.len();
-    if len > 0 && run.row(len - 1).is_some_and(Row::is_blank) {
-        len - 1
-    } else {
-        len
+/// One row up from the pin's head: the newest segment's last row.
+fn pin_up(
+    run: &mut Run,
+    local: &Local,
+    products: &mut Products,
+    opts: &Opts<'_>,
+    missing: &mut Vec<i64>,
+) -> Option<Start> {
+    let id = run.newest(local, products, opts)?;
+    match run.place(local, products, opts, id) {
+        Placed::Laid => {
+            let rows = run.laid(id).map_or(0, |laid| laid.rows.len());
+            Some(Start::At(id, rows.saturating_sub(1)))
+        }
+        Placed::Missing(block) => {
+            missing.push(block);
+            None
+        }
+        Placed::Empty => None,
     }
 }
 

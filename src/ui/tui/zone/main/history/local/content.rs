@@ -43,6 +43,25 @@ pub struct Block {
     pub result: Option<String>,
     pub memo: Option<String>,
     pub duration_ms: i64,
+    pub truncated: Option<Truncation>,
+}
+
+/// How much a live result left behind when it was cut: the full text, not the part kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Truncation {
+    pub lines: u64,
+    pub bytes: u64,
+}
+
+impl Truncation {
+    /// The relay's `{lines, bytes}` object, when this frame carries one.
+    pub fn of(value: Option<&Value>) -> Option<Truncation> {
+        let value = value?.as_object()?;
+        Some(Truncation {
+            lines: value.get("lines")?.as_u64()?,
+            bytes: value.get("bytes")?.as_u64()?,
+        })
+    }
 }
 
 impl Block {
@@ -64,6 +83,7 @@ impl Block {
             result: text_of(row, "result"),
             memo: text_of(row, "memo"),
             duration_ms: row.get("duration_ms").and_then(Value::as_i64).unwrap_or(0),
+            truncated: None,
         })
     }
 }

@@ -14,7 +14,7 @@ use super::spec::{Args, ToolProgress};
 use super::subagent::FINAL;
 use super::workspace::Workspace;
 use crate::server::agent::request::contract::{Spill, ToolCall};
-use crate::server::agent::request::live::{Element, Event, ToolEvent};
+use crate::server::agent::request::live::{Element, Event, ToolEvent, Truncation};
 use crate::server::platform::time::now_stamp;
 
 /// What a call that the user stopped mid-flight reports as its reason.
@@ -167,7 +167,7 @@ impl Engine {
             Ok(out) => out,
             Err(e) => {
                 let text = format!("{e:#}");
-                self.end(input, call, false, &text, None, started);
+                self.end(input, call, false, &text, None, started, None);
                 return failed(call, text, started);
             }
         };
@@ -190,9 +190,9 @@ impl Engine {
             (arrived_before_stop && env.stop.is_stopped()).then(|| INTERRUPTED.to_string())
         });
         let ok = reason.is_none();
-        let (text, spill) = measure(tool.name, env.limits, text);
+        let (text, spill, truncated) = measure(tool.name, env.limits, text);
         let memo = memo.map(|value| serde_json::to_string(&value).unwrap_or_default());
-        self.end(input, call, ok, &text, memo.as_deref(), started);
+        self.end(input, call, ok, &text, memo.as_deref(), started, truncated);
         if stop {
             *halted = true;
         }
@@ -230,7 +230,7 @@ impl Engine {
         started: Instant,
     ) -> ToolResult {
         self.start(input, call);
-        self.end(input, call, false, why, None, started);
+        self.end(input, call, false, why, None, started, None);
         failed(call, why, started)
     }
 
@@ -242,6 +242,7 @@ impl Engine {
         result: &str,
         memo: Option<&str>,
         started: Instant,
+        truncated: Option<Truncation>,
     ) {
         let _ = input.out.send(Event {
             session: input.session,
@@ -251,6 +252,7 @@ impl Engine {
                 result: result.to_string(),
                 memo: memo.map(str::to_string),
                 duration_ms: elapsed(started),
+                truncated,
             }),
         });
     }
@@ -274,17 +276,27 @@ fn failed(call: &ToolCall, text: impl Into<String>, started: Instant) -> ToolRes
     }
 }
 
-/// Measure: too big → split in two. The full text goes to `spill`, the body keeps the visible part.
-fn measure(tool: &str, limits: Limits, text: String) -> (String, Option<Spill>) {
-    if text.lines().count() <= limits.lines && text.len() <= limits.bytes {
-        return (text, None);
+/// Measure: too big → split in two. The full text goes to `spill`, the body keeps the visible part;
+/// the two counts describe the text before it was cut.
+fn measure(
+    tool: &str,
+    limits: Limits,
+    text: String,
+) -> (String, Option<Spill>, Option<Truncation>) {
+    let lines = text.lines().count();
+    if lines <= limits.lines && text.len() <= limits.bytes {
+        return (text, None, None);
     }
+    let truncated = Truncation {
+        lines: lines as u64,
+        bytes: text.len() as u64,
+    };
     let head = visible(&text, limits);
     let spill = Spill {
         name: tool.to_string(),
         content: text,
     };
-    (head, Some(spill))
+    (head, Some(spill), Some(truncated))
 }
 
 /// The visible part: whole lines, until either the line cap or the byte cap runs out. A first line
