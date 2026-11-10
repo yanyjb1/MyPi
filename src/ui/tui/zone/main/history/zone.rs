@@ -151,6 +151,8 @@ pub struct HistoryZone {
     pub(super) margin: usize,
     /// Positions whose content changed since the last draw.
     pub(super) dirty: BTreeSet<Idx>,
+    /// Blocks the last draw lacked; the next tick asks for their rounds.
+    pub(super) missing: Vec<i64>,
     /// The checklist's own product.
     pub(super) todo_panel: TodoPanel,
     pub(super) todo: Vec<Task>,
@@ -174,8 +176,6 @@ pub struct HistoryZone {
     pub(super) structure: Turns,
     /// The id ranges asked for and not yet answered.
     pub(super) asking: HashSet<[i64; 2]>,
-    /// The newest block id this zone has numbered.
-    pub(super) landed: i64,
     /// A closed turn whose receipt does not line up: the ranges its own rows must come from.
     pub(super) pending: Option<Vec<[i64; 2]>>,
     /// A fresh attach lays the structure out again.
@@ -200,6 +200,7 @@ impl Default for HistoryZone {
             range: Range::default(),
             margin: DEFAULT_MARGIN,
             dirty: BTreeSet::new(),
+            missing: Vec::new(),
             todo_panel: TodoPanel::default(),
             todo: Vec::new(),
             todo_fold: TodoFold::default(),
@@ -216,7 +217,6 @@ impl Default for HistoryZone {
             cwd: String::new(),
             structure: Turns::default(),
             asking: HashSet::new(),
-            landed: 0,
             pending: None,
             needs_layout: false,
             busy: false,
@@ -263,7 +263,6 @@ impl HistoryZone {
     ) -> Vec<ratatui::text::Line<'static>> {
         let width = usize::from(term_w.max(1));
         let height = usize::from(self.height).max(1);
-        self.settle_dirty();
         let pin = self.pin_rows(width);
         let spend = self.with_draw(|local, run, range, opts| {
             run.set_pin(pin);
@@ -271,12 +270,20 @@ impl HistoryZone {
         });
         let top = spend.top;
         self.with_draw(|_, run, _, _| run.trim(top, top + height));
-        for block in &spend.missing {
-            if let Some(turn) = self.turn_of(*block) {
+        self.missing = spend.missing;
+        display::lines(&spend.rows, accent)
+    }
+
+    /// One round's side effects, before the draw: the dirty set settles, and what the last draw
+    /// lacked leaves as a request.
+    pub(in crate::ui::tui::zone::main) fn tick(&mut self) {
+        self.settle_dirty();
+        let missing = std::mem::take(&mut self.missing);
+        for block in missing {
+            if let Some(turn) = self.turn_of(block) {
                 self.ask_turn(turn);
             }
         }
-        display::lines(&spend.rows, accent)
     }
 
     /// Positions whose content changed lose their rows once; content past the budget leaves.
@@ -374,16 +381,13 @@ impl HistoryZone {
         self.mark(Idx::Fixed(num));
     }
 
-    /// Whether a waiting close owns this block id.
-    pub(super) fn pending_covers(&self, id: i64) -> bool {
-        self.pending
-            .as_ref()
-            .is_some_and(|ranges| ranges.iter().any(|[lo, hi]| (*lo..=*hi).contains(&id)))
-    }
-
-    /// A line this front end has to say, on its own slot.
+    /// A line this front end has to say, in the mutable region.
     pub fn notice(&mut self, text: String, level: Level, life: Life) {
-        self.local.notice(text, level, life);
+        for num in self.local.kill_short() {
+            self.forget(num);
+        }
+        let idx = self.local.notice(text, level, life);
+        self.mark(idx);
     }
 
     /// `/new`: drop this conversation's section; the next attach asks for the new one.
@@ -396,6 +400,7 @@ impl HistoryZone {
         self.local.clear();
         self.run.clear();
         self.dirty.clear();
+        self.missing.clear();
         self.range.follow();
         self.structure.clear();
         self.asking.clear();
@@ -404,7 +409,6 @@ impl HistoryZone {
         self.pin.clear();
         self.tick = 0;
         self.pending_focus = None;
-        self.landed = 0;
         self.pending = None;
         self.needs_layout = false;
         self.busy = false;
@@ -714,13 +718,16 @@ impl SubZone for HistoryZone {
             }
             name::ECHO => {
                 if let Some(text) = content.get("text").and_then(Value::as_str) {
-                    self.local.running_mut().echo(text);
+                    let at = self.local.running_mut().echo(text);
+                    self.mark(Idx::Turn(at as u32));
                     self.shouts
                         .push(Shout::new(name::TICK, serde_json::json!({})));
                 }
             }
             name::RETRACT => {
-                self.local.running_mut().retract();
+                if let Some(at) = self.local.running_mut().retract() {
+                    self.mark(Idx::Turn(at as u32));
+                }
                 let reason = content
                     .get("reason")
                     .and_then(Value::as_str)

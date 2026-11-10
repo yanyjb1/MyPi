@@ -61,30 +61,9 @@ impl Local {
         Idx::Fixed(self.fixed.append_older(SlotKind::Block { id, held: None }))
     }
 
-    /// A slot for a block whose content is not in hand yet.
-    pub fn append_id(&mut self, id: i64) -> Idx {
-        Idx::Fixed(self.fixed.append(SlotKind::Block { id, held: None }))
-    }
-
-    /// Slots, in range order, for every id that has none yet.
-    pub fn reserve(&mut self, ranges: &[[i64; 2]]) {
-        for [lo, hi] in ranges {
-            for id in *lo..=*hi {
-                if self.num_of(id).is_none() {
-                    self.append_id(id);
-                }
-            }
-        }
-    }
-
-    /// A line only this front end has to say: it waits at the end of the running turn.
+    /// A line only this front end has to say: it enters the mutable region like everything else.
     pub fn notice(&mut self, text: String, level: Level, life: Life) -> Idx {
-        if !self.running.is_empty() {
-            self.running.notice(text, level, life);
-            return Idx::Turn((self.running.len() - 1) as u32);
-        }
-        self.fixed.kill_short();
-        Idx::Fixed(self.fixed.append(SlotKind::Notice { text, level, life }))
+        Idx::Turn(self.running.notice(text, level, life) as u32)
     }
 
     /// A notice that waits past the turn it arrived in.
@@ -92,8 +71,8 @@ impl Local {
         Idx::Fixed(self.fixed.append(SlotKind::Notice { text, level, life }))
     }
 
-    pub fn kill_short(&mut self) {
-        self.fixed.kill_short();
+    pub fn kill_short(&mut self) -> Vec<i64> {
+        self.fixed.kill_short()
     }
 
     /// A rewind: the position keeps its number and draws nothing.
@@ -139,12 +118,19 @@ impl Local {
 
     /// A block's content: it takes the slot its id already has.
     pub fn put(&mut self, block: Block) {
-        let id = block.id;
         self.note_pair(&block);
-        if self.num_of(id).is_none() {
-            self.append_id(id);
+        self.fixed.bind(block.id, block);
+    }
+
+    /// The receipt's own numbering: a position per id, in range order, content still to come.
+    pub fn reserve(&mut self, ranges: &[[i64; 2]]) {
+        for [lo, hi] in ranges {
+            for id in *lo..=*hi {
+                if self.num_of(id).is_none() {
+                    self.fixed.append(SlotKind::Block { id, held: None });
+                }
+            }
         }
-        self.fixed.bind(id, block);
     }
 
     /// Whether this block's content is in hand.
@@ -201,9 +187,9 @@ impl Local {
         self.fixed.oldest()
     }
 
-    /// The newest block id that has a slot.
-    pub fn max_id(&self) -> i64 {
-        self.fixed.top()
+    /// Whether this session's own blocks have positions already.
+    pub fn has_now(&self) -> bool {
+        self.fixed.has_now()
     }
 
     /// The newest user message in hand, for the input box after a rewind.

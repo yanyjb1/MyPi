@@ -18,7 +18,7 @@ pub(super) fn read_frame(zone: &mut HistoryZone, frame: &Frame) {
     match (frame.class.as_str(), frame.name.as_str()) {
         ("stream", _) => read_stream(zone, frame),
         ("call", "init") => {
-            // Structure first: every id gets its slot before its content arrives.
+            // The wire orders rounds oldest first; a position is laid newest first.
             if let Some(snapshot) = frame.content.get("structure").and_then(turns_of) {
                 apply_structure(zone, &snapshot);
             }
@@ -222,32 +222,34 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         .get("ranges")
         .and_then(ranges_of)
         .unwrap_or_default();
-    // A close still waiting for its rows hands over now: the screen moves on either way.
-    take_pending(zone);
-    // A call that did not finish cleanly states why in the row the turn kept, not in the stream.
-    let failed = has_failure(zone);
-    ask_blocks(zone, &ranges, failed);
-    if zone.local.handover(&ranges) {
-        let last = ranges.iter().map(|[_, hi]| *hi).max().unwrap_or(0);
-        zone.landed = zone.landed.max(last);
-        zone.run.clear();
-        zone.outbox.push(Request::Structure);
-    } else if ranges.is_empty() {
-        zone.local.running_mut().clear();
+    if ranges.is_empty() {
+        zone.local.drop_turn();
         zone.run.clear();
         zone.outbox.push(Request::Structure);
     } else {
-        // The running turn does not line up with the receipt: it holds the screen until the
-        // receipt's own rows are in hand, and the next turn's entries wait beside it.
-        zone.local.running_mut().seal();
-        zone.pending = Some(ranges.clone());
-        zone.local.reserve(&ranges);
-        settle_pending(zone);
+        // A call that did not finish cleanly states why in the row the turn kept, not in the stream.
+        let failed = has_failure(zone);
+        if zone.local.handover(&ranges) {
+            zone.run.clear();
+            if failed {
+                ask_blocks(zone, &ranges);
+            }
+            zone.outbox.push(Request::Structure);
+        } else {
+            // The running turn does not line up with the receipt: the receipt is the truth, so
+            // its rows are fetched and handed over once they are all in hand.
+            zone.pending = Some(ranges.clone());
+            zone.local.reserve(&ranges);
+            ask_blocks(zone, &ranges);
+            settle_pending(zone);
+        }
     }
     zone.pin.clear();
-    zone.busy = false;
-    zone.shouts
-        .push(Shout::new(name::BUSY, json!({"on": false})));
+    if zone.pending.is_none() && zone.busy {
+        zone.busy = false;
+        zone.shouts
+            .push(Shout::new(name::BUSY, json!({"on": false})));
+    }
 }
 
 /// Whether this turn holds a call that failed: its reason lives in the stored row alone.
@@ -262,16 +264,34 @@ fn has_failure(zone: &HistoryZone) -> bool {
         })
 }
 
-/// Ask for every range whose blocks are not in hand; `all` takes them whether they are or not.
-fn ask_blocks(zone: &mut HistoryZone, ranges: &[[i64; 2]], all: bool) {
+/// Ask for a receipt's rows. A range asked for is noted so the draw does not ask again.
+fn ask_blocks(zone: &mut HistoryZone, ranges: &[[i64; 2]]) {
     for [lo, hi] in ranges {
-        if !all && (*lo..=*hi).all(|id| zone.local.has(id)) {
-            continue;
-        }
+        zone.asking.insert([*lo, *hi]);
         zone.outbox.push(Request::Blocks {
             ranges: vec![[*lo, *hi]],
         });
     }
+}
+
+/// Finish a waiting close once the receipt's rows are all in hand.
+fn settle_pending(zone: &mut HistoryZone) {
+    let ready = zone
+        .pending
+        .as_ref()
+        .is_some_and(|ranges| covered(zone, ranges));
+    if !ready {
+        return;
+    }
+    zone.pending = None;
+    zone.local.drop_turn();
+    zone.run.clear();
+    if zone.busy {
+        zone.busy = false;
+        zone.shouts
+            .push(Shout::new(name::BUSY, json!({"on": false})));
+    }
+    zone.outbox.push(Request::Structure);
 }
 
 /// Whether every id of these ranges has its content.
@@ -281,29 +301,7 @@ fn covered(zone: &HistoryZone, ranges: &[[i64; 2]]) -> bool {
         .all(|[lo, hi]| (*lo..=*hi).all(|id| zone.local.has(id)))
 }
 
-/// Finish a waiting close once its rows are in hand.
-fn settle_pending(zone: &mut HistoryZone) {
-    let ready = zone
-        .pending
-        .as_ref()
-        .is_some_and(|ranges| covered(zone, ranges));
-    if ready {
-        take_pending(zone);
-    }
-}
-
-/// Take the waiting close's positions from its receipt, whether its rows are here or not.
-fn take_pending(zone: &mut HistoryZone) {
-    let Some(ranges) = zone.pending.take() else {
-        return;
-    };
-    zone.local.settle(&ranges);
-    zone.landed = ranges.iter().map(|[_, hi]| *hi).max().unwrap_or(0);
-    zone.run.clear();
-    zone.outbox.push(Request::Structure);
-}
-
-/// Decode a `blocks` array: the content takes the slot its id already owns.
+/// Decode a `blocks` array: every row carries its id and takes the slot that id owns.
 fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
     let Some(items) = rows.as_array() else {
         return;
@@ -313,18 +311,8 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
             continue;
         };
         let id = block.id;
-        let fresh = id > zone.landed;
         let absent = !zone.local.has(id);
         let differs = zone.local.differs(&block);
-        if fresh && !zone.pending_covers(id) {
-            zone.landed = id;
-            if !zone.needs_layout {
-                zone.local.kill_short();
-                if zone.local.num_of(id).is_none() {
-                    zone.local.append_id(id);
-                }
-            }
-        }
         zone.local.put(block);
         if absent || differs {
             for side in zone.local.exchange(id).into_iter().flatten() {
@@ -335,9 +323,7 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
             }
         }
     }
-    if zone.pending.is_some() {
-        settle_pending(zone);
-    }
+    settle_pending(zone);
     // A range whose blocks are all in hand is no longer waiting: it stops exempting content.
     zone.asking
         .retain(|[lo, hi]| !(*lo..=*hi).all(|id| zone.local.has(id)));
@@ -413,13 +399,16 @@ fn read_config(zone: &mut HistoryZone, content: &Value) {
 pub(super) fn apply_structure(zone: &mut HistoryZone, snapshot: &Turns) {
     zone.settle_dirty();
     zone.structure = snapshot.clone();
-    if zone.needs_layout && !zone.structure.rounds().is_empty() {
+    let empty = zone.structure.rounds().is_empty();
+    if zone.needs_layout && !empty {
         zone.needs_layout = false;
-        lay_out(zone);
-    } else {
+        // A section that already holds this session's own blocks was laid out by its receipts.
+        if !zone.local.has_now() {
+            lay_out(zone);
+        }
+    } else if !zone.needs_layout {
         drop_unowned(zone);
     }
-    reconcile(zone);
     drop_stale_focus(zone);
     zone.settle_focus();
     zone.ensure_around();
@@ -441,20 +430,6 @@ fn drop_stale_focus(zone: &mut HistoryZone) {
     }
 }
 
-/// Give every block the structure owns a position, in render order.
-fn reconcile(zone: &mut HistoryZone) {
-    let floor = zone.local.max_id();
-    for round in zone.structure.rounds().iter().rev() {
-        for [lo, hi] in &round.ranges {
-            for id in *lo..=*hi {
-                if id > floor && zone.local.num_of(id).is_none() && !zone.pending_covers(id) {
-                    zone.local.append_id(id);
-                }
-            }
-        }
-    }
-}
-
 /// Lay the whole structure out as the past, newest block at -1.
 fn lay_out(zone: &mut HistoryZone) {
     let turns = zone.structure.rounds();
@@ -472,7 +447,6 @@ fn lay_out(zone: &mut HistoryZone) {
     for id in ids.iter().rev() {
         zone.local.append_older(*id);
     }
-    zone.landed = ids.last().copied().unwrap_or(0);
     zone.range.follow();
 }
 
@@ -482,7 +456,6 @@ fn drop_unowned(zone: &mut HistoryZone) {
     for idx in &gone {
         zone.local.dead(*idx);
     }
-    zone.landed = zone.local.max_id();
     if gone.is_empty() {
         return;
     }
@@ -492,6 +465,18 @@ fn drop_unowned(zone: &mut HistoryZone) {
         zone.shouts
             .push(Shout::new(name::PREFILL, json!({"text": text})));
     }
+}
+
+/// An `init` answer's `structure`: one `{turn, ranges}` per round, oldest first on the wire.
+fn turns_of(value: &Value) -> Option<Turns> {
+    let mut rounds = Vec::new();
+    for item in value.as_array()? {
+        let id = item.get("turn").and_then(Value::as_i64)?;
+        let ranges = item.get("ranges").and_then(ranges_of)?;
+        rounds.push(Round::new(id, ranges));
+    }
+    rounds.reverse();
+    Some(Turns::of(rounds))
 }
 
 /// A frame's ranges: `[[lo, hi], …]`.
@@ -505,15 +490,4 @@ fn ranges_of(value: &Value) -> Option<Vec<[i64; 2]>> {
         out.push([pair[0].as_i64()?, pair[1].as_i64()?]);
     }
     Some(out)
-}
-
-/// An `init` answer's `structure`: one `{turn, ranges}` per round, newest first.
-fn turns_of(value: &Value) -> Option<Turns> {
-    let mut rounds = Vec::new();
-    for item in value.as_array()? {
-        let id = item.get("turn").and_then(Value::as_i64)?;
-        let ranges = item.get("ranges").and_then(ranges_of)?;
-        rounds.push(Round::new(id, ranges));
-    }
-    Some(Turns::of(rounds))
 }

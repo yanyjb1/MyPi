@@ -14,7 +14,7 @@ What is here, what each file holds, who calls whom. Current state only.
 ## What it exposes
 
 - `App::boot(session, size, startup, zones)`.
-- `finished`, `size`, `pump`, `input`, `render`, `cursor`, `bye`, `take_copy`.
+- `finished`, `size`, `pump`, `tick`, `frame`, `input`, `cursor`, `bye`, `take_copy`.
 - `attach`, `detach`.
 - `Startup::main`, `Startup::resume`, `Startup::attach`.
 

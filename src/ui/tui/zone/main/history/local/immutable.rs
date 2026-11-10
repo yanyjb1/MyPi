@@ -21,7 +21,6 @@ pub struct Immutable {
     index: HashMap<i64, i64>,
     pairs: HashMap<String, Pair>,
     clock: u64,
-    top: i64,
     /// Slots that hold content right now: the budget counts these.
     held: usize,
 }
@@ -50,7 +49,8 @@ impl Immutable {
     }
 
     /// A short line expires: its slot keeps its number and draws nothing.
-    pub fn kill_short(&mut self) {
+    pub fn kill_short(&mut self) -> Vec<i64> {
+        let mut gone = Vec::new();
         for slot in self.past.iter_mut().chain(self.now.iter_mut()) {
             if let SlotKind::Notice {
                 life: super::slot::Life::Short,
@@ -58,8 +58,10 @@ impl Immutable {
             } = slot.kind
             {
                 slot.kind = SlotKind::Next;
+                gone.push(slot.num);
             }
         }
+        gone
     }
 
     /// A rewind: the slot keeps its number and stops holding a block.
@@ -85,7 +87,6 @@ impl Immutable {
         self.index.clear();
         self.pairs.clear();
         self.clock = 0;
-        self.top = 0;
         self.held = 0;
     }
 
@@ -140,9 +141,9 @@ impl Immutable {
         self.index.get(&block).copied()
     }
 
-    /// The newest block id that has a slot.
-    pub fn top(&self) -> i64 {
-        self.top
+    /// Whether this session's own blocks have positions.
+    pub fn has_now(&self) -> bool {
+        !self.now.is_empty()
     }
 
     /// The content on this slot, when it is in hand.
@@ -229,42 +230,70 @@ impl Immutable {
         self.pairs.entry(call.to_string()).or_default()
     }
 
-    /// Drop content until the region holds `budget` blocks. Exempt blocks stay.
+    /// Drop content until the region holds `budget` blocks. Exempt blocks stay, and an exchange
+    /// is kept or dropped as one: a card draws both halves.
     pub fn evict(&mut self, budget: usize, keep: impl Fn(i64, i64) -> bool) -> Vec<i64> {
         if self.held <= budget {
             return Vec::new();
         }
+        let mut candidates: Vec<(u64, i64, i64)> = self
+            .past
+            .iter()
+            .chain(self.now.iter())
+            .filter_map(|slot| match &slot.kind {
+                SlotKind::Block {
+                    id,
+                    held: Some(held),
+                } => Some((held.at, slot.num, *id)),
+                _ => None,
+            })
+            .collect();
+        candidates.sort_unstable();
         let mut out = Vec::new();
-        while self.held > budget {
-            let victim = self
-                .past
-                .iter()
-                .chain(self.now.iter())
-                .filter_map(|slot| match &slot.kind {
-                    SlotKind::Block {
-                        id,
-                        held: Some(held),
-                    } => Some((held.at, slot.num, *id)),
-                    _ => None,
-                })
-                .filter(|(_, num, id)| !keep(*id, *num))
-                .min_by_key(|(at, num, _)| (*at, *num))
-                .map(|(_, num, _)| num);
-            let Some(num) = victim else { break };
-            if let Some(SlotKind::Block { held, .. }) = self.at_mut(num).map(|slot| &mut slot.kind)
-            {
-                *held = None;
+        for (_, num, id) in candidates {
+            if self.held <= budget {
+                break;
             }
-            self.held -= 1;
-            out.push(num);
+            if self.block(num).is_none() || keep(id, num) {
+                continue;
+            }
+            let partner = self
+                .partner(num, id)
+                .filter(|(_, onum)| self.block(*onum).is_some());
+            if let Some((other, onum)) = partner
+                && keep(other, onum)
+            {
+                continue;
+            }
+            for victim in std::iter::once(num).chain(partner.map(|(_, other)| other)) {
+                if let Some(SlotKind::Block { held, .. }) =
+                    self.at_mut(victim).map(|slot| &mut slot.kind)
+                {
+                    *held = None;
+                }
+                self.held -= 1;
+                out.push(victim);
+            }
         }
         out
+    }
+
+    /// The other half of this block's exchange, when it has content.
+    fn partner(&self, num: i64, id: i64) -> Option<(i64, i64)> {
+        let call = self.block(num)?.call_id.as_deref()?;
+        let pair = self.pairs.get(call)?;
+        let other = if pair.request == Some(id) {
+            pair.result
+        } else {
+            pair.request
+        }?;
+        let at = self.num_of(other)?;
+        (at != num).then_some((other, at))
     }
 
     fn remember(&mut self, num: i64, kind: &SlotKind) {
         if let SlotKind::Block { id, held } = kind {
             self.index.insert(*id, num);
-            self.top = self.top.max(*id);
             if held.is_some() {
                 self.held += 1;
             }

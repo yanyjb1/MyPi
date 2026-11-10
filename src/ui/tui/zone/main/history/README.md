@@ -22,8 +22,8 @@ numbers do not survive the handover.
 
 A fixed position holds one of three things: a block (with its content when it is in hand), a line
 this front end says (a notice), or `Next`. `Next` keeps its number and draws nothing. A block with
-no content is a position the view can name before anything arrives, or one whose content the budget
-took back; both draw the `…` row and ask for the block.
+no content is one of the restored past whose rows have not been fetched, or one the budget took
+back; both draw the `…` row and ask for the block.
 
 Content is one `Block`: id, kind, the text or arguments it carries, name, intent, call id, the
 result and its ok, memo, duration, and whether it opens its round. A tool exchange is two blocks: a
@@ -34,12 +34,16 @@ round before any of its results, so two calls in one round sit next to each othe
 lives in the finished region; the running round answers from its own entries.
 
 The running round is an ordered list of entries; each entry is a block or a notice, and it carries
-the product derived from it. A block entry takes an upstream id when the round's receipt arrives; a
-notice never does. The receipt is checked by count first: the number of ids must equal the number of
-block entries, notices are not counted. A receipt that does not line up means the turn was cut
-short — a call that never ran leaves no block behind — so the receipt's positions are reserved at
-once, the running round keeps the screen until those rows are fetched, and only then does it go.
-While that wait lasts, the next round's entries grow beside it and take over on arrival.
+the product derived from it. Entries take their places by arrival. A block entry takes an upstream
+id when the round's receipt arrives; a notice never does. The receipt is checked by count first: the
+number of ids must equal the number of block entries, notices are not counted.
+
+A receipt that does not line up means the turn was cut short: a tool call interrupted before its
+arguments were complete never ran, and a request that never ran leaves no row behind. The zone takes
+the receipt's numbering at once — one empty position per id — asks the database for those rows, and
+binds each row to its own position as it arrives. When the last one is in hand the turn's blocks go
+and its notices land after them. Until then the running round keeps the screen and the statusline
+stays busy, so nothing else grows beside it.
 
 The two regions are the only holders of block content. What the budget takes away leaves the slot's
 number and kind behind, so a later scroll asks for it again instead of keeping it twice.
@@ -128,9 +132,10 @@ One round belongs to the app: it drains what the terminal said, then what the co
 runs the side effects, then draws only if the showing zone's rows changed.
 
 Inside this zone a frame is three steps. Ingest appends to the model — a piece, a block, a receipt —
-and records the position it touched in a dirty set; it never lays anything. The draw applies the set
-once: those positions lose their laid rows and their product, the content budget is settled, and the
-window is spent. Every other position keeps its rows and its product.
+and records the position it touched in a dirty set; it never lays anything. The tick applies the
+set: those positions lose their laid rows and their product, the content budget is settled against
+the window the last draw kept, and what the last draw lacked leaves as a block request. The draw
+then spends the window and trims the rows around it; it changes nothing.
 
 The zone counts its own revisions: every entry point that can change the rows bumps one. The app
 draws when that number moved since the last draw, or when the ESC row's clock fell due. Nothing else
@@ -155,8 +160,9 @@ opens a natural line), or `Wrapped` (it is a continuation).
   that answers a second time for the same block.
 - **The budget counts content, not positions** so that memory does not follow the length of the
   conversation; a block that leaves comes back through the same ask as one that never arrived.
-- **Blocks in use are exempt from the budget** so that a scroll never takes away a row it is about
-  to draw, and the working set is never evicted under the reader.
+- **The budget settles against the window the last draw kept** so that a scroll never takes away a
+  row it is about to draw; a block outside that window comes back through the same ask as one that
+  never arrived.
 - **Ingest only appends** so that a batch of stream pieces costs one append each, not one layout
   each; the shape of a round is decided once, at the draw that shows it.
 - **One layout per changed position per draw** so that a screen never derives the same block twice

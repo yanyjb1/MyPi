@@ -7,7 +7,7 @@ use super::section::Local;
 
 impl Local {
     /// The round's receipt arrived and lines up with the running turn: blocks take ids, notices
-    /// keep their place. `false` = it does not line up; [`Local::settle`] takes over then.
+    /// keep their place. `false` = it does not line up; the receipt numbers its own rows then.
     pub(crate) fn handover(&mut self, ranges: &[[i64; 2]]) -> bool {
         let ids = ids_of(ranges);
         let blocks = self
@@ -20,7 +20,7 @@ impl Local {
             return false;
         }
         let entries = self.running_mut().take();
-        self.kill_short();
+        let _ = self.kill_short();
         let mut ids = ids.into_iter();
         let mut first = true;
         for entry in entries {
@@ -42,22 +42,14 @@ impl Local {
         true
     }
 
-    /// The receipt does not line up: its rows are in hand, so the ids lead and the running turn's
-    /// notices land after them. The running turn goes, and whatever the next one already said stays.
-    pub(crate) fn settle(&mut self, ranges: &[[i64; 2]]) {
-        let ids = ids_of(ranges);
-        self.kill_short();
-        for id in ids {
-            if self.num_of(id).is_none() {
-                self.append_id(id);
-            }
-        }
+    /// The receipt named nothing: nothing landed, so the turn's blocks go and its notices stay.
+    pub(crate) fn drop_turn(&mut self) {
+        let _ = self.kill_short();
         for entry in self.running_mut().take() {
             if let Entry::Notice { text, level, life } = entry {
                 self.append_notice(text, level, life);
             }
         }
-        self.running_mut().adopt();
     }
 }
 

@@ -30,14 +30,17 @@ The only vocabulary the app and the three major zones share.
 | `event` | one frame it declared, or any `local` one |
 | `action` | one input it claimed |
 | `structure` | the structural window after `Request::Structure` |
-| `render` | this zone's rows |
+| `tick` | one frame's side effects, before any drawing |
+| `revision` | bumped whenever the zone's rows would differ |
+| `anim` | how often time alone rewrites the rows; `None` = never |
+| `render` | this zone's rows; it changes nothing |
 | `cursor` | the hardware cursor, if any |
 
 ### `SubZone`
 
 `claims`, `kinds`, `deliver_event(frame, size)`, `deliver_action(action)`, `attach(session,
-size)`, `detach`, `borrowed`, `structure`, `take_shouts`, `hear`. `Main` is the only host. Rows
-are `Main`'s own business: `main::pane::Pane` takes the ask, the grant and the broadcast.
+size)`, `detach`, `borrowed`, `structure`, `revision`, `take_shouts`, `hear`. `Main` is the only
+host. Rows are `Main`'s own business: `main::pane::Pane` takes the ask, the grant and the broadcast.
 
 ### `Kind`
 
@@ -52,10 +55,13 @@ lifts `stream / notice` out of `Stream`. `local` returns `None`: it is delivered
 
 | variant | lands as |
 |---|---|
-| `Send { kind, name, content, answer }` | one session frame; the app fills in the session |
+| `Init`, `Meta`, `Usage`, `Pools`, `Config`, `Blocks`, `Sessions`, `Memo` | one session call; the app names the door |
+| `Submit`, `Interrupt`, `Mailbox`, `ClearMailbox`, `Rename`, `SetCwd`, `SwitchModel`, `SetDefaultModel`, `Compact`, `Delete`, `Rewind` | one session write |
 | `Attach(i64)` | `session.attach` + `subscribe watch` + the broadcast |
 | `Detach` | `session.detach` + the broadcast |
-| `Turns` | `session.structure()`, translated by the app, handed to the zone that shows |
+| `Structure` | `session.structure()`, translated by the app, handed to the zone that shows |
+| `Copy` | the loop writes the clipboard between draws |
+| `PickProfile` | the profile a draft will open with |
 | `Quit` | the app ends the loop |
 
 ### `Shout`
@@ -64,8 +70,8 @@ One event a sub-zone (or the main zone) puts out: `name` and `content`. The main
 to the other two and repeats until the queue is dry; a shouter never hears its own event, and a
 shout raised while delivering lands on the same queue.
 
-The names in use: `cwd` (main), `usage`, `busy`, `prefill` (history and input), `queue`,
-`echo`, `retract`, `notice` (input to history).
+The names in use: `cwd` (main), `usage`, `signal`, `busy`, `prefill`, `queue`, `echo`, `retract`,
+`notice`, `tick`.
 
 ### `Outcome`
 

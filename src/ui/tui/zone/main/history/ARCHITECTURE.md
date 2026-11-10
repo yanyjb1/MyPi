@@ -36,7 +36,8 @@ HistoryZone
  ├── run: Run                   ── the laid segments, in render order
  ├── range: Range               ── `Latest` or one fixed place, plus the screen height
  ├── margin: usize              ── blocks that keep their content and product
- ├── dirty: BTreeSet<Idx>       ── positions a piece or a block touched since the last draw
+ ├── dirty: BTreeSet<Idx>       ── positions a piece or a block touched since the last tick
+ ├── missing: Vec<i64>          ── blocks the last draw lacked
  ├── todo_panel: TodoPanel      ── the checklist's rows
  ├── pin: Vec<Pin>              ── what is still running, in arrival order
  ├── tick: usize                ── the phase the spinner reads
@@ -46,18 +47,20 @@ HistoryZone
 ```
 
 - `wire::read_frame` decodes one frame and never lays: a piece appends to the running entry and marks
-  that entry's position (and the card position it draws), a block binds to the slot its id owns, a
-  receipt hands the running entries their numbers. `call init` reads the structure before the blocks,
-  so every id has its slot before its content arrives.
-- `zone::render_rows` applies the dirty set once: those positions lose their laid rows and their
-  product, the content budget is settled against the blocks in use, the pin is rebuilt, the window
-  is spent, and the run is trimmed.
+  that entry's position (and the card position it draws), a block binds to the slot its id owns.
+  `call init` lays the structure out before the blocks, so every id has its slot before its content
+  arrives. A receipt either hands the running entries their numbers or, when the count does not line
+  up, reserves its own positions and binds the fetched rows to them.
+- `zone::tick` applies the dirty set once: those positions lose their laid rows and their product,
+  the content budget is settled against the window the last draw kept, and the blocks the last draw
+  lacked leave as `Request::Blocks`. `zone::render_rows` rebuilds the pin, spends the window, and
+  trims the run; it changes nothing.
 - `Local::prepare` builds a position's product on first use and keeps it on the block; `Local::shape`
   hands the run what that product is. The run lays only segments it does not hold.
 - `Local::evict` drops content past `cacheMargin`, oldest admission first, skipping positions the run
-  holds, the ranges asked for, and the ranges a close is waiting on. A position whose content left
-  draws `…` and asks again through `Request::Blocks`.
-- `Products` is gone: there is no cache outside the two regions.
+  holds, the ranges asked for, and the ranges a close is waiting on. One exchange is kept or dropped
+  as one, so a card never loses half its rows. A position whose content left draws `…` and asks
+  again through `Request::Blocks`.
 
 ## Must stay in sync
 
@@ -82,6 +85,9 @@ HistoryZone
     new block field means the invalidation points must know about it.
 13. An ingest path and `HistoryZone::mark`: whatever changes a position's content must mark it, or
     the screen keeps the rows it drew before.
+14. A receipt and the rows fetched for it: the ids come from the receipt, the content from
+    `call blocks`, and the positions from the receipt alone. Nothing gives a position to content
+    that did not come from a receipt.
 
 ## Not wired
 

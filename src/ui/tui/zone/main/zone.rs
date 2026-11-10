@@ -132,6 +132,7 @@ impl Zone for MainZone {
     fn tick(&mut self) -> Vec<Request> {
         self.input.tick_statusline();
         self.settle();
+        self.history.tick();
         let mut requests = self.history.take_requests();
         requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
@@ -212,6 +213,8 @@ impl Zone for MainZone {
                 .and_then(crate::ui::tui::theme::Accent::parse)
             {
                 self.accent = accent;
+                // The accent is this zone's own drawn fact: no child revision moves for it.
+                self.rev = self.rev.wrapping_add(1);
             }
             self.sync_revision();
             return Vec::new();

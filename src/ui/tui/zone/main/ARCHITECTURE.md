@@ -38,7 +38,7 @@ The app, the session, the socket, the database, the agent loop, the picker, and 
 
 ```text
 MainZone
- ├── history  ── blocks, live tail, local section, viewport, cache
+ ├── history  ── blocks, live tail, the two regions, viewport, products
  ├── input    ── editor, statusline, exits, hires
  ├── reserved ── desk, completion, usage panel, memo panel
  ├── keys     ── seats and loans
@@ -47,11 +47,12 @@ MainZone
 
 - `event` and `action` end in `flush`, which drains every child's `shouts` and delivers them to the
   other two.
-- `tick` runs the statusline's own clock, `settle`, and the hand that the editor asked for, then folds
-  the children's revisions into one number the app compares.
+- `tick` runs the statusline's own clock, `settle`, the hand that the editor asked for, and the
+  history zone's settled dirty set with its asks; then it folds the children's revisions into one
+  number the app compares.
 - `settle` re-arbitrates rows, seats a pending hand, and flushes again.
-- `render` calls each child in row order; the desk reports the cursor's column back to the input. It
-  changes nothing the zone's rows depend on.
+- `render` calls each child in row order; the desk reports the cursor's column back to the input.
+  The children lay rows only: every model change and every ask happens in `tick` or on an action.
 
 ## Must stay in sync
 

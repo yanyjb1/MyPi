@@ -170,14 +170,6 @@ impl App {
         }
     }
 
-    /// This frame's rows, from the zone that shows.
-    pub fn render(&mut self) -> Vec<Line<'static>> {
-        match self.owner {
-            Some(zone) => self.zones[zone.index()].render(),
-            None => Vec::new(),
-        }
-    }
-
     /// Where the hardware cursor goes.
     pub fn cursor(&self) -> Option<(u16, u16)> {
         match self.owner {
