@@ -95,6 +95,9 @@ pub(crate) fn run_to(
             let mut rdr = std::io::BufReader::new(pipe);
             let mut raw = [0u8; 8192];
             let mut pending = String::new();
+            let mut batch = String::new();
+            /// How much one message carries: a chatty command must not cost one wake per line.
+            const CHUNK: usize = 8 * 1024;
             loop {
                 match rdr.read(&mut raw) {
                     Ok(0) | Err(_) => break,
@@ -103,16 +106,21 @@ pub(crate) fn run_to(
                         // or escape split across reads must not be emitted half-formed.
                         pending.push_str(&String::from_utf8_lossy(&raw[..n]));
                         while let Some(i) = pending.find('\n') {
-                            let line: String = pending.drain(..=i).collect();
-                            if tx.send(wrap(line)).is_err() {
-                                return;
+                            batch.extend(pending.drain(..=i));
+                            if batch.len() >= CHUNK {
+                                if tx.send(wrap(std::mem::take(&mut batch))).is_err() {
+                                    return;
+                                }
                             }
                         }
                     }
                 }
             }
             if !pending.is_empty() {
-                let _ = tx.send(wrap(pending));
+                batch.push_str(&pending);
+            }
+            if !batch.is_empty() && tx.send(wrap(batch)).is_err() {
+                return;
             }
             let _ = tx.send(Msg::ReaderDone);
         });
@@ -239,7 +247,9 @@ impl OutputSink for StringSink {
         if exit.code != Some(0) && !exit.killed {
             text.push_str(&format!("\n[exit {}]", exit.code.unwrap_or(-1)));
         }
-        self.text = text.trim_end().to_string();
+        let keep = text.trim_end().len();
+        text.truncate(keep);
+        self.text = text;
         Ok(())
     }
 }

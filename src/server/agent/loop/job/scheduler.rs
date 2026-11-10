@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use anyhow::Result;
+
 use crate::server::agent::tools::contract::job::{JobCtx, JobOutcome, OutputSink};
 use crate::server::platform::time;
 
@@ -31,10 +33,11 @@ pub(crate) fn spawn(
     stop: Arc<AtomicBool>,
     bell: Bell,
     dir: OutputDir,
-) {
-    let _ = std::thread::Builder::new()
+) -> std::io::Result<()> {
+    std::thread::Builder::new()
         .name(format!("mypi-jobs-{session}"))
-        .spawn(move || run(session, values, wake, state, stop, bell, dir));
+        .spawn(move || run(session, values, wake, state, stop, bell, dir))
+        .map(|_| ())
 }
 
 /// What the thread does after one pass.
@@ -119,8 +122,15 @@ fn tick(
             text: wakes.join("\n"),
         });
     }
+    let mut lost = false;
     for id in starts {
-        run_job(state.clone(), bell.clone(), id);
+        if run_job(state.clone(), bell.clone(), id).is_err() {
+            lost = true;
+        }
+    }
+    // A job whose thread never started still owes a wake; one more tick delivers it.
+    if lost {
+        return Next::At(Duration::ZERO);
     }
     if done {
         return Next::Done;
@@ -327,10 +337,10 @@ fn prune(st: &mut State, dir: &OutputDir) {
     }
 }
 
-pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Bell, id: Id) {
+pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Bell, id: Id) -> Result<()> {
     let worker_state = state.clone();
     let worker_bell = bell.clone();
-    let _ = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name(format!("mypi-jobs-run-{id}"))
         .spawn(move || {
             let (runner, timeout, cancel, needs_slot, mut output) = {
@@ -414,5 +424,49 @@ pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Bell, id: Id) {
             }
             drop(st);
             ring(&worker_bell);
-        });
+        })
+        .map(|_| ())
+        .map_err(|e| {
+            settle_unstarted(&state, id, &e);
+            ring(&bell);
+            anyhow::Error::new(e)
+        })
+}
+
+/// No thread: the job fails here, its pool slot returns, and its wake rides the next tick.
+fn settle_unstarted(state: &Mutex<State>, id: Id, why: &std::io::Error) {
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut needs_slot = false;
+    let mut schedule = None;
+    let mut notice = None;
+    if let Some(task) = st.tasks.get_mut(&id) {
+        task.state = TaskState::Failed;
+        task.ended = Some(time::unix_now());
+        task.text = Some(format!("the job's thread did not start: {why}"));
+        let duration = task.duration();
+        needs_slot = task.needs_slot;
+        schedule = task.schedule;
+        if task.wake_on_done {
+            notice = Some(wake::job_status(
+                id,
+                TaskState::Failed,
+                None,
+                duration,
+                task.bytes,
+                task.truncated,
+            ));
+        }
+    }
+    if needs_slot {
+        st.running = st.running.saturating_sub(1);
+    }
+    if let Some(sid) = schedule
+        && let Some(entry) = st.schedules.get_mut(&sid)
+        && entry.running == Some(id)
+    {
+        entry.running = None;
+    }
+    if let Some(text) = notice {
+        st.pending_wakes.push(text);
+    }
 }

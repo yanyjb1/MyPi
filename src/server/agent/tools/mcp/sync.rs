@@ -36,6 +36,12 @@ impl SyncMcpBridge {
         }
     }
 
+    /// One session's bridge, its table read where the session stands. Servers start on first use.
+    pub fn open(cwd: &Path, global: &Path) -> Result<Self> {
+        let config = super::setup::table(cwd, global)?;
+        Ok(Self::new(cwd.to_path_buf(), global.to_path_buf(), config))
+    }
+
     fn server_for(&self, name: &str) -> Result<Arc<Mutex<Server>>> {
         let existing = self
             .servers

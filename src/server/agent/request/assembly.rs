@@ -17,6 +17,7 @@ pub fn build(
     system: &str,
     stored: &[Message],
     tools: Arc<Vec<ToolDef>>,
+    tools_json: Arc<serde_json::Value>,
     session: i64,
 ) -> Result<ProtocolRequest> {
     let mut messages = Vec::with_capacity(stored.len() + 1);
@@ -32,6 +33,7 @@ pub fn build(
         stream,
         messages,
         tools,
+        tools_json,
         session_id: Some(session.to_string()),
     })
 }
@@ -46,6 +48,7 @@ pub fn compaction(
     region: &[Message],
     instruction: &str,
     tools: Arc<Vec<ToolDef>>,
+    tools_json: Arc<serde_json::Value>,
     session: i64,
 ) -> Result<ProtocolRequest> {
     let mut messages = Vec::with_capacity(region.len() + 2);
@@ -64,6 +67,7 @@ pub fn compaction(
         stream,
         messages,
         tools,
+        tools_json,
         session_id: Some(session.to_string()),
     })
 }

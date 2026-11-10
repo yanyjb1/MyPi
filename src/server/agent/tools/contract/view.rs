@@ -28,8 +28,8 @@ pub trait Source: Send + Sync {
     fn block(&self, session: i64, id: i64) -> Result<Option<BlockPair>>;
     fn jobs(&self, session: i64) -> Option<Arc<dyn job::JobHost>>;
     fn child(&self, session: i64) -> Option<Arc<dyn Child>>;
-    /// The process-wide MCP bridge, when `mcp.json` named at least one server.
-    fn mcp(&self) -> Option<Arc<dyn McpBridge>>;
+    /// The session's own MCP bridge, opened where that session now stands.
+    fn mcp(&self, session: i64, cwd: &Path) -> Result<Arc<dyn McpBridge>>;
 }
 
 /// One sub-session's live state: its draft, its budget and its answer file.
@@ -37,7 +37,8 @@ pub trait Child: Send + Sync {
     fn draft(&self) -> &dyn Draft;
     /// What is left of the tool-call budget.
     fn left(&self) -> u32;
-    fn charge(&self) -> Result<()>;
+    /// Spend one call; the caller refuses first, so this never goes below zero.
+    fn charge(&self);
     /// The file `final submit` writes; its name was fixed when the child was spawned.
     fn answer(&self) -> &Path;
     /// Record that the draft has landed; the parent's job is done only after this.

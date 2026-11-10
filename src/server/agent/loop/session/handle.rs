@@ -1,7 +1,7 @@
 //! One session's handle: its birth values, its live state, its stop flag.
 
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::server::agent::request::message::Usage;
 use crate::server::agent::request::transport::worker::SessionWorker;
@@ -30,6 +30,8 @@ pub(crate) struct Handle {
     pub busy: AtomicBool,
     pub gone: AtomicBool,
     pub live: Mutex<Option<Live>>,
+    /// One ring per turn that ended: whoever waits for a session to settle waits here.
+    settled: (Mutex<u64>, Condvar),
     /// The running turn's partial usage; read only while `busy` holds.
     partial: Mutex<Option<Partial>>,
 }
@@ -46,7 +48,46 @@ impl Handle {
             busy: AtomicBool::new(false),
             gone: AtomicBool::new(false),
             live: Mutex::new(None),
+            settled: (Mutex::new(0), Condvar::new()),
             partial: Mutex::new(None),
+        }
+    }
+
+    /// The turn is over: the flag drops, the idle waiters hear it, the scheduler wakes.
+    pub(crate) fn mark_idle(&self) {
+        self.busy.store(false, Ordering::Release);
+        self.ring_settle();
+        self.mailbox.notify();
+    }
+
+    /// Wake whoever waits for this session to settle.
+    pub(crate) fn ring_settle(&self) {
+        let mut generation = self.settled.0.lock().unwrap_or_else(|e| e.into_inner());
+        *generation += 1;
+        self.settled.1.notify_all();
+    }
+
+    /// Block until no turn runs on this session.
+    pub(crate) fn wait_idle(&self) {
+        let mut generation = self.settled.0.lock().unwrap_or_else(|e| e.into_inner());
+        while self.busy.load(Ordering::Acquire) {
+            generation = self
+                .settled
+                .1
+                .wait(generation)
+                .unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Wait at most `wait` for the session to settle.
+    pub(crate) fn wait_idle_for(&self, wait: std::time::Duration) {
+        let generation = self.settled.0.lock().unwrap_or_else(|e| e.into_inner());
+        if self.busy.load(Ordering::Acquire) {
+            let _ = self
+                .settled
+                .1
+                .wait_timeout(generation, wait)
+                .unwrap_or_else(|e| e.into_inner());
         }
     }
 

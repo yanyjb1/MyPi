@@ -11,6 +11,7 @@ use super::contract::output::{ToolOutput, ToolResult};
 use super::contract::view::{Child, Export, Source};
 use super::registry;
 use super::spec::{Args, ToolProgress};
+use super::subagent::FINAL;
 use super::workspace::Workspace;
 use crate::server::agent::request::contract::{Spill, ToolCall};
 use crate::server::agent::request::live::{Element, Event, ToolEvent};
@@ -53,6 +54,16 @@ impl Engine {
     }
 
     fn env(&self, input: &BatchInput) -> Result<Env> {
+        // Aliases are a database read: only a batch that reaches the shell pays for it.
+        let reads_aliases = input
+            .calls
+            .iter()
+            .any(|call| matches!(call.name.as_str(), "bash" | "alias" | "kairos"));
+        let session_aliases = if reads_aliases {
+            self.source.aliases(input.session)?
+        } else {
+            BTreeMap::new()
+        };
         Ok(Env {
             workspace: Workspace::new(input.root.clone(), input.cwd.clone()),
             limits: self.limits,
@@ -64,9 +75,8 @@ impl Engine {
             session: input.session,
             batch_len: input.calls.len(),
             tools: input.tools.iter().cloned().collect(),
-            aliases: Aliases::new(self.aliases.clone(), self.source.aliases(input.session)?),
+            aliases: Aliases::new(self.aliases.clone(), session_aliases),
             default_budget: self.default_budget,
-            mcp: self.source.mcp(),
             export: self.export.clone(),
             paths: self.paths.clone(),
             source: self.source.clone(),
@@ -117,7 +127,7 @@ impl Engine {
             let why = format!("tool `{}` is disabled by the active profile", tool.name);
             return self.refused(input, call, &why, started);
         }
-        let charged = tool.name != "final";
+        let charged = tool.name != FINAL.name;
         if charged && child.is_some_and(|c| c.left() == 0) {
             let why = "tool-call budget exhausted; finish with `final submit`";
             return self.refused(input, call, why, started);
@@ -161,13 +171,8 @@ impl Engine {
                 return failed(call, text, started);
             }
         };
-        if charged
-            && let Some(child) = child
-            && let Err(e) = child.charge()
-        {
-            let text = format!("{e:#}");
-            self.end(input, call, false, &text, None, started);
-            return failed(call, text, started);
+        if charged && let Some(child) = child {
+            child.charge();
         }
 
         let ts = now_stamp();

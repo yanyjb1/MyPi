@@ -16,33 +16,36 @@ use crate::server::agent::tools::mcp::bridge::McpBridge;
 use crate::server::storage::Reader;
 use crate::server::storage::query::{Cond, Order, Query, Sheet, Val};
 
-/// One database path, plus the handles the loop attaches as sessions come alive.
+/// One database path, plus the handles the loop builds as sessions come alive.
 pub struct Db {
     path: PathBuf,
+    /// The global `mcp.json`, for a session that has no project copy.
+    global: PathBuf,
+    /// One job service per session, built the first time something asks for it.
+    factory: crate::server::agent::r#loop::job::Factory,
     jobs: Mutex<HashMap<i64, Arc<dyn JobHost>>>,
     children: Mutex<HashMap<i64, Arc<dyn Child>>>,
-    mcp: Mutex<Option<Arc<dyn McpBridge>>>,
+    mcp: Mutex<HashMap<i64, Arc<dyn McpBridge>>>,
 }
 
 impl Db {
-    pub fn new(path: PathBuf) -> Arc<Self> {
+    pub(crate) fn new(
+        path: PathBuf,
+        global: PathBuf,
+        factory: crate::server::agent::r#loop::job::Factory,
+    ) -> Arc<Self> {
         Arc::new(Self {
             path,
+            global,
+            factory,
             jobs: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
-            mcp: Mutex::new(None),
+            mcp: Mutex::new(HashMap::new()),
         })
     }
 
     fn reader(&self) -> Result<Reader> {
         Reader::open(&self.path)
-    }
-
-    pub fn attach_jobs(&self, session: i64, service: Arc<dyn JobHost>) {
-        self.jobs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(session, service);
     }
 
     pub fn detach_jobs(&self, session: i64) {
@@ -66,8 +69,12 @@ impl Db {
             .remove(&session);
     }
 
-    pub fn attach_mcp(&self, bridge: Arc<dyn McpBridge>) {
-        *self.mcp.lock().unwrap_or_else(|e| e.into_inner()) = Some(bridge);
+    /// Drop a session's MCP bridge; its servers shut down with it.
+    pub fn detach_mcp(&self, session: i64) {
+        self.mcp
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&session);
     }
 }
 
@@ -113,7 +120,7 @@ impl Source for Db {
         };
         let mut filter = vec![
             Cond::Eq("kind", Val::Text("tool_request".to_string())),
-            Cond::Within("id", ranges),
+            Cond::Within("id", ranges.clone()),
         ];
         if let Some(tool) = tool
             && tool != "all"
@@ -131,7 +138,7 @@ impl Source for Db {
                 .order("id", order)
                 .limit(limit),
         )?;
-        Ok(records(&reader, requests)?)
+        Ok(records(&reader, requests, &ranges)?)
     }
 
     fn calls_after(&self, session: i64, block: i64, tool: &str) -> Result<Vec<CallRecord>> {
@@ -143,11 +150,11 @@ impl Source for Db {
                 .filter(vec![
                     Cond::Eq("kind", Val::Text("tool_request".to_string())),
                     Cond::Eq("name", Val::Text(tool.to_string())),
-                    Cond::Within("id", ranges),
+                    Cond::Within("id", ranges.clone()),
                 ])
                 .order("id", Order::Asc),
         )?;
-        Ok(records(&reader, requests)?)
+        Ok(records(&reader, requests, &ranges)?)
     }
 
     fn last_memo(&self, session: i64, marker: &str) -> Result<Option<(i64, String)>> {
@@ -174,7 +181,7 @@ impl Source for Db {
         let ranges = ranges(&reader, session)?;
         let rows = reader.query(&Query::new(Sheet::Blocks).filter(vec![
             Cond::Eq("id", Val::Int(id)),
-            Cond::Within("id", ranges),
+            Cond::Within("id", ranges.clone()),
         ]))?;
         let Some(request) = rows.into_iter().next() else {
             return Ok(None);
@@ -191,6 +198,7 @@ impl Source for Db {
                     .filter(vec![
                         Cond::Eq("kind", Val::Text("tool_result".to_string())),
                         Cond::Eq("call_id", Val::Text(call_id.to_string())),
+                        Cond::Within("id", ranges),
                     ])
                     .limit(1),
             )?
@@ -200,11 +208,22 @@ impl Source for Db {
     }
 
     fn jobs(&self, session: i64) -> Option<Arc<dyn JobHost>> {
-        self.jobs
+        // A child never owns a job service: it is the parent's job that runs it.
+        if self
+            .children
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(&session)
-            .cloned()
+            .contains_key(&session)
+        {
+            return None;
+        }
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(service) = jobs.get(&session) {
+            return Some(service.clone());
+        }
+        let service: Arc<dyn JobHost> = self.factory.make(session);
+        jobs.insert(session, service.clone());
+        Some(service)
     }
 
     fn child(&self, session: i64) -> Option<Arc<dyn Child>> {
@@ -215,8 +234,27 @@ impl Source for Db {
             .cloned()
     }
 
-    fn mcp(&self) -> Option<Arc<dyn McpBridge>> {
-        self.mcp.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    fn mcp(&self, session: i64, cwd: &std::path::Path) -> Result<Arc<dyn McpBridge>> {
+        let existing = self
+            .mcp
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&session)
+            .cloned();
+        if let Some(bridge) = existing {
+            // The session may have moved since the last call; the table follows it.
+            bridge.rescan(cwd)?;
+            return Ok(bridge);
+        }
+        // Servers start lazily, so building outside the lock costs no process.
+        let bridge: Arc<dyn McpBridge> = Arc::new(
+            crate::server::agent::tools::mcp::sync::SyncMcpBridge::open(cwd, &self.global)?,
+        );
+        self.mcp
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session, bridge.clone());
+        Ok(bridge)
     }
 }
 
@@ -349,7 +387,7 @@ fn anchor_block(reader: &Reader, anchor: &str) -> Result<i64> {
 }
 
 /// Request rows plus their paired results, as history hands them over.
-fn records(reader: &Reader, requests: Vec<Value>) -> Result<Vec<CallRecord>> {
+fn records(reader: &Reader, requests: Vec<Value>, ranges: &[[i64; 2]]) -> Result<Vec<CallRecord>> {
     let ids: Vec<Val> = requests
         .iter()
         .filter_map(|row| row["call_id"].as_str())
@@ -363,6 +401,7 @@ fn records(reader: &Reader, requests: Vec<Value>) -> Result<Vec<CallRecord>> {
                 .filter(vec![
                     Cond::Eq("kind", Val::Text("tool_result".to_string())),
                     Cond::In("call_id", ids),
+                    Cond::Within("id", ranges.to_vec()),
                 ]),
         )?;
         for row in results {

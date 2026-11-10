@@ -209,7 +209,10 @@ impl Api {
             (Some(provider), Some(model)) => Some((provider.to_string(), model.to_string())),
             _ => None,
         };
-        let cwd = row["cwd"].as_str().map(PathBuf::from);
+        let cwd = row["cwd"]
+            .as_str()
+            .map(PathBuf::from)
+            .ok_or_else(|| Refuse::Internal("the session row carries no cwd".into()))?;
         drop(reader);
 
         let cfg = self.cfg();

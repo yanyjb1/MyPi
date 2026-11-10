@@ -13,6 +13,7 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES,
     KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_INTERVAL,
     KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_TIMEOUT, KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE,
+    KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_TASK_TIMEOUT_SECS,
     KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
@@ -120,6 +121,18 @@ impl Config {
             .unwrap_or(1000)
             .max(0)
             .min(u32::MAX as i64) as u32
+    }
+
+    /// How long one sub-session may run before the loop stops it.
+    pub fn task_timeout(&self) -> std::time::Duration {
+        let seconds = self
+            .effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_TASK_TIMEOUT_SECS)
+            .and_then(Value::as_int)
+            .unwrap_or(3600)
+            .max(1);
+        std::time::Duration::from_secs(seconds as u64)
     }
 
     /// Where exported spill texts and artifact files land: `<temp>/mypi`.

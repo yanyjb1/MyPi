@@ -146,7 +146,6 @@ Env {
   tools: BTreeSet<String>,   // the session's list; the one gate
   aliases: Aliases,          // config layer above the session layer
   default_budget: u32,
-  mcp: Option<Arc<dyn McpBridge>>,
   export: Arc<dyn Export>,   // a full text out of the database as a file
   paths: Paths,              // agents, answers, globalAgents
   source: Arc<dyn Source>,   // reads the loop owns
@@ -281,18 +280,24 @@ A reply cut short mid-stream keeps no calls at all. Calls that arrived whole but
 their request blocks dropped before the turn's one commit. A call's own deadline is not a stop:
 `bash` reports `timed out after Ns` through `ToolOutput::failure`.
 
+`final submit` is not a stop either: its result carries `stop`, and the turn settles as `finished`.
+
 ### MCP
 
 `mcp` is one static tool with a fixed schema. Which servers exist and which tools each exposes is
 decided at runtime, so a new server needs no Rust change — only a line in `mcp.json`.
+
+The bridge belongs to a session: the tool asks `Source::mcp(session, cwd)`, which builds one on the
+first call and follows the session's cwd from then on (a move rescans the table and drops the old
+pool). A session that never calls `mcp` never starts a server.
 
 `mcp/setup.rs` reads the table for where the session stands: `<cwd>/.mypi/mcp.json` when it exists,
 else `<global root>/mcp.json`.
 
 **The project's file wins whole.** If it exists the global one is not read at all; the two are
 never merged. Neither existing means an empty table, and an empty table still mounts the bridge.
-A `cd` or a cwd change rescans; a changed table or directory drops the process pool, an unchanged
-one is a no-op.
+The table is read where the session stood at its first `mcp` call; the next call after a `cd` reads
+it again, and a changed table or directory drops the process pool. An unchanged one is a no-op.
 
 ```json
 {
@@ -323,7 +328,8 @@ not checked here; a bad argument is the server's error to report.
 
 - A job is created by the loop, never by a tool. The tool writes a `contract::job::JobSpec` and
   holds the session's `JobHost`; the scheduler, the pool, the per-run files and the wakes live in
-  `loop/job`.
+  `loop/job`. A session's service is built the first time anything asks for it, so a session that
+  never runs a job keeps no scheduler and no output folder.
 - One job, one completion: a command finishes, a child submits, or the clock arrives. The receipt
   names the job; the wake reports it done under the same id.
 - `kairos` is the tool face. A text job has no completion of its own, so it refuses `now`.
@@ -407,5 +413,6 @@ not checked here; a bad argument is the server's error to report.
 | `config.web.bringToFront` | raise the window when a verification challenge appears; default true |
 | `config.server.agent.tools.kairos.*` | `maxConcurrent`, `timeoutSecs`, `maxOutputBytes`, `maxRetained`; the job scheduler's numbers, read by the loop |
 | `config.server.agent.subagent.maxToolCalls` | one child's tool-call budget; read by the loop |
+| `config.server.agent.loop.tools.task.timeoutSecs` | how long one sub-session may run; default 3600 s |
 
 The browser keys are read by the web domain itself, not by the tool layer.

@@ -55,7 +55,7 @@ pub(crate) fn apply(
                 .as_ref()
             {
                 Some(live) => live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone(),
-                None => handle.birth().cwd.clone().unwrap_or_default(),
+                None => handle.birth().cwd,
             };
             let real = crate::server::agent::tools::workspace::resolve_dir(
                 &base,

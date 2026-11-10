@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Weak;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::Result;
 
@@ -69,14 +69,26 @@ impl JobRunner for AgentRunner {
             }
         };
         let deadline = Instant::now() + ctx.timeout;
+        // A cancellation rings the same bell the session rings when its turn ends.
+        let hook = {
+            let handle = handle.clone();
+            ctx.cancel.on_stop(move || handle.ring_settle())
+        };
         let mut stopped = false;
-        while handle.busy.load(Ordering::Acquire) {
-            if !stopped && (ctx.cancel.is_stopped() || Instant::now() >= deadline) {
+        loop {
+            if !handle.busy.load(Ordering::Acquire) {
+                break;
+            }
+            let now = Instant::now();
+            if !stopped && (ctx.cancel.is_stopped() || now >= deadline) {
                 stopped = true;
                 handle.interrupt();
+                handle.wait_idle();
+                break;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            handle.wait_idle_for(deadline.saturating_duration_since(now));
         }
+        drop(hook);
         let submitted = inner
             .source
             .child(self.child)

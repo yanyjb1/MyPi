@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use crate::server::agent::tools::contract::view::{Child, Draft};
 
@@ -45,13 +45,9 @@ impl Child for State {
         *self.budget.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn charge(&self) -> Result<()> {
+    fn charge(&self) {
         let mut left = self.budget.lock().unwrap_or_else(|e| e.into_inner());
-        if *left == 0 {
-            bail!("tool-call budget exhausted");
-        }
-        *left -= 1;
-        Ok(())
+        *left = left.saturating_sub(1);
     }
 
     fn answer(&self) -> &Path {

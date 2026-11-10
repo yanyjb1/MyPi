@@ -42,11 +42,8 @@ impl Protocol for Deepseek {
         );
         body.insert("stream".to_string(), json!(req.stream));
         body.insert("max_tokens".to_string(), json!(req.max_output_tokens));
-        if !req.tools.is_empty() {
-            body.insert(
-                "tools".to_string(),
-                serde_json::to_value(&*req.tools).expect("tool serialization is infallible"),
-            );
+        if !req.tools_json.as_array().is_some_and(Vec::is_empty) {
+            body.insert("tools".to_string(), req.tools_json.as_ref().clone());
         }
         let mut headers = Vec::new();
         if endpoint.auth_header {

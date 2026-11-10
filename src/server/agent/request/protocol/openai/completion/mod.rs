@@ -32,13 +32,13 @@ impl Completion {
 impl Protocol for Completion {
     fn request(&self, endpoint: &Endpoint, req: &ProtocolRequest) -> Result<WireRequest> {
         let messages = messages_to_wire(&req.messages, &self.compat);
-        let tools = serde_json::to_value(&*req.tools).expect("tool serialization is infallible");
+        let tools = req.tools_json.as_ref();
         let body = body_json(
             &req.model,
             req.max_output_tokens,
             req.stream,
-            &messages,
-            &tools,
+            messages,
+            tools,
             &self.compat,
             req.session_id.as_deref(),
         );
@@ -94,7 +94,7 @@ pub(crate) fn body_json(
     model: &str,
     max_tokens: u32,
     stream: bool,
-    messages: &serde_json::Value,
+    messages: serde_json::Value,
     tools: &serde_json::Value,
     compat: &crate::server::agent::request::protocol::openai::completion::compat::Resolved,
     session_id: Option<&str>,
@@ -127,7 +127,7 @@ pub(crate) fn body_json(
             Value::String(sid.to_string()),
         );
     }
-    body.insert("messages".to_string(), messages.clone());
+    body.insert("messages".to_string(), messages);
     body.insert("stream".to_string(), Value::Bool(stream));
 
     // ---- Does this request think? Three gates, in order of authority: (1) a level was asked for,
@@ -720,7 +720,7 @@ fn patch_assistant(
 /// Rewrite a tool's argument schema into what OpenAI's strict mode accepts: `additionalProperties: false`
 /// on every object, and every property in `required` (optionality is expressed as "T or null").
 fn enforce_strict_schema(node: &mut serde_json::Value) {
-    use serde_json::{Map, Value, json};
+    use serde_json::{Value, json};
 
     let Value::Object(obj) = node else {
         return;
@@ -770,7 +770,6 @@ fn enforce_strict_schema(node: &mut serde_json::Value) {
                 Value::Array(all_keys.into_iter().map(Value::String).collect()),
             );
         }
-        let _ = Map::new();
     }
 
     for key in ["items", "additionalProperties"] {

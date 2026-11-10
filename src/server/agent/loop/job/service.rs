@@ -74,15 +74,13 @@ struct Inner {
 
 impl Inner {
     /// Start the thread the first time something needs a clock; it ends itself once nothing does.
-    fn ensure(&self) {
-        {
-            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if st.alive {
-                return;
-            }
-            st.alive = true;
+    fn ensure(&self) -> Result<()> {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if st.alive {
+            return Ok(());
         }
-        scheduler::spawn(
+        st.alive = true;
+        if let Err(e) = scheduler::spawn(
             self.session,
             self.values,
             self.wake.clone(),
@@ -90,7 +88,11 @@ impl Inner {
             self.stop.clone(),
             self.bell.clone(),
             self.dir.clone(),
-        );
+        ) {
+            st.alive = false;
+            return Err(anyhow::Error::new(e).context("cannot start the job scheduler"));
+        }
+        Ok(())
     }
 
     fn cancel_all(&self) {
@@ -216,13 +218,22 @@ impl port::JobHost for JobService {
             if task.consumed {
                 bail!("{id} was already consumed");
             }
-            task.consumed = true;
-            (task.text.clone(), task.output.take())
+            (task.text.take(), task.output.take())
         };
         let text = match output {
             Some(output) => output.read_and_remove()?,
             None => text.unwrap_or_default(),
         };
+        if let Some(task) = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .tasks
+            .get_mut(&id)
+        {
+            task.consumed = true;
+        }
         self.inner.dir.remove_task_dir(id);
         Ok(text)
     }
@@ -280,7 +291,7 @@ impl JobService {
         }
         st.tasks.insert(id, task);
         drop(st);
-        scheduler::run_job(self.inner.state.clone(), self.inner.bell.clone(), id);
+        scheduler::run_job(self.inner.state.clone(), self.inner.bell.clone(), id)?;
         Ok(port::Receipt {
             id: id.to_string(),
             text: format!("{id} created"),
@@ -300,7 +311,7 @@ impl JobService {
         let task = Job::new(id, spec, output, Some(at));
         st.tasks.insert(id, task);
         drop(st);
-        self.inner.ensure();
+        self.inner.ensure()?;
         scheduler::ring(&self.inner.bell);
         Ok(port::Receipt {
             id: id.to_string(),
@@ -331,7 +342,7 @@ impl JobService {
             },
         );
         drop(st);
-        self.inner.ensure();
+        self.inner.ensure()?;
         scheduler::ring(&self.inner.bell);
         Ok(port::Receipt {
             id: Id::Schedule(sid).to_string(),

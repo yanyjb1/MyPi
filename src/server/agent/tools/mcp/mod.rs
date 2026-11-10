@@ -50,15 +50,13 @@ pub(crate) const TOOL: Tool = Tool {
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
-    let Some(bridge) = env.mcp.as_deref() else {
-        bail!("mcp is not configured");
-    };
+    let bridge = env.source.mcp(env.session, env.workspace.cwd())?;
     match args.choice(TYPE)?.as_str() {
         "list" => {
             let server = args.opt_str(SERVER)?;
-            list(bridge, server.as_deref())
+            list(bridge.as_ref(), server.as_deref())
         }
-        "call" => call(bridge, args),
+        "call" => call(bridge.as_ref(), args),
         _ => unreachable!("Args::choice validates type"),
     }
 }

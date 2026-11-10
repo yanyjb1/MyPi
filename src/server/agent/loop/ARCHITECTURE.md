@@ -20,7 +20,7 @@ session/settings.rs     fence and scrooge
 session/mailbox.rs      the wake queue, the one user slot, the wake wait
 session/change.rs       Model and Cwd
 session/child.rs        a sub-session's draft, budget, answer path, submit flag, nudges
-session/source.rs       Source over storage's reader, plus the attached handles
+session/source.rs       Source over storage's reader, plus the handles it builds on demand
 session/export.rs       Export: a full text out of the database as a file
 session/history.rs      Transcript: the session's cached history and the request half's read port
 turn/mod.rs             turn types (ask, cycle, fence)
@@ -39,10 +39,11 @@ half's types, re-exported from this domain's root.
 
 ## Relations
 
-- `Loop::book` reads the session's transcript, inserts a handle, makes the session's job service and
-  attaches it to `Source`, then starts the turn scheduler. `Loop::drop` reverses all three through
-  `unbook`, which also wakes the parked scheduler: `interrupt` alone does nothing to an idle
-  session, and a scheduler left parked keeps the handle alive.
+- `Loop::book` reads the session's transcript, inserts a handle and starts the turn scheduler.
+  `Source::jobs` builds that session's job service on its first job, and `Source::mcp` builds its
+  MCP bridge on its first `mcp` call (rescanning when the session moved). `Loop::drop` reverses all
+  three through `unbook`, which also wakes the parked scheduler: `interrupt` alone does nothing to
+  an idle session, and a scheduler left parked keeps the handle alive.
 - `Loop::deliver` refuses a sub-session and a busy session, and otherwise opens a turn through
   `pen::turn::open` and starts `turn::cycle::run`.
 - `Loop::write_mail` and `Loop::clear_mail` are the slot's only writers from outside.
@@ -59,8 +60,9 @@ half's types, re-exported from this domain's root.
 - A child effect lands as an archive row, a session row and the result block in one submission; the
   session row points at the child's own archive. After the commit the loop attaches the child's
   `State` (draft, budget, answer path) and starts an `agent` job; `session::agent::AgentRunner`
-  books the child, waits for `Handle::busy` to fall, reads the submit flag, drops the child through
-  `unbook` and reports the answer path in the wake.
+  books the child, waits on the handle's settle bell until the turn ends (or the task's deadline
+  passes, which interrupts it), reads the submit flag, drops the child through `unbook` and reports
+  the answer path in the wake.
 - A sub-session round that ends with an empty mailbox and no submit gets one more user block, at
   most three times, before the turn is allowed to end.
 - `job::JobService` answers `tools::contract::job::JobHost`; `session::jobs::Slots` holds the session

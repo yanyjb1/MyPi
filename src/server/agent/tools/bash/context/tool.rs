@@ -241,7 +241,11 @@ fn spill(env: &Env, file: &str, text: &str) -> Result<std::path::PathBuf> {
     let dir = env.export.dir();
     std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let path = dir.join(file);
-    std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+    env.workspace
+        .with_write(&path, || {
+            crate::server::agent::tools::workspace::write_atomic(&path, text)
+        })
+        .with_context(|| format!("cannot write {}", path.display()))?;
     Ok(path)
 }
 

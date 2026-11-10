@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 
 use super::change::{self, Change};
 use super::handle::Handle;
+use super::live::Live;
 use super::settings::Settings;
 use crate::server::agent::r#loop::job;
 use crate::server::agent::r#loop::pen;
@@ -36,7 +37,7 @@ pub struct Birth {
     pub compact: String,
     pub meta: Option<i64>,
     /// The launch directory the front end handed `init`; a change door never writes it.
-    pub cwd: Option<PathBuf>,
+    pub cwd: PathBuf,
 }
 
 /// A message for one session.
@@ -68,10 +69,10 @@ pub(crate) struct Inner {
     pub(crate) ask: Arc<dyn Ask>,
     pub(crate) batch: Arc<dyn Batch>,
     pub(crate) source: Arc<super::source::Db>,
-    pub(crate) global_mcp: PathBuf,
     pub(crate) dir: PathBuf,
     pub(crate) slots: Arc<super::jobs::Slots>,
-    pub(crate) factory: job::Factory,
+    /// One sub-session's deadline; `task` never borrows kairos' numbers.
+    pub(crate) task_timeout: std::time::Duration,
 }
 
 impl Loop {
@@ -83,9 +84,8 @@ impl Loop {
         cfg: &crate::server::config::Config,
     ) -> Self {
         let path = writer.path();
-        let source = super::source::Db::new(path.clone());
         let dir = cfg.export_dir();
-        let export = Arc::new(super::export::Files::new(path, dir.clone()));
+        let export = Arc::new(super::export::Files::new(path.clone(), dir.clone()));
         let (lines, bytes) = cfg.limits();
         let global_mcp = cfg
             .paths()
@@ -94,6 +94,9 @@ impl Loop {
             .unwrap_or_default()
             .join("mcp.json");
         let project = cfg.project_paths();
+        let slots = super::jobs::Slots::new();
+        let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
+        let source = super::source::Db::new(path.clone(), global_mcp, factory);
         let batch = crate::server::agent::tools::engine::Engine::new(
             crate::server::agent::tools::contract::env::Limits { lines, bytes },
             cfg.bash_timeout(),
@@ -112,8 +115,6 @@ impl Loop {
                     .join("agents"),
             },
         );
-        let slots = super::jobs::Slots::new();
-        let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
         Self {
             inner: Arc::new(Inner {
                 writer,
@@ -122,10 +123,9 @@ impl Loop {
                 ask,
                 batch: Arc::new(batch),
                 source,
-                global_mcp,
                 dir,
                 slots,
-                factory,
+                task_timeout: cfg.task_timeout(),
             }),
         }
     }
@@ -153,12 +153,8 @@ impl Loop {
         if !self.inner.slots.insert(id, handle.clone()) {
             bail!("session {id} is already booked");
         }
-        self.inner
-            .source
-            .attach_jobs(id, self.inner.factory.make(id));
         if let Err(e) = spawn_scheduler(&self.inner, handle) {
             self.inner.slots.remove(id);
-            self.inner.source.detach_jobs(id);
             return Err(e);
         }
         Ok(id)
@@ -212,25 +208,12 @@ impl Loop {
     /// Apply one change; a `Cwd` change answers the directory it landed on.
     pub fn change(&self, session: i64, change: Change) -> Result<Option<std::path::PathBuf>> {
         let handle = self.handle(session)?;
-        let landed = change::apply(
+        change::apply(
             &handle,
             change,
             &self.inner.writer,
             self.inner.settings.scrooge,
-        )?;
-        if let Some(real) = &landed
-            && let Some(mcp) = self.inner.source.mcp()
-            && let Err(e) = mcp.rescan(real)
-        {
-            crate::server::platform::log::warn(
-                "mcp",
-                format!(
-                    "rescan after cwd change to {} failed: {e:#}",
-                    real.display()
-                ),
-            );
-        }
-        Ok(landed)
+        )
     }
 
     /// Is this session on the table?
@@ -283,6 +266,7 @@ pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Res
 pub(crate) fn unbook(inner: &Arc<Inner>, id: i64) {
     inner.source.detach_jobs(id);
     inner.source.detach_child(id);
+    inner.source.detach_mcp(id);
     if let Some(handle) = inner.slots.remove(id) {
         handle.gone.store(true, Ordering::Release);
         handle.interrupt();
@@ -352,7 +336,7 @@ fn start_turn(
         bail!("session {} is already in a turn", handle.id);
     }
     if handle.gone.load(Ordering::Acquire) {
-        handle.busy.store(false, Ordering::Release);
+        handle.mark_idle();
         bail!("session {} is gone", handle.id);
     }
     handle.stop.reset();
@@ -365,31 +349,12 @@ fn start_turn(
     };
     let mode = mode_of(&start);
     let live = handle.take_live(&inner.dir);
-    // MCP rides along only when this session actually runs the `mcp` tool.
-    if live.tools.iter().any(|t| t == "mcp") && inner.source.mcp().is_none() {
-        let root = live.root.clone();
-        // A broken table fails the turn; mounting nothing would read as "not configured".
-        let table = match crate::server::agent::tools::mcp::setup::table(&root, &inner.global_mcp) {
-            Ok(table) => table,
-            Err(e) => {
-                handle.busy.store(false, Ordering::Release);
-                return Err(e);
-            }
-        };
-        inner.source.attach_mcp(Arc::new(
-            crate::server::agent::tools::mcp::sync::SyncMcpBridge::new(
-                root,
-                inner.global_mcp.clone(),
-                table,
-            ),
-        ));
-    }
     let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
     let model = Some((live.provider.clone(), live.model.clone()));
     let (turn, opening) = match pen::turn::open(&inner.writer, handle.id, start, &cwd, model) {
         Ok(pair) => pair,
         Err(e) => {
-            handle.busy.store(false, Ordering::Release);
+            handle.mark_idle();
             return Err(e);
         }
     };
@@ -409,7 +374,11 @@ fn start_turn(
     let spawned = std::thread::Builder::new()
         .name(format!("turn-{}", thread_handle.id))
         .spawn(move || {
-            let mut live = live;
+            // The handle goes back to idle however this thread ends, a panic included.
+            let mut session = TurnGuard {
+                handle: thread_handle.clone(),
+                live: Some(live),
+            };
             let mut current = turn;
             let mut mode = mode;
             let mut first_turn = first;
@@ -418,7 +387,7 @@ fn start_turn(
                     &inner,
                     &thread_handle,
                     current,
-                    &mut live,
+                    session.live(),
                     mode.clone(),
                     first_turn,
                 );
@@ -435,6 +404,7 @@ fn start_turn(
                         let start = next.start();
                         thread_handle.stop.reset();
                         mode = mode_of(&start);
+                        let live = session.live();
                         let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
                         let model = Some((live.provider.clone(), live.model.clone()));
                         match pen::turn::open(&inner.writer, thread_handle.id, start, &cwd, model) {
@@ -467,16 +437,34 @@ fn start_turn(
                     }
                 }
             }
-            thread_handle.put_live(live);
-            thread_handle.stop.reset();
-            thread_handle.busy.store(false, Ordering::Release);
-            thread_handle.mailbox.notify();
         });
     if let Err(e) = spawned {
-        handle.busy.store(false, Ordering::Release);
+        handle.mark_idle();
         return Err(e.into());
     }
     Ok(turn)
+}
+
+/// A turn thread's share of the handle: the live state, and the one exit that returns it.
+struct TurnGuard {
+    handle: Arc<Handle>,
+    live: Option<Live>,
+}
+
+impl TurnGuard {
+    fn live(&mut self) -> &mut Live {
+        self.live.as_mut().expect("the guard holds the live state")
+    }
+}
+
+impl Drop for TurnGuard {
+    fn drop(&mut self) {
+        if let Some(live) = self.live.take() {
+            self.handle.put_live(live);
+        }
+        self.handle.stop.reset();
+        self.handle.mark_idle();
+    }
 }
 
 fn requeue(handle: &Handle, start: pen::turn::Start) {

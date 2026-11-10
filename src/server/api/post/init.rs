@@ -76,7 +76,7 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
         manuals,
         compact: resolved.compact_instruction,
         meta: Some(archive),
-        cwd: Some(cwd),
+        cwd,
     })?;
     Ok(json!({"session": session}))
 }

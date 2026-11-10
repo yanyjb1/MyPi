@@ -86,6 +86,8 @@ pub struct ProtocolRequest {
     pub stream: bool,
     pub messages: Vec<WireMessage>,
     pub tools: Arc<Vec<ToolDef>>,
+    /// The same manuals, already serialized by the session that owns them.
+    pub tools_json: Arc<serde_json::Value>,
     pub session_id: Option<String>,
 }
 

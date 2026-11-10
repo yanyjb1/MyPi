@@ -12,7 +12,7 @@ pub use super::message::Usage;
 use super::transport::worker::SessionWorker;
 
 /// Where one request goes: which provider serves, which model answers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Transport {
     pub provider: String,
     pub model: String,
@@ -32,6 +32,8 @@ impl Transport {
 pub enum Stop {
     Model,
     User,
+    /// A tool asked for the round to end, `final submit` being the one that does.
+    Finished,
     Broken,
     Killed,
     Fence,
@@ -43,6 +45,7 @@ impl Stop {
         match self {
             Stop::Model => "stop",
             Stop::User => "interrupted",
+            Stop::Finished => "finished",
             Stop::Broken => "broken",
             Stop::Killed => "killed",
             Stop::Fence => "fence",
@@ -68,6 +71,8 @@ pub struct LapInput {
     pub system: String,
     /// The session's manuals, built once when it was booked.
     pub tools: Arc<Vec<ToolDef>>,
+    /// Those manuals already serialized; the wire body takes a copy, never a rebuild.
+    pub tools_json: Arc<serde_json::Value>,
     pub stop: Arc<crate::server::platform::stop::Stop>,
     /// This session's worker: the child that owns its sockets.
     pub worker: Arc<SessionWorker>,
@@ -207,6 +212,8 @@ pub struct CompactInput {
     pub transport: Transport,
     pub system: String,
     pub tools: Arc<Vec<ToolDef>>,
+    /// Those manuals already serialized.
+    pub tools_json: Arc<serde_json::Value>,
     /// How much to keep verbatim; `None` takes the configured default.
     pub retention: Option<Retention>,
     /// What the summary should stress.

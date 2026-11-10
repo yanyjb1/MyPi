@@ -58,6 +58,9 @@ fn expand_alias(cmd: &str, aliases: &Aliases) -> String {
 
 /// Turn every standalone `#<ref>` token in `cmd` into the quoted path of that stored text.
 fn rewrite_refs(cmd: &str, export: &dyn Export, shell: &Shell) -> Result<String> {
+    if !cmd.contains('#') {
+        return Ok(cmd.to_string());
+    }
     let mut rewritten = String::with_capacity(cmd.len());
     let mut resolved: Vec<(String, String)> = Vec::new();
     let bytes: Vec<char> = cmd.chars().collect();

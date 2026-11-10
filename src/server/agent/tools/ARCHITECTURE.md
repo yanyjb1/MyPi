@@ -68,7 +68,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 - **`web`**: `WebArgs`, `run` from the `web` tool; `shutdown` from `main`.
 - **Who calls it**: `loop/turn` (one batch at a time, `Batch::run`), `loop/turn/cycle` (`roster`
   for the manuals, and the child list correction), `loop/session/book` (builds `Engine` from
-  config, mounts the MCP bridge when the session runs it).
+  config), `loop/session/source` (builds a session's job service and MCP bridge on first use).
 - **Knows nothing about**: the api doors, the database connection, the front end, rounds, streams.
 
 ## Inside
@@ -93,9 +93,9 @@ Engine::run
   it books a session and takes both off when it drops one. A job is only ever created by the loop.
 - The guard is used in two places — the `bash` tool and `alias add` — and judges the expanded
   command in both.
-- The MCP bridge is mounted at turn start, only for a session whose list holds `mcp`; it reads the
-  table for the session's root and a broken table fails the turn. A session sees it through
-  `Source::mcp`. An empty table still mounts the bridge.
+- The MCP bridge is built by `Source::mcp(session, cwd)` on the session's first `mcp` call, from the
+  table for its cwd; a later move rescans it. A broken table fails that call, not the turn. An empty
+  table still mounts the bridge.
 - A child's tool list is corrected once, where the child is spawned: `task` out, `final` in.
 
 ## Must stay in step
@@ -114,8 +114,8 @@ Engine::run
 8. `contract::job::JobHost` and `loop/job`: the port is the whole surface a tool sees; a new job
    field starts there.
 9. `web` feature and two places: the `mod.rs` declaration and the `TOOLS` row.
-10. `mcp::setup::table` and `loop/session/book`: the loop supplies the global path and the session's
-    root; the domain never decides where the session stands.
+10. `mcp::setup::table` and `loop/session/source`: the loop supplies the global path and the session's
+    cwd; the domain never decides where the session stands.
 11. The web domain's config keys and `src/web/README.md`: it reads them itself, so a rename here is
     a rename there.
 12. `platform::stop::Stop` and its three holders — the session handle, each job's `cancel`, and
@@ -127,5 +127,5 @@ Engine::run
 
 ## Not wired yet
 
-1. A `kairos` call in a session without a job service fails at call time; the roster does not
-   screen for it.
+1. A `kairos` call in a sub-session fails at call time: a child has no job service, and the roster
+   does not screen for it.

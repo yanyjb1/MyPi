@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::view::{Export, Source};
-use crate::server::agent::tools::mcp::bridge::McpBridge;
 use crate::server::agent::tools::workspace::Workspace;
 
 /// What a tool reads: one session's conditions for one batch.
@@ -23,7 +22,6 @@ pub struct Env {
     pub aliases: Aliases,
     /// The budget a spawned sub-session gets when the call names none.
     pub default_budget: u32,
-    pub mcp: Option<Arc<dyn McpBridge>>,
     pub export: Arc<dyn Export>,
     pub paths: Paths,
     pub source: Arc<dyn Source>,

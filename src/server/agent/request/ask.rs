@@ -52,7 +52,8 @@ impl Options {
 /// The request half.
 pub struct Request {
     options: Options,
-    slot: Mutex<Option<(super::contract::Transport, Arc<Client>)>>,
+    /// One client per address; two sessions on two models never evict each other.
+    clients: Mutex<std::collections::BTreeMap<super::contract::Transport, Arc<Client>>>,
 }
 
 impl Request {
@@ -62,16 +63,14 @@ impl Request {
         }
         Ok(Self {
             options,
-            slot: Mutex::new(None),
+            clients: Mutex::new(std::collections::BTreeMap::new()),
         })
     }
 
-    /// The client for one address, rebuilt only when the address changes.
+    /// The client for one address, built the first time that address is asked for.
     fn client(&self, transport: &super::contract::Transport) -> Result<Arc<Client>> {
-        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((address, client)) = slot.as_ref()
-            && address == transport
-        {
+        let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(client) = clients.get(transport) {
             return Ok(client.clone());
         }
         let provider = self
@@ -81,7 +80,7 @@ impl Request {
             .find(|provider| provider.name == transport.provider)
             .with_context(|| format!("no provider named {}", transport.provider))?;
         let client = Arc::new(Client::new(provider, &transport.model, self.options.retry));
-        *slot = Some((transport.clone(), client.clone()));
+        clients.insert(transport.clone(), client.clone());
         Ok(client)
     }
 
@@ -102,6 +101,7 @@ impl Ask for Request {
             &input.system,
             &stored[..],
             input.tools,
+            input.tools_json,
             input.session,
         )?;
 
@@ -132,8 +132,14 @@ impl Ask for Request {
     }
 
     fn results(&self, input: ResultsInput, blocks: &dyn BlockSink) -> Result<()> {
-        for run in &input.results {
-            if !input.calls.iter().any(|c| c.call_id == run.call_id) {
+        let ResultsInput {
+            calls,
+            results,
+            history,
+            ..
+        } = input;
+        for run in &results {
+            if !calls.iter().any(|c| c.call_id == run.call_id) {
                 bail!("a result names no call: {}", run.call_id);
             }
         }
@@ -141,24 +147,24 @@ impl Ask for Request {
         let mut known: Vec<Reference> = Vec::new();
         let ts = crate::server::platform::time::now_stamp();
 
-        for run in &input.results {
-            let (text, attached) = match run.spill.as_ref() {
+        for run in results {
+            let (text, attached) = match run.spill {
                 Some(spill) => {
                     let (hash, reference) =
-                        artifact::resolve(&spill.content, &mut known, input.history.as_ref())?;
-                    let mut text = run.result.clone();
+                        artifact::resolve(&spill.content, &mut known, history.as_ref())?;
+                    let mut text = run.result;
                     text.push_str(&artifact::citation(&reference, &spill.content));
                     (
                         text,
                         Some(Artifact {
-                            name: spill.name.clone(),
-                            content: spill.content.clone(),
+                            name: spill.name,
+                            content: spill.content,
                             hash,
                             reference,
                         }),
                     )
                 }
-                None => (run.result.clone(), None),
+                None => (run.result, None),
             };
             // The cut-short reason is the last line: after the body and its artifact note.
             let text = match run.reason.as_deref() {
@@ -204,6 +210,7 @@ impl Ask for Request {
             &plan.region,
             &instruction,
             input.tools,
+            input.tools_json,
             input.session,
         )?;
 

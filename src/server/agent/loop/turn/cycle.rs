@@ -52,6 +52,7 @@ pub(crate) fn run(
             transport: live.transport(),
             system: live.system.clone(),
             tools: live.manuals.clone(),
+            tools_json: live.tools_json.clone(),
             retention,
             focus,
             instruction: live.compact.clone(),
@@ -155,6 +156,7 @@ fn laps(
             transport: live.transport(),
             system: live.system.clone(),
             tools: live.manuals.clone(),
+            tools_json: live.tools_json.clone(),
             stop: handle.stop.clone(),
             worker: handle.worker.clone(),
             live: inner.out.clone(),
@@ -210,14 +212,15 @@ fn laps(
             .map(|call| call.call_id.clone())
             .collect();
         blocks.drop_calls(&unanswered);
+        let (children, deletes) = effects(&blocks, &results, live)?;
+        let stopped = results.iter().any(|result| result.stop);
         let reported = ResultsInput {
             session: handle.id,
             history: history.clone(),
             calls: lap.calls.clone(),
-            results: results.iter().map(report).collect(),
+            results: results.into_iter().map(report).collect(),
         };
         inner.ask.results(reported, &*blocks)?;
-        let (children, deletes) = effects(&blocks, &results, live)?;
         let (landed, landed_blocks) = blocks.flush()?;
         transcript.append(landed_blocks)?;
         for (at, spec) in children {
@@ -249,7 +252,7 @@ fn laps(
                     manuals: spec.manuals,
                     compact: live.compact.clone(),
                     meta: Some(meta),
-                    cwd: Some(spec.cwd),
+                    cwd: spec.cwd,
                 },
                 spec.start,
                 spec.answer,
@@ -257,7 +260,7 @@ fn laps(
             jobs.start(JobSpec {
                 runner,
                 schedule: Schedule::After(std::time::Duration::ZERO),
-                timeout: None,
+                timeout: Some(inner.task_timeout),
                 output: false,
                 needs_slot: true,
                 kind: "agent",
@@ -267,8 +270,8 @@ fn laps(
         if !deletes.is_empty() {
             pen::effect::apply(&inner.writer, handle.id, &deletes)?;
         }
-        if results.iter().any(|result| result.stop) {
-            return Ok(Stop::User);
+        if stopped {
+            return Ok(Stop::Finished);
         }
         fence.count();
     }
@@ -399,14 +402,14 @@ fn effects(
 }
 
 /// One finished call, as the request half takes it.
-fn report(result: &ToolResult) -> Reported {
+fn report(result: ToolResult) -> Reported {
     Reported {
-        call_id: result.call_id.clone(),
+        call_id: result.call_id,
         ok: result.ok,
-        result: result.result.clone(),
-        reason: result.reason.clone(),
-        memo: result.memo.clone(),
-        spill: result.spill.clone(),
+        result: result.result,
+        reason: result.reason,
+        memo: result.memo,
+        spill: result.spill,
         duration_ms: result.duration_ms,
     }
 }

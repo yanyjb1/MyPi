@@ -24,15 +24,17 @@ Change = Model { provider, model } | Cwd(path)
 ```
 
 `ask` is `Arc<dyn request::Ask>`; `out` carries the live line. The loop builds the tool layer from
-`config` and keeps the read ports it also implements: `Source` (database reads, with the
-process-wide MCP bridge among its handles) and `Export` (a full text out of the database as a
-file). Request shapes come
+`config` and keeps the read ports it also implements: `Source` (database reads, with one MCP
+bridge and one job service per session, both built on first use) and `Export` (a full text out of
+the database as a file). Request shapes come
 from `request::contract`; tool shapes come from `agent::tools::contract`; both are re-exported here,
 so a caller names one vocabulary. `Retention` is `Chars(n)` or `Blocks(n)`.
 
 `book` only opens the session; the caller has already written the `sessions` row and resolved the
 system prompt, the tool names and the compaction instruction. It reads the session's history once
-into its transcript, starts the turn scheduler, and attaches the session's job service to `Source`.
+into its transcript and starts the turn scheduler. Nothing else is created yet: the session's job
+service and MCP bridge appear the first time a tool asks for them, and the bridge reads the table
+for wherever the session stands at that call.
 `deliver` opens a turn and returns its id; a busy session and a sub-session both refuse it, nothing
 is queued.
 
@@ -46,8 +48,9 @@ nothing.
 the loop takes it, and each wake block is its own user message. The slot is written whole by a front
 end, taken by the loop at a blocking point, and cleared by the take; the turn it opens is named after
 the slot. A turn stops when the user interrupts, or when the wake queue is empty and the model asks
-for no tools. A sub-session whose turn ends without `final submit` gets one more user message, up to
-three, before the turn is allowed to end.
+for no tools. A tool that asks for the round to end (`final submit`) settles the turn as `finished`,
+not as an interruption. A sub-session whose turn ends without `final submit` gets one more user
+message, up to three, before the turn is allowed to end.
 
 `job` is the scheduler behind every background task: a per-session service, a concurrency pool, a
 cron clock, one output file per run, and a wake that starts a turn. A tool describes a job and holds
@@ -109,6 +112,7 @@ loop only adds tool events to it.
 - `config.server.agent.tools.browser.{bin,port,profileDir,idleSecs,userAgent,extraArgs}` — the web tool's launch values, and `config.web.bringToFront` for its challenge window.
 - `config.server.agent.tools.kairos.*` — `maxConcurrent`, `timeoutSecs`, `maxOutputBytes`, `maxRetained`: the job scheduler's numbers.
 - `config.server.agent.subagent.maxToolCalls` — the default budget for a sub-session.
+- `config.server.agent.loop.tools.task.timeoutSecs` — how long one sub-session may run; the runner stops it at the deadline.
 
 The output cap of a request body is not here: it belongs to the request half's startup options. The
 export folder is the platform's downloads directory, and the project root is the startup directory
