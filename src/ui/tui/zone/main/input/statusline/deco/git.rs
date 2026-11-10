@@ -46,9 +46,9 @@ impl Git {
 impl Deco for Git {
     /// The first frame scans at once; after that one scan per configured interval, and one
     /// more whenever a round moved the tree.
-    fn tick(&mut self, ctx: &Ctx) {
+    fn tick(&mut self, ctx: &Ctx) -> bool {
         if ctx.data.cwd.is_empty() {
-            return;
+            return false;
         }
         let dir = PathBuf::from(&ctx.data.cwd);
         if dir != self.dir {
@@ -60,12 +60,13 @@ impl Deco for Git {
         let interval = ctx.data.git_scan.unwrap_or(DEFAULT_SCAN);
         let due = self.at.is_none_or(|at| at.elapsed() >= interval);
         if !due && !self.dirty {
-            return;
+            return false;
         }
         self.status = crate::git::snapshot(&self.dir);
         self.at = Some(Instant::now());
         self.scanned = true;
         self.dirty = false;
+        true
     }
 
     fn on_event(&mut self, event: &str, _content: &Value, _ctx: &Ctx) {

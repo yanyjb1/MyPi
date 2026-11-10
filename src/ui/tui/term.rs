@@ -20,6 +20,12 @@ use crate::ui::tui::action::{self, Action};
 
 use crate::ui::tui::zone::TermSize;
 
+/// How long an idle round waits for the terminal before looking at the connection again.
+const FRAME: Duration = Duration::from_millis(16);
+
+/// Events one round reads before it looks at the connection.
+const BATCH: usize = 256;
+
 /// What the terminal produced on its own.
 pub enum Input {
     /// The user did something.
@@ -79,19 +85,37 @@ impl Term {
         Ok(())
     }
 
-    /// Wait up to one frame for terminal input. `None` = nothing worth an action this frame.
-    pub fn poll(&self) -> Result<Option<Input>> {
-        if !event::poll(Duration::from_millis(16))? {
-            return Ok(None);
+    /// Wait up to one frame for the terminal to say something. Nothing is consumed.
+    pub fn wait(&self) -> Result<()> {
+        let _ = event::poll(FRAME)?;
+        Ok(())
+    }
+
+    /// Everything the terminal produced since the last call, in order.
+    ///
+    /// One round takes a bounded batch: a stream of mouse events must not starve the connection.
+    pub fn drain(&self) -> Result<Vec<Input>> {
+        let mut out = Vec::new();
+        while out.len() < BATCH && event::poll(Duration::ZERO)? {
+            match event::read()? {
+                event::Event::Key(key) => {
+                    if let Some(action) = action::from_key(key) {
+                        out.push(Input::Action(action));
+                    }
+                }
+                event::Event::Mouse(mouse) => {
+                    if let Some(action) = action::from_mouse(&mouse) {
+                        out.push(Input::Action(action));
+                    }
+                }
+                event::Event::Paste(text) => out.push(Input::Action(action::from_paste(text))),
+                event::Event::FocusGained => out.push(Input::Focus(true)),
+                event::Event::FocusLost => out.push(Input::Focus(false)),
+                // The size is read from the terminal at the top of every round.
+                event::Event::Resize(_, _) => {}
+            }
         }
-        match event::read()? {
-            event::Event::Key(key) => Ok(action::from_key(key).map(Input::Action)),
-            event::Event::Mouse(mouse) => Ok(action::from_mouse(&mouse).map(Input::Action)),
-            event::Event::Paste(text) => Ok(Some(Input::Action(action::from_paste(text)))),
-            event::Event::FocusGained => Ok(Some(Input::Focus(true))),
-            event::Event::FocusLost => Ok(Some(Input::Focus(false))),
-            event::Event::Resize(_, _) => Ok(None),
-        }
+        Ok(out)
     }
 
     /// Give the screen back.

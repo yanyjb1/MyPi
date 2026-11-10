@@ -2,28 +2,10 @@
 
 use std::collections::VecDeque;
 
-use super::super::local::content::Kind;
-use super::super::local::mutable::Entry;
 use super::super::local::section::{Idx, Local};
-use super::super::local::slot::SlotKind;
-use super::super::product::{self, Opts, Product, Products};
+use super::super::product::{Opts, Shape};
 use super::super::row::Row;
 use super::segment::{Laid, SegId};
-
-/// What one position hands over.
-enum Shape {
-    Rows(Vec<Row>),
-    Segs(Vec<product::Segment>, bool),
-    Missing(i64),
-    Dead,
-}
-
-/// What placing one segment did.
-pub enum Placed {
-    Laid,
-    Empty,
-    Missing(i64),
-}
 
 /// What laying one position's first row found.
 pub enum Head {
@@ -35,24 +17,30 @@ pub enum Head {
     Empty,
 }
 
+/// What placing one segment did.
+pub enum Placed {
+    Laid,
+    Empty,
+    Missing(i64),
+}
+
 /// The run of laid segments, and the width it was laid at.
 #[derive(Default)]
 pub struct Run {
     segs: VecDeque<Laid>,
-    /// The rows pinned under the newest segment: rebuilt every frame, never cached.
+    /// The rows pinned under the newest segment: rebuilt every draw, never cached.
     pin: Vec<Row>,
     width: usize,
 }
 
 impl Run {
-    /// The width moved: every laid row goes, and every width-keeping product with it.
-    pub fn set_width(&mut self, width: usize, products: &mut Products) {
+    /// The width moved: every laid row goes.
+    pub fn set_width(&mut self, width: usize) {
         if self.width == width {
             return;
         }
         self.segs.clear();
         self.width = width;
-        products.drop_fixed();
     }
 
     pub fn width(&self) -> usize {
@@ -100,18 +88,17 @@ impl Run {
         self.pin.get(at)
     }
 
+    /// Whether this position still has rows in the run.
+    pub fn holds(&self, idx: Idx) -> bool {
+        self.segs.iter().any(|laid| laid.id.idx == idx)
+    }
+
     /// The position's first row, laying whole pieces until one has rows.
-    pub fn head(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-        idx: Idx,
-    ) -> Head {
-        let count = self.count(local, products, opts, idx);
+    pub fn head(&mut self, local: &mut Local, opts: &Opts<'_>, idx: Idx) -> Head {
+        let count = self.count(local, opts, idx);
         for piece in 0..count {
             let id = SegId { idx, piece };
-            match self.place(local, products, opts, id) {
+            match self.place(local, opts, id) {
                 Placed::Laid => return Head::Laid(id),
                 Placed::Missing(block) => return Head::Missing(block),
                 Placed::Empty => {}
@@ -124,8 +111,7 @@ impl Run {
     /// oldest content instead of padding above it.
     pub fn back(
         &mut self,
-        local: &Local,
-        products: &mut Products,
+        local: &mut Local,
         opts: &Opts<'_>,
         mut id: SegId,
         mut row: usize,
@@ -139,10 +125,10 @@ impl Run {
                 rows -= take;
                 continue;
             }
-            let Some(prev) = self.prev(local, products, opts, id) else {
+            let Some(prev) = self.prev(local, opts, id) else {
                 break;
             };
-            match self.place(local, products, opts, prev) {
+            match self.place(local, opts, prev) {
                 Placed::Missing(block) => {
                     missing.push(block);
                     return ((prev, 0), missing);
@@ -190,15 +176,10 @@ impl Run {
     }
 
     /// The newest segment that has rows, laying nothing.
-    pub fn newest(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-    ) -> Option<SegId> {
+    pub fn newest(&mut self, local: &mut Local, opts: &Opts<'_>) -> Option<SegId> {
         let mut idx = last_index(local)?;
         loop {
-            let count = self.count(local, products, opts, idx);
+            let count = self.count(local, opts, idx);
             if count > 0 {
                 return Some(SegId {
                     idx,
@@ -210,14 +191,8 @@ impl Run {
     }
 
     /// The segment after this one, and how many it has with rows left.
-    pub fn next(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-        id: SegId,
-    ) -> Option<SegId> {
-        let count = self.count(local, products, opts, id.idx);
+    pub fn next(&mut self, local: &mut Local, opts: &Opts<'_>, id: SegId) -> Option<SegId> {
+        let count = self.count(local, opts, id.idx);
         if id.piece + 1 < count {
             return Some(SegId {
                 idx: id.idx,
@@ -226,7 +201,7 @@ impl Run {
         }
         let mut idx = walk::newer(local, id.idx)?;
         loop {
-            if self.count(local, products, opts, idx) > 0 {
+            if self.count(local, opts, idx) > 0 {
                 return Some(SegId { idx, piece: 0 });
             }
             idx = walk::newer(local, idx)?;
@@ -234,13 +209,7 @@ impl Run {
     }
 
     /// The segment before this one.
-    pub fn prev(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-        id: SegId,
-    ) -> Option<SegId> {
+    pub fn prev(&mut self, local: &mut Local, opts: &Opts<'_>, id: SegId) -> Option<SegId> {
         if id.piece > 0 {
             return Some(SegId {
                 idx: id.idx,
@@ -249,7 +218,7 @@ impl Run {
         }
         let mut idx = walk::older(local, id.idx)?;
         loop {
-            let count = self.count(local, products, opts, idx);
+            let count = self.count(local, opts, idx);
             if count > 0 {
                 return Some(SegId {
                     idx,
@@ -260,70 +229,12 @@ impl Run {
         }
     }
 
-    /// One content arrival: only the tail segment of that position is laid again.
-    pub fn touch(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-        idx: Idx,
-    ) -> Vec<i64> {
-        let count = self.count(local, products, opts, idx);
-        let mut tail = 0usize;
-        for (at, laid) in self.segs.iter().enumerate() {
-            if laid.id.idx == idx {
-                tail = at;
-            }
-        }
-        let Some(laid) = self.segs.get(tail) else {
-            return Vec::new();
-        };
-        if laid.id.idx != idx {
-            return Vec::new();
-        }
-        let from = laid.id.piece;
-        while self
-            .segs
-            .get(tail)
-            .is_some_and(|laid| laid.id.idx == idx && laid.id.piece >= from)
-        {
-            self.segs.remove(tail);
-        }
-        let mut missing = Vec::new();
-        let mut cursor = Some(SegId { idx, piece: from });
-        while let Some(id) = cursor {
-            if id.piece >= count {
-                break;
-            }
-            let (rows, gone) = self.lay(local, products, opts, id);
-            missing.extend(gone);
-            if !rows.is_empty() {
-                self.insert(Laid { id, rows });
-            }
-            cursor = if id.piece + 1 < count {
-                Some(SegId {
-                    idx,
-                    piece: id.piece + 1,
-                })
-            } else {
-                None
-            };
-        }
-        missing
-    }
-
     /// Lay this segment into the run.
-    pub fn place(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-        id: SegId,
-    ) -> Placed {
+    pub fn place(&mut self, local: &mut Local, opts: &Opts<'_>, id: SegId) -> Placed {
         if self.segs.iter().any(|laid| laid.id == id) {
             return Placed::Laid;
         }
-        let (rows, missing) = self.lay(local, products, opts, id);
+        let (rows, missing) = self.lay(local, opts, id);
         if let Some(block) = missing.first() {
             return Placed::Missing(*block);
         }
@@ -359,28 +270,25 @@ impl Run {
     }
 
     /// One segment's rows, the gap after it included; and the block ids it lacks.
-    fn lay(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-        id: SegId,
-    ) -> (Vec<Row>, Vec<i64>) {
-        match self.shape(local, products, opts, id.idx) {
-            Some(Shape::Rows(rows)) => {
+    fn lay(&mut self, local: &mut Local, opts: &Opts<'_>, id: SegId) -> (Vec<Row>, Vec<i64>) {
+        let width = self.width();
+        local.prepare(id.idx, opts, width);
+        match local.shape(id.idx) {
+            Shape::Fixed(rows) => {
                 if id.piece > 0 {
                     return (Vec::new(), Vec::new());
                 }
-                (with_gap(rows), Vec::new())
+                (with_gap(rows.to_vec()), Vec::new())
             }
-            Some(Shape::Segs(segs, thinking)) => {
+            Shape::Rows(rows) => (with_gap(rows), Vec::new()),
+            Shape::Segs(segs, thinking) => {
                 let Some(seg) = segs.get(id.piece) else {
                     return (Vec::new(), Vec::new());
                 };
-                let rows = super::color::rows(seg, self.width(), thinking);
+                let rows = super::color::rows(seg, width, thinking);
                 (with_gap(rows), Vec::new())
             }
-            Some(Shape::Missing(block)) => (
+            Shape::Missing(block) => (
                 with_gap(vec![Row::text(
                     super::super::row::Lead::None,
                     "…",
@@ -390,69 +298,14 @@ impl Run {
                 )]),
                 vec![block],
             ),
-            Some(Shape::Dead) | None => (Vec::new(), Vec::new()),
+            Shape::Dead => (Vec::new(), Vec::new()),
         }
     }
 
-    fn count(
-        &mut self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-        idx: Idx,
-    ) -> usize {
-        match self.shape(local, products, opts, idx) {
-            Some(Shape::Rows(rows)) => usize::from(!rows.is_empty()),
-            Some(Shape::Segs(segs, _)) => segs.len(),
-            Some(Shape::Missing(_)) => 1,
-            Some(Shape::Dead) | None => 0,
-        }
-    }
-
-    fn shape(
-        &self,
-        local: &Local,
-        products: &mut Products,
-        opts: &Opts<'_>,
-        idx: Idx,
-    ) -> Option<Shape> {
+    /// The segments this position takes; `1` while its content is missing.
+    fn count(&mut self, local: &mut Local, opts: &Opts<'_>, idx: Idx) -> usize {
         let width = self.width();
-        match idx {
-            Idx::Turn(at) => match local.running().get(at as usize)? {
-                Entry::Notice { text, level, .. } => {
-                    Some(Shape::Rows(product::notice_rows(text, *level)))
-                }
-                Entry::Block(block) => Some(shape_of(
-                    product::of(block, local.result_of(idx), opts, width),
-                    block.kind == Kind::Reasoning,
-                )),
-            },
-            Idx::Fixed(_) => match &local.slot(idx)?.kind {
-                SlotKind::Notice { text, level, .. } => {
-                    Some(Shape::Rows(product::notice_rows(text, *level)))
-                }
-                SlotKind::Next => Some(Shape::Dead),
-                SlotKind::Block(id) => {
-                    if !local.has(*id) {
-                        return Some(Shape::Missing(*id));
-                    }
-                    let block = local.block(idx)?;
-                    let paired = local.result_of(idx);
-                    let product = products.get(*id, paired.map(|result| result.id), || {
-                        product::of(block, paired, opts, width)
-                    });
-                    Some(shape_of(product, block.kind == Kind::Reasoning))
-                }
-            },
-        }
-    }
-}
-
-/// A product as the run takes it.
-fn shape_of(product: Product, thinking: bool) -> Shape {
-    match product {
-        Product::Text(segs) => Shape::Segs(segs, thinking),
-        Product::Fixed(rows) => Shape::Rows(rows),
+        local.count(idx, opts, width)
     }
 }
 

@@ -147,7 +147,7 @@ impl HistoryZone {
                 let which = match self.local.slot(idx).map(|slot| &slot.kind) {
                     Some(SlotKind::Next) => Which::Next,
                     Some(SlotKind::Notice { .. }) => Which::Notice,
-                    Some(SlotKind::Block(id)) => Which::Block(*id),
+                    Some(SlotKind::Block { id, .. }) => Which::Block(*id),
                     None => return true,
                 };
                 match which {
@@ -185,9 +185,7 @@ impl HistoryZone {
         let line = self
             .focus_line
             .min(usize::from(self.height.saturating_sub(1)));
-        let aim = self.with_draw(|local, products, run, range, opts| {
-            range.aim(run, local, products, opts, idx, line)
-        });
+        let aim = self.with_draw(|local, run, range, opts| range.aim(run, local, opts, idx, line));
         match aim {
             Aim::Empty => Step::Skip,
             Aim::Missing(blocks) => {
@@ -201,7 +199,7 @@ impl HistoryZone {
                 if self.ask_blocks(&missing) {
                     return Step::Wait;
                 }
-                self.with_draw(|_, _, _, range, _| range.anchor(top));
+                self.with_draw(|_, _, range, _| range.anchor(top));
                 Step::Land
             }
         }
@@ -247,16 +245,14 @@ impl HistoryZone {
     }
 
     fn draws(&mut self, idx: Idx) -> bool {
-        self.with_draw(|local, products, run, _, opts| {
-            !matches!(run.head(local, products, opts, idx), Head::Empty)
-        })
+        self.with_draw(|local, run, _, opts| !matches!(run.head(local, opts, idx), Head::Empty))
     }
 
     /// The nearest block at or past this fixed position, in one direction.
     pub(super) fn block_near(&self, num: i64, older: bool) -> Option<i64> {
         let mut cursor = Some(Idx::Fixed(num));
         while let Some(Idx::Fixed(at)) = cursor {
-            if let Some(SlotKind::Block(id)) =
+            if let Some(SlotKind::Block { id, .. }) =
                 self.local.slot(Idx::Fixed(at)).map(|slot| &slot.kind)
                 && *id > 0
             {
@@ -286,9 +282,7 @@ impl HistoryZone {
                 let line = self
                     .focus_line
                     .min(usize::from(self.height.saturating_sub(1)));
-                self.with_draw(|local, products, run, range, opts| {
-                    range.sight(run, local, products, opts, line)
-                })
+                self.with_draw(|local, run, range, opts| range.sight(run, local, opts, line))
             }
         }
     }

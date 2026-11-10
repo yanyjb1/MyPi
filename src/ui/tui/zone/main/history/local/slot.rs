@@ -1,5 +1,8 @@
 //! One slot of the finished conversation: a number, and what sits on it.
 
+use super::super::product::Product;
+use super::content::Block;
+
 /// How loud one of this front end's own lines is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -17,11 +20,18 @@ pub enum Life {
     Long,
 }
 
+/// One block's content and the product derived from it at the current width.
+pub struct Held {
+    pub block: Block,
+    pub product: Option<Product>,
+    /// Admission order: the oldest content leaves first.
+    pub at: u64,
+}
+
 /// What one slot holds.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotKind {
-    /// One block, named upstream by this id.
-    Block(i64),
+    /// One block, named upstream by this id; `None` = its content is not in hand.
+    Block { id: i64, held: Option<Box<Held>> },
     /// A line this front end says. It stays here and never goes upstream.
     Notice {
         text: String,
@@ -33,7 +43,6 @@ pub enum SlotKind {
 }
 
 /// One slot: a number, and what sits on it.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Slot {
     pub num: i64,
     pub kind: SlotKind,

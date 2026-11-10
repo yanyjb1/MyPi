@@ -17,6 +17,5 @@ mod wake;
 pub(crate) use notice::rows as notice_rows;
 pub(crate) use opts::Opts;
 pub(crate) use pin::{esc_row, rows as pin_rows};
-pub(crate) use products::{Product, Products, of};
-pub(crate) use segment::Segment;
+pub(crate) use products::{Product, Shape, of};
 pub(crate) use todo::{Task, TodoPanel};

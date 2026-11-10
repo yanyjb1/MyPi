@@ -103,6 +103,8 @@ pub struct TreeZone {
     asking: HashSet<[i64; 2]>,
     /// The rows are stale and must be rebuilt before the next draw.
     stale: bool,
+    /// Bumped whenever this zone's rows would differ.
+    rev: u64,
 }
 
 impl Default for TreeZone {
@@ -120,6 +122,7 @@ impl Default for TreeZone {
             accent: Accent::default(),
             asking: HashSet::new(),
             stale: true,
+            rev: 0,
         }
     }
 }
@@ -260,33 +263,13 @@ impl TreeZone {
             memo,
         }
     }
-}
 
-impl Zone for TreeZone {
-    fn keys(&self) -> Vec<Claim> {
-        let key = |mods, code| Claim::Key(Key { code, mods });
-        vec![
-            key(PLAIN, KeyCode::Up),
-            key(PLAIN, KeyCode::Down),
-            key(PLAIN, KeyCode::PageUp),
-            key(PLAIN, KeyCode::PageDown),
-            key(PLAIN, KeyCode::Home),
-            key(PLAIN, KeyCode::End),
-            key(PLAIN, KeyCode::Enter),
-            key(SHIFT, KeyCode::Enter),
-            key(PLAIN, KeyCode::Tab),
-            key(PLAIN, KeyCode::Esc),
-            key(PLAIN, KeyCode::Char('q')),
-            Claim::Wheel,
-            Claim::WheelShift,
-        ]
+    fn bump(&mut self) {
+        self.rev = self.rev.wrapping_add(1);
     }
 
-    fn kinds(&self) -> &'static [Kind] {
-        &[Kind::Call]
-    }
-
-    fn start(&mut self, size: TermSize, _memo: &Memo) -> Vec<Request> {
+    /// The page is entered: the rows are rebuilt from scratch.
+    fn enter(&mut self, size: TermSize, _memo: &Memo) -> Vec<Request> {
         self.size = Some(size);
         self.stale = true;
         self.landed = false;
@@ -301,7 +284,7 @@ impl Zone for TreeZone {
         ]
     }
 
-    fn session(&mut self, id: Option<i64>) -> Vec<Request> {
+    fn follow(&mut self, id: Option<i64>) -> Vec<Request> {
         if id.is_none() {
             self.structure.clear();
             self.blocks.clear();
@@ -314,7 +297,7 @@ impl Zone for TreeZone {
         Vec::new()
     }
 
-    fn event(&mut self, frame: &Frame) -> Vec<Request> {
+    fn read(&mut self, frame: &Frame) -> Vec<Request> {
         match (frame.class.as_str(), frame.name.as_str()) {
             ("call", "init") | ("call", "blocks") => {
                 if let Some(rows) = frame.content.get("blocks") {
@@ -352,7 +335,7 @@ impl Zone for TreeZone {
         Vec::new()
     }
 
-    fn action(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
+    fn act(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
         self.sync();
         match action {
             Action::ScrollUp { shift } => self.move_by(if *shift { -10 } else { -1 }),
@@ -391,18 +374,85 @@ impl Zone for TreeZone {
         (Outcome::Stay, self.wanted())
     }
 
-    fn structure(&mut self, snapshot: &Turns) -> Vec<Request> {
+    fn take_structure(&mut self, snapshot: &Turns) -> Vec<Request> {
         self.structure = snapshot.clone();
         self.stale = true;
         self.asking.clear();
         self.sync();
         self.wanted()
     }
+}
 
-    fn render(&mut self) -> Vec<ratatui::text::Line<'static>> {
+impl Zone for TreeZone {
+    fn keys(&self) -> Vec<Claim> {
+        let key = |mods, code| Claim::Key(Key { code, mods });
+        vec![
+            key(PLAIN, KeyCode::Up),
+            key(PLAIN, KeyCode::Down),
+            key(PLAIN, KeyCode::PageUp),
+            key(PLAIN, KeyCode::PageDown),
+            key(PLAIN, KeyCode::Home),
+            key(PLAIN, KeyCode::End),
+            key(PLAIN, KeyCode::Enter),
+            key(SHIFT, KeyCode::Enter),
+            key(PLAIN, KeyCode::Tab),
+            key(PLAIN, KeyCode::Esc),
+            key(PLAIN, KeyCode::Char('q')),
+            Claim::Wheel,
+            Claim::WheelShift,
+        ]
+    }
+
+    fn kinds(&self) -> &'static [Kind] {
+        &[Kind::Call]
+    }
+
+    fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request> {
+        let out = self.enter(size, memo);
+        self.bump();
+        out
+    }
+
+    fn session(&mut self, id: Option<i64>) -> Vec<Request> {
+        let out = self.follow(id);
+        self.bump();
+        out
+    }
+
+    fn tick(&mut self) -> Vec<Request> {
+        let before = (self.selected, self.scroll);
         self.sync();
         let body = self.body();
         self.settle_scroll(body);
+        if (self.selected, self.scroll) != before {
+            self.bump();
+        }
+        Vec::new()
+    }
+
+    fn revision(&self) -> u64 {
+        self.rev
+    }
+
+    fn event(&mut self, frame: &Frame) -> Vec<Request> {
+        let out = self.read(frame);
+        self.bump();
+        out
+    }
+
+    fn action(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
+        let out = self.act(action);
+        self.bump();
+        out
+    }
+
+    fn structure(&mut self, snapshot: &Turns) -> Vec<Request> {
+        let out = self.take_structure(snapshot);
+        self.bump();
+        out
+    }
+
+    fn render(&mut self) -> Vec<ratatui::text::Line<'static>> {
         super::render::rows(
             &self.rows,
             self.selected,

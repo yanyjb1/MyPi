@@ -3,8 +3,11 @@
 //! Blocks here have no upstream id yet; the round's receipt gives them one. A notice is a line
 //! only this front end says: it takes no id and never goes upstream.
 
+use std::collections::HashMap;
+
 use super::content::{Block, Kind as BlockKind, Truncation};
 use super::slot::{Level, Life};
+use crate::ui::tui::zone::main::history::product::Product;
 
 /// One entry of the running turn, in source order.
 pub enum Entry {
@@ -23,6 +26,14 @@ pub enum Entry {
 struct Region {
     entries: Vec<Entry>,
     open: Option<usize>,
+    /// The product each position handed over at the current width; a write clears it.
+    products: HashMap<usize, Product>,
+}
+
+impl Region {
+    fn touch(&mut self) {
+        self.products.clear();
+    }
 }
 
 /// The running turn. While a close waits for its rows, the next turn's entries grow beside it.
@@ -46,6 +57,27 @@ impl Mutable {
     /// The close settled: the turn goes, and whatever the next one already said takes its place.
     pub fn adopt(&mut self) {
         self.live = self.next.take().unwrap_or_default();
+    }
+
+    /// The product this position handed over, when it was built.
+    pub fn product(&self, at: usize) -> Option<&Product> {
+        self.live.products.get(&at)
+    }
+
+    pub fn set_product(&mut self, at: usize, product: Product) {
+        self.live.products.insert(at, product);
+    }
+
+    pub fn drop_product(&mut self, at: usize) {
+        self.live.products.remove(&at);
+    }
+
+    /// Every built product goes: the options or the width moved.
+    pub fn drop_products(&mut self) {
+        self.live.touch();
+        if let Some(next) = self.next.as_mut() {
+            next.touch();
+        }
     }
 
     pub fn entries(&self) -> &[Entry] {
@@ -84,16 +116,19 @@ impl Mutable {
 
     pub fn take(&mut self) -> Vec<Entry> {
         self.live.open = None;
+        self.live.touch();
         std::mem::take(&mut self.live.entries)
     }
 
     pub fn text(&mut self, piece: &str) -> usize {
         let region = self.target();
+        region.touch();
         region.grow(BlockKind::Assistant, piece)
     }
 
     pub fn thinking(&mut self, piece: &str) -> usize {
         let region = self.target();
+        region.touch();
         region.grow(BlockKind::Reasoning, piece)
     }
 
@@ -104,6 +139,7 @@ impl Mutable {
     /// One wake message, its own block: the text names the reminder.
     pub fn wake(&mut self, text: &str) -> usize {
         let region = self.target();
+        region.touch();
         let mut block = blank(BlockKind::Wake, None);
         block.text = Some(text.to_string());
         region.open = None;
@@ -114,6 +150,7 @@ impl Mutable {
     /// A message this front end just put out: it leads the turn, above the reply.
     pub fn echo(&mut self, text: &str) -> usize {
         let region = self.target();
+        region.touch();
         let mut block = blank(BlockKind::User, None);
         block.text = Some(text.to_string());
         region.entries.insert(0, Entry::Block(block));
@@ -126,6 +163,7 @@ impl Mutable {
     /// The echo opened nothing: the leading message goes.
     pub fn retract(&mut self) {
         let region = self.target();
+        region.touch();
         let leading = matches!(region.entries.first(), Some(Entry::Block(block)) if block.kind == BlockKind::User);
         if leading {
             region.entries.remove(0);
@@ -138,6 +176,7 @@ impl Mutable {
     /// A line only this front end says: it closes whatever block was still growing.
     pub fn notice(&mut self, text: String, level: Level, life: Life) -> usize {
         let region = self.target();
+        region.touch();
         region.open = None;
         region.entries.push(Entry::Notice { text, level, life });
         region.entries.len() - 1
@@ -145,6 +184,7 @@ impl Mutable {
 
     pub fn arguments(&mut self, call_id: &str, name: &str, piece: &str) -> usize {
         let region = self.target();
+        region.touch();
         let at = region.request(call_id);
         let Some(Entry::Block(block)) = region.entries.get_mut(at) else {
             return at;
@@ -164,6 +204,7 @@ impl Mutable {
         intent: Option<&str>,
     ) -> usize {
         let region = self.target();
+        region.touch();
         let at = region.request(call_id);
         let Some(Entry::Block(block)) = region.entries.get_mut(at) else {
             return at;
@@ -176,6 +217,7 @@ impl Mutable {
 
     pub fn tool_progress(&mut self, call_id: &str, piece: &str) -> usize {
         let region = self.target();
+        region.touch();
         let at = region.result(call_id);
         let Some(Entry::Block(block)) = region.entries.get_mut(at) else {
             return at;
@@ -194,6 +236,7 @@ impl Mutable {
         truncated: Option<Truncation>,
     ) -> usize {
         let region = self.target();
+        region.touch();
         let at = region.result(call_id);
         let Some(Entry::Block(block)) = region.entries.get_mut(at) else {
             return at;

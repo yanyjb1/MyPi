@@ -1,6 +1,7 @@
 //! The app: the registry, the display ledger, and the only exit to the session.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use ratatui::text::Line;
 use serde_json::{Value, json};
@@ -56,6 +57,8 @@ pub struct App {
     pub(super) told: Vec<Option<Option<i64>>>,
     /// Text waiting for the loop to write it to the clipboard.
     copy: Vec<String>,
+    /// What the last draw showed: the owner's revision, and when it was drawn.
+    drawn: Option<(u64, Instant)>,
     finished: bool,
 }
 
@@ -83,6 +86,7 @@ impl App {
             opening: None,
             told,
             copy: Vec::new(),
+            drawn: None,
             finished: false,
         };
         app.reset_memo();
@@ -118,6 +122,37 @@ impl App {
                 None => self.detach(),
             }
         }
+    }
+
+    /// One frame's side effects: the zone that shows settles, and what it asks leaves now.
+    pub fn tick(&mut self) {
+        let Some(owner) = self.owner else {
+            return;
+        };
+        let requests = self.zones[owner.index()].tick();
+        self.land_all(requests);
+    }
+
+    /// The rows to draw now; `None` = nothing changed and no animation is due.
+    pub fn frame(&mut self, now: Instant) -> Option<Vec<Line<'static>>> {
+        let owner = self.owner?;
+        let zone = &mut self.zones[owner.index()];
+        let rev = zone.revision();
+        let due = match self.drawn {
+            None => true,
+            Some((drawn, at)) => {
+                drawn != rev
+                    || zone
+                        .anim()
+                        .is_some_and(|period| now.saturating_duration_since(at) >= period)
+            }
+        };
+        if !due {
+            return None;
+        }
+        let lines = zone.render();
+        self.drawn = Some((zone.revision(), now));
+        Some(lines)
     }
 
     /// One input from the loop.
@@ -205,6 +240,7 @@ impl App {
                     self.memo.write(&alias, &content);
                 }
                 self.owner = Some(to);
+                self.drawn = None;
                 self.tell();
                 let requests = self.zones[to.index()].start(self.size, &self.memo);
                 self.land_all(requests);

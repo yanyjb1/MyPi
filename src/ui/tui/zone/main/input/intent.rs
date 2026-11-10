@@ -125,6 +125,7 @@ impl InputZone {
         if self.editor.is_empty() {
             self.editor = Editor::from_text(text);
             self.finished = false;
+            self.wrap_gen = self.wrap_gen.wrapping_add(1);
             self.history.on_edit();
         }
     }
@@ -148,6 +149,8 @@ impl InputZone {
 
     /// An edit landed: the word decides whether the completion hand is wanted.
     pub(super) fn edited(&mut self, consumed: bool) -> bool {
+        self.wrap_gen = self.wrap_gen.wrapping_add(1);
+        self.bump();
         self.refresh_hang();
         if self.hang {
             self.pending_hire = Some(Hire::Completion);

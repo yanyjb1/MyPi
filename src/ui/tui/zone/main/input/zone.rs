@@ -71,6 +71,14 @@ pub struct InputZone {
     pub(super) shouts: Vec<Shout>,
     /// Frames this zone owes the session.
     pub(super) outbox: Vec<Request>,
+    /// Bumped whenever this zone's rows would differ.
+    rev: u64,
+    /// The editor text wrapped at the width it was last laid at.
+    view: crate::ui::tui::text::Wrapped,
+    /// The `(columns, edit generation)` `view` was wrapped from.
+    view_key: (usize, u64),
+    /// Bumped on every edit: the wrap follows it.
+    pub(super) wrap_gen: u64,
 }
 
 impl Default for InputZone {
@@ -100,6 +108,10 @@ impl Default for InputZone {
             pending_name: None,
             shouts: Vec::new(),
             outbox: Vec::new(),
+            rev: 0,
+            view: crate::ui::tui::text::Wrapped::default(),
+            view_key: (0, 0),
+            wrap_gen: 0,
         }
     }
 }
@@ -123,6 +135,47 @@ impl InputZone {
         std::mem::take(&mut self.pending_exits)
     }
 
+    /// One frame for the statusline: a deco with work of its own runs it here.
+    pub fn tick_statusline(&mut self) {
+        let ctx = Ctx { data: &self.data };
+        if self.statusline.tick(&ctx) {
+            self.bump();
+        }
+    }
+
+    pub(super) fn bump(&mut self) {
+        self.rev = self.rev.wrapping_add(1);
+    }
+
+    /// Esc first (a lent-away Esc never arrives here), then the intent table.
+    fn act(&mut self, a: &Action) -> bool {
+        let key = match a {
+            Action::Key(key) => *key,
+            Action::Paste(text) => {
+                self.enter_armed = None;
+                let intent = semantics::Intent::Paste(text.clone());
+                let consumed = self.apply(&intent, None);
+                return self.edited(consumed);
+            }
+            Action::ScrollUp { .. } | Action::ScrollDown { .. } => return false,
+        };
+        if key.code == KeyCode::Esc && self.route_esc(&key) {
+            return true;
+        }
+        let intent = semantics::translate(key);
+        if matches!(intent, semantics::Intent::None) {
+            return false;
+        }
+        // Only two Enters in a row interrupt: any other key spends the arm.
+        if !matches!(intent, semantics::Intent::Submit) {
+            self.enter_armed = None;
+        }
+        let wrapped = matches!(intent, semantics::Intent::Up | semantics::Intent::Down)
+            .then(|| self.wrapped());
+        let consumed = self.apply(&intent, wrapped.as_ref());
+        self.edited(consumed)
+    }
+
     /// The editor's text and where the cursor sits in it.
     pub fn draft(&self) -> (String, usize) {
         (self.editor.text(), self.editor.cursor())
@@ -136,8 +189,20 @@ impl InputZone {
     }
 
     /// The wrapped result at the current width: keys and rendering share it.
-    fn wrapped(&self) -> crate::ui::tui::text::Wrapped {
-        crate::ui::tui::text::wrap(&self.editor.text(), geometry::inner_width(self.term.cols))
+    fn ensure_view(&mut self, cols: u16) {
+        let key = (usize::from(cols.max(1)), self.wrap_gen);
+        if self.view_key != key {
+            self.view =
+                crate::ui::tui::text::wrap(&self.editor.text(), geometry::inner_width(cols));
+            self.view_key = key;
+        }
+    }
+
+    /// A copy of the wrapped text: the cursor-walking intents ask for one.
+    fn wrapped(&mut self) -> crate::ui::tui::text::Wrapped {
+        let cols = self.term.cols;
+        self.ensure_view(cols);
+        self.view.clone()
     }
 
     /// The statusline's own reading of an event.
@@ -170,38 +235,22 @@ impl SubZone for InputZone {
         &[Kind::Call, Kind::Post, Kind::Subscribe]
     }
 
+    fn revision(&self) -> u64 {
+        self.rev
+    }
+
     fn deliver_event(&mut self, frame: &Frame, size: TermSize) -> Vec<Request> {
         self.term = size;
-        self.read_frame(frame)
+        let out = self.read_frame(frame);
+        self.bump();
+        out
     }
 
     /// Esc first (a lent-away Esc never arrives here), then the intent table.
     fn deliver_action(&mut self, a: &Action) -> bool {
-        let key = match a {
-            Action::Key(key) => *key,
-            Action::Paste(text) => {
-                self.enter_armed = None;
-                let intent = semantics::Intent::Paste(text.clone());
-                let consumed = self.apply(&intent, None);
-                return self.edited(consumed);
-            }
-            Action::ScrollUp { .. } | Action::ScrollDown { .. } => return false,
-        };
-        if key.code == KeyCode::Esc && self.route_esc(&key) {
-            return true;
-        }
-        let intent = semantics::translate(key);
-        if matches!(intent, semantics::Intent::None) {
-            return false;
-        }
-        // Only two Enters in a row interrupt: any other key spends the arm.
-        if !matches!(intent, semantics::Intent::Submit) {
-            self.enter_armed = None;
-        }
-        let wrapped = matches!(intent, semantics::Intent::Up | semantics::Intent::Down)
-            .then(|| self.wrapped());
-        let consumed = self.apply(&intent, wrapped.as_ref());
-        self.edited(consumed)
+        let consumed = self.act(a);
+        self.bump();
+        consumed
     }
 
     fn attach(&mut self, session: i64, _size: TermSize) {
@@ -216,6 +265,7 @@ impl SubZone for InputZone {
         self.in_flight = None;
         self.pending_notice.clear();
         self.outbox.push(Request::Usage);
+        self.bump();
     }
 
     fn detach(&mut self) {
@@ -227,6 +277,7 @@ impl SubZone for InputZone {
         self.enter_armed = None;
         self.pending_name = None;
         self.editor.clear();
+        self.wrap_gen = self.wrap_gen.wrapping_add(1);
         self.history.exit();
         self.finished = true;
         self.scroll = 0;
@@ -237,6 +288,7 @@ impl SubZone for InputZone {
         self.outbox.push(Request::Config {
             key: DEFAULT_MODEL_KEY.to_string(),
         });
+        self.bump();
     }
 
     fn take_shouts(&mut self) -> Vec<Shout> {
@@ -282,27 +334,26 @@ impl SubZone for InputZone {
             }
             _ => {}
         }
+        self.bump();
     }
 }
 
 impl Pane for InputZone {
-    fn request_height(&self, term: TermSize) -> u16 {
-        self.request_height_for(self.wrapped_for(term).len(), term.rows)
+    fn request_height(&mut self, term: TermSize) -> u16 {
+        self.ensure_view(term.cols);
+        self.request_height_for(self.view.len(), term.rows)
     }
 
     fn assign(&mut self, term: TermSize, rows: u16) {
         self.term = term;
-        self.rows = rows;
+        if self.rows != rows {
+            self.rows = rows;
+            self.bump();
+        }
     }
 }
 
 impl InputZone {
-    /// The wrapped result at the given width — `request_height` runs before the new
-    /// size is stored, so the width comes in as an argument.
-    fn wrapped_for(&self, term: TermSize) -> crate::ui::tui::text::Wrapped {
-        crate::ui::tui::text::wrap(&self.editor.text(), geometry::inner_width(term.cols))
-    }
-
     /// Self-rendering; the width comes in as an argument, like its siblings.
     ///
     /// Order: wrap, scroll to the cursor, the statusline row, then the container.
@@ -313,23 +364,20 @@ impl InputZone {
     ) -> Vec<ratatui::text::Line<'static>> {
         self.term = term;
         let term_w = term.cols.max(1);
-        let wrapped =
-            crate::ui::tui::text::wrap(&self.editor.text(), geometry::inner_width(term_w));
-        let (cursor_row, cursor_col) = wrapped.locate(self.editor.cursor());
+        self.ensure_view(term_w);
+        let (cursor_row, cursor_col) = self.view.locate(self.editor.cursor());
         let container_rows = usize::from(self.rows.max(2));
         self.scroll =
-            geometry::adjust_scroll(self.scroll, wrapped.len(), container_rows, cursor_row);
+            geometry::adjust_scroll(self.scroll, self.view.len(), container_rows, cursor_row);
         let status_line = {
             let ctx = Ctx { data: &self.data };
-            // One frame each: a deco with work of its own does it here, inside the frame.
-            self.statusline.tick(&ctx);
             self.statusline
                 .render(&StatusTheme::new(*accent), term_w, &ctx)
         };
         let drawn = render::render(
             &render::Spec {
                 status_line,
-                wrapped: &wrapped,
+                wrapped: &self.view,
                 starts: self.scroll,
                 container_rows,
                 cursor_row,

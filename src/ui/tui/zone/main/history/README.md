@@ -2,14 +2,15 @@
 
 ## 1. Design / Schema
 
-Four parts: the local section, the product layer, the prefetch layer, and a display step.
+Four parts: the local section, the prefetch layer, a display step, and the frame that decides when
+any of it runs.
 
 | part | holds | hands down | evicts |
 |---|---|---|---|
-| local section | positions, and the content behind them | a position, and the block it names | never; only a rewind empties a position |
-| product layer | a block as segments, or as folded rows | segments, or rows | by block, `cacheMargin` of them |
+| local section | positions, and each position's content plus its product | a position, and what it draws | content past `cacheMargin`, oldest admission first, blocks in use exempt |
 | prefetch layer | laid segments and gaps | rows, in screen order | by segment, whole segments only |
 | display | nothing | screen lines | nothing |
+| frame | the revision the last draw showed | `None` while nothing changed | nothing |
 
 ### Local section
 
@@ -19,8 +20,10 @@ A position is either `Fixed(i64)` or `Turn(u32)`.
 this front end's own run. `Turn` numbers the entries of the running round while it grows; those
 numbers do not survive the handover.
 
-A position holds one of three things: a block id, a line this front end says (a notice), or `Next`.
-`Next` keeps its number, draws nothing, and takes no budget.
+A fixed position holds one of three things: a block (with its content when it is in hand), a line
+this front end says (a notice), or `Next`. `Next` keeps its number and draws nothing. A block with
+no content is a position the view can name before anything arrives, or one whose content the budget
+took back; both draw the `…` row and ask for the block.
 
 Content is one `Block`: id, kind, the text or arguments it carries, name, intent, call id, the
 result and its ok, memo, duration, and whether it opens its round. A tool exchange is two blocks: a
@@ -28,36 +31,32 @@ request and the result that answers it.
 
 A request finds its result by call id, never by position: the upstream writes every request of a
 round before any of its results, so two calls in one round sit next to each other. The pairing index
-lives in the local section; the running round and the finished conversation both answer it.
+lives in the finished region; the running round answers from its own entries.
 
-The running round is an ordered list of entries; each entry is a block or a notice. A block entry
-takes an upstream id when the round's receipt arrives; a notice never does. The receipt is checked
-by count first: the number of ids must equal the number of block entries, notices are not counted.
-A receipt that does not line up means the turn was cut short — a call that never ran leaves no
-block behind — so the running round keeps the screen while the receipt's own rows are fetched;
-those rows then lead, positions are taken from them in id order, and only then does the running
-round go. While that wait lasts, the next round's entries grow beside it and take over on arrival.
+The running round is an ordered list of entries; each entry is a block or a notice, and it carries
+the product derived from it. A block entry takes an upstream id when the round's receipt arrives; a
+notice never does. The receipt is checked by count first: the number of ids must equal the number of
+block entries, notices are not counted. A receipt that does not line up means the turn was cut
+short — a call that never ran leaves no block behind — so the receipt's positions are reserved at
+once, the running round keeps the screen until those rows are fetched, and only then does it go.
+While that wait lasts, the next round's entries grow beside it and take over on arrival.
 
-### Product layer
+The two regions are the only holders of block content. What the budget takes away leaves the slot's
+number and kind behind, so a later scroll asks for it again instead of keeping it twice.
 
-Two lifetimes:
+### Products
 
-| layer | content | on a width change |
-|---|---|---|
-| first | segment to natural lines | untouched |
-| second | natural lines to folded rows | discarded and rebuilt |
+One product per block: text blocks hand over segments, everything else hands over rows folded at a
+width. A whole-block product is built at the width it will be drawn at; a text product is built
+without one.
 
-Two product kinds: text segments (prose, thinking, fences) and whole-block products (cards, user
-messages, notices, tables, task lists). A text product is a list of segments; a whole-block product
-is rows already folded at a width.
+The product is built on the first use of a position and kept on the block. It goes when the block's
+content changes, and when the width, the fold budget or the accent's options move. A product that
+would draw nothing is not kept.
 
-The cache is keyed by block id and the result id it pairs with, and a block keeps one entry: a
-result that lands later replaces the copy built without it. A product that would draw nothing is not
-kept; eviction compares admission time first, then the ids; `Next` positions have no product, and a
-running round is never cached as a block. A width change drops every whole-block product and every
-laid row; text products survive.
-
-A running block is rebuilt whenever content arrives. Only its last segment can still change.
+The running round rebuilds a block's product when a piece lands: a text block re-splits, a card is
+laid again from the stream it has. A running card builds only the rows its fold keeps, so a long
+output costs the budget, not the output.
 
 ### Tool cards
 
@@ -107,7 +106,7 @@ cached for it.
 
 The run keeps one reserved tail slot: the pin, a list of rows laid under the newest segment. It is
 not a segment and takes no `SegId`; `len` and `row` count it, `trim` and `at` do not. The zone
-rebuilds it every frame from the checklist and from what is still running, so a round close never
+rebuilds it every draw from the checklist and from what is still running, so a round close never
 has to clear it.
 
 The pin is the checklist, then the ESC row while a call or a thought runs. It scrolls like any other
@@ -122,6 +121,20 @@ The display range is a start plus the rows the screen has. Three starts:
 - `Latest`: the last rows of the run. New content lands on screen by itself.
 - `At(SegId, row)`: one fixed place. The screen does not move when content lands elsewhere.
 - `Pin(row)`: a row of the pin. It only happens when the screen is shorter than the pin itself.
+
+### Frame
+
+One round belongs to the app: it drains what the terminal said, then what the connection said, then
+runs the side effects, then draws only if the showing zone's rows changed.
+
+Inside this zone a frame is three steps. Ingest appends to the model — a piece, a block, a receipt —
+and records the position it touched in a dirty set; it never lays anything. The draw applies the set
+once: those positions lose their laid rows and their product, the content budget is settled, and the
+window is spent. Every other position keeps its rows and its product.
+
+The zone counts its own revisions: every entry point that can change the rows bumps one. The app
+draws when that number moved since the last draw, or when the ESC row's clock fell due. Nothing else
+draws, so an idle front end runs no layout at all.
 
 ### Display
 
@@ -138,6 +151,18 @@ opens a natural line), or `Wrapped` (it is a continuation).
 
 - **Indexes and content are separate** so that a position can exist before its content arrives. The
   view can name anything in the structural window; content is fetched on demand.
+- **Content lives only in the two regions** so that one block is one copy: no third table, no cache
+  that answers a second time for the same block.
+- **The budget counts content, not positions** so that memory does not follow the length of the
+  conversation; a block that leaves comes back through the same ask as one that never arrived.
+- **Blocks in use are exempt from the budget** so that a scroll never takes away a row it is about
+  to draw, and the working set is never evicted under the reader.
+- **Ingest only appends** so that a batch of stream pieces costs one append each, not one layout
+  each; the shape of a round is decided once, at the draw that shows it.
+- **One layout per changed position per draw** so that a screen never derives the same block twice
+  for one frame.
+- **Drawing follows a counter** so that an idle frame costs a comparison, and an animation is the
+  only thing that draws without content.
 - **Blocks keep ids, not positions**: a rewind changes positions, never ids.
 - **A pair is a call id, not a neighbour** because a round commits every request before any result,
   so the call and its answer are not adjacent.
@@ -147,12 +172,12 @@ opens a natural line), or `Wrapped` (it is a continuation).
   a paragraph's spans cross row boundaries.
 - **Gaps belong to the segment's tail** so that laying one segment never has to look at its
   neighbor.
-- **Folding lives in the product layer** because it depends on width, while segments do not.
+- **Folding lives in the product** because it depends on width, while segments do not.
 - **The range is a start plus a height** so that the screen is a slice of the run, and a growing
   block only changes the rows after its last settled row.
 - **The pin is a row set after the segments, not a layer above them** so that one scroll model
   covers the checklist and the transcript, and a short screen still shows the checklist.
-- **The pin is rebuilt every frame** so that no handover, width change or round close has to know
+- **The pin is rebuilt every draw** so that no handover, width change or round close has to know
   about it.
 - **Display is stateless** so that the same rows always produce the same screen.
 - **A card is drawn from both halves of its exchange**, so the request's position owns the rows; a
@@ -177,7 +202,7 @@ opens a natural line), or `Wrapped` (it is a continuation).
 
 | key | use |
 |---|---|
-| `config.ui.tui.zone.main.history.cacheMargin` | blocks kept in the product layer |
+| `config.ui.tui.zone.main.history.cacheMargin` | blocks that keep their content and product |
 | `config.ui.tui.zone.main.history.focusLine` | rows above the sight line when a block is focused |
 | `config.ui.tui.zone.main.history.cardFoldBudget` | rows a card head or tail may take |
 | `config.ui.tui.zone.main.history.scrollHeight` | rows one wheel notch walks |

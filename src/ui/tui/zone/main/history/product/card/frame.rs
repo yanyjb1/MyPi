@@ -71,6 +71,7 @@ pub fn node(block: &Block, paired: Option<&Block>, opts: &Opts, width: usize) ->
             intent: block.intent.as_deref(),
             result: outcome,
             expanded: opts.tool,
+            budget: opts.fold,
             width,
         },
         outcome.is_none_or(|o| o.ok.is_none()),
@@ -132,6 +133,25 @@ pub(crate) fn output_lines(text: &str) -> Vec<Row> {
         )];
     }
     text.lines()
+        .map(|line| Row::of(Lead::None, vec![Run::fixed(line, fixed::TOOL_OUTPUT)]))
+        .collect()
+}
+
+/// The last rows a running result shows: the fold keeps the tail, so only it is built.
+pub(crate) fn output_tail(text: &str, budget: usize) -> Vec<Row> {
+    if text.trim().is_empty() {
+        return vec![Row::of(
+            Lead::None,
+            vec![Run::fixed("(no output)", fixed::MUTED)],
+        )];
+    }
+    let budget = budget.max(3);
+    text.lines()
+        .rev()
+        .take(budget)
+        .collect::<Vec<&str>>()
+        .into_iter()
+        .rev()
         .map(|line| Row::of(Lead::None, vec![Run::fixed(line, fixed::TOOL_OUTPUT)]))
         .collect()
 }

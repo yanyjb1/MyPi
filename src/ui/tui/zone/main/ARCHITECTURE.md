@@ -47,8 +47,11 @@ MainZone
 
 - `event` and `action` end in `flush`, which drains every child's `shouts` and delivers them to the
   other two.
+- `tick` runs the statusline's own clock, `settle`, and the hand that the editor asked for, then folds
+  the children's revisions into one number the app compares.
 - `settle` re-arbitrates rows, seats a pending hand, and flushes again.
-- `render` calls each child in row order; the desk reports the cursor's column back to the input.
+- `render` calls each child in row order; the desk reports the cursor's column back to the input. It
+  changes nothing the zone's rows depend on.
 
 ## Must stay in sync
 
@@ -58,7 +61,10 @@ MainZone
 4. `keys::TABLE` and the children's own claims (`CLAIMS` on each type).
 5. `dispatch` and every `ExitRequest`.
 6. `keys::check` and the three `CLAIMS` lists: two sub-zones may not claim the same input.
+7. A child's mutating entry point and its `SubZone::revision`: a change that skips the bump never
+   draws.
+8. `HistoryZone::anim` and `Zone::anim`: the ESC row's clock is the only time-driven row here.
 
 ## Not wired
 
-1. `run` still draws every frame whether or not anything arrived.
+Nothing.

@@ -5,7 +5,7 @@ use crate::ui::tui::zone::TermSize;
 /// A sub-zone the main zone hands rows to.
 pub(crate) trait Pane {
     /// Rows this pane wants, given the terminal size.
-    fn request_height(&self, _term: TermSize) -> u16 {
+    fn request_height(&mut self, _term: TermSize) -> u16 {
         0
     }
 

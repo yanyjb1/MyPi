@@ -1,5 +1,7 @@
 //! The two levels: the app talks to major zones, a major zone talks to its sub-zones.
 
+use std::time::Duration;
+
 use ratatui::text::Line;
 use serde_json::Value;
 
@@ -37,6 +39,19 @@ pub trait Zone {
     /// The structural window, after a `Request::Structure`.
     fn structure(&mut self, snapshot: &Turns) -> Vec<Request>;
 
+    /// One frame's side effects, before any drawing: the requests this zone owes.
+    fn tick(&mut self) -> Vec<Request> {
+        Vec::new()
+    }
+
+    /// Bumped whenever this zone's rows would differ.
+    fn revision(&self) -> u64;
+
+    /// How often time alone rewrites the rows; `None` = never.
+    fn anim(&self) -> Option<Duration> {
+        None
+    }
+
     /// This zone's rows for the frame.
     fn render(&mut self) -> Vec<Line<'static>>;
 
@@ -69,6 +84,9 @@ pub trait SubZone {
     fn borrowed(&self) -> &'static [Claim] {
         &[]
     }
+
+    /// Bumped whenever this sub-zone's rows would differ.
+    fn revision(&self) -> u64;
 
     /// Events this sub-zone put out since the last call, oldest first.
     fn take_shouts(&mut self) -> Vec<Shout> {

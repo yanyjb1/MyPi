@@ -120,8 +120,9 @@ money and context, asked at attach, at every round's end and after each request.
 ### Height and rendering
 
 `pane::Pane`'s `request_height` wraps the text at the inner width, adds one row, and caps the
-result at one fifth of the terminal, at least two rows. `render_rows` wraps again, locates the
-cursor, adjusts the scroll with minimal movement, ticks the statusline, then draws the container.
+result at one fifth of the terminal, at least two rows. `render_rows` reuses that wrap, locates the
+cursor, adjusts the scroll with minimal movement, then draws the container. The statusline's own
+clock runs in `tick_statusline`, once a round.
 
 ### Statusline
 
@@ -133,8 +134,8 @@ the `models.model.<address>` answer gives the model pill and the gauge's denomin
 gives the cost in both currencies and where the context stands. The display currency comes from
 `config.ui.tui.fx.currency`, never from a model. The gauge's first cell is its marker: `-` for a
 measured count, `~` for an estimate. `activity` steps one glyph per `tick` shout. `git` scans on its
-own frame tick: the first frame at once, then once per configured interval, and once more whenever
-a round moved the tree.
+own tick: the first one at once, then once per configured interval, and once more when a round
+starts or ends.
 
 ### Invariants
 

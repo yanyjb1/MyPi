@@ -2,7 +2,16 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use super::slot::{Slot, SlotKind};
+use super::super::product::Product;
+use super::content::Block;
+use super::slot::{Held, Slot, SlotKind};
+
+/// The two sides of one tool exchange, by block id.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Pair {
+    pub request: Option<i64>,
+    pub result: Option<i64>,
+}
 
 /// Numbers below zero hold what the database had; zero up holds this front end's own run.
 #[derive(Default)]
@@ -10,9 +19,20 @@ pub struct Immutable {
     past: VecDeque<Slot>,
     now: Vec<Slot>,
     index: HashMap<i64, i64>,
+    pairs: HashMap<String, Pair>,
+    clock: u64,
+    top: i64,
+    /// Slots that hold content right now: the budget counts these.
+    held: usize,
 }
 
 impl Immutable {
+    /// The next admission stamp: the eviction order.
+    pub fn stamp(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
+
     /// One more slot above zero.
     pub fn append(&mut self, kind: SlotKind) -> i64 {
         let num = self.now.len() as i64;
@@ -44,12 +64,15 @@ impl Immutable {
 
     /// A rewind: the slot keeps its number and stops holding a block.
     pub fn dead(&mut self, num: i64) {
-        let id = match self.at(num).map(|slot| &slot.kind) {
-            Some(SlotKind::Block(id)) => Some(*id),
-            _ => None,
+        let (id, filled) = match self.at(num).map(|slot| &slot.kind) {
+            Some(SlotKind::Block { id, held }) => (Some(*id), held.is_some()),
+            _ => (None, false),
         };
         if let Some(id) = id {
             self.index.remove(&id);
+        }
+        if filled {
+            self.held = self.held.saturating_sub(1);
         }
         if let Some(slot) = self.at_mut(num) {
             slot.kind = SlotKind::Next;
@@ -60,6 +83,10 @@ impl Immutable {
         self.past.clear();
         self.now.clear();
         self.index.clear();
+        self.pairs.clear();
+        self.clock = 0;
+        self.top = 0;
+        self.held = 0;
     }
 
     pub fn at(&self, num: i64) -> Option<&Slot> {
@@ -75,7 +102,7 @@ impl Immutable {
         }
     }
 
-    fn at_mut(&mut self, num: i64) -> Option<&mut Slot> {
+    pub fn at_mut(&mut self, num: i64) -> Option<&mut Slot> {
         if num < 0 {
             let at = self.past.len() as i64 + num;
             if at < 0 {
@@ -113,9 +140,134 @@ impl Immutable {
         self.index.get(&block).copied()
     }
 
+    /// The newest block id that has a slot.
+    pub fn top(&self) -> i64 {
+        self.top
+    }
+
+    /// The content on this slot, when it is in hand.
+    pub fn block(&self, num: i64) -> Option<&Block> {
+        match &self.at(num)?.kind {
+            SlotKind::Block {
+                held: Some(held), ..
+            } => Some(&held.block),
+            _ => None,
+        }
+    }
+
+    /// The product this slot's block handed over, when it was built.
+    pub fn product(&self, num: i64) -> Option<&Product> {
+        match &self.at(num)?.kind {
+            SlotKind::Block {
+                held: Some(held), ..
+            } => held.product.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Keep the built product on the slot.
+    pub fn set_product(&mut self, num: i64, product: Product) {
+        if let Some(SlotKind::Block {
+            held: Some(held), ..
+        }) = self.at_mut(num).map(|slot| &mut slot.kind)
+        {
+            held.product = Some(product);
+        }
+    }
+
+    pub fn drop_product(&mut self, num: i64) {
+        if let Some(SlotKind::Block {
+            held: Some(held), ..
+        }) = self.at_mut(num).map(|slot| &mut slot.kind)
+        {
+            held.product = None;
+        }
+    }
+
+    pub fn drop_products(&mut self) {
+        for slot in self.past.iter_mut().chain(self.now.iter_mut()) {
+            if let SlotKind::Block {
+                held: Some(held), ..
+            } = &mut slot.kind
+            {
+                held.product = None;
+            }
+        }
+    }
+
+    /// The block content arrives: the slot it belongs to takes it.
+    pub fn bind(&mut self, id: i64, block: Block) {
+        let Some(num) = self.num_of(id) else {
+            return;
+        };
+        let at = self.stamp();
+        let empty = matches!(
+            self.at(num).map(|slot| &slot.kind),
+            Some(SlotKind::Block { held: None, .. })
+        );
+        if empty {
+            self.held += 1;
+        }
+        let Some(slot) = self.at_mut(num) else {
+            return;
+        };
+        if let SlotKind::Block { held, .. } = &mut slot.kind {
+            *held = Some(Box::new(Held {
+                block,
+                product: None,
+                at,
+            }));
+        }
+    }
+
+    /// The exchange this block belongs to, as this region knows it.
+    pub fn pair(&self, call: &str) -> Option<Pair> {
+        self.pairs.get(call).copied()
+    }
+
+    pub fn pair_mut(&mut self, call: &str) -> &mut Pair {
+        self.pairs.entry(call.to_string()).or_default()
+    }
+
+    /// Drop content until the region holds `budget` blocks. Exempt blocks stay.
+    pub fn evict(&mut self, budget: usize, keep: impl Fn(i64, i64) -> bool) -> Vec<i64> {
+        if self.held <= budget {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        while self.held > budget {
+            let victim = self
+                .past
+                .iter()
+                .chain(self.now.iter())
+                .filter_map(|slot| match &slot.kind {
+                    SlotKind::Block {
+                        id,
+                        held: Some(held),
+                    } => Some((held.at, slot.num, *id)),
+                    _ => None,
+                })
+                .filter(|(_, num, id)| !keep(*id, *num))
+                .min_by_key(|(at, num, _)| (*at, *num))
+                .map(|(_, num, _)| num);
+            let Some(num) = victim else { break };
+            if let Some(SlotKind::Block { held, .. }) = self.at_mut(num).map(|slot| &mut slot.kind)
+            {
+                *held = None;
+            }
+            self.held -= 1;
+            out.push(num);
+        }
+        out
+    }
+
     fn remember(&mut self, num: i64, kind: &SlotKind) {
-        if let SlotKind::Block(id) = kind {
+        if let SlotKind::Block { id, held } = kind {
             self.index.insert(*id, num);
+            self.top = self.top.max(*id);
+            if held.is_some() {
+                self.held += 1;
+            }
         }
     }
 }

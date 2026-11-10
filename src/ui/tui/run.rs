@@ -1,5 +1,7 @@
 //! Take the terminal, run the frame loop, give it back.
 
+use std::time::Instant;
+
 use anyhow::Result;
 use serde_json::json;
 
@@ -10,6 +12,9 @@ use crate::ui::tui::term;
 use crate::ui::tui::zone::Frame;
 
 /// The loop owns the terminal; the app owns the session.
+///
+/// One round: what the terminal said, then what the connection said, then the side effects,
+/// then a draw only when the showing zone's rows changed or an animation fell due.
 pub fn run(session: Session, startup: app::Startup) -> Result<()> {
     let mut term = term::Term::enter()?;
     let size = term.size()?;
@@ -34,24 +39,30 @@ pub fn run(session: Session, startup: app::Startup) -> Result<()> {
             )));
         }
 
+        // The user is always served before the connection: a frame batch is appended, never laid.
+        for input in term.drain()? {
+            match input {
+                term::Input::Action(action) => app.input(app::Input::Action(action)),
+                term::Input::Focus(gained) => app.input(app::Input::Local(Frame::new(
+                    "local",
+                    "focus",
+                    json!({"gained": gained}),
+                ))),
+            }
+        }
         app.pump();
+        app.tick();
         // A failed draw means the terminal is gone; the exit path below still runs.
-        if term.draw(app.render(), app.cursor()).is_err() {
+        if let Some(lines) = app.frame(Instant::now())
+            && term.draw(lines, app.cursor()).is_err()
+        {
             break;
         }
         if app.finished() {
             break;
         }
 
-        match term.poll()? {
-            Some(term::Input::Action(action)) => app.input(app::Input::Action(action)),
-            Some(term::Input::Focus(gained)) => app.input(app::Input::Local(Frame::new(
-                "local",
-                "focus",
-                json!({"gained": gained}),
-            ))),
-            None => {}
-        }
+        term.wait()?;
 
         // What the frame put on the clipboard leaves between draws, never inside one.
         for text in app.take_copy() {

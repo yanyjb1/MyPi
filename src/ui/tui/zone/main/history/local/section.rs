@@ -1,11 +1,10 @@
 //! The local section: render order and the content each position holds.
 
-use std::collections::{BTreeMap, HashMap};
-
 use super::content::{Block, Kind as BlockKind};
 use super::immutable::Immutable;
-use super::mutable::Mutable;
-use super::slot::{Level, Life, Slot, SlotKind};
+use super::mutable::{Entry, Mutable};
+use super::slot::{Held, Level, Life, Slot, SlotKind};
+use crate::ui::tui::zone::main::history::product::{self, Opts, Product, Shape};
 
 /// Where one render position sits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -16,47 +15,66 @@ pub enum Idx {
     Turn(u32),
 }
 
-/// The two sides of one tool exchange, as far as they are in hand.
-#[derive(Default, Clone, Copy)]
-struct Pair {
-    request: Option<i64>,
-    result: Option<i64>,
-}
-
-/// The whole conversation, in render order, and the content behind it.
+/// The whole conversation, in render order, with the content behind it.
 #[derive(Default)]
 pub struct Local {
     fixed: Immutable,
     running: Mutable,
-    blocks: BTreeMap<i64, Block>,
-    /// `call_id` to the ids of the two blocks it ties.
-    pairs: HashMap<String, Pair>,
 }
 
 impl Local {
     pub fn clear(&mut self) {
         self.fixed.clear();
         self.running.clear();
-        self.blocks.clear();
-        self.pairs.clear();
-    }
-
-    /// Render order goes; the content already in hand stays.
-    pub fn reset_positions(&mut self) {
-        self.fixed.clear();
-        self.running.clear();
     }
 
     /// One finished block, appended above zero.
     pub fn append(&mut self, block: Block) -> Idx {
+        self.note_pair(&block);
         let id = block.id;
-        self.put(block);
-        Idx::Fixed(self.fixed.append(SlotKind::Block(id)))
+        let at = self.fixed.stamp();
+        Idx::Fixed(self.fixed.append(SlotKind::Block {
+            id,
+            held: Some(Box::new(Held {
+                block,
+                product: None,
+                at,
+            })),
+        }))
     }
 
-    /// One block of the restored history: newest is -1.
+    /// The exchange index follows the content: a request or a result names its half.
+    fn note_pair(&mut self, block: &Block) {
+        let Some(call) = block.call_id.clone() else {
+            return;
+        };
+        let pair = self.fixed.pair_mut(&call);
+        match block.kind {
+            BlockKind::ToolRequest => pair.request = Some(block.id),
+            BlockKind::ToolResult => pair.result = Some(block.id),
+            _ => {}
+        }
+    }
+
+    /// One block of the restored history: newest is -1. Its content comes later.
     pub fn append_older(&mut self, id: i64) -> Idx {
-        Idx::Fixed(self.fixed.append_older(SlotKind::Block(id)))
+        Idx::Fixed(self.fixed.append_older(SlotKind::Block { id, held: None }))
+    }
+
+    /// A slot for a block whose content is not in hand yet.
+    pub fn append_id(&mut self, id: i64) -> Idx {
+        Idx::Fixed(self.fixed.append(SlotKind::Block { id, held: None }))
+    }
+
+    /// Slots, in range order, for every id that has none yet.
+    pub fn reserve(&mut self, ranges: &[[i64; 2]]) {
+        for [lo, hi] in ranges {
+            for id in *lo..=*hi {
+                if self.num_of(id).is_none() {
+                    self.append_id(id);
+                }
+            }
+        }
     }
 
     /// A line only this front end has to say: it waits at the end of the running turn.
@@ -81,45 +99,7 @@ impl Local {
     /// A rewind: the position keeps its number and draws nothing.
     pub fn dead(&mut self, idx: Idx) {
         let Idx::Fixed(num) = idx else { return };
-        let gone = match self.fixed.at(num).map(|slot| &slot.kind) {
-            Some(SlotKind::Block(id)) => Some(*id),
-            _ => None,
-        };
-        if let Some(id) = gone {
-            self.drop_content(id);
-        }
         self.fixed.dead(num);
-    }
-
-    /// A block's content goes, and the side it made in its exchange.
-    fn drop_content(&mut self, id: i64) {
-        let Some(block) = self.blocks.remove(&id) else {
-            return;
-        };
-        let Some(call) = block.call_id.as_deref() else {
-            return;
-        };
-        let Some(pair) = self.pairs.get_mut(call) else {
-            return;
-        };
-        match block.kind {
-            BlockKind::ToolRequest => pair.request = None,
-            BlockKind::ToolResult => pair.result = None,
-            _ => {}
-        }
-        if pair.request.is_none() && pair.result.is_none() {
-            self.pairs.remove(call);
-        }
-    }
-
-    pub fn block(&self, idx: Idx) -> Option<&Block> {
-        match idx {
-            Idx::Fixed(num) => match self.fixed.at(num)?.kind {
-                SlotKind::Block(id) => self.blocks.get(&id),
-                _ => None,
-            },
-            Idx::Turn(at) => self.running.block(at as usize),
-        }
     }
 
     pub fn slot(&self, idx: Idx) -> Option<&Slot> {
@@ -132,22 +112,6 @@ impl Local {
     /// One slot by number.
     pub fn at(&self, num: i64) -> Option<&Slot> {
         self.fixed.at(num)
-    }
-
-    /// The result that answers this position, when it is in hand.
-    pub fn result_of(&self, idx: Idx) -> Option<&Block> {
-        let block = self.block(idx)?;
-        if block.kind != BlockKind::ToolRequest {
-            return None;
-        }
-        let call = block.call_id.as_deref()?;
-        match idx {
-            Idx::Fixed(_) => {
-                let result = self.pairs.get(call)?.result?;
-                self.blocks.get(&result)
-            }
-            Idx::Turn(_) => self.running.result_of(call),
-        }
     }
 
     /// Where a result's card is drawn: its request's position, while both sit in the running turn.
@@ -164,31 +128,29 @@ impl Local {
     /// The ids of the exchange this block belongs to, its own included.
     pub fn exchange(&self, block: i64) -> [Option<i64>; 2] {
         let call = self
-            .blocks
-            .get(&block)
+            .num_of(block)
+            .and_then(|num| self.fixed.block(num))
             .and_then(|held| held.call_id.as_deref());
-        match call.and_then(|call| self.pairs.get(call)) {
+        match call.and_then(|call| self.fixed.pair(call)) {
             Some(pair) => [pair.request, pair.result],
             None => [Some(block), None],
         }
     }
 
-    /// A block's content, without giving it a slot: it may already have one.
+    /// A block's content: it takes the slot its id already has.
     pub fn put(&mut self, block: Block) {
-        if let Some(call) = block.call_id.as_deref() {
-            let pair = self.pairs.entry(call.to_string()).or_default();
-            match block.kind {
-                BlockKind::ToolRequest => pair.request = Some(block.id),
-                BlockKind::ToolResult => pair.result = Some(block.id),
-                _ => {}
-            }
+        let id = block.id;
+        self.note_pair(&block);
+        if self.num_of(id).is_none() {
+            self.append_id(id);
         }
-        self.blocks.insert(block.id, block);
+        self.fixed.bind(id, block);
     }
 
     /// Whether this block's content is in hand.
     pub fn has(&self, id: i64) -> bool {
-        self.blocks.contains_key(&id)
+        self.num_of(id)
+            .is_some_and(|num| self.fixed.block(num).is_some())
     }
 
     /// Whether this position holds a block, content or not.
@@ -196,7 +158,7 @@ impl Local {
         match idx {
             Idx::Fixed(num) => matches!(
                 self.fixed.at(num).map(|slot| &slot.kind),
-                Some(SlotKind::Block(_))
+                Some(SlotKind::Block { .. })
             ),
             Idx::Turn(at) => self.running.block(at as usize).is_some(),
         }
@@ -204,34 +166,20 @@ impl Local {
 
     /// Whether the held copy of this block differs from the new one.
     pub fn differs(&self, block: &Block) -> bool {
-        self.blocks.get(&block.id).is_some_and(|old| old != block)
-    }
-
-    /// A slot for a block whose content is already in hand.
-    pub fn append_id(&mut self, id: i64) -> Idx {
-        Idx::Fixed(self.fixed.append(SlotKind::Block(id)))
+        self.num_of(block.id)
+            .and_then(|num| self.fixed.block(num))
+            .is_some_and(|old| old != block)
     }
 
     /// Numbers of the slots whose block the conversation no longer owns.
     pub fn unowned(&self, owns: impl Fn(i64) -> bool) -> Vec<Idx> {
         self.fixed
             .iter()
-            .filter_map(|slot| match slot.kind {
-                SlotKind::Block(id) if !owns(id) => Some(Idx::Fixed(slot.num)),
+            .filter_map(|slot| match &slot.kind {
+                SlotKind::Block { id, .. } if !owns(*id) => Some(Idx::Fixed(slot.num)),
                 _ => None,
             })
             .collect()
-    }
-
-    /// Drop the content the conversation no longer owns.
-    pub fn retain(&mut self, owns: impl Fn(i64) -> bool) {
-        self.blocks.retain(|id, _| owns(*id));
-        let blocks = &self.blocks;
-        self.pairs.retain(|_, pair| {
-            pair.request = pair.request.filter(|id| blocks.contains_key(id));
-            pair.result = pair.result.filter(|id| blocks.contains_key(id));
-            pair.request.is_some() || pair.result.is_some()
-        });
     }
 
     /// The position this block id sits on, if it has one.
@@ -253,18 +201,26 @@ impl Local {
         self.fixed.oldest()
     }
 
-    /// The newest block id whose content is in hand.
+    /// The newest block id that has a slot.
     pub fn max_id(&self) -> i64 {
-        self.blocks.keys().next_back().copied().unwrap_or(0)
+        self.fixed.top()
     }
 
     /// The newest user message in hand, for the input box after a rewind.
     pub fn last_user_text(&self) -> Option<String> {
-        self.blocks
-            .values()
-            .rev()
-            .find(|block| block.kind == BlockKind::User)
-            .and_then(|block| block.content.clone().or_else(|| block.text.clone()))
+        self.fixed
+            .iter()
+            .filter_map(|slot| match &slot.kind {
+                SlotKind::Block {
+                    held: Some(held), ..
+                } if held.block.kind == BlockKind::User => held
+                    .block
+                    .content
+                    .clone()
+                    .or_else(|| held.block.text.clone()),
+                _ => None,
+            })
+            .last()
     }
 
     pub fn running(&self) -> &Mutable {
@@ -273,5 +229,131 @@ impl Local {
 
     pub fn running_mut(&mut self) -> &mut Mutable {
         &mut self.running
+    }
+
+    /// Build the product this position hands over, once per change.
+    pub fn prepare(&mut self, idx: Idx, opts: &Opts<'_>, width: usize) {
+        match idx {
+            Idx::Turn(at) => {
+                let at = at as usize;
+                if self.running.product(at).is_some() {
+                    return;
+                }
+                let Some(product) = self.turn_product(at, opts, width) else {
+                    return;
+                };
+                if !product.is_empty() {
+                    self.running.set_product(at, product);
+                }
+            }
+            Idx::Fixed(num) => {
+                if self.fixed.product(num).is_some() {
+                    return;
+                }
+                let Some(product) = self.fixed_product(num, opts, width) else {
+                    return;
+                };
+                if !product.is_empty() {
+                    self.fixed.set_product(num, product);
+                }
+            }
+        }
+    }
+
+    /// What this position draws, as the run takes it.
+    pub fn shape(&self, idx: Idx) -> Shape<'_> {
+        match idx {
+            Idx::Turn(at) => {
+                let at = at as usize;
+                let Some(entry) = self.running.get(at) else {
+                    return Shape::Dead;
+                };
+                match entry {
+                    Entry::Notice { text, level, .. } => {
+                        Shape::Rows(product::notice_rows(text, *level))
+                    }
+                    Entry::Block(block) => match self.running.product(at) {
+                        Some(Product::Text(segs)) => {
+                            Shape::Segs(segs, block.kind == BlockKind::Reasoning)
+                        }
+                        Some(Product::Fixed(rows)) => Shape::Fixed(rows),
+                        None => Shape::Dead,
+                    },
+                }
+            }
+            Idx::Fixed(num) => {
+                let Some(slot) = self.fixed.at(num) else {
+                    return Shape::Dead;
+                };
+                match &slot.kind {
+                    SlotKind::Next => Shape::Dead,
+                    SlotKind::Notice { text, level, .. } => {
+                        Shape::Rows(product::notice_rows(text, *level))
+                    }
+                    SlotKind::Block { id, held } => match held {
+                        None => Shape::Missing(*id),
+                        Some(held) => match &held.product {
+                            Some(Product::Text(segs)) => {
+                                Shape::Segs(segs, held.block.kind == BlockKind::Reasoning)
+                            }
+                            Some(Product::Fixed(rows)) => Shape::Fixed(rows),
+                            None => Shape::Dead,
+                        },
+                    },
+                }
+            }
+        }
+    }
+
+    /// How many segments this position takes; `1` while its content is missing.
+    pub fn count(&mut self, idx: Idx, opts: &Opts<'_>, width: usize) -> usize {
+        self.prepare(idx, opts, width);
+        match self.shape(idx) {
+            Shape::Segs(segs, _) => segs.len(),
+            Shape::Fixed(rows) => usize::from(!rows.is_empty()),
+            Shape::Rows(rows) => usize::from(!rows.is_empty()),
+            Shape::Missing(_) => 1,
+            Shape::Dead => 0,
+        }
+    }
+
+    /// The product this position handed over goes; the content stays.
+    pub fn drop_product(&mut self, idx: Idx) {
+        match idx {
+            Idx::Fixed(num) => self.fixed.drop_product(num),
+            Idx::Turn(at) => self.running.drop_product(at as usize),
+        }
+    }
+
+    /// Every built product goes: the options or the width moved.
+    pub fn drop_products(&mut self) {
+        self.fixed.drop_products();
+        self.running.drop_products();
+    }
+
+    /// Drop content past the region's budget; the returned numbers lost theirs.
+    pub fn evict(&mut self, budget: usize, keep: impl Fn(i64, i64) -> bool) -> Vec<i64> {
+        self.fixed.evict(budget, keep)
+    }
+
+    fn turn_product(&self, at: usize, opts: &Opts<'_>, width: usize) -> Option<Product> {
+        let block = self.running.block(at)?;
+        let paired = block
+            .call_id
+            .as_deref()
+            .and_then(|call| self.running.result_of(call));
+        Some(product::of(block, paired, opts, width))
+    }
+
+    fn fixed_product(&self, num: i64, opts: &Opts<'_>, width: usize) -> Option<Product> {
+        let block = self.fixed.block(num)?;
+        let paired = block
+            .call_id
+            .as_deref()
+            .and_then(|call| self.fixed.pair(call))
+            .and_then(|pair| pair.result)
+            .and_then(|id| self.num_of(id))
+            .and_then(|num| self.fixed.block(num));
+        Some(product::of(block, paired, opts, width))
     }
 }

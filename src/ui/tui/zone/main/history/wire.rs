@@ -11,27 +11,28 @@ use super::product::Task;
 use super::zone::HistoryZone;
 
 use crate::ui::tui::TodoFold;
-use crate::ui::tui::zone::{Frame, Request, Shout, Turns, name};
+use crate::ui::tui::zone::{Frame, Request, Round, Shout, Turns, name};
 
 /// One frame, decided by its class and name.
 pub(super) fn read_frame(zone: &mut HistoryZone, frame: &Frame) {
     match (frame.class.as_str(), frame.name.as_str()) {
         ("stream", _) => read_stream(zone, frame),
         ("call", "init") => {
+            // Structure first: every id gets its slot before its content arrives.
+            if let Some(snapshot) = frame.content.get("structure").and_then(turns_of) {
+                apply_structure(zone, &snapshot);
+            }
             if let Some(rows) = frame.content.get("blocks") {
                 take_blocks(zone, rows);
             }
             if let Some(todo) = frame.content.get("todo") {
                 take_todo(zone, todo);
             }
-            zone.outbox.push(Request::Structure);
         }
         ("call", "blocks") => {
             if let Some(rows) = frame.content.get("blocks") {
                 take_blocks(zone, rows);
             }
-            zone.asking
-                .retain(|[lo, hi]| !(*lo..=*hi).all(|id| zone.local.has(id)));
         }
         ("call", "config") => read_config(zone, &frame.content),
         _ => {}
@@ -77,8 +78,14 @@ fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
     }
 }
 
+/// One piece: the model grows by an append, and the position it touched is marked.
 fn piece(zone: &mut HistoryZone, content: &Value) {
     zone.tick += 1;
+    if !zone.busy {
+        zone.busy = true;
+        zone.shouts
+            .push(Shout::new(name::BUSY, json!({"on": true})));
+    }
     let kind = content
         .get("kind")
         .and_then(Value::as_str)
@@ -165,10 +172,8 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
         _ => None,
     };
     if let Some(at) = touched {
-        zone.touch_turn(at);
+        zone.mark(Idx::Turn(at as u32));
     }
-    zone.shouts
-        .push(Shout::new(name::BUSY, json!({"on": true})));
     zone.shouts.push(Shout::new(name::TICK, json!({})));
 }
 
@@ -235,10 +240,12 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         // The running turn does not line up with the receipt: it holds the screen until the
         // receipt's own rows are in hand, and the next turn's entries wait beside it.
         zone.local.running_mut().seal();
-        zone.pending = Some(ranges);
+        zone.pending = Some(ranges.clone());
+        zone.local.reserve(&ranges);
         settle_pending(zone);
     }
     zone.pin.clear();
+    zone.busy = false;
     zone.shouts
         .push(Shout::new(name::BUSY, json!({"on": false})));
 }
@@ -296,7 +303,7 @@ fn take_pending(zone: &mut HistoryZone) {
     zone.outbox.push(Request::Structure);
 }
 
-/// Decode a `blocks` array, keep the content, and number the fresh ones.
+/// Decode a `blocks` array: the content takes the slot its id already owns.
 fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
     let Some(items) = rows.as_array() else {
         return;
@@ -309,30 +316,31 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
         let fresh = id > zone.landed;
         let absent = !zone.local.has(id);
         let differs = zone.local.differs(&block);
-        zone.local.put(block);
-        if absent || differs {
-            for side in zone.local.exchange(id).into_iter().flatten() {
-                zone.products.drop_block(side);
-                if let Some(num) = zone.local.num_of(side) {
-                    zone.forget(num);
+        if fresh && !zone.pending_covers(id) {
+            zone.landed = id;
+            if !zone.needs_layout {
+                zone.local.kill_short();
+                if zone.local.num_of(id).is_none() {
+                    zone.local.append_id(id);
                 }
             }
         }
-        if !fresh || zone.pending_covers(id) {
-            continue;
-        }
-        zone.landed = id;
-        if zone.needs_layout {
-            continue;
-        }
-        zone.local.kill_short();
-        if zone.local.num_of(id).is_none() {
-            zone.local.append_id(id);
+        zone.local.put(block);
+        if absent || differs {
+            for side in zone.local.exchange(id).into_iter().flatten() {
+                if let Some(num) = zone.local.num_of(side) {
+                    zone.local.drop_product(Idx::Fixed(num));
+                    zone.forget(num);
+                }
+            }
         }
     }
     if zone.pending.is_some() {
         settle_pending(zone);
     }
+    // A range whose blocks are all in hand is no longer waiting: it stops exempting content.
+    zone.asking
+        .retain(|[lo, hi]| !(*lo..=*hi).all(|id| zone.local.has(id)));
     zone.settle_focus();
 }
 
@@ -373,12 +381,13 @@ fn read_config(zone: &mut HistoryZone, content: &Value) {
         "config.ui.tui.zone.main.history.cardFoldBudget" => {
             if let Some(n) = number {
                 zone.fold = (n as usize).max(3);
-                zone.products.drop_fixed();
+                zone.local.drop_products();
+                zone.run.clear();
             }
         }
         "config.ui.tui.zone.main.history.cacheMargin" => {
             if let Some(n) = number {
-                zone.products.set_margin((n as usize).max(1));
+                zone.margin = (n as usize).max(1);
             }
         }
         "config.ui.tui.zone.main.history.scrollHeight" => {
@@ -402,6 +411,7 @@ fn read_config(zone: &mut HistoryZone, content: &Value) {
 
 /// The structural window arrived.
 pub(super) fn apply_structure(zone: &mut HistoryZone, snapshot: &Turns) {
+    zone.settle_dirty();
     zone.structure = snapshot.clone();
     if zone.needs_layout && !zone.structure.rounds().is_empty() {
         zone.needs_layout = false;
@@ -457,12 +467,12 @@ fn lay_out(zone: &mut HistoryZone) {
             ids.extend(*lo..=*hi);
         }
     }
-    zone.local.reset_positions();
+    zone.local.clear();
+    zone.run.clear();
     for id in ids.iter().rev() {
         zone.local.append_older(*id);
     }
     zone.landed = ids.last().copied().unwrap_or(0);
-    zone.run.clear();
     zone.range.follow();
 }
 
@@ -472,12 +482,12 @@ fn drop_unowned(zone: &mut HistoryZone) {
     for idx in &gone {
         zone.local.dead(*idx);
     }
-    zone.local.retain(|id| zone.structure.owns(id));
     zone.landed = zone.local.max_id();
     if gone.is_empty() {
         return;
     }
     zone.run.clear();
+    zone.local.drop_products();
     if let Some(text) = zone.local.last_user_text() {
         zone.shouts
             .push(Shout::new(name::PREFILL, json!({"text": text})));
@@ -495,4 +505,15 @@ fn ranges_of(value: &Value) -> Option<Vec<[i64; 2]>> {
         out.push([pair[0].as_i64()?, pair[1].as_i64()?]);
     }
     Some(out)
+}
+
+/// An `init` answer's `structure`: one `{turn, ranges}` per round, newest first.
+fn turns_of(value: &Value) -> Option<Turns> {
+    let mut rounds = Vec::new();
+    for item in value.as_array()? {
+        let id = item.get("turn").and_then(Value::as_i64)?;
+        let ranges = item.get("ranges").and_then(ranges_of)?;
+        rounds.push(Round::new(id, ranges));
+    }
+    Some(Turns::of(rounds))
 }

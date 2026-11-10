@@ -56,8 +56,11 @@ pub trait Deco {
     /// One bus event; ignore the ones you do not care about.
     fn on_event(&mut self, _event: &str, _content: &Value, _ctx: &Ctx) {}
 
-    /// One frame: this is where a deco with work of its own decides it is due.
-    fn tick(&mut self, _ctx: &Ctx) {}
+    /// One frame: this is where a deco with work of its own decides it is due. `true` = it
+    /// changed what it draws.
+    fn tick(&mut self, _ctx: &Ctx) -> bool {
+        false
+    }
 
     /// `budget` is `None` while measuring (return the narrowest form), else the
     /// cells allocated. An empty run hides the deco and its connector.
@@ -92,11 +95,14 @@ impl StatusLine {
         }
     }
 
-    /// One frame for every deco: whoever has work of its own runs it here.
-    pub fn tick(&mut self, ctx: &Ctx) {
+    /// One frame for every deco: whoever has work of its own runs it here. `true` = any of
+    /// them changed what it draws.
+    pub fn tick(&mut self, ctx: &Ctx) -> bool {
+        let mut changed = false;
         for (_, deco) in &mut self.rows {
-            deco.tick(ctx);
+            changed |= deco.tick(ctx);
         }
+        changed
     }
 
     /// Render the row. Exactly `width` cells, always.

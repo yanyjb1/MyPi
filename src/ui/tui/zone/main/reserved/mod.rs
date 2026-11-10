@@ -43,11 +43,32 @@ pub struct ReservedZone {
     queued: usize,
     /// Frames this zone owes the session.
     outbox: Vec<Request>,
+    /// Bumped whenever this zone's rows would differ.
+    rev: u64,
 }
 
 impl ReservedZone {
     /// Nothing is claimed up front; the desk only borrows.
     pub const CLAIMS: &'static [Claim] = &[];
+
+    fn bump(&mut self) {
+        self.rev = self.rev.wrapping_add(1);
+    }
+
+    /// One key, when a hand is on duty. A hand that answers hands its reply to the editor.
+    fn act(&mut self, a: &Action) -> bool {
+        let Action::Key(key) = a else {
+            return false;
+        };
+        let Some(who) = self.on_duty.clone() else {
+            return false;
+        };
+        if let Some(reply) = self.hand(&who).on_key(key) {
+            self.reply = Some(reply);
+        }
+        self.drain_memo();
+        true
+    }
 
     /// The hand for one hire signal. One `match`: a new hand touches here only.
     fn hand(&mut self, who: &Hire) -> &mut dyn Hand {
@@ -97,6 +118,7 @@ impl ReservedZone {
         self.hand(&who).arrived();
         let cwd = self.cwd.clone();
         self.hand(&who).place(&cwd);
+        self.bump();
     }
 
     /// The editor's text and cursor, after every edit. A hand that needs them reads them;
@@ -152,6 +174,15 @@ impl ReservedZone {
 
     /// Frame start: drop a hand that left, take the report of a fresh one.
     pub(super) fn settle(&mut self) {
+        let before = (self.on_duty.clone(), self.report.is_some());
+        self.settle_inner();
+        let after = (self.on_duty.clone(), self.report.is_some());
+        if before != after {
+            self.bump();
+        }
+    }
+
+    fn settle_inner(&mut self) {
         let Some(who) = self.on_duty.clone() else {
             return;
         };
@@ -168,7 +199,6 @@ impl ReservedZone {
 
     /// Idle: one blank row. On duty: the hand's own rows, padded to what it was given.
     pub fn render_rows(&mut self, term: TermSize, accent: &Accent) -> Vec<Line<'static>> {
-        self.settle();
         let rows = usize::from(self.want.max(IDLE_ROWS));
         let Some(who) = self.on_duty.clone() else {
             return vec![self.idle_row(accent)];
@@ -186,6 +216,10 @@ impl SubZone for ReservedZone {
 
     fn kinds(&self) -> &'static [Kind] {
         KINDS
+    }
+
+    fn revision(&self) -> u64 {
+        self.rev
     }
 
     fn borrowed(&self) -> &'static [Claim] {
@@ -227,22 +261,16 @@ impl SubZone for ReservedZone {
             }
             _ => {}
         }
-        self.take_requests()
+        let out = self.take_requests();
+        self.bump();
+        out
     }
 
     fn deliver_action(&mut self, a: &Action) -> bool {
         self.settle();
-        let Action::Key(key) = a else {
-            return false;
-        };
-        let Some(who) = self.on_duty.clone() else {
-            return false;
-        };
-        if let Some(reply) = self.hand(&who).on_key(key) {
-            self.reply = Some(reply);
-        }
-        self.drain_memo();
-        true
+        let consumed = self.act(a);
+        self.bump();
+        consumed
     }
 
     fn attach(&mut self, _session: i64, _size: TermSize) {
@@ -253,6 +281,7 @@ impl SubZone for ReservedZone {
         self.memo = hands::memo::MemoHand::default();
         // The bill belongs to one session: a different one starts from nothing.
         self.usage.reset();
+        self.bump();
     }
 
     fn detach(&mut self) {
@@ -265,6 +294,7 @@ impl SubZone for ReservedZone {
         self.want = 0;
         self.memo = hands::memo::MemoHand::default();
         self.usage.reset();
+        self.bump();
     }
 
     fn hear(&mut self, event: &str, content: &Value) {
@@ -309,11 +339,12 @@ impl SubZone for ReservedZone {
                 }
             }
         }
+        self.bump();
     }
 }
 
 impl Pane for ReservedZone {
-    fn request_height(&self, _term: TermSize) -> u16 {
+    fn request_height(&mut self, _term: TermSize) -> u16 {
         match self.report {
             Some(report) => report.rows.min(MAX_ROWS),
             None => IDLE_ROWS,
@@ -321,6 +352,10 @@ impl Pane for ReservedZone {
     }
 
     fn assign(&mut self, _term: TermSize, rows: u16) {
-        self.want = rows.max(IDLE_ROWS);
+        let want = rows.max(IDLE_ROWS);
+        if self.want != want {
+            self.want = want;
+            self.bump();
+        }
     }
 }

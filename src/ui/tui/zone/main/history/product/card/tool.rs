@@ -35,6 +35,8 @@ pub(crate) struct ToolBlock<'a> {
     pub intent: Option<&'a str>,
     pub result: Option<ToolOutcome<'a>>,
     pub expanded: bool,
+    /// Rows a head or a tail may take before it folds.
+    pub budget: usize,
     pub width: usize,
 }
 
@@ -162,9 +164,11 @@ pub(crate) trait ToolRenderer {
         default_call(b.name, b.args)
     }
 
-    fn result_sections(&self, _b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
+    fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
         let lines = match o.ok {
             Some(false) => error_body(o.text),
+            // A running result shows its tail: build only what the fold keeps.
+            None if !b.expanded => super::frame::output_tail(o.text, b.budget),
             _ => output_lines(o.text),
         };
         vec![Section { label: None, lines }]

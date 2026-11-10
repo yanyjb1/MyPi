@@ -95,6 +95,8 @@ pub struct ResumeZone {
     pending_delete: Option<i64>,
     /// The last answer refused something; the render shows it.
     failed: bool,
+    /// Bumped whenever this zone's rows would differ.
+    rev: u64,
 }
 
 impl Default for ResumeZone {
@@ -112,6 +114,7 @@ impl Default for ResumeZone {
             loaded: false,
             pending_delete: None,
             failed: false,
+            rev: 0,
         }
     }
 }
@@ -182,6 +185,115 @@ impl ResumeZone {
         let last = self.visible.len() - 1;
         let next = self.selected as i64 + delta;
         self.selected = next.clamp(0, last as i64) as usize;
+    }
+
+    fn bump(&mut self) {
+        self.rev = self.rev.wrapping_add(1);
+    }
+
+    fn enter(&mut self, size: TermSize, memo: &crate::ui::tui::zone::Memo) -> Vec<Request> {
+        self.size = Some(size);
+        if let Some(cwd) = memo.read("cwd") {
+            self.cwd = cwd.into();
+        }
+        vec![self.begin()]
+    }
+
+    fn follow(&mut self, id: Option<i64>) -> Vec<Request> {
+        if id.is_none() {
+            self.rows.clear();
+            self.visible.clear();
+            self.seen = usize::MAX;
+            self.filter.clear();
+            self.selected = 0;
+            self.scroll = 0;
+            self.loaded = false;
+            self.pending_delete = None;
+        }
+        Vec::new()
+    }
+
+    fn read(&mut self, frame: &Frame) -> Vec<Request> {
+        match (frame.class.as_str(), frame.name.as_str()) {
+            ("call", "sessions") => self.load(&frame.content),
+            ("call", "delete") => self.failed = frame.content.get("error").is_some(),
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn act(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
+        let stay = (Outcome::Stay, Vec::new());
+        let back = (
+            Outcome::Show {
+                to: ZoneId::Main,
+                memo: Vec::new(),
+            },
+            Vec::new(),
+        );
+        match action {
+            Action::ScrollUp { .. } => self.move_by(-1),
+            Action::ScrollDown { .. } => self.move_by(1),
+            Action::Paste(text) => {
+                // A paste is a filter word here: a picker is not worth multi-line semantics.
+                self.filter.push_str(&text.replace('\n', " "));
+                self.refilter();
+            }
+            Action::Key(key) => {
+                let ctrl = key.mods.ctrl;
+                if !matches!(key.code, KeyCode::Enter | KeyCode::Delete | KeyCode::Esc) {
+                    self.pending_delete = None;
+                }
+                match key.code {
+                    KeyCode::Delete => {
+                        self.pending_delete = self.selected_id();
+                        return stay;
+                    }
+                    KeyCode::Esc => return back,
+                    KeyCode::Enter => {
+                        let Some(id) = self.selected_id() else {
+                            return stay;
+                        };
+                        if self.pending_delete == Some(id) {
+                            self.failed = false;
+                            let requests = vec![Request::Delete(id), self.list()];
+                            return (Outcome::Stay, requests);
+                        }
+                        return (
+                            Outcome::Show {
+                                to: ZoneId::Main,
+                                memo: Vec::new(),
+                            },
+                            vec![Request::Attach(id)],
+                        );
+                    }
+                    KeyCode::Up => self.move_by(-1),
+                    KeyCode::Down => self.move_by(1),
+                    KeyCode::PageUp => self.move_by(-PAGE),
+                    KeyCode::PageDown => self.move_by(PAGE),
+                    KeyCode::Home => self.selected = 0,
+                    KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
+                    KeyCode::Tab => {
+                        self.scope = self.scope.toggled();
+                        return (Outcome::Stay, vec![self.list()]);
+                    }
+                    KeyCode::Backspace => {
+                        self.filter.pop();
+                        self.refilter();
+                    }
+                    KeyCode::Char('u') if ctrl => {
+                        self.filter.clear();
+                        self.refilter();
+                    }
+                    KeyCode::Char(c) if !ctrl => {
+                        self.filter.push(c);
+                        self.refilter();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        stay
     }
 }
 
@@ -273,109 +385,32 @@ impl Zone for ResumeZone {
         &[Kind::Call]
     }
 
+    fn revision(&self) -> u64 {
+        self.rev
+    }
+
     fn start(&mut self, size: TermSize, memo: &crate::ui::tui::zone::Memo) -> Vec<Request> {
-        self.size = Some(size);
-        if let Some(cwd) = memo.read("cwd") {
-            self.cwd = cwd.into();
-        }
-        vec![self.begin()]
+        let out = self.enter(size, memo);
+        self.bump();
+        out
     }
 
     fn session(&mut self, id: Option<i64>) -> Vec<Request> {
-        if id.is_none() {
-            self.rows.clear();
-            self.visible.clear();
-            self.seen = usize::MAX;
-            self.filter.clear();
-            self.selected = 0;
-            self.scroll = 0;
-            self.loaded = false;
-            self.pending_delete = None;
-        }
-        Vec::new()
+        let out = self.follow(id);
+        self.bump();
+        out
     }
 
     fn event(&mut self, frame: &Frame) -> Vec<Request> {
-        match (frame.class.as_str(), frame.name.as_str()) {
-            ("call", "sessions") => self.load(&frame.content),
-            ("call", "delete") => self.failed = frame.content.get("error").is_some(),
-            _ => {}
-        }
-        Vec::new()
+        let out = self.read(frame);
+        self.bump();
+        out
     }
 
     fn action(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
-        let stay = (Outcome::Stay, Vec::new());
-        let back = (
-            Outcome::Show {
-                to: ZoneId::Main,
-                memo: Vec::new(),
-            },
-            Vec::new(),
-        );
-        match action {
-            Action::ScrollUp { .. } => self.move_by(-1),
-            Action::ScrollDown { .. } => self.move_by(1),
-            Action::Paste(text) => {
-                // A paste is a filter word here: a picker is not worth multi-line semantics.
-                self.filter.push_str(&text.replace('\n', " "));
-                self.refilter();
-            }
-            Action::Key(key) => {
-                let ctrl = key.mods.ctrl;
-                if !matches!(key.code, KeyCode::Enter | KeyCode::Delete | KeyCode::Esc) {
-                    self.pending_delete = None;
-                }
-                match key.code {
-                    KeyCode::Delete => {
-                        self.pending_delete = self.selected_id();
-                        return stay;
-                    }
-                    KeyCode::Esc => return back,
-                    KeyCode::Enter => {
-                        let Some(id) = self.selected_id() else {
-                            return stay;
-                        };
-                        if self.pending_delete == Some(id) {
-                            self.failed = false;
-                            let requests = vec![Request::Delete(id), self.list()];
-                            return (Outcome::Stay, requests);
-                        }
-                        return (
-                            Outcome::Show {
-                                to: ZoneId::Main,
-                                memo: Vec::new(),
-                            },
-                            vec![Request::Attach(id)],
-                        );
-                    }
-                    KeyCode::Up => self.move_by(-1),
-                    KeyCode::Down => self.move_by(1),
-                    KeyCode::PageUp => self.move_by(-PAGE),
-                    KeyCode::PageDown => self.move_by(PAGE),
-                    KeyCode::Home => self.selected = 0,
-                    KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
-                    KeyCode::Tab => {
-                        self.scope = self.scope.toggled();
-                        return (Outcome::Stay, vec![self.list()]);
-                    }
-                    KeyCode::Backspace => {
-                        self.filter.pop();
-                        self.refilter();
-                    }
-                    KeyCode::Char('u') if ctrl => {
-                        self.filter.clear();
-                        self.refilter();
-                    }
-                    KeyCode::Char(c) if !ctrl => {
-                        self.filter.push(c);
-                        self.refilter();
-                    }
-                    _ => {}
-                }
-            }
-        }
-        stay
+        let out = self.act(action);
+        self.bump();
+        out
     }
 
     fn structure(&mut self, _snapshot: &Turns) -> Vec<Request> {

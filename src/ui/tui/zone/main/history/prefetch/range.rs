@@ -1,7 +1,7 @@
 //! The display range: where the screen starts, and the rows it takes.
 
 use super::super::local::section::Local;
-use super::super::product::{Opts, Products};
+use super::super::product::Opts;
 use super::super::row::{Ink, Lead, Row};
 use super::segment::SegId;
 use super::{Head, Placed, Run};
@@ -57,25 +57,24 @@ impl Range {
     pub fn rows(
         &mut self,
         run: &mut Run,
-        local: &Local,
-        products: &mut Products,
+        local: &mut Local,
         opts: &Opts<'_>,
         height: usize,
     ) -> Spend {
         match self.start() {
-            Start::Latest => latest(run, local, products, opts, height),
+            Start::Latest => latest(run, local, opts, height),
             Start::Pin(at) => {
                 if at >= run.pin_len() {
                     self.start = Some(Start::Latest);
-                    return latest(run, local, products, opts, height);
+                    return latest(run, local, opts, height);
                 }
                 pinned(run, at, height)
             }
             Start::At(id, row) => {
-                let (rows, missing, ended) = at(run, local, products, opts, height, id, row);
+                let (rows, missing, ended) = at(run, local, opts, height, id, row);
                 if ended {
                     self.start = Some(Start::Latest);
-                    return latest(run, local, products, opts, height);
+                    return latest(run, local, opts, height);
                 }
                 Spend {
                     rows,
@@ -90,21 +89,20 @@ impl Range {
     pub fn scroll(
         &mut self,
         run: &mut Run,
-        local: &Local,
-        products: &mut Products,
+        local: &mut Local,
         opts: &Opts<'_>,
         height: usize,
         older: bool,
         count: usize,
     ) -> Vec<i64> {
         let mut missing = Vec::new();
-        let Some(mut at) = self.top(run, local, products, opts, height) else {
+        let Some(mut at) = self.top(run, local, opts, height) else {
             return missing;
         };
         let mut reached_end = false;
         for _ in 0..count.max(1) {
             let moved = match (at, older) {
-                (Start::Pin(0), true) => pin_up(run, local, products, opts, &mut missing),
+                (Start::Pin(0), true) => pin_up(run, local, opts, &mut missing),
                 (Start::Pin(row), true) => Some(Start::Pin(row - 1)),
                 (Start::Pin(row), false) => {
                     if row + 1 < run.pin_len() {
@@ -116,9 +114,9 @@ impl Range {
                 }
                 (Start::At(id, row), _) => {
                     let moved = if older {
-                        step_up(run, local, products, opts, id, row, &mut missing)
+                        step_up(run, local, opts, id, row, &mut missing)
                     } else {
-                        step_down(run, local, products, opts, id, row, &mut missing)
+                        step_down(run, local, opts, id, row, &mut missing)
                     };
                     match moved {
                         Some((next, at)) => Some(Start::At(next, at)),
@@ -145,17 +143,16 @@ impl Range {
     pub fn aim(
         &mut self,
         run: &mut Run,
-        local: &Local,
-        products: &mut Products,
+        local: &mut Local,
         opts: &Opts<'_>,
         idx: super::super::local::section::Idx,
         focus_line: usize,
     ) -> Aim {
-        match run.head(local, products, opts, idx) {
+        match run.head(local, opts, idx) {
             Head::Missing(block) => Aim::Missing(vec![block]),
             Head::Empty => Aim::Empty,
             Head::Laid(id) => {
-                let (top, missing) = run.back(local, products, opts, id, 0, focus_line);
+                let (top, missing) = run.back(local, opts, id, 0, focus_line);
                 Aim::Top { top, missing }
             }
         }
@@ -170,8 +167,7 @@ impl Range {
     pub fn sight(
         &mut self,
         run: &mut Run,
-        local: &Local,
-        products: &mut Products,
+        local: &mut Local,
         opts: &Opts<'_>,
         rows: usize,
     ) -> Option<super::super::local::section::Idx> {
@@ -181,7 +177,7 @@ impl Range {
         };
         let mut missing = Vec::new();
         for _ in 0..rows {
-            match step_down(run, local, products, opts, id, row, &mut missing) {
+            match step_down(run, local, opts, id, row, &mut missing) {
                 Some((next, at)) => {
                     id = next;
                     row = at;
@@ -195,8 +191,7 @@ impl Range {
     fn top(
         &mut self,
         run: &mut Run,
-        local: &Local,
-        products: &mut Products,
+        local: &mut Local,
         opts: &Opts<'_>,
         height: usize,
     ) -> Option<Start> {
@@ -204,7 +199,7 @@ impl Range {
             Start::At(id, row) => Some(Start::At(id, row)),
             Start::Pin(at) => Some(Start::Pin(at)),
             Start::Latest => {
-                let _ = fill_tail(run, local, products, opts, height);
+                let _ = fill_tail(run, local, opts, height);
                 let index = run.len().saturating_sub(height);
                 if index >= run.body_len() {
                     let pin = run.pin_len();
@@ -220,14 +215,8 @@ impl Range {
 }
 
 /// The newest screenful: fill towards the old side, then take the last rows.
-fn latest(
-    run: &mut Run,
-    local: &Local,
-    products: &mut Products,
-    opts: &Opts<'_>,
-    height: usize,
-) -> Spend {
-    let missing = fill_tail(run, local, products, opts, height);
+fn latest(run: &mut Run, local: &mut Local, opts: &Opts<'_>, height: usize) -> Spend {
+    let missing = fill_tail(run, local, opts, height);
     let len = run.len();
     let top = len.saturating_sub(height);
     let shown = len.saturating_sub(top);
@@ -264,8 +253,7 @@ fn pinned(run: &Run, at: usize, height: usize) -> Spend {
 #[allow(clippy::too_many_arguments)]
 fn at(
     run: &mut Run,
-    local: &Local,
-    products: &mut Products,
+    local: &mut Local,
     opts: &Opts<'_>,
     height: usize,
     id: SegId,
@@ -279,7 +267,7 @@ fn at(
         if rows.len() >= height {
             break;
         }
-        match run.place(local, products, opts, seg) {
+        match run.place(local, opts, seg) {
             Placed::Laid => {
                 let Some(laid) = run.laid(seg) else {
                     break;
@@ -298,7 +286,7 @@ fn at(
                 rows.push(mark());
             }
         }
-        cursor = run.next(local, products, opts, seg);
+        cursor = run.next(local, opts, seg);
         skip = 0;
     }
     let mut at_pin = 0usize;
@@ -310,23 +298,17 @@ fn at(
 }
 
 /// The rows a screen needs, laid towards the old side; and the block ids the run lacks.
-fn fill_tail(
-    run: &mut Run,
-    local: &Local,
-    products: &mut Products,
-    opts: &Opts<'_>,
-    height: usize,
-) -> Vec<i64> {
+fn fill_tail(run: &mut Run, local: &mut Local, opts: &Opts<'_>, height: usize) -> Vec<i64> {
     let mut missing = Vec::new();
     let mut need = height.saturating_sub(run.pin_len());
     if need == 0 {
         return missing;
     }
-    let Some(mut id) = run.newest(local, products, opts) else {
+    let Some(mut id) = run.newest(local, opts) else {
         return missing;
     };
     loop {
-        if let Placed::Missing(block) = run.place(local, products, opts, id) {
+        if let Placed::Missing(block) = run.place(local, opts, id) {
             missing.push(block);
         }
         let rows = run.laid(id).map_or(0, |laid| laid.rows.len());
@@ -334,7 +316,7 @@ fn fill_tail(
         if need == 0 {
             return missing;
         }
-        let Some(prev) = run.prev(local, products, opts, id) else {
+        let Some(prev) = run.prev(local, opts, id) else {
             return missing;
         };
         id = prev;
@@ -344,13 +326,12 @@ fn fill_tail(
 /// One row up from the pin's head: the newest segment's last row.
 fn pin_up(
     run: &mut Run,
-    local: &Local,
-    products: &mut Products,
+    local: &mut Local,
     opts: &Opts<'_>,
     missing: &mut Vec<i64>,
 ) -> Option<Start> {
-    let id = run.newest(local, products, opts)?;
-    match run.place(local, products, opts, id) {
+    let id = run.newest(local, opts)?;
+    match run.place(local, opts, id) {
         Placed::Laid => {
             let rows = run.laid(id).map_or(0, |laid| laid.rows.len());
             Some(Start::At(id, rows.saturating_sub(1)))
@@ -365,14 +346,13 @@ fn pin_up(
 
 fn step_down(
     run: &mut Run,
-    local: &Local,
-    products: &mut Products,
+    local: &mut Local,
     opts: &Opts<'_>,
     id: SegId,
     row: usize,
     missing: &mut Vec<i64>,
 ) -> Option<(SegId, usize)> {
-    let rows = match run.place(local, products, opts, id) {
+    let rows = match run.place(local, opts, id) {
         Placed::Laid => run.laid(id).map_or(0, |laid| laid.rows.len()),
         Placed::Missing(block) => {
             missing.push(block);
@@ -383,15 +363,15 @@ fn step_down(
     if row + 1 < rows {
         return Some((id, row + 1));
     }
-    let mut cursor = run.next(local, products, opts, id);
+    let mut cursor = run.next(local, opts, id);
     while let Some(next) = cursor {
-        match run.place(local, products, opts, next) {
+        match run.place(local, opts, next) {
             Placed::Laid => return Some((next, 0)),
             Placed::Missing(block) => {
                 missing.push(block);
                 return Some((next, 0));
             }
-            Placed::Empty => cursor = run.next(local, products, opts, next),
+            Placed::Empty => cursor = run.next(local, opts, next),
         }
     }
     None
@@ -399,8 +379,7 @@ fn step_down(
 
 fn step_up(
     run: &mut Run,
-    local: &Local,
-    products: &mut Products,
+    local: &mut Local,
     opts: &Opts<'_>,
     id: SegId,
     row: usize,
@@ -409,9 +388,9 @@ fn step_up(
     if row > 0 {
         return Some((id, row - 1));
     }
-    let mut cursor = run.prev(local, products, opts, id);
+    let mut cursor = run.prev(local, opts, id);
     while let Some(prev) = cursor {
-        match run.place(local, products, opts, prev) {
+        match run.place(local, opts, prev) {
             Placed::Laid => {
                 let rows = run.laid(prev).map_or(0, |laid| laid.rows.len());
                 return Some((prev, rows.saturating_sub(1)));
@@ -420,7 +399,7 @@ fn step_up(
                 missing.push(block);
                 return Some((prev, 0));
             }
-            Placed::Empty => cursor = run.prev(local, products, opts, prev),
+            Placed::Empty => cursor = run.prev(local, opts, prev),
         }
     }
     None

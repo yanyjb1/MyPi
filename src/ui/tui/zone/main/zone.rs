@@ -34,6 +34,10 @@ pub struct MainZone {
     shouts: Vec<Shout>,
     /// The directory the conversation row last named; a temporary `cd` never touches it.
     session_cwd: Option<String>,
+    /// Bumped whenever any sub-zone's rows would differ.
+    rev: u64,
+    /// The sub-zone revisions this `rev` was minted from.
+    seen: (u64, u64, u64),
 }
 
 impl MainZone {
@@ -117,6 +121,24 @@ impl Zone for MainZone {
         KINDS
     }
 
+    fn revision(&self) -> u64 {
+        self.rev
+    }
+
+    fn anim(&self) -> Option<std::time::Duration> {
+        self.history.anim()
+    }
+
+    fn tick(&mut self) -> Vec<Request> {
+        self.input.tick_statusline();
+        self.settle();
+        let mut requests = self.history.take_requests();
+        requests.extend(self.reserved.take_requests());
+        requests.extend(self.input.take_requests());
+        self.sync_revision();
+        requests
+    }
+
     fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request> {
         super::keys::check();
         self.size = Some(size);
@@ -137,13 +159,14 @@ impl Zone for MainZone {
         requests.extend(self.history.take_requests());
         requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
+        self.sync_revision();
         requests
     }
 
     fn session(&mut self, id: Option<i64>) -> Vec<Request> {
         let size = self.term();
         self.session_cwd = None;
-        match id {
+        let requests = match id {
             Some(id) => {
                 self.history.attach(id, size);
                 self.input.attach(id, size);
@@ -166,7 +189,9 @@ impl Zone for MainZone {
                 requests.extend(self.input.take_requests());
                 requests
             }
-        }
+        };
+        self.sync_revision();
+        requests
     }
 
     fn event(&mut self, frame: &Frame) -> Vec<Request> {
@@ -176,6 +201,7 @@ impl Zone for MainZone {
             self.size = Some(size);
         }
         if frame.is_local() && frame.name == "disconnected" {
+            self.sync_revision();
             return vec![Request::Quit];
         }
         if frame.is_local() && frame.name == "accent" {
@@ -187,6 +213,7 @@ impl Zone for MainZone {
             {
                 self.accent = accent;
             }
+            self.sync_revision();
             return Vec::new();
         }
         self.read_cwd(frame);
@@ -215,6 +242,7 @@ impl Zone for MainZone {
         requests.extend(self.history.take_requests());
         requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
+        self.sync_revision();
         requests
     }
 
@@ -226,6 +254,7 @@ impl Zone for MainZone {
         requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
         self.flush();
+        self.sync_revision();
         (outcome, requests)
     }
 
@@ -237,11 +266,11 @@ impl Zone for MainZone {
         let mut requests = self.history.take_requests();
         requests.extend(self.reserved.take_requests());
         requests.extend(self.input.take_requests());
+        self.sync_revision();
         requests
     }
 
     fn render(&mut self) -> Vec<ratatui::text::Line<'static>> {
-        self.settle();
         let accent = self.accent;
         let width = self.term().cols;
         let mut out = self.history.render_rows(width, accent);
@@ -260,6 +289,19 @@ impl Zone for MainZone {
 }
 
 impl MainZone {
+    /// Fold the sub-zones' revisions into one: the app compares only this.
+    fn sync_revision(&mut self) {
+        let now = (
+            self.history.revision(),
+            self.input.revision(),
+            self.reserved.revision(),
+        );
+        if now != self.seen {
+            self.seen = now;
+            self.rev = self.rev.wrapping_add(1);
+        }
+    }
+
     fn settle(&mut self) {
         arbitrate::settle(self);
         self.deliver_hires();

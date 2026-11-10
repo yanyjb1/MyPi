@@ -1,7 +1,7 @@
 //! The history zone: what it claims, what it holds, and the contract it answers.
 
-use std::collections::HashSet;
-use std::time::Instant;
+use std::collections::{BTreeSet, HashSet};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -9,7 +9,7 @@ use super::focus::{Focus, Target};
 use super::local::section::{Idx, Local};
 use super::local::slot::{Level, Life, SlotKind};
 use super::prefetch::{Range, Run, Start, walk};
-use super::product::{Opts, Products, Task, TodoPanel, esc_row, pin_rows};
+use super::product::{Opts, Task, TodoPanel, esc_row, pin_rows};
 use super::row::Row;
 use super::{display, wire};
 use crate::ui::tui::text::glyphs as g;
@@ -143,12 +143,14 @@ pub(super) struct Pin {
 pub struct HistoryZone {
     /// The local section: render order and the content behind it.
     pub(super) local: Local,
-    /// The block cache.
-    pub(super) products: Products,
     /// The laid segments around the screen.
     pub(super) run: Run,
     /// Where the screen starts.
     pub(super) range: Range,
+    /// How many blocks may keep their content and product.
+    pub(super) margin: usize,
+    /// Positions whose content changed since the last draw.
+    pub(super) dirty: BTreeSet<Idx>,
     /// The checklist's own product.
     pub(super) todo_panel: TodoPanel,
     pub(super) todo: Vec<Task>,
@@ -178,21 +180,26 @@ pub struct HistoryZone {
     pub(super) pending: Option<Vec<[i64; 2]>>,
     /// A fresh attach lays the structure out again.
     pub(super) needs_layout: bool,
+    /// A round is running: the statusline's busy glyph is on.
+    pub(super) busy: bool,
     /// The place the window is waiting to point at, once its content is here.
     pub(super) pending_focus: Option<Target>,
     /// What this frame owes the session.
     pub(super) outbox: Vec<Request>,
     /// What this frame owes the other zones.
     pub(super) shouts: Vec<Shout>,
+    /// Bumped whenever this zone's rows would differ.
+    rev: u64,
 }
 
 impl Default for HistoryZone {
     fn default() -> Self {
-        let mut zone = HistoryZone {
+        HistoryZone {
             local: Local::default(),
-            products: Products::default(),
             run: Run::default(),
             range: Range::default(),
+            margin: DEFAULT_MARGIN,
+            dirty: BTreeSet::new(),
             todo_panel: TodoPanel::default(),
             todo: Vec::new(),
             todo_fold: TodoFold::default(),
@@ -212,24 +219,23 @@ impl Default for HistoryZone {
             landed: 0,
             pending: None,
             needs_layout: false,
+            busy: false,
             pending_focus: None,
             outbox: Vec::new(),
             shouts: Vec::new(),
-        };
-        zone.products.set_margin(DEFAULT_MARGIN);
-        zone
+            rev: 0,
+        }
     }
 }
 
 impl HistoryZone {
-    /// Run one operation that needs the local section, the products, the run and the range at once.
+    /// Run one operation that needs the local section, the run and the range at once.
     pub(super) fn with_draw<R>(
         &mut self,
-        f: impl FnOnce(&Local, &mut Products, &mut Run, &mut Range, &Opts<'_>) -> R,
+        f: impl FnOnce(&mut Local, &mut Run, &mut Range, &Opts<'_>) -> R,
     ) -> R {
         let HistoryZone {
             local,
-            products,
             run,
             range,
             thinking,
@@ -246,7 +252,7 @@ impl HistoryZone {
             cwd: cwd.as_str(),
             fold: *fold,
         };
-        f(local, products, run, range, &opts)
+        f(local, run, range, &opts)
     }
 
     /// The screen: the transcript, the checklist and the running label, in one run.
@@ -257,19 +263,47 @@ impl HistoryZone {
     ) -> Vec<ratatui::text::Line<'static>> {
         let width = usize::from(term_w.max(1));
         let height = usize::from(self.height).max(1);
+        self.settle_dirty();
         let pin = self.pin_rows(width);
-        let spend = self.with_draw(|local, products, run, range, opts| {
+        let spend = self.with_draw(|local, run, range, opts| {
             run.set_pin(pin);
-            range.rows(run, local, products, opts, height)
+            range.rows(run, local, opts, height)
         });
         let top = spend.top;
-        self.with_draw(|_, _, run, _, _| run.trim(top, top + height));
+        self.with_draw(|_, run, _, _| run.trim(top, top + height));
         for block in &spend.missing {
             if let Some(turn) = self.turn_of(*block) {
                 self.ask_turn(turn);
             }
         }
         display::lines(&spend.rows, accent)
+    }
+
+    /// Positions whose content changed lose their rows once; content past the budget leaves.
+    pub(super) fn settle_dirty(&mut self) {
+        let dirty = std::mem::take(&mut self.dirty);
+        for idx in dirty {
+            self.run.forget(idx);
+            self.local.drop_product(idx);
+        }
+        let HistoryZone {
+            local,
+            run,
+            margin,
+            asking,
+            pending,
+            ..
+        } = self;
+        let evicted = local.evict(*margin, |id, num| {
+            run.holds(Idx::Fixed(num))
+                || asking.iter().any(|[lo, hi]| (*lo..=*hi).contains(&id))
+                || pending
+                    .as_ref()
+                    .is_some_and(|ranges| ranges.iter().any(|[lo, hi]| (*lo..=*hi).contains(&id)))
+        });
+        for num in evicted {
+            run.forget(Idx::Fixed(num));
+        }
     }
 
     /// The rows under the last segment: the checklist, then what is still running.
@@ -327,21 +361,17 @@ impl HistoryZone {
         self.pin.retain(|pin| pin.call.as_deref() != Some(call));
     }
 
-    /// One position grew: its last segment is laid again, and the card that draws it with it.
-    pub(super) fn touch_turn(&mut self, at: usize) {
-        let idx = Idx::Turn(at as u32);
-        let card = self.local.card_at(idx);
-        self.with_draw(|local, products, run, _, opts| {
-            run.touch(local, products, opts, idx);
-            if let Some(card) = card {
-                run.touch(local, products, opts, card);
-            }
-        });
+    /// One position's content changed: its rows are laid again at the next draw.
+    pub(super) fn mark(&mut self, idx: Idx) {
+        self.dirty.insert(idx);
+        if let Some(card) = self.local.card_at(idx) {
+            self.dirty.insert(card);
+        }
     }
 
     /// One fixed position's content changed: its rows go.
     pub(super) fn forget(&mut self, num: i64) {
-        self.run.forget(Idx::Fixed(num));
+        self.mark(Idx::Fixed(num));
     }
 
     /// Whether a waiting close owns this block id.
@@ -364,8 +394,8 @@ impl HistoryZone {
     /// The local section goes, and the run, the checklist and the range with it.
     pub(super) fn destroy(&mut self) {
         self.local.clear();
-        self.products.clear();
         self.run.clear();
+        self.dirty.clear();
         self.range.follow();
         self.structure.clear();
         self.asking.clear();
@@ -377,6 +407,7 @@ impl HistoryZone {
         self.landed = 0;
         self.pending = None;
         self.needs_layout = false;
+        self.busy = false;
     }
 
     /// Frames this zone asked for, taken by the host.
@@ -450,7 +481,7 @@ impl HistoryZone {
         };
         let direct = matches!(
             self.local.slot(slot).map(|slot| &slot.kind),
-            Some(SlotKind::Block(_))
+            Some(SlotKind::Block { .. })
         );
         let Some(block) = self.block_near(num, older) else {
             return;
@@ -522,14 +553,25 @@ impl HistoryZone {
     /// One scroll by rows.
     pub(super) fn scroll(&mut self, older: bool, rows: usize) {
         let height = usize::from(self.height).max(1);
-        let missing = self.with_draw(|local, products, run, range, opts| {
-            range.scroll(run, local, products, opts, height, older, rows)
+        let missing = self.with_draw(|local, run, range, opts| {
+            range.scroll(run, local, opts, height, older, rows)
         });
         for block in missing {
             if let Some(turn) = self.turn_of(block) {
                 self.ask_turn(turn);
             }
         }
+    }
+}
+
+impl HistoryZone {
+    fn bump(&mut self) {
+        self.rev = self.rev.wrapping_add(1);
+    }
+
+    /// How often the ESC row changes on its own: the starburst turns 30 times a second.
+    pub(crate) fn anim(&self) -> Option<Duration> {
+        (!self.pin.is_empty()).then(|| Duration::from_millis(1000 / 30))
     }
 }
 
@@ -542,12 +584,20 @@ impl SubZone for HistoryZone {
         KINDS
     }
 
+    fn revision(&self) -> u64 {
+        self.rev
+    }
+
     fn deliver_event(&mut self, frame: &Frame, _size: TermSize) -> Vec<Request> {
         wire::read_frame(self, frame);
-        self.take_requests()
+        let out = self.take_requests();
+        self.bump();
+        out
     }
 
     fn deliver_action(&mut self, action: &Action) -> bool {
+        // Keys read the layout: whatever the stream changed is laid before they run.
+        self.settle_dirty();
         let handled = match action {
             Action::ScrollUp { shift: false } => {
                 self.scroll(true, self.scroll_height.max(1));
@@ -569,13 +619,13 @@ impl SubZone for HistoryZone {
             Action::Key(key) => match key.code {
                 KeyCode::Char('t') if key.mods.ctrl => {
                     self.thinking = !self.thinking;
-                    self.products.clear();
+                    self.local.drop_products();
                     self.run.clear();
                     true
                 }
                 KeyCode::Char('o') if key.mods.ctrl => {
                     self.tool = !self.tool;
-                    self.products.drop_fixed();
+                    self.local.drop_products();
                     self.run.clear();
                     true
                 }
@@ -619,6 +669,7 @@ impl SubZone for HistoryZone {
         if handled {
             self.ensure_around();
         }
+        self.bump();
         handled
     }
 
@@ -631,14 +682,17 @@ impl SubZone for HistoryZone {
                 key: (*key).to_string(),
             });
         }
+        self.bump();
     }
 
     fn detach(&mut self) {
         self.destroy();
+        self.bump();
     }
 
     fn structure(&mut self, snapshot: &Turns) {
         wire::apply_structure(self, snapshot);
+        self.bump();
     }
 
     fn take_shouts(&mut self) -> Vec<Shout> {
@@ -653,6 +707,9 @@ impl SubZone for HistoryZone {
                 {
                     self.cwd.clear();
                     self.cwd.push_str(path);
+                    // Cards name directories: the paths they drew are stale now.
+                    self.local.drop_products();
+                    self.run.clear();
                 }
             }
             name::ECHO => {
@@ -685,20 +742,30 @@ impl SubZone for HistoryZone {
             }
             _ => {}
         }
+        self.bump();
     }
 }
 
 impl Pane for HistoryZone {
     fn assign(&mut self, term: TermSize, rows: u16) {
+        let height_moved = self.height != rows;
         self.height = rows;
         let width = usize::from(term.cols.max(1));
-        if self.width != width {
+        let width_moved = self.width != width;
+        if width_moved {
             self.width = width;
-            self.with_draw(|_, products, run, _, _| run.set_width(width, products));
+            self.run.set_width(width);
+            self.local.drop_products();
+        }
+        if height_moved || width_moved {
+            self.bump();
         }
     }
 
     fn on_height_changed(&mut self, rows: u16) {
-        self.height = rows;
+        if self.height != rows {
+            self.height = rows;
+            self.bump();
+        }
     }
 }
