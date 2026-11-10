@@ -38,7 +38,7 @@ HistoryZone
  ├── range: Range               ── `Latest` or one fixed place, plus the screen height
  ├── todo_panel: TodoPanel      ── the checklist's rows
  ├── pin: Vec<Pin>              ── what is still running, in arrival order
- ├── tick: usize                ── the phase the spinner and the sweep read
+ ├── tick: usize                ── the phase the spinner reads
  └── thinking / tool / fold / scroll_height / focus_line / placeholder / cwd / pending
 ```
 

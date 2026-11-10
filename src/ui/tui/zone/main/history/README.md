@@ -113,7 +113,9 @@ has to clear it.
 The pin is the checklist, then the ESC row while a call or a thought runs. It scrolls like any other
 row: it is not an overlay, and going up walks into the transcript above it. The ESC row reads
 `spinner ESC <elapsed> · <label>`; the label is the intent of the earliest unfinished call, or
-`thinking` while only reasoning arrives, swept by the accent at the speed content arrives.
+`thinking` while only reasoning arrives. A thought keeps `ESC` in the accent and sweeps the label; a
+call keeps the label in the accent and sweeps `ESC`. The starburst turns one frame per tick and the
+sweep walks 30 columns a second on the row's own clock.
 
 The display range is a start plus the rows the screen has. Three starts:
 

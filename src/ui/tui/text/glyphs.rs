@@ -6,6 +6,9 @@ pub(crate) const PENDING: &str = "[*]";
 
 /// Four phases, for anything that turns while the session is busy.
 pub(crate) const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+
+/// The starburst the ESC row turns, one frame every 80 ms.
+pub(crate) const STAR: [char; 8] = ['✻', '✼', '❉', '❊', '✺', '✹', '✸', '✶'];
 pub(crate) const ESC: &str = "ESC";
 
 pub(crate) const SEP: &str = "·";

@@ -155,7 +155,7 @@ pub struct HistoryZone {
     pub(super) todo_fold: TodoFold,
     /// What is still running, in the order it started; only the first one shows.
     pub(super) pin: Vec<Pin>,
-    /// The phase the spinner and the sweep read.
+    /// The phase the spinner reads.
     pub(super) tick: usize,
     /// The last width the layout was built at.
     pub(super) width: usize,
@@ -285,10 +285,10 @@ impl HistoryZone {
         let checklist = todo_panel.rows(todo, *todo_fold, width).to_vec();
         let esc = pin.first().map(|running| {
             esc_row(
-                g::SPINNER[*tick % g::SPINNER.len()],
+                g::STAR[*tick % g::STAR.len()],
                 running.since.elapsed(),
                 &running.label,
-                *tick,
+                running.call.is_none(),
             )
         });
         pin_rows(checklist, esc)
