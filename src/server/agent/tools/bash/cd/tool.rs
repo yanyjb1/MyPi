@@ -11,7 +11,7 @@ use crate::server::agent::tools::workspace;
 
 const PATH: usize = 0;
 
-const PARAMS: &[Param] = &[Param::req(
+const PARAMS: &[Param] = &[Param::new(
     "path",
     Kind::Text,
     "Target directory. `./`, `../`, `~/`, and absolute paths allowed.",
@@ -22,6 +22,7 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Change the working directory for the rest of the session. Later tool calls and relative paths resolve from\n\
             the new one. Directories only: not the filesystem root, not a top-level directory (the temp dir excepted),\n\
             and nowhere under the home tree; confirm with `pwd` or `ls`.",
+    input: "path is the only field.",
     params: PARAMS,
     run,
     summary,

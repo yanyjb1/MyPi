@@ -10,7 +10,7 @@ use crate::ui::tui::theme::fixed;
 /// The whole exchange: one line, or a tree of names.
 pub(crate) fn block(args: &str, result: Option<ToolOutcome<'_>>) -> Vec<Row> {
     let state = State::of(result);
-    let op = arg_str(args, "op").unwrap_or_default();
+    let op = arg_str(args, "type").unwrap_or_default();
     let mut runs = head(state, "Alias");
     let mut out = Vec::new();
     match op.as_str() {

@@ -13,17 +13,17 @@ use crate::server::agent::tools::spec::Args;
 use super::command::{Command, CommandRunner};
 use super::duration::parse as parse_duration;
 use super::text::TextRunner;
-use super::{CONTENT, COUNT, DELAY, EXPR, ID, OP, TIMEOUT, TYPE};
+use super::{CONTENT, COUNT, DELAY, EXPR, ID, KIND, TIMEOUT, TYPE};
 
 pub(crate) fn run(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     let jobs = env
         .source
         .jobs(env.session)
         .ok_or_else(|| anyhow::anyhow!("`kairos` is unavailable in this session"))?;
-    let op = args.choice(OP)?;
+    let op = args.choice(TYPE)?;
     match op.as_str() {
         "now" => {
-            let kind = args.choice(TYPE)?;
+            let kind = args.choice(KIND)?;
             if kind != "command" {
                 bail!("`text` runs on `after` or `every` only; `now` has nothing to wait for");
             }
@@ -31,13 +31,13 @@ pub(crate) fn run(env: &mut Env, args: &Args) -> Result<ToolOutput> {
         }
         "after" => {
             let delay = parse_duration(&args.str(DELAY)?)?;
-            let kind = args.choice(TYPE)?;
+            let kind = args.choice(KIND)?;
             start(env, jobs.as_ref(), args, &kind, Schedule::After(delay))
         }
         "every" => {
             let expr = args.str(EXPR)?;
             let count = count(args)?;
-            let kind = args.choice(TYPE)?;
+            let kind = args.choice(KIND)?;
             start(
                 env,
                 jobs.as_ref(),

@@ -11,7 +11,7 @@ use crate::ui::tui::theme::fixed;
 
 /// The one-line form; `result` has none.
 pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<Row>> {
-    let op = arg_str(args, "op")?;
+    let op = arg_str(args, "type")?;
     if op == "result" {
         return None;
     }

@@ -10,16 +10,16 @@ use crate::server::agent::tools::contract::view::{MemoReadOp, MemoScope, MemoVie
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
 
-const OP: usize = 0;
+const TYPE: usize = 0;
 const SCOPE: usize = 1;
 const NAME: usize = 2;
 const CONTENT: usize = 3;
 
 const PARAMS: &[Param] = &[
-    Param::req(
-        "op",
+    Param::new(
+        "type",
         Kind::Choice(&["add", "mod", "del", "show", "history", "list"]),
-        "The operation.",
+        "Which operation this is.",
     ),
     Param::df(
         "scope",
@@ -27,16 +27,8 @@ const PARAMS: &[Param] = &[
         "Where the memo lives.",
         "current",
     ),
-    Param::opt(
-        "name",
-        Kind::Text,
-        "Memo name; required by every op but `list`.",
-    ),
-    Param::opt(
-        "content",
-        Kind::Text,
-        "Full memo body; required by `add` and `mod`.",
-    ),
+    Param::new("name", Kind::Text, "Memo name."),
+    Param::new("content", Kind::Text, "The full memo body."),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
@@ -44,13 +36,15 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Named notes shared with the user. `add` creates, `mod` appends a version, `del` removes \
             every version, `show` reads the latest version, `history` reads every version, `list` \
             lists names. Reads accept both scopes; writes are current only.",
+    input: "type is always needed. A write (add, mod) is current scope only and takes name and \
+            content. del, show and history take name; list takes nothing else.",
     params: PARAMS,
     run,
     summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
-    let op = args.choice(OP)?;
+    let op = args.choice(TYPE)?;
     let scope = match args.choice(SCOPE)?.as_str() {
         "current" => MemoScope::Current,
         "global" => MemoScope::Global,
@@ -142,5 +136,5 @@ fn render(memo: MemoView) -> (String, Value) {
 
 /// One line for a history listing: the operation only.
 fn summary(call: &CallRecord) -> String {
-    summary::clip(&summary::field(call, "op").unwrap_or_default(), 96)
+    summary::clip(&summary::field(call, "type").unwrap_or_default(), 96)
 }

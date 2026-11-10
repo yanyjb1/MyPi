@@ -10,7 +10,7 @@ use crate::ui::tui::theme::fixed;
 /// The one row an exchange leaves: its state, its operation, and what it left behind.
 pub(crate) fn marker(args: &str, outcome: Option<ToolOutcome<'_>>) -> Vec<Row> {
     let state = State::of(outcome);
-    let op = partial::text(args, "op").unwrap_or_default();
+    let op = partial::text(args, "type").unwrap_or_default();
     let mut runs = vec![
         Run::with(state.glyph(), Some(state.glyph_ink()), Modifier::empty()),
         Run::fixed(" Todo", fixed::TOOL_TITLE).bold(),

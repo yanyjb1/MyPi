@@ -62,7 +62,7 @@ What is here, what each file holds, who talks to whom. Current state only.
   browser keys, which the web domain reads itself.
 - **`platform`**: `time::now_stamp` (the effect stamp) and the local-time parts, `log::warn`,
   `env::temp_dir`, `shell::Shell` (the session's shell: program, one-shot argument shape,
-  stored-text read form), `proc` (process group spawn, group signal, tree teardown), `stop::Stop`
+  stored-text path form), `proc` (process group spawn, group signal, tree teardown), `stop::Stop`
   (the session's stop signal and the actions a call registers on it).
 - **`request`**: `ToolCall`, `ToolDef`, `Message` for definitions and the context window.
 - **`web`**: `WebArgs`, `run` from the `web` tool; `shutdown` from `main`.
@@ -103,7 +103,8 @@ Engine::run
 1. `contract::env::Env` and `engine`: every field is filled in one place; a new port is a field here
    and a trait in `contract::view`.
 2. `spec::Param` order and each tool's index constants: `Args` reads positionally.
-3. `schema_of` and `Args::fill`: one `Param` table feeds both.
+3. `schema_of` and `Args::fill`: one `Param` table feeds both; the envelope (`intent` beside
+   `input`) is built in one place and unwrapped in the other.
 4. `ToolOutput.effects` and `contract::output::Effect`: the front door stamps `ts`, so a tool must
    never fill it.
 5. `bash` and `kairos`: every command goes through `admit`; the guard runs once, on the final text.

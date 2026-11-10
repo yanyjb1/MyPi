@@ -56,7 +56,7 @@ fn expand_alias(cmd: &str, aliases: &Aliases) -> String {
     out
 }
 
-/// Turn every standalone `#<ref>` token in `cmd` into the shell's own read of that stored text.
+/// Turn every standalone `#<ref>` token in `cmd` into the quoted path of that stored text.
 fn rewrite_refs(cmd: &str, export: &dyn Export, shell: &Shell) -> Result<String> {
     let mut rewritten = String::with_capacity(cmd.len());
     let mut resolved: Vec<(String, String)> = Vec::new();
@@ -80,17 +80,17 @@ fn rewrite_refs(cmd: &str, export: &dyn Export, shell: &Shell) -> Result<String>
                 let cached = resolved
                     .iter()
                     .find(|(w, _)| *w == word)
-                    .map(|(_, read)| read.clone());
-                let read = match cached {
-                    Some(read) => Some(read),
+                    .map(|(_, token)| token.clone());
+                let token = match cached {
+                    Some(token) => Some(token),
                     None => resolve(&word, export).map(|path| {
-                        let read = shell.read_file(&path);
-                        resolved.push((word.clone(), read.clone()));
-                        read
+                        let token = shell.path_token(&path);
+                        resolved.push((word.clone(), token.clone()));
+                        token
                     }),
                 };
-                if let Some(read) = read {
-                    rewritten.push_str(&read);
+                if let Some(token) = token {
+                    rewritten.push_str(&token);
                     i = j;
                     continue;
                 }
@@ -102,7 +102,7 @@ fn rewrite_refs(cmd: &str, export: &dyn Export, shell: &Shell) -> Result<String>
     Ok(rewritten)
 }
 
-/// One ref → the token that prints it. `None` = the ref names nothing (leave the token as is).
+/// One ref → the path of its stored text. `None` = the ref names nothing (leave the token as is).
 fn resolve(word: &str, export: &dyn Export) -> Option<std::path::PathBuf> {
     match export.path(word) {
         Ok(path) => Some(path),

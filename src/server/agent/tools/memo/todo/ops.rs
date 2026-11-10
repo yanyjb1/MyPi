@@ -6,7 +6,7 @@ use super::state::{TodoItem, counts};
 use crate::server::agent::tools::spec::Args;
 
 // Positions in the parameter table; `TOOL` writes it in this order.
-pub(super) const OP: usize = 0;
+pub(super) const TYPE: usize = 0;
 pub(super) const ITEMS: usize = 1;
 pub(super) const IDS: usize = 2;
 pub(super) const DONE: usize = 3;
@@ -64,9 +64,9 @@ pub struct Call {
 impl Call {
     /// Read from the parameter table, then shape-checked.
     pub fn read(args: &Args) -> Result<Call> {
-        let name = args.choice(OP)?;
+        let name = args.choice(TYPE)?;
         let op = Op::parse(&name)
-            .ok_or_else(|| anyhow!("unknown op `{name}` ({})", Op::ALL.join("/")))?;
+            .ok_or_else(|| anyhow!("unknown type `{name}` ({})", Op::ALL.join("/")))?;
         let call = Call {
             op,
             items: args.str_list(ITEMS)?,

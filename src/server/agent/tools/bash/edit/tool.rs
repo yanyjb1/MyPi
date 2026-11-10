@@ -17,26 +17,26 @@ const NEW: usize = 3;
 const RANGE: usize = 4;
 
 const PARAMS: &[Param] = &[
-    Param::req(
+    Param::new(
         "type",
         Kind::Choice(&["exact", "mass"]),
-        "exact: replace one unique run of text; mass: replace one range of lines.",
+        "Which edit this is.",
     ),
-    Param::req("path", Kind::Text, "File path."),
-    Param::opt(
+    Param::new("path", Kind::Text, "File path."),
+    Param::new(
         "old",
         Kind::Text,
-        "exact: text to replace. MUST match exactly and be unique.",
+        "The text to replace. MUST match the file character for character, exactly once.",
     ),
-    Param::opt(
+    Param::new(
         "new",
         Kind::Text,
-        "The replacement block; empty removes the target.",
+        "The replacement block; an empty value removes the target.",
     ),
-    Param::opt(
+    Param::new(
         "range",
         Kind::Text,
-        "mass: the lines to replace, `12-14` or `12`.",
+        "The lines to replace, `12-14` or `12`.",
     ),
 ];
 
@@ -47,6 +47,9 @@ pub(crate) const TOOL: Tool = Tool {
             `range` with `new`; the block may be any number of lines. The other group's fields are \
             rejected. The answer names the lines that went, the lines that took their place, and \
             how far everything below moved.",
+    input: "type and path are always needed. type=exact: old (a unique run) and new. \
+            type=mass: range and new; an empty new removes the range. The other type's fields \
+            are refused.",
     params: PARAMS,
     run,
     summary,
@@ -134,7 +137,11 @@ pub(crate) fn mass_text(
     let block: Vec<&str> = match new {
         "" => Vec::new(),
         // One trailing newline is the block's own terminator, not an extra empty line.
-        text => text.strip_suffix('\n').unwrap_or(text).split('\n').collect(),
+        text => text
+            .strip_suffix('\n')
+            .unwrap_or(text)
+            .split('\n')
+            .collect(),
     };
     let old_lines = to - from + 1;
     let new_lines = block.len();

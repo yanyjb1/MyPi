@@ -120,12 +120,12 @@ impl Shell {
         cmd
     }
 
-    /// The token that prints one stored file, in this shell's own words.
-    pub fn read_file(&self, path: &Path) -> String {
+    /// The single shell token naming one stored file, quoted so the path survives as one word.
+    pub fn path_token(&self, path: &Path) -> String {
         let text = path.display().to_string();
         match self.kind {
-            Kind::Bash | Kind::Zsh | Kind::Niu => format!("cat {}", posix(&text)),
-            Kind::Pwsh => format!("Get-Content -Raw -LiteralPath {}", pwsh_quote(&text)),
+            Kind::Bash | Kind::Zsh | Kind::Niu => posix(&text),
+            Kind::Pwsh => pwsh_quote(&text),
         }
     }
 }

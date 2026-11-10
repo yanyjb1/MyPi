@@ -122,10 +122,9 @@ impl Config {
             .min(u32::MAX as i64) as u32
     }
 
-    /// Where exported full texts land.
+    /// Where exported spill texts and artifact files land: `<temp>/mypi`.
     pub fn export_dir(&self) -> PathBuf {
-        crate::server::platform::env::downloads_dir()
-            .unwrap_or_else(crate::server::platform::env::temp_dir)
+        crate::server::platform::env::temp_dir().join("mypi")
     }
 
     /// The project root and its two folders.

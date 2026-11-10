@@ -4,13 +4,15 @@ use serde_json::Value;
 
 use super::super::super::row::Row;
 use super::super::table;
-use super::{Section, ToolBlock, ToolOutcome, ToolRenderer, arg_scalar, arg_str, output_lines};
+use super::{
+    Section, ToolBlock, ToolOutcome, ToolRenderer, arg_scalar, arg_str, call_input, output_lines,
+};
 
 pub(crate) struct Context;
 
 impl ToolRenderer for Context {
     fn title(&self, b: &ToolBlock<'_>) -> Option<String> {
-        let op = arg_str(b.args, "op")?;
+        let op = arg_str(b.args, "type")?;
         Some(match op.as_str() {
             "show" => format!("show the content of {}", listing(b.args, "ids")),
             _ => format!(
@@ -40,7 +42,7 @@ fn table_of(b: &ToolBlock<'_>, details: &Value, raw: &str) -> Vec<Row> {
     let Some(rows) = details.as_array() else {
         return output_lines(raw);
     };
-    let show = arg_str(b.args, "op").as_deref() == Some("show");
+    let show = arg_str(b.args, "type").as_deref() == Some("show");
     let width = b.inner_width();
     if show {
         let body = rows
@@ -92,10 +94,10 @@ fn table_of(b: &ToolBlock<'_>, details: &Value, raw: &str) -> Vec<Row> {
 
 /// One argument as it reads in a title: strings bare, arrays joined.
 fn listing(args: &str, key: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(args) else {
-        return String::new();
-    };
-    listing_of(value.get(key))
+    match call_input(args) {
+        Some(value) => listing_of(value.get(key)),
+        None => String::new(),
+    }
 }
 
 /// One argument, or the value the tool uses when it is absent.

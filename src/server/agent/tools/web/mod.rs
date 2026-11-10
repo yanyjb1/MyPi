@@ -8,15 +8,17 @@ use super::contract::view::CallRecord;
 use super::spec::{Args, Kind, Param, Tool, ToolProgress};
 use super::summary;
 
-const OP: usize = 0;
+const TYPE: usize = 0;
 const URL: usize = 1;
 const RAW: usize = 2;
 const QUERY: usize = 3;
 const PROVIDER: usize = 4;
 const PAGE: usize = 5;
 const SELECTOR: usize = 6;
-const VALUE: usize = 7;
-const FULL_PAGE: usize = 8;
+const KEY: usize = 7;
+const VALUE: usize = 8;
+const PIXELS: usize = 9;
+const FULL_PAGE: usize = 10;
 
 /// Every operation; the schema and the dispatch read this one list.
 const OPS: &[&str] = &[
@@ -33,44 +35,38 @@ const OPS: &[&str] = &[
 ];
 
 const PARAMS: &[Param] = &[
-    Param::req("op", Kind::Choice(OPS), "Operation to perform."),
-    Param::opt("url", Kind::Text, "read/open: URL."),
+    Param::new("type", Kind::Choice(OPS), "Which operation this is."),
+    Param::new("url", Kind::Text, "The page to load."),
     Param::df(
         "raw",
         Kind::Flag,
-        "read: return DOM HTML instead of Markdown.",
+        "Return DOM HTML instead of Markdown.",
         "false",
     ),
-    Param::opt(
+    Param::new(
         "query",
         Kind::Text,
-        "search: query, passed through verbatim.",
+        "The search words, passed through verbatim.",
     ),
-    Param::opt(
+    Param::new(
         "provider",
         Kind::Choice(&["google", "bing", "baidu"]),
-        "search: the one provider this query runs against.",
+        "The one engine this query runs against.",
     ),
     Param::df(
         "page",
         Kind::Number,
-        "search: target page; fetches pages 1..N.",
+        "The last result page to fetch; pages 1..N are merged.",
         "1",
     ),
-    Param::opt(
-        "selector",
-        Kind::Text,
-        "click/fill/select: CSS selector; press: key name.",
-    ),
-    Param::opt(
-        "value",
-        Kind::Any,
-        "fill/select/eval: string; scroll: pixels.",
-    ),
+    Param::new("selector", Kind::Text, "CSS selector."),
+    Param::new("key", Kind::Text, "Key name, e.g. `Enter`."),
+    Param::new("value", Kind::Text, "The text to put into the field."),
+    Param::df("pixels", Kind::Number, "How far to scroll down.", "600"),
     Param::df(
         "full_page",
         Kind::Flag,
-        "screenshot: capture the whole page.",
+        "Capture the whole page, not the viewport.",
         "false",
     ),
 ];
@@ -81,23 +77,36 @@ pub(crate) const TOOL: Tool = Tool {
             runs one provider and merges pages 1..N; `open`/`click`/`fill`/`press`/`select`/\
             `scroll`/`eval` operate the work tab; `screenshot` writes a PNG under the system temp \
             directory.",
+    input: "type is always needed. read: url, or nothing to read the work tab as it stands. \
+            open: url, or nothing for a blank tab. search: query and provider. click: selector. \
+            fill: selector and value. press: key. select: selector and value. scroll: pixels. \
+            eval: value, the JavaScript to run. screenshot: nothing else.",
     params: PARAMS,
     run,
     summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
-    let page = args.opt_int(PAGE)?.unwrap_or(1);
+    let kind = args.choice(TYPE)?;
+    let page = args.int(PAGE)?;
     let page = u32::try_from(page).map_err(|_| anyhow::anyhow!("`page` must be >= 1"))?;
+    let selector = match kind.as_str() {
+        "press" => args.opt_str(KEY)?,
+        _ => args.opt_str(SELECTOR)?,
+    };
+    let value = match kind.as_str() {
+        "scroll" => Some(serde_json::Value::from(args.int(PIXELS)?)),
+        _ => args.opt_str(VALUE)?.map(serde_json::Value::from),
+    };
     let a = crate::web::WebArgs {
-        op: args.choice(OP)?,
+        op: kind,
         url: args.opt_str(URL)?,
         raw: args.flag(RAW)?,
         query: args.opt_str(QUERY)?,
         provider: args.opt_str(PROVIDER)?,
         page,
-        selector: args.opt_str(SELECTOR)?,
-        value: args.opt_any(VALUE).cloned(),
+        selector,
+        value,
         full_page: args.flag(FULL_PAGE)?,
     };
     let text = crate::web::run(&a, env.session)?;
@@ -106,14 +115,13 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
 /// One line for a history listing: the operation and the argument that locates it.
 fn summary(call: &CallRecord) -> String {
-    let op = summary::field(call, "op").unwrap_or_default();
+    let op = summary::field(call, "type").unwrap_or_default();
     let at = match op.as_str() {
         "read" => summary::field(call, "url").unwrap_or_else(|| "page".to_string()),
         "open" => summary::field(call, "url").unwrap_or_default(),
         "search" => summary::field(call, "query").unwrap_or_default(),
-        "click" | "fill" | "press" | "select" => {
-            summary::field(call, "selector").unwrap_or_default()
-        }
+        "click" | "fill" | "select" => summary::field(call, "selector").unwrap_or_default(),
+        "press" => summary::field(call, "key").unwrap_or_default(),
         "eval" => summary::field(call, "value").unwrap_or_default(),
         _ => String::new(),
     };

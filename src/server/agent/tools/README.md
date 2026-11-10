@@ -50,7 +50,7 @@ a batch with the turn's stop signal
   → registry::spec(name)
   → env.allows(name)                       the session's list; the only gate
   → budget gate (every call but `final`)
-  → Args::fill(tool.params, args)          JSON object → positional values
+  → Args::fill(tool.params, args)          `input` → positional values
   → (tool.run)(env, &args, progress)       Start, Progress and End events around it
   → a stop that landed meanwhile makes the result `ok: false`, reason `interrupted`
   → every out.effects gets one ts
@@ -62,27 +62,38 @@ Unknown names error.
 
 ### Schema
 
-A tool declares `params: &[Param]`; `Param { name, kind, required, default, about }` and
-`Kind = Text | Number | Line | Flag | Any | Choice(&[str]) | TextList | Numbers`.
-`schema_of` renders the JSON schema and injects one required string property, `intent`, into every
-tool; no tool declares it.
+A tool declares `params: &[Param]`; `Param { name, kind, default, about }` and
+`Kind = Text | Number | Line | Flag | Object | Choice(&[str]) | TextList | Numbers`.
+
+Every call is one envelope: `intent` beside `input`, both required, everything else inside `input`.
+`schema_of` builds it once for every tool, so no tool declares `intent`.
+
+- `about` says what the tool does and what it answers. No field list.
+- `input`'s description says, per `type`, which fields a call needs and what an omission means.
+- Each field says what its value is; its type and enum come from the table.
+- No `required` array inside `input`: which fields are needed depends on `type`, and only the tool
+  knows that. `Args::fill` unwraps the envelope and fills defaults; a tool that needs a field errors
+  where it reads it, naming the field.
+
+Every field is optional in the schema; `always` below marks the ones every call of that tool needs
+(the tool checks them, not the schema).
 
 | tool | parameters, in index order |
 |---|---|
-| `read` | `path` req, `offset` (1-based), `limit` (default 500, capped by the output line limit) |
-| `edit` | `type` req (`exact`/`mass`), `path` req, `old`, `new`, `range` (`12-14` or `12`) |
-| `write` | `path` req, `content` req |
-| `cd` | `path` req |
-| `bash` | `command` req |
-| `alias` | `op` req (`add`/`list`/`del`), `name`, `command` |
-| `kairos` | `op` req (`now`/`after`/`every`/`list`/`status`/`result`/`cancel`), `type` (`command`/`text`), `content`, `timeout`, `delay`, `expr`, `count`, `id` |
-| `task` | `template` req, `vars`, `cwd`, `maxToolCalls`, `name` |
-| `final` | `op` req (`write`/`edit`/`read`/`submit`), `content`, `old`, `new`, `range` |
-| `mcp` | `op` req (`list`/`call`), `server`, `tool`, `args` |
-| `web` | `op` req (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`screenshot`), `url`, `raw`, `query`, `provider`, `page`, `selector`, `value`, `full_page` |
-| `memo` | `op` req (`add`/`mod`/`del`/`show`/`history`/`list`), `scope` (`current`/`global`, default `current`), `name`, `content` |
-| `todo` | `op` req (`set`/`tick`/`view`), `items` (the whole list), `ids` (item numbers, 1-based), `done` (default true) |
-| `context` | `op` req (`query`/`show`), `anchor`, `direction` (`before`/`after`), `limit` (default 3), `tool` (a name or `all`, default `bash`), `ids` |
+| `read` | `path` always, `offset` (1-based, default 1), `limit` (default 500, capped by the output line limit) |
+| `edit` | `type` always (`exact`/`mass`), `path` always, `old`, `new`, `range` (`12-14` or `12`) |
+| `write` | `path` always, `content` always |
+| `cd` | `path` always |
+| `bash` | `command` always |
+| `alias` | `type` (`add`/`list`/`del`), `name`, `command` |
+| `kairos` | `type` (`now`/`after`/`every`/`list`/`status`/`result`/`cancel`), `kind` (`command`/`text`, default `command`), `content`, `timeout`, `delay`, `expr`, `count` (default 3), `id` |
+| `task` | `template` always, `vars` (object of strings), `cwd`, `maxToolCalls`, `name` |
+| `final` | `type` (`write`/`edit`/`read`/`submit`), `content`, `old`, `new`, `range` |
+| `mcp` | `type` (`list`/`call`), `server`, `tool`, `args` (object) |
+| `web` | `type` (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`screenshot`), `url`, `raw` (default false), `query`, `provider`, `page` (default 1), `selector`, `key`, `value`, `pixels` (default 600), `full_page` (default false) |
+| `memo` | `type` (`add`/`mod`/`del`/`show`/`history`/`list`), `scope` (`current`/`global`, default `current`), `name`, `content` |
+| `todo` | `type` (`set`/`tick`/`view`), `items` (the whole list), `ids` (item numbers, 1-based), `done` (default true) |
+| `context` | `type` (`query`/`show`), `anchor` (a `#<ref>` hash or a block id), `direction` (`before`/`after`, default `after`), `limit` (default 3), `tool` (a name or `all`, default `bash`), `ids` |
 
 `provider` is read by `search` only: one search runs against exactly one provider, so a call that
 names none is refused rather than spread across several tabs, and the other operations leave it out.
@@ -195,7 +206,7 @@ guard, a backslash before a newline is a continuation, and `expand_alias` rewrit
 every segment once.
 
 The command itself runs in the session's shell (`Env.bash.shell`): `bash` or `zsh` on unix, `pwsh`
-or `niu` on windows. `platform::shell` builds the command line and the `#<ref>` read form;
+or `niu` on windows. `platform::shell` builds the command line and the quoted path a `#<ref>` becomes;
 `platform::proc` starts it as its own process group and stops it group-wide, TERM then KILL. A stop
 arrives through the `Stop` the runner registered after the spawn; the tool thread itself only
 receives, so nothing wakes it on a timer. The guard belongs to the unix shells only; `pwsh` and
@@ -203,13 +214,14 @@ receives, so nothing wakes it on a timer. The guard belongs to the unix shells o
 
 ### context
 
-- `query` needs `anchor` and `direction`; `tool` is one name or `all`. The answer is a JSON array of
+- `query` needs `anchor` and `direction`; `tool` is one name or `all`. `anchor` takes a `#<ref>`
+  (the hash printed when a result was truncated) or a block id. The answer is a JSON array of
   `{id, tool, ok, summary}`, one element per recorded call.
 - `show` answers a JSON array of `{id, request, result}`; request and result are the stored text
   parsed back into JSON, `null` when the block carries none.
-- Past ten rows, or past three shown blocks, the text lands in `Export::dir()` and the reply names
-  the file; the name is built from the parameters, so the same query overwrites its own file. The
-  memo still carries every row.
+- Past ten rows, or past three shown blocks, the text lands in `Export::dir()` (`<temp>/mypi`) and
+  the reply names the file. The name carries the session and the parameters, so the same query in
+  one session overwrites its own file and no two sessions collide. The memo still carries every row.
 
 ### Query answers and summaries
 

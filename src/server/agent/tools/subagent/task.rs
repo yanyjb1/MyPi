@@ -21,30 +21,30 @@ const MAX: usize = 3;
 const NAME: usize = 4;
 
 pub(crate) const PARAMS: &[Param] = &[
-    Param::req(
+    Param::new(
         "template",
         Kind::Text,
         "Template name, or a path when no named template exists.",
     ),
-    Param::opt(
+    Param::new(
         "vars",
-        Kind::Any,
-        "Object of string values for the template's `{{...}}` slots.",
+        Kind::Object,
+        "String values for the template's `{{...}}` slots.",
     ),
-    Param::opt(
+    Param::new(
         "cwd",
         Kind::Text,
         "Working directory; needs the parent's `cd` tool.",
     ),
-    Param::opt(
+    Param::new(
         "maxToolCalls",
         Kind::Number,
-        "Tool-call budget for this child; defaults to config.",
+        "Tool-call budget for this child; the config value when omitted.",
     ),
-    Param::opt(
+    Param::new(
         "name",
         Kind::Text,
-        "Answer file name; defaults to the template's name.",
+        "Answer file name; the template's stem when omitted.",
     ),
 ];
 
@@ -53,6 +53,8 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Spawn one subagent from a template and return at once. The child works in its own \
             session and writes an answer file; a wake reports when it ends. A child never gets \
             `task`: the tool cannot be handed down, so a template's tool list must not name it.",
+    input: "template is always needed. vars fills the template's slots, cwd and maxToolCalls \
+            override the config, name fixes the answer file.",
     params: PARAMS,
     run,
     summary,
@@ -119,7 +121,7 @@ fn vars(args: &Args) -> Result<BTreeMap<String, String>> {
     };
     let map = value
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("`vars` must be a JSON object"))?;
+        .ok_or_else(|| anyhow::anyhow!("`vars` must be an object of strings, not a string"))?;
     let mut out = BTreeMap::new();
     for (name, value) in map {
         let text = value

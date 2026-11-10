@@ -10,18 +10,18 @@ use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
 
-const OP: usize = 0;
+const TYPE: usize = 0;
 const NAME: usize = 1;
 const COMMAND: usize = 2;
 
 const PARAMS: &[Param] = &[
-    Param::req(
-        "op",
+    Param::new(
+        "type",
         Kind::Choice(&["add", "list", "del"]),
-        "The operation.",
+        "Which operation this is.",
     ),
-    Param::opt("name", Kind::Text, "Alias name."),
-    Param::opt("command", Kind::Text, "The command the alias expands to."),
+    Param::new("name", Kind::Text, "Alias name."),
+    Param::new("command", Kind::Text, "The command the alias expands to."),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
@@ -30,13 +30,15 @@ pub(crate) const TOOL: Tool = Tool {
             word of every command line expands once, before the guard. A name fixed by the config is \
             read-only for the session: `add` and `del` refuse it. An alias cannot contain variables, \
             functions, or newlines. Changes take effect for later bash calls in this round.",
+    input: "type is always needed. type=add: name and command. type=del: name. \
+            type=list: nothing else.",
     params: PARAMS,
     run,
     summary,
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
-    match args.choice(OP)?.as_str() {
+    match args.choice(TYPE)?.as_str() {
         "add" => add(env, args),
         "list" => Ok(list(env)),
         "del" => del(env, args),
@@ -132,7 +134,7 @@ fn alias_name(args: &Args) -> Result<String> {
 
 /// One line for a history listing: the op, plus the name and command it carries.
 fn summary(call: &CallRecord) -> String {
-    let op = summary::field(call, "op").unwrap_or_default();
+    let op = summary::field(call, "type").unwrap_or_default();
     let name = summary::field(call, "name").unwrap_or_default();
     match (op.as_str(), summary::field(call, "command")) {
         ("add", Some(command)) => summary::clip(&format!("{name} => {command}"), 96),

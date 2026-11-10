@@ -25,7 +25,7 @@ pub fn config_dir() -> PathBuf {
     base("XDG_CONFIG_HOME", ".config").join("mypi")
 }
 
-/// The user's download folder, where exports land: `~/Downloads`.
+/// The user's download folder, where the memo export on session delete lands: `~/Downloads`.
 pub fn downloads_dir() -> Option<PathBuf> {
     home().map(|home| home.join("Downloads"))
 }

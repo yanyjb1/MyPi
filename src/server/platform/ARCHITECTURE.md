@@ -15,7 +15,7 @@ keeps — is in `README.md`.
 | `time.rs` | the process's time zone, and the program's one stamp shape: `init`, `now_stamp`, `age_seconds`, `days_from_stamp` |
 | `stamp.rs` | the timestamp templates: `parse` and `render` turn two instants into the prefix and suffix of one user message |
 | `log.rs` | the in-process ring of what happened to us: a level, a scope, a message and a millisecond |
-| `shell.rs` | which shell runs a command line: `Kind`, `Shell`, `default`, `resolve`, `names`, the one-shot argument shape, and the read form a stored text takes |
+| `shell.rs` | which shell runs a command line: `Kind`, `Shell`, `default`, `resolve`, `names`, the one-shot argument shape, and the quoted path a stored text becomes |
 | `proc.rs` | one command's process tree: `spawn_grouped`, `guard_orphan`, `signal_group`, `terminate_tree`, `grace`; the per-family pieces are compile-time `cfg` modules |
 | `stop.rs` | the stop signal: `Stop` (flag plus a table of actions) and `Hook` (a registration that comes off on drop); `new`, `is_stopped`, `set`, `reset`, `on_stop` |
 

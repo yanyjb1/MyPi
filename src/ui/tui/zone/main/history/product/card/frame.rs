@@ -467,15 +467,15 @@ pub(crate) fn error_body(text: &str) -> Vec<Row> {
 
 /// The call as JSON, or as written when it does not parse.
 pub(crate) fn default_call(name: &str, args: &str) -> Vec<Row> {
-    match serde_json::from_str::<Value>(args) {
-        Ok(v) => {
+    match call_input(args) {
+        Some(v) => {
             let pretty = serde_json::to_string_pretty(&v).unwrap_or_else(|_| args.to_string());
             pretty
                 .lines()
                 .map(|l| code::line(l, Some("json")))
                 .collect()
         }
-        Err(_) => {
+        None => {
             let lang = language_for_tool(name);
             args.lines().map(|l| code::line(l, lang)).collect()
         }
@@ -593,22 +593,25 @@ pub(crate) fn relativize(base: &str, path: &str) -> String {
     path.to_string()
 }
 
-pub(crate) fn arg_bool(args: &str, key: &str) -> Option<bool> {
+/// A call's arguments with the envelope taken off: the `input` object.
+pub(crate) fn call_input(args: &str) -> Option<Value> {
     let v: Value = serde_json::from_str(args).ok()?;
-    v.get(key)?.as_bool()
+    v.get("input").cloned()
+}
+
+pub(crate) fn arg_bool(args: &str, key: &str) -> Option<bool> {
+    call_input(args)?.get(key)?.as_bool()
 }
 
 pub(crate) fn arg_str(args: &str, key: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(args).ok()?;
-    Some(v.get(key)?.as_str()?.to_string())
+    Some(call_input(args)?.get(key)?.as_str()?.to_string())
 }
 
 /// One argument as text: strings bare, numbers and flags spelled out.
 pub(crate) fn arg_scalar(args: &str, key: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(args).ok()?;
-    let value = v.get(key)?;
+    let value = call_input(args)?.get(key)?.clone();
     Some(match value {
-        Value::String(text) => text.clone(),
+        Value::String(text) => text,
         Value::Null => return None,
         other => other.to_string(),
     })

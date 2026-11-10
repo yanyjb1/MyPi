@@ -2,13 +2,17 @@
 
 use crate::server::agent::tools::contract::view::CallRecord;
 
-/// One string field of a call's JSON arguments.
+/// One string field of a call's `input`.
 pub(crate) fn field(call: &CallRecord, name: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(&call.args)
+    input(&call.args)?.get(name)?.as_str().map(str::to_owned)
+}
+
+/// A call's arguments as a JSON object, the envelope taken off.
+pub(crate) fn input(args: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(args)
         .ok()?
-        .get(name)?
-        .as_str()
-        .map(str::to_owned)
+        .get("input")
+        .cloned()
 }
 
 /// Whitespace runs collapsed to one space; past `cap` characters, cut and marked.

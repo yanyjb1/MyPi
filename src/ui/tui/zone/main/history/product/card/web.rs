@@ -1,12 +1,10 @@
 //! web: `search` as a card, every other operation as one line.
 
-use serde_json::Value;
-
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_bool, arg_str, error_body,
-    error_under, head, non_empty_lines, one_line, short_url, truncate,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_bool, arg_scalar, arg_str,
+    error_body, error_under, head, non_empty_lines, one_line, short_url, truncate,
 };
 use crate::ui::tui::text::{display_width, glyphs as g};
 use crate::ui::tui::theme::fixed;
@@ -40,19 +38,24 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
                 values.push(short_url(&u));
             }
         }
-        "click" | "fill" | "press" | "select" => {
+        "click" | "fill" | "select" => {
             if let Some(sel) = arg_str(args, "selector").filter(|s| !s.trim().is_empty()) {
                 values.push(truncate(&one_line(&sel), 48));
+            }
+        }
+        "press" => {
+            if let Some(key) = arg_str(args, "key").filter(|k| !k.trim().is_empty()) {
+                values.push(truncate(&one_line(&key), 48));
             }
         }
         "scroll" => {
             values.push(format!(
                 "{}px",
-                value_of(args, "value").unwrap_or_else(|| "600".to_string())
+                arg_scalar(args, "pixels").unwrap_or_else(|| "600".to_string())
             ));
         }
         "eval" => {
-            if let Some(expr) = value_of(args, "value").filter(|v| !v.trim().is_empty()) {
+            if let Some(expr) = arg_scalar(args, "value").filter(|v| !v.trim().is_empty()) {
                 values.push(truncate(&one_line(&expr), 48));
             }
         }
@@ -131,7 +134,7 @@ impl ToolRenderer for Web {
 }
 
 fn op_of(args: &str) -> String {
-    arg_str(args, "op").unwrap_or_default()
+    arg_str(args, "type").unwrap_or_default()
 }
 
 fn label_of(op: &str) -> String {
@@ -139,16 +142,6 @@ fn label_of(op: &str) -> String {
     match chars.next() {
         Some(c) => format!("Web {}{}", c.to_uppercase(), chars.as_str()),
         None => "Web".to_string(),
-    }
-}
-
-/// A scalar argument spelled out, strings or numbers.
-fn value_of(args: &str, key: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(args).ok()?;
-    match v.get(key)? {
-        Value::String(text) => Some(text.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
     }
 }
 

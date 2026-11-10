@@ -20,8 +20,8 @@ pub enum Kind {
     Line,
     /// A boolean.
     Flag,
-    /// Any JSON; the tool reads it (used by `browser`'s `value`).
-    Any,
+    /// A JSON object.
+    Object,
     /// One of an enum.
     Choice(&'static [&'static str]),
     /// An array of strings.
@@ -37,8 +37,6 @@ pub struct Param {
     /// The name, for the model.
     pub name: &'static str,
     pub kind: Kind,
-    /// Required.
-    pub required: bool,
     /// The default, as text, converted per `kind`.
     pub default: Option<&'static str>,
     /// The description, for the model.
@@ -46,29 +44,17 @@ pub struct Param {
 }
 
 impl Param {
-    /// Required.
-    pub const fn req(name: &'static str, kind: Kind, about: &'static str) -> Self {
+    /// No default: an absent value is absent, and the tool decides what that means.
+    pub const fn new(name: &'static str, kind: Kind, about: &'static str) -> Self {
         Self {
             name,
             kind,
-            required: true,
             default: None,
             about,
         }
     }
 
-    /// Optional: absent means absent.
-    pub const fn opt(name: &'static str, kind: Kind, about: &'static str) -> Self {
-        Self {
-            name,
-            kind,
-            required: false,
-            default: None,
-            about,
-        }
-    }
-
-    /// Optional: absent means the default.
+    /// Absent means this text, converted per `kind`.
     pub const fn df(
         name: &'static str,
         kind: Kind,
@@ -78,7 +64,6 @@ impl Param {
         Self {
             name,
             kind,
-            required: false,
             default: Some(default),
             about,
         }
@@ -86,13 +71,16 @@ impl Param {
 
     /// The node in the manual.
     fn json(&self) -> Value {
-        let about = self.about;
+        let about = match self.default {
+            Some(default) => format!("{}. Omitted: {default}.", self.about.trim_end_matches('.')),
+            None => self.about.to_string(),
+        };
         match self.kind {
             Kind::Text => json!({"type": "string", "description": about}),
             Kind::Number => json!({"type": "integer", "description": about}),
             Kind::Line => json!({"type": "integer", "description": about}),
             Kind::Flag => json!({"type": "boolean", "description": about}),
-            Kind::Any => json!({"description": about}),
+            Kind::Object => json!({"type": "object", "description": about}),
             Kind::Choice(list) => json!({"type": "string", "enum": list, "description": about}),
             Kind::TextList => json!({
                 "type": "array",
@@ -119,42 +107,40 @@ impl Param {
     }
 }
 
-/// A parameter table → the manual's object (internal: no `intent` injected).
-fn object_of(params: &[Param]) -> Value {
+/// One parameter table → the `input` object's properties. No `required` array: which fields a call
+/// needs is stated in the tool's `input` description, per `type`.
+fn properties_of(params: &[Param]) -> serde_json::Map<String, Value> {
     let mut properties = serde_json::Map::new();
-    let mut required = Vec::new();
     for p in params {
         properties.insert(p.name.to_string(), p.json());
-        if p.required {
-            required.push(json!(p.name));
-        }
     }
-    json!({
-        "type": "object",
-        "properties": properties,
-        "required": required,
-    })
+    properties
 }
 
-/// A parameter table → the model's manual. `intent` is injected here, once for every tool, so no tool
-/// writes it out itself.
-pub fn schema_of(params: &[Param]) -> Value {
-    let mut node = object_of(params);
-    let properties = node["properties"]
-        .as_object_mut()
-        .expect("schema_of builds the properties map");
+/// One tool's manual: `intent` and `input` side by side, both required. `intent` is injected here,
+/// once for every tool, so no tool writes it out itself.
+pub fn schema_of(tool: &Tool) -> Value {
+    let mut properties = serde_json::Map::new();
     properties.insert(
         "intent".to_string(),
         json!({
             "type": "string",
-            "description": "Capitalized 2-6 word present-participle intent, e.g. Reading model role settings. Shown to the user while the call runs."
+            "description": "Capitalized 2-6 word present-participle intent, e.g. Reading model role settings. Shown to the user while the call runs. Emit it first."
         }),
     );
-    node["required"]
-        .as_array_mut()
-        .expect("schema_of builds the required array")
-        .push(json!("intent"));
-    node
+    properties.insert(
+        "input".to_string(),
+        json!({
+            "type": "object",
+            "description": tool.input,
+            "properties": properties_of(tool.params),
+        }),
+    );
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": ["intent", "input"],
+    })
 }
 
 // ---- reading values ----
@@ -166,7 +152,7 @@ pub struct Args {
 }
 
 impl Args {
-    /// Raw text → ordered arguments: read by table, fill defaults, report what is missing.
+    /// Raw text → ordered arguments: unwrap the envelope, read by table, fill defaults.
     pub fn fill(params: &'static [Param], raw: &str) -> Result<Self> {
         let text = raw.trim();
         let parsed: Value = if text.is_empty() {
@@ -174,15 +160,24 @@ impl Args {
         } else {
             serde_json::from_str(text).map_err(|e| anyhow!("arguments is not valid JSON: {e}"))?
         };
-        let Value::Object(map) = parsed else {
+        let Value::Object(mut map) = parsed else {
             bail!("arguments must be a JSON object");
         };
-        Self::from_map(params, &map)
+        let input = match map.remove("input") {
+            None | Some(Value::Null) => serde_json::Map::new(),
+            Some(Value::Object(inner)) => inner,
+            Some(Value::String(text)) => match serde_json::from_str::<Value>(&text) {
+                Ok(Value::Object(inner)) => inner,
+                _ => bail!("`input` must be an object, not a string holding something else"),
+            },
+            Some(other) => bail!("`input` must be an object; got {other}"),
+        };
+        Self::from_map(params, &input)
     }
 
-    /// A table + one object → ordered arguments.
+    /// A table + one object → ordered arguments. A value for an object parameter that arrived as a
+    /// string is read once as JSON, so a host that stringifies nested values costs nothing.
     fn from_map(params: &'static [Param], map: &serde_json::Map<String, Value>) -> Result<Self> {
-        let mut missing: Vec<&str> = Vec::new();
         let mut values = Vec::with_capacity(params.len());
         for p in params {
             let mut value = map.get(p.name).cloned().unwrap_or(Value::Null);
@@ -191,18 +186,20 @@ impl Args {
             {
                 value = p.typed_default(d);
             }
-            if value.is_null() && p.required {
-                missing.push(p.name);
+            if matches!(p.kind, Kind::Object)
+                && let Some(parsed) = value
+                    .as_str()
+                    .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                    .filter(Value::is_object)
+            {
+                value = parsed;
             }
             values.push(value);
-        }
-        if !missing.is_empty() {
-            bail!("missing required argument(s): {}", missing.join(", "));
         }
         Ok(Self { params, values })
     }
 
-    /// An array of strings; empty when absent (required ones were caught in `fill`).
+    /// An array of strings; empty when absent.
     pub fn str_list(&self, i: usize) -> Result<Vec<String>> {
         let Some(value) = self.maybe(i) else {
             return Ok(Vec::new());
@@ -341,8 +338,10 @@ pub type Summary = fn(&CallRecord) -> String;
 pub struct Tool {
     /// The name the model calls it by, and the key the profile list uses.
     pub name: &'static str,
-    /// The manual the model reads.
+    /// What the tool does, when to reach for it, what it answers. No field list.
     pub about: &'static str,
+    /// How `input` is composed: the fields each `type` needs, and what an omission means.
+    pub input: &'static str,
     /// The parameter table; position is the index.
     pub params: &'static [Param],
     /// The one entry point.
@@ -352,12 +351,12 @@ pub struct Tool {
 }
 
 impl Tool {
-    /// The model-visible entry: name + manual + parameter table (with `intent` injected).
+    /// The model-visible entry: name + manual + the `input` envelope (with `intent` beside it).
     pub fn definition(&self) -> crate::server::agent::request::message::ToolDef {
         crate::server::agent::request::message::ToolDef::function(
             self.name,
             self.about,
-            schema_of(self.params),
+            schema_of(self),
         )
     }
 }

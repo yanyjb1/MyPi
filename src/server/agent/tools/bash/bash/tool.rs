@@ -11,7 +11,7 @@ use crate::server::agent::tools::summary;
 
 const COMMAND: usize = 0;
 
-const PARAMS: &[Param] = &[Param::req(
+const PARAMS: &[Param] = &[Param::new(
     "command",
     Kind::Text,
     "Shell commands; lines run in order.",
@@ -25,8 +25,10 @@ pub(crate) const TOOL: Tool = Tool {
             inside it is allowed, but rm/mv/find -delete that reaches outside (including ~ and system\n\
             paths like /etc) is refused outright. Catastrophic patterns are blocked the same way: `dd`\n\
             to a block device, fork bombs, reverse shells, `curl | sh`.\n\
-            A `#<ref>` token (e.g. `#3xl`) stands for a stored artifact — it turns into a file holding\n\
-            that whole text, so `grep x #3xl` searches it; a token that names nothing stays literal text.",
+            A `#<ref>` token (e.g. `#3xl`) stands for a stored artifact — it is replaced by the\n\
+            path of a file holding that whole text, so `grep x #3xl` and `cat #3xl` both work; a\n\
+            token that names nothing stays literal text.",
+    input: "command is the only field.",
     params: PARAMS,
     run,
     summary,

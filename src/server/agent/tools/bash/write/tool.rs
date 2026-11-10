@@ -12,8 +12,8 @@ const PATH: usize = 0;
 const CONTENT: usize = 1;
 
 const PARAMS: &[Param] = &[
-    Param::req("path", Kind::Text, "File path."),
-    Param::req(
+    Param::new("path", Kind::Text, "File path."),
+    Param::new(
         "content",
         Kind::Text,
         "The file's full content, written verbatim.",
@@ -25,6 +25,7 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Write the whole file, **overwriting** any existing one. For new files, or when every line \
             changes; a single-location change is `edit`. A missing parent directory is refused. NEVER \
             create documentation or emojis unless asked.",
+    input: "both fields are always needed: the path, and the whole content.",
     params: PARAMS,
     run,
     summary,

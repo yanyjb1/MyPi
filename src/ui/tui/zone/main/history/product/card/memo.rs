@@ -11,7 +11,7 @@ pub(crate) struct Memo;
 
 impl ToolRenderer for Memo {
     fn title(&self, b: &ToolBlock<'_>) -> Option<String> {
-        let op = arg_str(b.args, "op")?;
+        let op = arg_str(b.args, "type")?;
         let name = arg_str(b.args, "name").unwrap_or_default();
         Some(match op.as_str() {
             "show" | "history" => format!("{op} {name} {}", scope(b.args)),
@@ -21,7 +21,7 @@ impl ToolRenderer for Memo {
     }
 
     fn call_body(&self, b: &ToolBlock<'_>) -> Vec<Row> {
-        let op = arg_str(b.args, "op").unwrap_or_default();
+        let op = arg_str(b.args, "type").unwrap_or_default();
         if !matches!(op.as_str(), "add" | "mod") {
             return Vec::new();
         }
@@ -37,7 +37,7 @@ impl ToolRenderer for Memo {
                 lines: error_body(o.text),
             }];
         }
-        let op = arg_str(b.args, "op").unwrap_or_default();
+        let op = arg_str(b.args, "type").unwrap_or_default();
         let lines = match op.as_str() {
             "show" | "history" | "list" => table_of(&op, o.details, b.inner_width(), o.text),
             _ => Vec::new(),

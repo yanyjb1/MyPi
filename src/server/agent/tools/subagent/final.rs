@@ -11,33 +11,33 @@ use crate::server::agent::tools::summary;
 
 use super::answer;
 
-const OP: usize = 0;
+const TYPE: usize = 0;
 const CONTENT: usize = 1;
 const OLD: usize = 2;
 const NEW: usize = 3;
 const RANGE: usize = 4;
 
 pub(crate) const PARAMS: &[Param] = &[
-    Param::req(
-        "op",
+    Param::new(
+        "type",
         Kind::Choice(&["write", "edit", "read", "submit"]),
-        "The operation.",
+        "Which operation this is.",
     ),
-    Param::opt("content", Kind::Text, "Full draft for `write`."),
-    Param::opt(
+    Param::new("content", Kind::Text, "The full draft."),
+    Param::new(
         "old",
         Kind::Text,
-        "edit: text to replace. MUST match exactly and be unique.",
+        "The text to replace. MUST match exactly and be unique.",
     ),
-    Param::opt(
+    Param::new(
         "new",
         Kind::Text,
-        "edit: the replacement block; empty removes the target.",
+        "The replacement block; an empty value removes the target.",
     ),
-    Param::opt(
+    Param::new(
         "range",
         Kind::Text,
-        "edit: the lines to replace, `12-14` or `12`.",
+        "The lines to replace, `12-14` or `12`.",
     ),
 ];
 
@@ -45,6 +45,8 @@ pub(crate) const TOOL: Tool = Tool {
     name: "final",
     about: "Edit the draft a subagent leaves behind. `submit` writes the answer file and ends the \
             task; it must be the only call in its message.",
+    input: "type is always needed. type=write: content. type=edit: either old and new, or \
+            range and new. type=read and type=submit: nothing else; submit needs a non-empty draft.",
     params: PARAMS,
     run,
     summary,
@@ -56,7 +58,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         .child(env.session)
         .ok_or_else(|| anyhow::anyhow!("`final` is only available to a subagent"))?;
     let draft = child.draft();
-    match args.choice(OP)?.as_str() {
+    match args.choice(TYPE)?.as_str() {
         "write" => {
             draft.write(&args.str(CONTENT)?)?;
             Ok(ToolOutput::text("draft written"))
@@ -103,6 +105,6 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
 /// One line for a history listing: the operation.
 fn summary(call: &CallRecord) -> String {
-    let op = summary::field(call, "op").unwrap_or_default();
+    let op = summary::field(call, "type").unwrap_or_default();
     summary::clip(&op, 96)
 }

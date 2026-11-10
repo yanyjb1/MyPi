@@ -5,13 +5,14 @@ use serde_json::Value;
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head, output_lines,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, call_input, error_under, head,
+    output_lines,
 };
 use crate::ui::tui::theme::fixed;
 
 /// The one-line form; only `list` has one.
 pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<Row>> {
-    if arg_str(args, "op").as_deref() != Some("list") {
+    if arg_str(args, "type").as_deref() != Some("list") {
         return None;
     }
     let state = State::of(result);
@@ -46,10 +47,10 @@ impl ToolRenderer for Call {
 }
 
 fn arguments(args: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(args) else {
-        return String::new();
-    };
-    match value.get("args") {
+    match call_input(args)
+        .as_ref()
+        .and_then(|input| input.get("args"))
+    {
         Some(Value::Null) | None => "{}".to_string(),
         Some(other) => other.to_string(),
     }

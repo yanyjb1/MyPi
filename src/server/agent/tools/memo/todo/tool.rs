@@ -15,12 +15,16 @@ use crate::server::agent::tools::summary;
 pub(crate) const RESET: &str = "\"todo_reset\":true";
 
 pub(super) const PARAMS: &[Param] = &[
-    Param::req("op", Kind::Choice(ops::Op::ALL), "The operation."),
-    Param::opt("items", Kind::TextList, "set: the whole list, in order."),
-    Param::opt(
+    Param::new(
+        "type",
+        Kind::Choice(ops::Op::ALL),
+        "Which operation this is.",
+    ),
+    Param::new("items", Kind::TextList, "The whole list, in order."),
+    Param::new(
         "ids",
         Kind::Numbers,
-        "tick: the item numbers `view` printed.",
+        "The item numbers `view` printed, 1-based.",
     ),
     Param::df(
         "done",
@@ -36,6 +40,8 @@ pub(crate) const TOOL: Tool = Tool {
             replaces the whole list in order; an empty `items` clears it. `tick` marks the given item \
             numbers done, or clears their tick with `done: false`. `view` prints the list with the \
             numbers `tick` takes, 1-based; an unknown number fails the call and changes nothing.",
+    input: "type is always needed. set: items (empty clears the list). tick: ids, and done=false \
+            to clear their tick. view: nothing else.",
     params: PARAMS,
     run,
     summary,
@@ -73,5 +79,5 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
 /// One line for a history listing: the operation only.
 fn summary(call: &CallRecord) -> String {
-    summary::clip(&summary::field(call, "op").unwrap_or_default(), 96)
+    summary::clip(&summary::field(call, "type").unwrap_or_default(), 96)
 }

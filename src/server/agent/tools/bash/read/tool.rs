@@ -14,17 +14,18 @@ const LIMIT: usize = 2;
 const DEFAULT_LINES: usize = 500;
 
 const PARAMS: &[Param] = &[
-    Param::req("path", Kind::Text, "File path."),
+    Param::new("path", Kind::Text, "File path."),
     Param::df(
         "offset",
         Kind::Line,
-        "First line to read (1-based, default 1). The output footer names the offset for the next call.",
+        "First line to read (1-based). The output footer names the offset for the next call.",
         "1",
     ),
-    Param::opt(
+    Param::df(
         "limit",
         Kind::Number,
-        "Max lines this call; defaults to 500 and is capped by the configured output line limit.",
+        "Max lines this call; the configured output line limit caps it.",
+        "500",
     ),
 ];
 
@@ -33,6 +34,7 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Read a file with line numbers so later turns can cite exact lines. MUST read before \
             editing; NEVER guess the current text. Files only, never directories. Past the line cap \
             the output stops early and its footer names the offset to continue from.",
+    input: "path is the only field a call needs; offset and limit narrow the window.",
     params: PARAMS,
     run,
     summary,
