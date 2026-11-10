@@ -112,8 +112,8 @@ baidu   https://www.baidu.com/s?wd=…&pn=10×(n-1)
 `tabs::POOL` is the process's only tab state.
 
 ```text
-(session, TabKind::Search)  → search, and a read that carries a url
-(session, TabKind::Work)    → open, the actions, screenshot, a read without a url
+(session, TabKind::Search)  → search
+(session, TabKind::Work)    → read, open, the actions, screenshot
 ```
 
 - Tabs are created on demand and keyed by session and kind.
@@ -196,7 +196,6 @@ answer a status line, except `screenshot`, which names its file and its size.
   parse that suddenly yields nothing is a selector problem, not a gate. Baidu's ads are not
   separated from organic results.
 - A machine without a display cannot use this domain at all.
-- CDP Network, HAR and response bodies are intentionally absent.
 
 ## 4. Config fields
 

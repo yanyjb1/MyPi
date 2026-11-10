@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-/// Ceiling for one evaluated action, and for the resource scan beside it.
+/// Ceiling for one evaluated action.
 pub(crate) const ACTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) mod drive;
