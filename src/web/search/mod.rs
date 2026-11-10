@@ -39,12 +39,8 @@ const TIDY: &str = r#"(() => {
 })()"#;
 
 pub(crate) fn run(session: i64, query: &str, provider_name: &str, pages: u32) -> Result<String> {
-    let provider = provider::get(provider_name).ok_or_else(|| {
-        anyhow!(
-            "unknown provider {provider_name:?}; {}",
-            ENGINES.join("|")
-        )
-    })?;
+    let provider = provider::get(provider_name)
+        .ok_or_else(|| anyhow!("unknown provider {provider_name:?}; {}", ENGINES.join("|")))?;
     let name = provider.name();
 
     let mut hits: Vec<Hit> = Vec::new();

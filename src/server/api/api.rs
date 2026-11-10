@@ -11,8 +11,8 @@ use serde_json::json;
 use crate::ipc::contract::ErrorCode;
 use crate::ipc::contract::Frame;
 use crate::server::agent::r#loop::{Birth, Loop, Settings};
-use crate::server::agent::request::{Options, Request, RetryPolicy, Streaming};
 use crate::server::agent::request::message::ToolDef;
+use crate::server::agent::request::{Options, Request, RetryPolicy, Streaming};
 use crate::server::config::Config;
 use crate::server::storage::{Reader, Writer};
 

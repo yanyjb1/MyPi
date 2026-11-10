@@ -58,7 +58,11 @@ const PARAMS: &[Param] = &[
         "1",
     ),
     Param::new("selector", Kind::Text, "CSS selector."),
-    Param::new("value", Kind::Text, "Text for the field, or the JavaScript."),
+    Param::new(
+        "value",
+        Kind::Text,
+        "Text for the field, or the JavaScript.",
+    ),
     Param::df("pixels", Kind::Number, "How far to scroll down.", "600"),
     Param::df(
         "full_page",

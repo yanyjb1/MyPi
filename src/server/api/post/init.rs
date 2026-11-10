@@ -37,7 +37,8 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
     };
     let tools = resolved.tools.unwrap_or_else(registry::names);
     let manuals = Arc::new(registry::roster(&tools));
-    let tools_json = serde_json::to_string(&*manuals).map_err(|e| Refuse::Internal(e.to_string()))?;
+    let tools_json =
+        serde_json::to_string(&*manuals).map_err(|e| Refuse::Internal(e.to_string()))?;
 
     let system = resolved.system;
     let landed = api.writer().push(Submit {

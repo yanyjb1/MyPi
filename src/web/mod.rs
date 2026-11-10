@@ -1,5 +1,5 @@
-mod artifact;
 mod args;
+mod artifact;
 mod browser;
 mod html;
 mod ops;

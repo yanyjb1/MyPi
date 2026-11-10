@@ -12,12 +12,7 @@ use crate::ui::tui::theme::fixed;
 const SWEEP_CELLS_PER_SEC: u128 = 30;
 
 /// `spinner ESC <elapsed> · <label>`; thinking sweeps the label, a call sweeps `ESC`.
-pub(crate) fn row(
-    spinner: char,
-    elapsed: Duration,
-    label: &str,
-    thinking: bool,
-) -> Row {
+pub(crate) fn row(spinner: char, elapsed: Duration, label: &str, thinking: bool) -> Row {
     let millis = elapsed.as_millis();
     let phase = (millis * SWEEP_CELLS_PER_SEC / 1000) as usize;
     let mut runs = vec![
