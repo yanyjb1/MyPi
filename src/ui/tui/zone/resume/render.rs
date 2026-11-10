@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::zone::{ResumeZone, Row, Scope};
+use crate::ui::tui::text::bytes as byte_size;
 use crate::ui::tui::text::card::{card_edge, card_edge_labeled, card_row};
 use crate::ui::tui::theme::fixed;
 
@@ -187,7 +188,7 @@ fn row_lines(
     meta.push(fg(age_text(stamp), fixed::DIM));
     meta.push(dot());
     if let Some(bytes) = row.bytes {
-        meta.push(fg(human_bytes(bytes), fixed::DIM));
+        meta.push(fg(byte_size(bytes.max(0) as u64), fixed::DIM));
     }
     if row.memos > 0 {
         meta.push(dot());
@@ -338,19 +339,6 @@ fn human_age(secs: u64) -> String {
         86_400..=2_591_999 => format!("{} 天前", secs / 86_400),
         _ => format!("{} 天前", secs / 86_400),
     }
-}
-
-/// Byte size; decimals only where they carry information.
-fn human_bytes(bytes: i64) -> String {
-    let b = bytes.max(0) as f64;
-    if b < 1024.0 {
-        return format!("{} B", bytes.max(0));
-    }
-    let kb = b / 1024.0;
-    if kb < 1024.0 {
-        return format!("{:.1} KB", kb);
-    }
-    format!("{:.1} MB", kb / 1024.0)
 }
 
 /// Path shortening: at most the last two segments, no leading slash,

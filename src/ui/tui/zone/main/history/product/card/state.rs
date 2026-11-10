@@ -5,7 +5,6 @@ use super::ToolOutcome;
 use crate::ui::tui::text::glyphs as g;
 use crate::ui::tui::theme::fixed;
 
-/// How a card is colored, by the state of the exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum State {
     /// No settled result yet: the call is queued, its arguments still arrive, or its output streams.

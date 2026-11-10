@@ -113,7 +113,7 @@ pub enum ToolEvent {
     },
 }
 
-/// The full text a truncated result left behind: the amount that was cut, not what stayed.
+/// Size of the full text before the cut, not the part that stayed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Truncation {
     pub lines: u64,

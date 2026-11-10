@@ -24,7 +24,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
   `ui::tui::theme` for the fixed palette and the accent, `ui::tui::TodoFold`,
   `ui::tui::action` for keys and wheel, `ui::tui::text` for display width, byte counts and
   durations.
-- **Asks the session for**: `call init`, `call blocks`, `call config`, `call usage`, `call todo`,
+- **Asks the session for**: `call init`, `call blocks`, `call config`, `call usage`,
   and the structural window, all through `Request` values its host drains.
 - **Does not know**: the app, the socket, the database, the agent loop, the picker.
 
