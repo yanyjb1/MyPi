@@ -28,8 +28,6 @@ pub enum Kind {
     TextList,
     /// An array of integers.
     Numbers,
-    /// An array of objects, fields per the given table (`edit`'s `edits`, `todo`'s `list`).
-    Table(&'static [Param]),
 }
 
 /// One parameter's declaration. **Its position in the table is its index**: values are read by
@@ -104,11 +102,6 @@ impl Param {
             Kind::Numbers => json!({
                 "type": "array",
                 "items": {"type": "integer"},
-                "description": about,
-            }),
-            Kind::Table(fields) => json!({
-                "type": "array",
-                "items": object_of(fields),
                 "description": about,
             }),
         }
@@ -227,26 +220,6 @@ impl Args {
             );
         }
         Ok(out)
-    }
-
-    /// A table of objects: each element read by the given sub-table; empty when absent.
-    pub fn table(&self, i: usize) -> Result<Vec<Args>> {
-        let fields = match self.params.get(i).map(|p| p.kind) {
-            Some(Kind::Table(f)) => f,
-            _ => bail!("`{}` is not a table of records", self.name(i)),
-        };
-        let Some(value) = self.maybe(i) else {
-            return Ok(Vec::new());
-        };
-        let array = value.as_array().ok_or_else(|| self.wrong(i, "an array"))?;
-        let mut rows = Vec::with_capacity(array.len());
-        for element in array {
-            let map = element
-                .as_object()
-                .ok_or_else(|| self.wrong(i, "an array of objects"))?;
-            rows.push(Self::from_map(fields, map)?);
-        }
-        Ok(rows)
     }
 
     fn name(&self, i: usize) -> &'static str {

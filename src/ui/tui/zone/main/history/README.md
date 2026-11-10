@@ -132,7 +132,8 @@ opens a natural line), or `Wrapped` (it is a continuation).
 - Block content arrives through `Request::Blocks`; the zone asks per round, once per range.
 - The checklist is drawn from `call todo` and `call init`, pinned under the transcript.
 - `write` carries no memo, so its card can only preview the new content; there is no old file to
-  diff against, and the edit diff's context lines are not in the edit memo either.
+  diff against. An `edit` card draws its diff from the request plus one memo field, so context
+  lines outside the replaced range are not shown.
 
 ## 4. Config fields
 

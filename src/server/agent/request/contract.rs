@@ -1,7 +1,6 @@
 //! Every shape that crosses into the loop. The loop fills what it owns; request reads it.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 
 use anyhow::Result;
@@ -67,7 +66,7 @@ pub struct LapInput {
     pub transport: Transport,
     pub system: String,
     pub tools: Vec<serde_json::Value>,
-    pub stop: Arc<AtomicBool>,
+    pub stop: Arc<crate::server::platform::stop::Stop>,
     /// This session's worker: the child that owns its sockets.
     pub worker: Arc<SessionWorker>,
     pub live: Sender<Event>,
@@ -96,6 +95,8 @@ pub struct ToolResult {
     pub call_id: String,
     pub ok: bool,
     pub result: String,
+    /// Why the call failed, when it failed by being cut short.
+    pub reason: Option<String>,
     pub memo: Option<String>,
     pub spill: Option<Spill>,
     pub duration_ms: u64,
@@ -210,7 +211,7 @@ pub struct CompactInput {
     pub focus: Option<String>,
     /// The instruction template; `{{focus}}` marks where the focus goes.
     pub instruction: String,
-    pub stop: Arc<AtomicBool>,
+    pub stop: Arc<crate::server::platform::stop::Stop>,
     /// This session's worker: the child that owns its sockets.
     pub worker: Arc<SessionWorker>,
     pub live: Sender<Event>,

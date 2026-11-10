@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use super::view::{Export, Source};
@@ -16,6 +15,8 @@ pub struct Env {
     pub workspace: Workspace,
     pub limits: Limits,
     pub bash: BashEnv,
+    /// The session's stop signal; a tool that blocks registers what stopping it means.
+    pub stop: Arc<crate::server::platform::stop::Stop>,
     pub session: i64,
     pub batch_len: usize,
     pub tools: BTreeSet<String>,
@@ -119,7 +120,6 @@ impl Default for Limits {
 /// What `bash` runs with.
 pub struct BashEnv {
     pub timeout: Duration,
-    pub interrupt: Arc<AtomicBool>,
     pub shell: crate::server::platform::shell::Shell,
 }
 

@@ -49,6 +49,35 @@ impl Pen {
             .extend(rows);
     }
 
+    /// Drop the request blocks of calls that never ran; nothing refers to them yet.
+    pub fn drop_calls(&self, ids: &std::collections::BTreeSet<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let named = |call_id: &Option<String>| call_id.as_ref().is_some_and(|id| ids.contains(id));
+        {
+            let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+            rows.retain(|row| match row {
+                Row::Block { block, .. } => {
+                    !(block.kind == BlockKind::ToolRequest && named(&block.call_id))
+                }
+                _ => true,
+            });
+            let mut at = self.at.lock().unwrap_or_else(|e| e.into_inner());
+            at.clear();
+            for (index, row) in rows.iter().enumerate() {
+                if let Row::Block { block, .. } = row
+                    && block.kind == BlockKind::ToolRequest
+                    && let Some(id) = &block.call_id
+                {
+                    at.insert(id.clone(), index);
+                }
+            }
+        }
+        let mut blocks = self.blocks.lock().unwrap_or_else(|e| e.into_inner());
+        blocks.retain(|block| !(block.kind == Kind::ToolRequest && named(&block.call_id)));
+    }
+
     /// Write everything held so far as one submission; the blocks land in row order.
     pub fn flush(&self) -> Result<(Landed, Vec<Block>)> {
         let rows = std::mem::take(&mut *self.rows.lock().unwrap_or_else(|e| e.into_inner()));

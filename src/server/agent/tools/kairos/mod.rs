@@ -51,10 +51,11 @@ pub(crate) const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "kairos",
-    about: "Hold one background task and return at once. `now` starts a command immediately, \
-            `after` waits for a delay, and `every` repeats on a five-field cron; a text task only \
-            takes `after` or `every`. The receipt names the task; a wake reports when it is done, \
-            and `result` hands back what it left. Subagents cannot use this tool.",
+    about: "Hold one background task and return at once. `now` starts a command immediately, `after` \
+            waits for a delay, `every` repeats on a five-field cron, `list` shows the held tasks, \
+            `status` reports one, `result` hands back what it left, `cancel` stops it. A text task \
+            only takes `after` or `every`. The receipt names the task; a wake reports when it is \
+            done. Subagents cannot use this tool.",
     params: PARAMS,
     run,
     summary,

@@ -23,15 +23,11 @@ const INLINE_LINES: usize = 10;
 const INLINE_BLOCKS: usize = 3;
 
 const PARAMS: &[Param] = &[
-    Param::req(
-        "op",
-        Kind::Choice(&["query", "show"]),
-        "query: the calls around an anchor; show: whole rows by block number.",
-    ),
+    Param::req("op", Kind::Choice(&["query", "show"]), "The operation."),
     Param::opt(
         "anchor",
         Kind::Text,
-        "query: a spilled-text reference (`#<ref>`) or a block number.",
+        "query: a `#<ref>` reference or a block number.",
     ),
     Param::opt(
         "direction",
@@ -55,11 +51,11 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "context",
-    about: "Look at what this session has already recorded; nothing is executed. `query` walks the calls\n\
-            around an anchor — an artifact reference `#<ref>` or a block number — in one direction, for one\n\
-            tool or all of them, and answers one JSON row per call: id, tool, ok, summary. `show` answers each\n\
-            block's request arguments and result as JSON. A listing past ten calls, and a `show` past three\n\
-            block numbers, is written to a file and the reply names that file.",
+    about: "Look at what this session has already recorded; nothing is executed. `query` walks the \
+            calls around an anchor in one direction, for one tool or all of them, and answers one \
+            JSON row per call: id, tool, ok, summary. `show` answers each block's request arguments \
+            and result as JSON. A listing past ten calls, and a `show` past three block numbers, is \
+            written to a file and the reply names that file.",
     params: PARAMS,
     run,
     summary,

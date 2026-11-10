@@ -1,7 +1,7 @@
 //! DeepSeek: its own body and its own decode. No compatibility table is shared with completions.
 
+use crate::server::platform::stop::Stop;
 use std::io::BufRead;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use serde_json::{Map, Value, json};
@@ -73,7 +73,7 @@ impl Protocol for Deepseek {
         &self,
         mut reader: Box<dyn BufRead>,
         out: &mut dyn Output,
-        cancel: &AtomicBool,
+        cancel: &Stop,
     ) -> Result<AssistantMessage> {
         let mut content = String::new();
         let mut reasoning = String::new();
@@ -117,6 +117,9 @@ impl Protocol for Deepseek {
 
         let mut placed = calls.finish();
         placed.retain(|call| call.complete());
+        if interrupted {
+            placed.clear();
+        }
         if !reasoning.is_empty() {
             out.block(blocks::text(Kind::Reasoning, &reasoning));
         }

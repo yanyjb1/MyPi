@@ -1,8 +1,8 @@
 //! OpenAI Responses: `input` items in, events out.
 
+use crate::server::platform::stop::Stop;
 use std::collections::BTreeMap;
 use std::io::BufRead;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -65,7 +65,7 @@ impl Protocol for Responses {
         &self,
         reader: Box<dyn BufRead>,
         out: &mut dyn Output,
-        cancel: &AtomicBool,
+        cancel: &Stop,
     ) -> Result<AssistantMessage> {
         decode(reader, out, cancel)
     }
@@ -130,7 +130,7 @@ fn tools(tools: &[ToolDef]) -> Vec<Value> {
 fn decode(
     mut reader: Box<dyn BufRead>,
     out: &mut dyn Output,
-    cancel: &AtomicBool,
+    cancel: &Stop,
 ) -> Result<AssistantMessage> {
     let mut content = String::new();
     let mut reasoning = String::new();
@@ -237,6 +237,9 @@ fn decode(
 
     let mut placed: Vec<WireCall> = order.into_iter().filter_map(|k| calls.remove(&k)).collect();
     placed.retain(|call| call.complete());
+    if interrupted {
+        placed.clear();
+    }
 
     if !reasoning.is_empty() {
         out.block(blocks::text(Kind::Reasoning, &reasoning));

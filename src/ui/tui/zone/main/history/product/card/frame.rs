@@ -367,15 +367,16 @@ pub(crate) struct Numbered {
     pub text: String,
 }
 
-/// The result text a diff-carrying edit replaces; a plain line otherwise.
+/// What an `edit` result leaves for the card to line up: the start line when the request cannot
+/// name it, and the replaced text when the request does not carry it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ToolView {
     Plain {
         text: String,
     },
     Diff {
-        deletions: Vec<Numbered>,
-        insertions: Vec<Numbered>,
+        at: Option<usize>,
+        old: Option<String>,
     },
 }
 
@@ -383,34 +384,10 @@ impl ToolView {
     pub(crate) fn from_details(details: Option<&Value>, text: &str) -> ToolView {
         let diff = details.filter(|d| d.get("kind").and_then(|k| k.as_str()) == Some("diff"));
         if let Some(d) = diff {
-            let lines = |key: &str| -> Vec<Numbered> {
-                let mut out: Vec<Numbered> = d
-                    .get(key)
-                    .and_then(|value| value.as_array())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| {
-                                Some(Numbered {
-                                    at: item
-                                        .get("line")
-                                        .and_then(Value::as_u64)
-                                        .map(|n| n as usize),
-                                    text: item.get("text").and_then(Value::as_str)?.to_string(),
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                out.sort_by_key(|line| line.at.unwrap_or(usize::MAX));
-                out
-            };
-            let (deletions, insertions) = (lines("deletions"), lines("insertions"));
-            if !deletions.is_empty() || !insertions.is_empty() {
-                return ToolView::Diff {
-                    deletions,
-                    insertions,
-                };
+            let at = d.get("atLine").and_then(Value::as_u64).map(|n| n as usize);
+            let old = d.get("old").and_then(Value::as_str).map(str::to_string);
+            if at.is_some() || old.is_some() {
+                return ToolView::Diff { at, old };
             }
         }
         ToolView::Plain {

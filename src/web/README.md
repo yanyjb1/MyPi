@@ -24,7 +24,6 @@ which is why it reads its own configuration instead of receiving it through `Env
 | `select` | `selector`, `value` | work | one status line |
 | `scroll` | `value` (pixels, default 600) | work | one status line |
 | `eval` | `value` (JS expression) | work | evaluation result |
-| `net` | `filter`, `max` | work | resource entries |
 | `screenshot` | `full_page` | work | temp path and byte count |
 
 `run(args, session)` is the whole entry. It takes one of two permits, dispatches on `op`, and
@@ -114,7 +113,7 @@ baidu   https://www.baidu.com/s?wd=…&pn=10×(n-1)
 
 ```text
 (session, TabKind::Search)  → search, and a read that carries a url
-(session, TabKind::Work)    → open, the actions, net, screenshot, a read without a url
+(session, TabKind::Work)    → open, the actions, screenshot, a read without a url
 ```
 
 - Tabs are created on demand and keyed by session and kind.
@@ -155,8 +154,8 @@ sweep reads: a browser with an operation in flight is never closed.
 ### Output
 
 `read` answers Markdown, or the DOM HTML with `raw`. `search` answers the provider, the page range,
-the count and a numbered list. The rest answer a status line, except `net`, which lists resource
-entries, and `screenshot`, which names a file and its size.
+the count and a numbered list. The rest answer a status line, except `screenshot`, which names a
+file and its size.
 
 ## 2. Design intent
 

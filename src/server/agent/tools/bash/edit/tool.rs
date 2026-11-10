@@ -1,4 +1,4 @@
-//! The `edit` tool: replace one unique run of text, or replace whole lines by number.
+//! The `edit` tool: replace one unique run of text, or one range of lines.
 
 use anyhow::{Context as _, Result, anyhow};
 use serde_json::{Value, json};
@@ -14,39 +14,39 @@ const TYPE: usize = 0;
 const PATH: usize = 1;
 const OLD: usize = 2;
 const NEW: usize = 3;
-const EDITS: usize = 4;
-
-/// One entry's shape in `edits`.
-const RECORD: &[Param] = &[
-    Param::req("line", Kind::Line, "Line number, 1-based."),
-    Param::req("text", Kind::Text, "New content for that line."),
-];
-const RECORD_LINE: usize = 0;
-const RECORD_TEXT: usize = 1;
+const RANGE: usize = 4;
 
 const PARAMS: &[Param] = &[
     Param::req(
         "type",
         Kind::Choice(&["exact", "mass"]),
-        "exact: replace one unique run of text; mass: replace whole lines by number.",
+        "exact: replace one unique run of text; mass: replace one range of lines.",
     ),
-    Param::req("path", Kind::Text, "File path. `./` and `../` allowed."),
+    Param::req("path", Kind::Text, "File path."),
     Param::opt(
         "old",
         Kind::Text,
         "exact: text to replace. MUST match exactly and be unique.",
     ),
-    Param::opt("new", Kind::Text, "exact: replacement text."),
     Param::opt(
-        "edits",
-        Kind::Table(RECORD),
-        "mass: one entry per line to replace.",
+        "new",
+        Kind::Text,
+        "The replacement block; empty removes the target.",
+    ),
+    Param::opt(
+        "range",
+        Kind::Text,
+        "mass: the lines to replace, `12-14` or `12`.",
     ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "edit",
-    about: "Edit one file. `type: exact` replaces one run of text and requires `old` to match the file character for character exactly once. `type: mass` replaces whole lines by number and requires a non-empty `edits`. The other group's fields are rejected. Only files inside the workspace and the temp directory.",
+    about: "Edit one file. `type: exact` replaces one run of text and requires `old` to match the \
+            file character for character exactly once. `type: mass` replaces the lines named by \
+            `range` with `new`; the block may be any number of lines. The other group's fields are \
+            rejected. The answer names the lines that went, the lines that took their place, and \
+            how far everything below moved.",
     params: PARAMS,
     run,
     summary,
@@ -74,23 +74,17 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
 fn exact(text: &str, args: &Args) -> Result<(String, Value, String)> {
     anyhow::ensure!(
-        args.opt_any(EDITS).is_none(),
-        "`edits` is only for type=mass"
+        args.opt_str(RANGE)?.is_none(),
+        "`range` is only for type=mass"
     );
     exact_text(text, &args.str(OLD)?, &args.str(NEW)?)
 }
 
 fn mass(text: &str, args: &Args) -> Result<(String, Value, String)> {
-    anyhow::ensure!(
-        args.opt_str(OLD)?.is_none() && args.opt_str(NEW)?.is_none(),
-        "`old`/`new` are only for type=exact"
-    );
-    let rows = args.table(EDITS)?;
-    let mut edits = Vec::with_capacity(rows.len());
-    for row in &rows {
-        edits.push((row.line(RECORD_LINE)?, row.str(RECORD_TEXT)?));
-    }
-    mass_text(text, &edits)
+    anyhow::ensure!(args.opt_str(OLD)?.is_none(), "`old` is only for type=exact");
+    let (from, to) = parse_range(&args.str(RANGE)?)?;
+    let block = args.opt_str(NEW)?.unwrap_or_default();
+    mass_text(text, from, to, &block)
 }
 
 /// Replace one unique run of text.
@@ -104,18 +98,13 @@ pub(crate) fn exact_text(text: &str, old: &str, new: &str) -> Result<(String, Va
         1 => {
             let pos = text.find(old).expect("count == 1 checked above");
             let at = line_of(text, pos);
-            // The memo must survive the file: old text, new text, and the lines each sat on.
-            let deletions = numbered(at, &lines_of(old));
-            let insertions = numbered(at, &lines_of(new));
+            let old_lines = lines_of(old).len();
+            let new_lines = lines_of(new).len();
+            let total = text.lines().count() + new_lines - old_lines;
             Ok((
                 text.replacen(old, new, 1),
-                json!({
-                    "kind": "diff",
-                    "atLine": at,
-                    "deletions": deletions,
-                    "insertions": insertions,
-                }),
-                "replaced".to_string(),
+                json!({ "kind": "diff", "atLine": at }),
+                receipt(at, old_lines, new_lines, total),
             ))
         }
         n => Err(anyhow!(
@@ -126,51 +115,70 @@ pub(crate) fn exact_text(text: &str, old: &str, new: &str) -> Result<(String, Va
     }
 }
 
-/// Replace whole lines by 1-based number.
-pub(crate) fn mass_text(text: &str, edits: &[(usize, String)]) -> Result<(String, Value, String)> {
-    anyhow::ensure!(!edits.is_empty(), "`edits` must not be empty");
-    let total = text.lines().count();
-    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let mut edits = edits.to_vec();
-    edits.sort_by_key(|e| std::cmp::Reverse(e.0));
+/// Replace whole lines by 1-based number: `from..=to` becomes `new`, any number of lines.
+pub(crate) fn mass_text(
+    text: &str,
+    from: usize,
+    to: usize,
+    new: &str,
+) -> Result<(String, Value, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let total = lines.len();
+    anyhow::ensure!(from >= 1, "`range` is 1-based; got {from}");
+    anyhow::ensure!(from <= to, "`range` must count upwards; got {from}-{to}");
+    anyhow::ensure!(
+        to <= total,
+        "line {to} does not exist; file has {total} lines"
+    );
 
-    for w in edits.windows(2) {
-        if w[0].0 == w[1].0 {
-            return Err(anyhow!("line {} was specified twice", w[0].0));
-        }
-    }
-    if let Some(e) = edits.first().filter(|e| e.0 > total) {
-        return Err(anyhow!(
-            "line {} does not exist; file has {total} lines",
-            e.0
-        ));
-    }
+    let block: Vec<&str> = match new {
+        "" => Vec::new(),
+        // One trailing newline is the block's own terminator, not an extra empty line.
+        text => text.strip_suffix('\n').unwrap_or(text).split('\n').collect(),
+    };
+    let old_lines = to - from + 1;
+    let new_lines = block.len();
 
-    let mut deletions = Vec::with_capacity(edits.len());
-    let mut insertions = Vec::with_capacity(edits.len());
-    let mut at = usize::MAX;
-    for (line, new) in edits {
-        deletions.push(json!({ "line": line, "text": lines[line - 1].clone() }));
-        lines[line - 1] = new;
-        insertions.push(json!({ "line": line, "text": lines[line - 1].clone() }));
-        at = at.min(line);
-    }
-    let changed = deletions.len();
-
-    let mut out = lines.join("\n");
+    let mut out: Vec<&str> = Vec::with_capacity(total - old_lines + new_lines);
+    out.extend_from_slice(&lines[..from - 1]);
+    out.extend_from_slice(&block);
+    out.extend_from_slice(&lines[to..]);
+    let mut text_out = out.join("\n");
     if text.ends_with('\n') {
-        out.push('\n');
+        text_out.push('\n');
     }
+
+    let old_text = lines[from - 1..to].join("\n");
+    let after = total - old_lines + new_lines;
     Ok((
-        out,
-        json!({
-            "kind": "diff",
-            "atLine": at,
-            "deletions": deletions,
-            "insertions": insertions,
-        }),
-        format!("replaced {changed} line(s)"),
+        text_out,
+        json!({ "kind": "diff", "old": old_text }),
+        receipt(from, old_lines, new_lines, after),
     ))
+}
+
+/// `12-14` or `12`, 1-based, ascending.
+pub(crate) fn parse_range(text: &str) -> Result<(usize, usize)> {
+    let text = text.trim();
+    let (from, to) = match text.split_once('-') {
+        Some((from, to)) => (from.trim(), to.trim()),
+        None => (text, text),
+    };
+    let number = |raw: &str| -> Result<usize> {
+        raw.parse::<usize>()
+            .map_err(|_| anyhow!("`range` must be `12-14` or `12`; got `{text}`"))
+    };
+    Ok((number(from)?, number(to)?))
+}
+
+/// The one line a model reads back: the lines that went, the lines that came, what moved below.
+fn receipt(from: usize, old_lines: usize, new_lines: usize, total: usize) -> String {
+    let to = from + old_lines.saturating_sub(1);
+    let below = new_lines as i64 - old_lines as i64;
+    format!(
+        "replaced lines {from}-{to} ({old_lines}) with {new_lines} lines; below {below:+}; \
+         file now {total} lines"
+    )
 }
 
 /// Which line (1-based) a byte position sits on.
@@ -188,15 +196,6 @@ fn lines_of(text: &str) -> Vec<String> {
         lines.pop();
     }
     lines
-}
-
-/// The lines of one text, numbered from `first`.
-fn numbered(first: usize, lines: &[String]) -> Vec<Value> {
-    lines
-        .iter()
-        .enumerate()
-        .map(|(at, text)| json!({ "line": first + at, "text": text }))
-        .collect()
 }
 
 /// One line for a history listing: which file.

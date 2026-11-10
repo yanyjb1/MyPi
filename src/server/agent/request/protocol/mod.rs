@@ -7,9 +7,9 @@ pub mod sse;
 pub mod stitch;
 pub mod stream;
 
+use crate::server::platform::stop::Stop;
 use std::fmt;
 use std::io::BufRead;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 
@@ -114,6 +114,6 @@ pub trait Protocol: Send + Sync {
         &self,
         reader: Box<dyn BufRead>,
         out: &mut dyn Output,
-        cancel: &AtomicBool,
+        cancel: &Stop,
     ) -> Result<AssistantMessage>;
 }

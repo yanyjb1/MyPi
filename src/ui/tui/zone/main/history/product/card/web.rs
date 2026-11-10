@@ -1,9 +1,8 @@
-//! web: `search` and `net` as cards, every other operation as one line.
+//! web: `search` as a card, every other operation as one line.
 
 use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
-use super::super::table;
 use super::tree;
 use super::{
     Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_bool, arg_str, error_body,
@@ -12,10 +11,10 @@ use super::{
 use crate::ui::tui::text::{display_width, glyphs as g};
 use crate::ui::tui::theme::fixed;
 
-/// The one-line form; `search` and `net` keep a card.
+/// The one-line form; `search` keeps a card.
 pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<Row>> {
     let op = op_of(args);
-    if op == "search" || op == "net" {
+    if op == "search" {
         return None;
     }
     let state = State::of(result);
@@ -87,7 +86,6 @@ impl ToolRenderer for Web {
     fn label(&self, b: &ToolBlock<'_>) -> Option<String> {
         match op_of(b.args).as_str() {
             "search" => Some("Web Search".to_string()),
-            "net" => Some("Web Net".to_string()),
             _ => None,
         }
     }
@@ -109,13 +107,6 @@ impl ToolRenderer for Web {
                 }
                 (!parts.is_empty()).then(|| parts.join(" · "))
             }
-            "net" => {
-                let filter = arg_str(b.args, "filter")
-                    .filter(|f| !f.trim().is_empty())
-                    .unwrap_or_else(|| "all".to_string());
-                let count = net_rows(text).len();
-                Some(format!("{filter} · {count} requests"))
-            }
             _ => None,
         }
     }
@@ -133,7 +124,6 @@ impl ToolRenderer for Web {
         }
         let lines = match op_of(b.args).as_str() {
             "search" => search_lines(hits(o.text), b.inner_width()),
-            "net" => table::cells(net_header(), net_rows(o.text), b.inner_width()),
             _ => Vec::new(),
         };
         vec![Section { label: None, lines }]
@@ -218,26 +208,6 @@ fn search_lines(hits: Vec<(String, String)>, inner: usize) -> Vec<Row> {
                 runs.push(tree::value(tail));
             }
             tree::entry(at == last, runs)
-        })
-        .collect()
-}
-
-fn net_header() -> Vec<String> {
-    vec!["type".to_string(), "url".to_string(), "ms".to_string()]
-}
-
-/// The rows `web net` prints: `[type] url (ms)`.
-fn net_rows(text: &str) -> Vec<Vec<String>> {
-    text.lines()
-        .filter_map(|line| {
-            let rest = line.trim().strip_prefix('[')?;
-            let (kind, rest) = rest.split_once("] ")?;
-            let (url, ms) = rest.rsplit_once(" (")?;
-            Some(vec![
-                kind.to_string(),
-                url.to_string(),
-                ms.trim_end_matches(')').to_string(),
-            ])
         })
         .collect()
 }

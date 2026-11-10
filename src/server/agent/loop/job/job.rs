@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use super::cron::Cron;
@@ -110,7 +109,7 @@ pub(crate) struct Job {
     pub(crate) exit: Option<i32>,
     pub(crate) bytes: usize,
     pub(crate) truncated: bool,
-    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) cancel: Arc<crate::server::platform::stop::Stop>,
     pub(crate) consumed: bool,
     pub(crate) start_at: Option<i64>,
     pub(crate) schedule: Option<u64>,
@@ -138,7 +137,7 @@ impl Job {
             exit: None,
             bytes: 0,
             truncated: false,
-            cancel: Arc::new(AtomicBool::new(false)),
+            cancel: crate::server::platform::stop::Stop::new(),
             consumed: false,
             start_at,
             schedule: None,

@@ -303,7 +303,7 @@ pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Arc<(Mutex<()>, Condvar)>,
             }
             task.exit = outcome.exit;
             task.text = outcome.text.or(task.text.take());
-            let canceled = task.cancel.load(Ordering::Relaxed) || task.state == TaskState::Canceled;
+            let canceled = task.cancel.is_stopped() || task.state == TaskState::Canceled;
             task.state = if canceled {
                 TaskState::Canceled
             } else if outcome.ok {

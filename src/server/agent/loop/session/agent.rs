@@ -71,7 +71,7 @@ impl JobRunner for AgentRunner {
         let deadline = Instant::now() + ctx.timeout;
         let mut stopped = false;
         while handle.busy.load(Ordering::Acquire) {
-            if !stopped && (ctx.cancel.load(Ordering::Relaxed) || Instant::now() >= deadline) {
+            if !stopped && (ctx.cancel.is_stopped() || Instant::now() >= deadline) {
                 stopped = true;
                 handle.interrupt();
             }

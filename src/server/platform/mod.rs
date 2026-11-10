@@ -7,4 +7,5 @@ pub mod os;
 pub mod proc;
 pub mod shell;
 pub mod stamp;
+pub mod stop;
 pub mod time;

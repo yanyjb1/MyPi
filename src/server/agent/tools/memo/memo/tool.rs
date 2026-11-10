@@ -19,31 +19,31 @@ const PARAMS: &[Param] = &[
     Param::req(
         "op",
         Kind::Choice(&["add", "mod", "del", "show", "history", "list"]),
-        "Operation. `show` reads the latest version; `history` reads every version.",
+        "The operation.",
     ),
     Param::df(
         "scope",
         Kind::Choice(&["current", "global"]),
-        "Where the memo lives. Writes are current only; reads accept both.",
+        "Where the memo lives.",
         "current",
     ),
     Param::opt(
         "name",
         Kind::Text,
-        "Memo name. Required by add, mod, del, show, and history.",
+        "Memo name; required by every op but `list`.",
     ),
     Param::opt(
         "content",
         Kind::Text,
-        "Full memo body. Required by add and mod.",
+        "Full memo body; required by `add` and `mod`.",
     ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "memo",
-    about: "Named notes shared with the user. Read current and global; write current only.\n\
-            `show` reads the latest version, `history` reads every version, `list` lists names.\n\
-            `add` creates, `mod` appends a version, `del` removes every version.",
+    about: "Named notes shared with the user. `add` creates, `mod` appends a version, `del` removes \
+            every version, `show` reads the latest version, `history` reads every version, `list` \
+            lists names. Reads accept both scopes; writes are current only.",
     params: PARAMS,
     run,
     summary,

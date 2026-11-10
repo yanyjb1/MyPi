@@ -51,10 +51,9 @@ pub fn run(args: &WebArgs, session: i64) -> Result<String> {
         }
         "open" => ops::open::run(args, session),
         "click" | "fill" | "press" | "select" | "scroll" | "eval" => ops::drive::run(args, session),
-        "net" => ops::net::run(args, session),
         "screenshot" => ops::screenshot::run(args, session),
         other => bail!(
-            "unknown op {other:?}; read|search|open|click|fill|press|select|scroll|eval|net|screenshot"
+            "unknown op {other:?}; read|search|open|click|fill|press|select|scroll|eval|screenshot"
         ),
     }
 }

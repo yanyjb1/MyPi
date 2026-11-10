@@ -8,7 +8,8 @@ layer; this layer asks nobody.
 One file per question, and no question handled twice: what this system is (`os.rs`), what time it is
 (`time.rs`), how a stamp renders into a message (`stamp.rs`), where the process's directories are
 (`env.rs`), which shell runs a command line (`shell.rs`), how one command's process tree is started
-and stopped (`proc.rs`), and what happened to us (`log.rs`).
+and stopped (`proc.rs`), what a session means by "stop" (`stop.rs`), and what happened to us
+(`log.rs`).
 
 ### The shell
 

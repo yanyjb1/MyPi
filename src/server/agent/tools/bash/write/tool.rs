@@ -12,7 +12,7 @@ const PATH: usize = 0;
 const CONTENT: usize = 1;
 
 const PARAMS: &[Param] = &[
-    Param::req("path", Kind::Text, "File path. `./` and `../` allowed."),
+    Param::req("path", Kind::Text, "File path."),
     Param::req(
         "content",
         Kind::Text,
@@ -22,9 +22,9 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "write",
-    about: "Write the whole file, **overwriting** any existing one. For new files, or when every line changes; a single-location\n\
-            change is `edit`. Only inside the workspace (the session's start directory) and the temp directory; a missing\n\
-            parent directory is refused. NEVER create documentation or emojis unless asked.",
+    about: "Write the whole file, **overwriting** any existing one. For new files, or when every line \
+            changes; a single-location change is `edit`. A missing parent directory is refused. NEVER \
+            create documentation or emojis unless asked.",
     params: PARAMS,
     run,
     summary,

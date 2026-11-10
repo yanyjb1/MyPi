@@ -353,7 +353,7 @@ fn start_turn(
         handle.busy.store(false, Ordering::Release);
         bail!("session {} is gone", handle.id);
     }
-    handle.stop.store(false, Ordering::Release);
+    handle.stop.reset();
     // A new turn spends its own tokens; the tally of the one before it is already in the rows.
     handle.clear_partial();
     let first = handle.transcript().blank();
@@ -431,7 +431,7 @@ fn start_turn(
                         };
                         let queued = next.queued();
                         let start = next.start();
-                        thread_handle.stop.store(false, Ordering::Release);
+                        thread_handle.stop.reset();
                         mode = mode_of(&start);
                         let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
                         let model = Some((live.provider.clone(), live.model.clone()));
@@ -466,7 +466,7 @@ fn start_turn(
                 }
             }
             thread_handle.put_live(live);
-            thread_handle.stop.store(false, Ordering::Release);
+            thread_handle.stop.reset();
             thread_handle.busy.store(false, Ordering::Release);
             thread_handle.mailbox.notify();
         });

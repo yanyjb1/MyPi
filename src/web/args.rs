@@ -8,7 +8,5 @@ pub struct WebArgs {
     pub page: u32,
     pub selector: Option<String>,
     pub value: Option<serde_json::Value>,
-    pub filter: Option<String>,
-    pub max: Option<usize>,
     pub full_page: bool,
 }

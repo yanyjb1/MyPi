@@ -15,35 +15,27 @@ use crate::server::agent::tools::summary;
 pub(crate) const RESET: &str = "\"todo_reset\":true";
 
 pub(super) const PARAMS: &[Param] = &[
-    Param::req(
-        "op",
-        Kind::Choice(ops::Op::ALL),
-        "set: replace the whole list (empty clears it); tick: change the given items; view: read it.",
-    ),
-    Param::opt(
-        "items",
-        Kind::TextList,
-        "set: the whole list, in order. An empty array clears the list.",
-    ),
+    Param::req("op", Kind::Choice(ops::Op::ALL), "The operation."),
+    Param::opt("items", Kind::TextList, "set: the whole list, in order."),
     Param::opt(
         "ids",
         Kind::Numbers,
-        "tick: the item numbers `view` printed, from 1.",
+        "tick: the item numbers `view` printed.",
     ),
     Param::df(
         "done",
         Kind::Flag,
-        "tick: mark done (default true); false clears the tick.",
+        "tick: mark done, or clear the tick with false.",
         "true",
     ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "todo",
-    about: "Keep a short checklist for a long task, outside your head; it survives compaction.\n\
-            `set` replaces the whole list in order; an empty `items` clears it. `tick` marks the given item\n\
-            numbers done, or clears their tick with `done: false`. `view` prints the list with the numbers\n\
-            `tick` takes. Numbers are positions, 1-based; an unknown number fails the call and changes nothing.",
+    about: "Keep a short checklist for a long task, outside your head; it survives compaction. `set` \
+            replaces the whole list in order; an empty `items` clears it. `tick` marks the given item \
+            numbers done, or clears their tick with `done: false`. `view` prints the list with the \
+            numbers `tick` takes, 1-based; an unknown number fails the call and changes nothing.",
     params: PARAMS,
     run,
     summary,

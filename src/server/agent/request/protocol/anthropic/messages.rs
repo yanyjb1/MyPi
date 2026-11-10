@@ -1,8 +1,8 @@
 //! Anthropic Messages: `messages` in, events out.
 
+use crate::server::platform::stop::Stop;
 use std::collections::BTreeMap;
 use std::io::BufRead;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -67,7 +67,7 @@ impl Protocol for Messages {
         &self,
         reader: Box<dyn BufRead>,
         out: &mut dyn Output,
-        cancel: &AtomicBool,
+        cancel: &Stop,
     ) -> Result<AssistantMessage> {
         decode(reader, out, cancel)
     }
@@ -192,7 +192,7 @@ enum Role {
 fn decode(
     mut reader: Box<dyn BufRead>,
     out: &mut dyn Output,
-    cancel: &AtomicBool,
+    cancel: &Stop,
 ) -> Result<AssistantMessage> {
     let mut chunks: BTreeMap<u64, Chunk> = BTreeMap::new();
     let mut order: Vec<u64> = Vec::new();
@@ -301,6 +301,10 @@ fn decode(
         }
     }
     calls.retain(|call| call.complete());
+    // A reply the user cut short leaves no call behind: one call that never ran leaves a phantom.
+    if interrupted {
+        calls.clear();
+    }
 
     if !reasoning.is_empty() {
         out.block(blocks::text(Kind::Reasoning, &reasoning));

@@ -6,7 +6,6 @@ use std::time::Duration;
 pub(crate) const ACTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) mod drive;
-pub(crate) mod net;
 pub(crate) mod open;
 pub(crate) mod read;
 pub(crate) mod screenshot;

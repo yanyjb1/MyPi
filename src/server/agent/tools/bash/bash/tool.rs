@@ -39,20 +39,26 @@ fn run(env: &mut Env, args: &Args, progress: &mut dyn FnMut(ToolProgress)) -> Re
     let admitted = admit::admit(env, raw)?;
 
     let cwd = env.workspace.cwd().to_path_buf();
-    let text = shell::run(
+    let (text, exit) = shell::run(
         &env.bash.shell,
         &cwd,
         &admitted.cmd,
         env.bash.timeout,
-        Some(env.bash.interrupt.clone()),
+        &env.stop,
         progress,
     )?;
 
     // The oversized tail is the front door's business (file it, append the ref); the tool hands up text.
-    Ok(ToolOutput::text(match admitted.warn {
+    let text = match admitted.warn {
         Some(ids) => format!("[warn: {ids}]\n{text}"),
         None => text,
-    }))
+    };
+    // A stop is the front door's to report; a deadline has no one else to speak for it.
+    let out = ToolOutput::text(text);
+    Ok(match exit.killed && !exit.canceled {
+        true => out.failure(format!("timed out after {}s", exit.timeout_secs)),
+        false => out,
+    })
 }
 
 /// One line for a history listing: the command, flattened, and whether it failed.

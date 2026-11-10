@@ -1,7 +1,6 @@
 //! The front door: one batch in, one result per call out. Gates, decode, run, stamp, measure.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -16,6 +15,9 @@ use super::workspace::Workspace;
 use crate::server::agent::request::contract::{Spill, ToolCall};
 use crate::server::agent::request::live::{Element, Event, ToolEvent};
 use crate::server::platform::time::now_stamp;
+
+/// What a call that the user stopped mid-flight reports as its reason.
+const INTERRUPTED: &str = "interrupted: the user stopped the turn";
 
 /// The one implementation of [`Batch`]. It holds what is the same for every session; `Env` is
 /// rebuilt per batch.
@@ -56,9 +58,9 @@ impl Engine {
             limits: self.limits,
             bash: BashEnv {
                 timeout: self.bash_timeout,
-                interrupt: input.stop.clone(),
                 shell: crate::server::platform::shell::Shell::default(),
             },
+            stop: input.stop.clone(),
             session: input.session,
             batch_len: input.calls.len(),
             tools: input.tools.iter().cloned().collect(),
@@ -79,20 +81,18 @@ impl Batch for Engine {
         let mut halted = false;
         let mut results = Vec::with_capacity(input.calls.len());
         for call in &input.calls {
-            let started = Instant::now();
-            let result = if halted || input.stop.load(Ordering::Relaxed) {
-                halted = true;
-                failed(call, "not run: the turn was stopped", started)
-            } else {
-                self.one(
-                    &mut env,
-                    call,
-                    &input,
-                    child.as_deref(),
-                    started,
-                    &mut halted,
-                )
-            };
+            // A call that never starts leaves nothing behind: no block, no result.
+            if halted || input.stop.is_stopped() {
+                break;
+            }
+            let result = self.one(
+                &mut env,
+                call,
+                &input,
+                child.as_deref(),
+                Instant::now(),
+                &mut halted,
+            );
             results.push(result);
         }
         Ok(results)
@@ -132,6 +132,8 @@ impl Engine {
             Err(e) => return failed(call, e.to_string(), started),
         };
         self.start(input, call);
+        // A stop that lands while this call runs is the front door's to report, not the tool's.
+        let arrived_before_stop = !env.stop.is_stopped();
 
         let tx = input.out.clone();
         let id = call.call_id.clone();
@@ -171,17 +173,23 @@ impl Engine {
             memo,
             effects,
             stop,
+            fail,
         } = out;
+        let reason = fail.or_else(|| {
+            (arrived_before_stop && env.stop.is_stopped()).then(|| INTERRUPTED.to_string())
+        });
+        let ok = reason.is_none();
         let (text, spill) = measure(tool.name, env.limits, text);
         let memo = memo.map(|value| serde_json::to_string(&value).unwrap_or_default());
-        self.end(input, call, true, &text, memo.as_deref(), started);
+        self.end(input, call, ok, &text, memo.as_deref(), started);
         if stop {
             *halted = true;
         }
         ToolResult {
             call_id: call.call_id.clone(),
-            ok: true,
+            ok,
             result: text,
+            reason,
             memo,
             spill,
             duration_ms: elapsed(started),
@@ -233,6 +241,7 @@ fn failed(call: &ToolCall, text: impl Into<String>, started: Instant) -> ToolRes
         call_id: call.call_id.clone(),
         ok: false,
         result: text.into(),
+        reason: None,
         memo: None,
         spill: None,
         duration_ms: elapsed(started),

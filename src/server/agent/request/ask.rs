@@ -132,11 +132,6 @@ impl Ask for Request {
     }
 
     fn results(&self, input: ResultsInput, blocks: &dyn BlockSink) -> Result<()> {
-        for call in &input.calls {
-            if !input.results.iter().any(|r| r.call_id == call.call_id) {
-                bail!("no result for call {}", call.call_id);
-            }
-        }
         for run in &input.results {
             if !input.calls.iter().any(|c| c.call_id == run.call_id) {
                 bail!("a result names no call: {}", run.call_id);
@@ -164,6 +159,11 @@ impl Ask for Request {
                     )
                 }
                 None => (run.result.clone(), None),
+            };
+            // The cut-short reason is the last line: after the body and its artifact note.
+            let text = match run.reason.as_deref() {
+                Some(reason) => format!("{text}\n[{reason}]"),
+                None => text,
             };
 
             blocks.land(

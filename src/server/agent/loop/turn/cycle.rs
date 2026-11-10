@@ -1,7 +1,6 @@
 //! The lap cycle: ask, run the batch, take the mailboxes, settle.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use anyhow::{Result, anyhow};
 
@@ -131,7 +130,7 @@ fn laps(
     let mut first_lap = true;
 
     loop {
-        if handle.stop.load(Ordering::Acquire) {
+        if handle.stop.is_stopped() {
             return Ok(Stop::User);
         }
         let wakes = drain(inner, handle, turn)?;
@@ -203,6 +202,14 @@ fn laps(
             out: inner.out.clone(),
         };
         let results = inner.batch.run(input)?;
+        // Calls the stop cut off never ran: their request blocks leave no trace.
+        let unanswered: std::collections::BTreeSet<String> = lap
+            .calls
+            .iter()
+            .filter(|call| !results.iter().any(|run| run.call_id == call.call_id))
+            .map(|call| call.call_id.clone())
+            .collect();
+        blocks.drop_calls(&unanswered);
         let reported = ResultsInput {
             session: handle.id,
             history: history.clone(),
@@ -401,6 +408,7 @@ fn report(result: &ToolResult) -> Reported {
         call_id: result.call_id.clone(),
         ok: result.ok,
         result: result.result.clone(),
+        reason: result.reason.clone(),
         memo: result.memo.clone(),
         spill: result.spill.clone(),
         duration_ms: result.duration_ms,
@@ -409,7 +417,7 @@ fn report(result: &ToolResult) -> Reported {
 
 /// The user stopped this turn: no notice, no error text, settled as interrupted.
 fn stopped(handle: &Handle, why: &anyhow::Error) -> bool {
-    if handle.stop.load(Ordering::Acquire) {
+    if handle.stop.is_stopped() {
         return true;
     }
     matches!(

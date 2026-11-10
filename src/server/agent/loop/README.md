@@ -36,9 +36,11 @@ into its transcript, starts the turn scheduler, and attaches the session's job s
 `deliver` opens a turn and returns its id; a busy session and a sub-session both refuse it, nothing
 is queued.
 
-`interrupt` touches a busy session only: it sets the stop flag (the tools and the next lap read it)
-and kills the session's worker, which is what ends a blocking read. An idle session hears nothing.
-A turn stopped this way settles as `interrupted`, never as broken.
+`interrupt` touches a busy session only: it sets the session's `Stop`, which runs the actions the
+running call registered, and kills the session's worker, which is what ends a blocking read. An
+idle session hears nothing. A turn stopped this way settles as `interrupted`, never as broken; a
+call that was already running keeps its output and reports the stop, one that never ran leaves
+nothing.
 
 `Mailbox` holds a wake queue and one user slot. A wake text is written as its own `wake` block when
 the loop takes it, and each wake block is its own user message. The slot is written whole by a front

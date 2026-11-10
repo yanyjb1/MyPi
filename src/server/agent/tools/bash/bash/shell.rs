@@ -1,26 +1,29 @@
 //! How one admitted command line runs, stops and reports. The group it leads is the unit of stopping:
 //! the backend supplies the program, `platform::proc` starts and signals the tree.
 
+use std::sync::Arc;
+
 use anyhow::{Context as _, Result};
 
 use crate::server::agent::tools::contract::job::{Exit, OutputSink};
 use crate::server::agent::tools::spec::ToolProgress;
 use crate::server::platform::proc::{self, Signal};
 use crate::server::platform::shell::Shell;
+use crate::server::platform::stop::Stop;
 
-/// One command line through the backend, collecting its output. Exit code and interrupt both live
-/// in the text (`[exit N]`, `[interrupted/timeout: …]`).
+/// One command line through the backend, collecting its output. The exit code and how it ended
+/// live in the `Exit`; the text carries `[exit N]` and nothing about stopping.
 pub(crate) fn run(
     shell: &Shell,
     cwd: &std::path::Path,
     cmd: &str,
     timeout: std::time::Duration,
-    external: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    stop: &Arc<Stop>,
     progress: &mut dyn FnMut(ToolProgress),
-) -> Result<String> {
+) -> Result<(String, Exit)> {
     let mut sink = StringSink::default();
-    run_to(shell, cwd, cmd, timeout, external, progress, &mut sink)?;
-    Ok(sink.text)
+    let exit = run_to(shell, cwd, cmd, timeout, stop, progress, &mut sink)?;
+    Ok((sink.text, exit))
 }
 
 /// Run one command line, feeding its two streams to `sink` as they arrive.
@@ -29,28 +32,11 @@ pub(crate) fn run_to(
     cwd: &std::path::Path,
     cmd: &str,
     timeout: std::time::Duration,
-    external: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    stop: &Arc<Stop>,
     progress: &mut dyn FnMut(ToolProgress),
     sink: &mut dyn OutputSink,
 ) -> Result<Exit> {
-    let stop = std::sync::Arc::new(StopFlag::default());
-    let external_stop = external.clone();
-    if let Some(ext) = external {
-        // Bridge the session's AtomicBool into this command's flag. Exit on `is_done`, **not**
-        // `is_armed`: a command nobody interrupts never arms the flag.
-        let bridged = stop.clone();
-        named("mypi-bash-bridge", move || {
-            // Wake on the flag (a condvar, not a 50ms poll), and end on `is_done`, so a plain
-            // successful call leaves no poller spinning behind.
-            while !bridged.is_armed() && !bridged.is_done() {
-                if ext.load(std::sync::atomic::Ordering::Relaxed) {
-                    bridged.arm();
-                    break;
-                }
-                bridged.wait_for(std::time::Duration::from_millis(20));
-            }
-        });
-    }
+    let flag = Arc::new(StopFlag::default());
     let mut command = shell.command(cmd);
     command
         .current_dir(cwd)
@@ -59,6 +45,27 @@ pub(crate) fn run_to(
     let mut child = proc::spawn_grouped(&mut command)
         .with_context(|| format!("spawning `{}` failed", shell.name()))?;
     let pgid = child.id();
+
+    // What stopping means here: TERM the group now, KILL it after the grace period if it lives.
+    let escalate = {
+        let flag = flag.clone();
+        move || {
+            if flag.armed.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            flag.ring();
+            proc::signal_group(pgid, Signal::Term);
+            let flag = flag.clone();
+            named("mypi-bash-grace", move || {
+                std::thread::sleep(proc::grace());
+                if !flag.is_done() {
+                    proc::signal_group(pgid, Signal::Kill);
+                }
+            });
+        }
+    };
+    // Registered after the spawn: a stop that landed earlier runs this here and now.
+    let hook = stop.on_stop(escalate.clone());
 
     // Everything about this command travels on one channel: both output streams and the exit status.
     // Line-oriented on purpose — the readers reassemble whole lines before saying anything.
@@ -112,26 +119,25 @@ pub(crate) fn run_to(
     }
 
     // Waiter thread: the only place blocked on the child's exit.
-    let waiter_stop = stop.clone();
     let tx_wait = tx.clone();
     named("mypi-bash-wait", move || {
         let r = child.wait();
         let _ = tx_wait.send(Msg::Exited(r));
-        drop(waiter_stop);
     });
     drop(tx);
 
-    // Deadline: arms the same flag the front-end stop arms, waiting on the shared condvar instead of
-    // sleeping out the timeout.
-    let timer_stop = stop.clone();
+    // Deadline: the same escalation, on the shared condvar instead of a sleeping thread.
+    let timer = escalate.clone();
+    let timer_flag = flag.clone();
     named("mypi-bash-deadline", move || {
-        timer_stop.wait_for(timeout);
-        timer_stop.arm();
+        timer_flag.wait_for(timeout);
+        if !timer_flag.is_done() {
+            timer();
+        }
     });
 
-    // Tool thread: drain with ticks; on stop, escalate TERM then KILL. Output goes to the front end as
-    // it arrives, so a command that prints for a minute looks alive.
-    const TICK: std::time::Duration = std::time::Duration::from_millis(50);
+    // Tool thread: one blocking receive. Output goes to the front end as it arrives, so a command
+    // that prints for a minute looks alive; nothing wakes this thread on a timer.
     /// How often the live view refreshes: fast enough to look live, slow enough that a chatty
     /// command cannot drown the front end.
     const REPORT_EVERY: std::time::Duration = std::time::Duration::from_millis(120);
@@ -140,19 +146,16 @@ pub(crate) fn run_to(
     let mut readers_left = 2usize;
     let mut unflushed = String::new();
     let mut last_report = std::time::Instant::now();
-    let mut killed = false;
-    let mut forced = false;
-    let mut term_at: Option<std::time::Instant> = None;
     let mut sink_error: Option<anyhow::Error> = None;
 
     while readers_left > 0 || status.is_none() {
-        match rx.recv_timeout(TICK) {
+        match rx.recv() {
             Ok(Msg::Out(chunk)) => {
                 unflushed.push_str(&chunk);
                 if sink_error.is_none() {
                     if let Err(e) = sink.out(&chunk) {
                         sink_error = Some(e);
-                        stop.arm();
+                        escalate();
                     }
                 }
             }
@@ -161,28 +164,13 @@ pub(crate) fn run_to(
                 if sink_error.is_none() {
                     if let Err(e) = sink.err(&chunk) {
                         sink_error = Some(e);
-                        stop.arm();
+                        escalate();
                     }
                 }
             }
             Ok(Msg::ReaderDone) => readers_left = readers_left.saturating_sub(1),
             Ok(Msg::Exited(r)) => status = Some(r),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                anyhow::bail!("the shell waiter died unexpectedly")
-            }
-        }
-        if stop.is_armed() && !killed {
-            killed = true;
-            term_at = Some(std::time::Instant::now());
-            proc::signal_group(pgid, Signal::Term);
-        }
-        if let Some(at) = term_at
-            && !forced
-            && at.elapsed() >= proc::grace()
-        {
-            forced = true;
-            proc::signal_group(pgid, Signal::Kill);
+            Err(_) => anyhow::bail!("the shell waiter died unexpectedly"),
         }
         if !unflushed.is_empty() && last_report.elapsed() >= REPORT_EVERY {
             last_report = std::time::Instant::now();
@@ -193,17 +181,15 @@ pub(crate) fn run_to(
     if !unflushed.is_empty() {
         progress(ToolProgress::Output(crate::ansi::strip_ansi(&unflushed)));
     }
-    // The command is over: release the interrupt bridge before touching the status, so the early
-    // returns below cannot strand a polling thread.
-    stop.finish();
-    let killed = killed || stop.is_armed();
+    // The command is over: take the action off the signal before the status, so an early return
+    // below cannot signal a group that is already gone.
+    drop(hook);
+    flag.finish();
+    let killed = flag.is_armed();
     let out = status
         .expect("loop only exits with a status")
         .with_context(|| "waiting for bash failed")?;
-    let canceled = killed
-        && external_stop
-            .as_ref()
-            .is_some_and(|e| e.load(std::sync::atomic::Ordering::Relaxed));
+    let canceled = killed && stop.is_stopped();
     let exit = Exit {
         code: out.code(),
         killed,
@@ -250,12 +236,7 @@ impl OutputSink for StringSink {
             text.push_str("\n[stderr] ");
             text.push_str(err.trim_end());
         }
-        if exit.killed {
-            text.push_str(&format!(
-                "\n[interrupted/timeout: killed after {}s]",
-                exit.timeout_secs
-            ));
-        } else if exit.code != Some(0) {
+        if exit.code != Some(0) && !exit.killed {
             text.push_str(&format!("\n[exit {}]", exit.code.unwrap_or(-1)));
         }
         self.text = text.trim_end().to_string();
@@ -263,23 +244,18 @@ impl OutputSink for StringSink {
     }
 }
 
-/// Why a bash command died without a clean exit. Shared with the waiter and deadline threads; arming
-/// is one-way, and `done` says the command is over, which is what ends the bridge's wait.
+/// Why a bash command died without a clean exit. One flag, one bell: arming is one-way, and `done`
+/// says the command is over so the deadline thread stops waiting.
 #[derive(Default)]
 struct StopFlag {
     armed: std::sync::atomic::AtomicBool,
     done: std::sync::atomic::AtomicBool,
-    /// Wakes both waiters the instant either flag flips, so neither has to
-    /// poll (the bridge) or sleep out a long timeout (the deadline).
+    /// Wakes the deadline thread the instant either flag flips.
     bell: std::sync::Condvar,
     lock: std::sync::Mutex<()>,
 }
 
 impl StopFlag {
-    fn arm(&self) {
-        self.armed.store(true, std::sync::atomic::Ordering::Relaxed);
-        self.ring();
-    }
     fn is_armed(&self) -> bool {
         self.armed.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -291,14 +267,13 @@ impl StopFlag {
     fn is_done(&self) -> bool {
         self.done.load(std::sync::atomic::Ordering::Relaxed)
     }
-    /// Wake every waiter (arming and finishing both end the wait). The lock alone is not a signal:
-    /// the waiters are parked on the condvar and need `notify_all` to be scheduled.
+    /// Wake the waiter (arming and finishing both end the wait). The lock alone is not a signal:
+    /// the waiter is parked on the condvar and needs `notify_all` to be scheduled.
     fn ring(&self) {
         drop(self.lock.lock().unwrap_or_else(|e| e.into_inner()));
         self.bell.notify_all();
     }
-    /// Block until the flag is armed, finished, or `timeout` elapses. Used by the deadline thread in
-    /// place of a bare `sleep`, and by the bridge in place of a poll loop.
+    /// Block until the flag is armed, finished, or `timeout` elapses. The deadline thread's only wait.
     fn wait_for(&self, timeout: std::time::Duration) {
         let guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let _ = self

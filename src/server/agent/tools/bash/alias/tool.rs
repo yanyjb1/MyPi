@@ -18,19 +18,18 @@ const PARAMS: &[Param] = &[
     Param::req(
         "op",
         Kind::Choice(&["add", "list", "del"]),
-        "add: define an alias; list: show current aliases; del: delete one.",
+        "The operation.",
     ),
     Param::opt("name", Kind::Text, "Alias name."),
-    Param::opt(
-        "command",
-        Kind::Text,
-        "add: the command the alias expands to.",
-    ),
+    Param::opt("command", Kind::Text, "The command the alias expands to."),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "alias",
-    about: "Maintain shell aliases. The head word of every command line expands once, before the guard. A name fixed by the config is read-only for the session: `add` and `del` refuse it. An alias cannot contain variables, functions, or newlines. `add` and `del` take effect for later bash calls in this round.",
+    about: "Maintain shell aliases: `add` defines one, `list` shows them, `del` deletes one. The head \
+            word of every command line expands once, before the guard. A name fixed by the config is \
+            read-only for the session: `add` and `del` refuse it. An alias cannot contain variables, \
+            functions, or newlines. Changes take effect for later bash calls in this round.",
     params: PARAMS,
     run,
     summary,

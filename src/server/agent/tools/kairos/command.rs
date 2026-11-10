@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -35,7 +34,7 @@ impl Command {
         &self,
         shell: &Shell,
         timeout: Duration,
-        cancel: Arc<AtomicBool>,
+        cancel: Arc<crate::server::platform::stop::Stop>,
         output: &mut dyn OutputSink,
     ) -> Result<Exit> {
         if let Some(ids) = &self.warn {
@@ -47,7 +46,7 @@ impl Command {
             &self.cwd,
             &self.cmd,
             timeout,
-            Some(cancel),
+            &cancel,
             &mut progress,
             output,
         )

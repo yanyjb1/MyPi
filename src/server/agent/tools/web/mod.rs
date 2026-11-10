@@ -16,9 +16,7 @@ const PROVIDER: usize = 4;
 const PAGE: usize = 5;
 const SELECTOR: usize = 6;
 const VALUE: usize = 7;
-const FILTER: usize = 8;
-const MAX: usize = 9;
-const FULL_PAGE: usize = 10;
+const FULL_PAGE: usize = 8;
 
 /// Every operation; the schema and the dispatch read this one list.
 const OPS: &[&str] = &[
@@ -31,7 +29,6 @@ const OPS: &[&str] = &[
     "select",
     "scroll",
     "eval",
-    "net",
     "screenshot",
 ];
 
@@ -49,7 +46,7 @@ const PARAMS: &[Param] = &[
         Kind::Text,
         "search: query, passed through verbatim.",
     ),
-    Param::req(
+    Param::opt(
         "provider",
         Kind::Choice(&["google", "bing", "baidu"]),
         "search: the one provider this query runs against.",
@@ -70,8 +67,6 @@ const PARAMS: &[Param] = &[
         Kind::Any,
         "fill/select/eval: string; scroll: pixels.",
     ),
-    Param::opt("filter", Kind::Text, "net: URL substring filter."),
-    Param::opt("max", Kind::Number, "net: maximum entries, default 20."),
     Param::df(
         "full_page",
         Kind::Flag,
@@ -84,8 +79,8 @@ pub(crate) const TOOL: Tool = Tool {
     name: "web",
     about: "Read, search, and drive a real browser. `read` returns Markdown or DOM HTML; `search` \
             runs one provider and merges pages 1..N; `open`/`click`/`fill`/`press`/`select`/\
-            `scroll`/`eval` operate the work tab; `net` lists performance resource entries; \
-            `screenshot` writes a PNG under the system temp directory.",
+            `scroll`/`eval` operate the work tab; `screenshot` writes a PNG under the system temp \
+            directory.",
     params: PARAMS,
     run,
     summary,
@@ -94,10 +89,6 @@ pub(crate) const TOOL: Tool = Tool {
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
     let page = args.opt_int(PAGE)?.unwrap_or(1);
     let page = u32::try_from(page).map_err(|_| anyhow::anyhow!("`page` must be >= 1"))?;
-    let max = match args.opt_int(MAX)? {
-        Some(n) => Some(usize::try_from(n).map_err(|_| anyhow::anyhow!("`max` must be >= 0"))?),
-        None => None,
-    };
     let a = crate::web::WebArgs {
         op: args.choice(OP)?,
         url: args.opt_str(URL)?,
@@ -107,8 +98,6 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         page,
         selector: args.opt_str(SELECTOR)?,
         value: args.opt_any(VALUE).cloned(),
-        filter: args.opt_str(FILTER)?,
-        max,
         full_page: args.flag(FULL_PAGE)?,
     };
     let text = crate::web::run(&a, env.session)?;
@@ -126,7 +115,6 @@ fn summary(call: &CallRecord) -> String {
             summary::field(call, "selector").unwrap_or_default()
         }
         "eval" => summary::field(call, "value").unwrap_or_default(),
-        "net" => summary::field(call, "filter").unwrap_or_else(|| "all".to_string()),
         _ => String::new(),
     };
     if at.trim().is_empty() {

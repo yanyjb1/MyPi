@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::server::agent::request::message::Usage;
 use crate::server::agent::request::transport::worker::SessionWorker;
+use crate::server::platform::stop::Stop;
 
 use super::book::Birth;
 use super::live::Live;
@@ -21,7 +22,7 @@ pub(crate) struct Handle {
     pub id: i64,
     pub birth: Mutex<Birth>,
     pub mailbox: Arc<Mailbox>,
-    pub stop: Arc<AtomicBool>,
+    pub stop: Arc<Stop>,
     /// This session's HTTP worker: one child, killed and replaced on interrupt.
     pub worker: Arc<SessionWorker>,
     /// This session's history: read once, appended as turns land.
@@ -39,7 +40,7 @@ impl Handle {
             id: birth.session,
             birth: Mutex::new(birth),
             mailbox: Arc::new(Mailbox::new()),
-            stop: Arc::new(AtomicBool::new(false)),
+            stop: Stop::new(),
             worker: SessionWorker::new(),
             transcript,
             busy: AtomicBool::new(false),
@@ -105,7 +106,7 @@ impl Handle {
         if !self.busy.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
-        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        self.stop.set();
         self.worker.kill();
         self.mailbox.notify();
     }

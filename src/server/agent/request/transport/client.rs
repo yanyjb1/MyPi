@@ -1,6 +1,6 @@
 //! One provider connection: its protocol, its retry policy, and the child's output.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::server::platform::stop::Stop;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -51,14 +51,14 @@ impl Client {
         req: &ProtocolRequest,
         out: &mut dyn Output,
         line: &Line,
-        cancel: &AtomicBool,
+        cancel: &Stop,
         worker: &std::sync::Arc<SessionWorker>,
     ) -> Result<AssistantMessage> {
         let mut emitted = false;
         let mut attempt = 0u32;
 
         let outcome = loop {
-            if cancel.load(Ordering::Relaxed) {
+            if cancel.is_stopped() {
                 break Err(anyhow::Error::new(Failure::Cancelled));
             }
             let wire = match self.protocol.request(&self.endpoint, req) {
@@ -78,7 +78,7 @@ impl Client {
                     let Some(failure) = e.downcast_ref::<Failure>() else {
                         break Err(e);
                     };
-                    let cancelled = cancel.load(Ordering::Relaxed);
+                    let cancelled = cancel.is_stopped();
                     let class = retry::classify(failure, emitted, cancelled);
                     if class == Class::Fatal {
                         if !cancelled {
@@ -89,7 +89,7 @@ impl Client {
                         crate::server::platform::log::error(&self.model, format!("{e:#}"));
                         break Err(e);
                     }
-                    if cancel.load(Ordering::Relaxed) {
+                    if cancel.is_stopped() {
                         break Err(anyhow::Error::new(Failure::Cancelled));
                     }
                     line.send(crate::server::agent::request::live::Element::Notice(
@@ -119,18 +119,18 @@ impl Client {
 }
 
 /// Sleep in slices so an interrupt is heard before the interval ends.
-fn wait(cancel: &AtomicBool, total: Duration) -> bool {
+fn wait(cancel: &Stop, total: Duration) -> bool {
     const STEP: Duration = Duration::from_millis(50);
     let mut left = total;
     while !left.is_zero() {
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.is_stopped() {
             return false;
         }
         let slice = left.min(STEP);
         std::thread::sleep(slice);
         left = left.saturating_sub(slice);
     }
-    !cancel.load(Ordering::Relaxed)
+    !cancel.is_stopped()
 }
 
 /// Counts whether anything reached the front end: after that, retrying would duplicate it.

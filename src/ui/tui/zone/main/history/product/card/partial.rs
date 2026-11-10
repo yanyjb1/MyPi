@@ -12,35 +12,6 @@ pub(crate) fn text(args: &str, key: &str) -> Option<String> {
     None
 }
 
-/// Every `(number, text)` pair of this object key, in the order the pairs arrive.
-pub(crate) fn records(args: &str, num: &str, text: &str) -> Vec<(Option<usize>, String)> {
-    let mut out: Vec<(Option<usize>, String)> = Vec::new();
-    let mut current: Option<usize> = None;
-    let mut at = 0;
-    while let Some((name, value)) = next_pair(args, at) {
-        if name == num {
-            let (number, end) = digits(args.as_bytes(), value);
-            if let Some(number) = number {
-                current = Some(number);
-                at = end;
-            } else {
-                at = value_end(args, value);
-            }
-            continue;
-        }
-        if name == text && args.as_bytes().get(value) == Some(&b'"') {
-            let Some((body, end, _)) = string_at(args, value) else {
-                break;
-            };
-            out.push((current.take(), body));
-            at = end;
-            continue;
-        }
-        at = value_end(args, value);
-    }
-    out
-}
-
 /// The next key and the byte its value starts at, at or after `from`.
 fn next_pair(args: &str, from: usize) -> Option<(String, usize)> {
     let bytes = args.as_bytes();
@@ -134,20 +105,4 @@ fn skip(bytes: &[u8], from: usize) -> Option<usize> {
         at += 1;
     }
     (at < bytes.len()).then_some(at)
-}
-
-fn digits(bytes: &[u8], from: usize) -> (Option<usize>, usize) {
-    let mut at = from;
-    let mut out = 0usize;
-    while at < bytes.len() && bytes[at].is_ascii_digit() {
-        let Some(next) = out
-            .checked_mul(10)
-            .and_then(|held| held.checked_add(usize::from(bytes[at] - b'0')))
-        else {
-            break;
-        };
-        out = next;
-        at += 1;
-    }
-    ((at > from).then_some(out), at)
 }

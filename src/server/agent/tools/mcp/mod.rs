@@ -17,14 +17,10 @@ use super::summary;
 use bridge::{McpBridge, McpContent, McpResult};
 
 const PARAMS: &[Param] = &[
-    Param::req(
-        "op",
-        Kind::Choice(&["list", "call"]),
-        "Operation: list servers/tools or call one tool.",
-    ),
-    Param::opt("server", Kind::Text, "Configured server name."),
-    Param::opt("tool", Kind::Text, "Tool name for call."),
-    Param::opt("args", Kind::Any, "Tool arguments as a JSON object."),
+    Param::req("op", Kind::Choice(&["list", "call"]), "The operation."),
+    Param::opt("server", Kind::Text, "Server name."),
+    Param::opt("tool", Kind::Text, "Tool name."),
+    Param::opt("args", Kind::Any, "Arguments as a JSON object."),
 ];
 
 pub const TOOL: Tool = Tool {

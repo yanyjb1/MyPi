@@ -1,7 +1,7 @@
 //! Chat Completions: request body, auth, and decode.
 
+use crate::server::platform::stop::Stop;
 use std::io::BufRead;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 
@@ -82,7 +82,7 @@ impl Protocol for Completion {
         &self,
         reader: Box<dyn BufRead>,
         out: &mut dyn Output,
-        cancel: &AtomicBool,
+        cancel: &Stop,
     ) -> Result<AssistantMessage> {
         protocol::openai::completion::stream::decode(reader, &self.compat, out, cancel)
     }

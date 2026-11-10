@@ -10,10 +10,10 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `contract/mod.rs` | declares the five contract groups |
 | `contract/call.rs` | `Batch`, `BatchInput`, `Cwd` |
 | `contract/output.rs` | `ToolResult`, `ToolOutput`, `Effect`, `MemoOp`, `AliasOp` |
-| `contract/env.rs` | `Env`, `Limits`, `BashEnv`, `Paths` |
+| `contract/env.rs` | `Env` (its `stop`), `Limits`, `BashEnv`, `Paths` |
 | `contract/view.rs` | the `Source`, `Export`, `Child`, `Draft`, `MemoRead` ports, the history shapes, and `MemoScope`, `MemoReadOp`, `MemoVersion`, `MemoView` |
 | `contract/job.rs` | the job vocabulary a tool shares with the loop: `JobSpec`, `Schedule`, `JobRunner`, `JobCtx`, `JobOutcome`, `Receipt`, `Row`, `Status`, `Exit`, `OutputSink`, and the `JobHost` port |
-| `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure, events |
+| `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure, events; the stop that lands mid-call becomes the result's reason |
 | `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `Tool`, `Run`, `Summary`, `ToolProgress` |
 | `summary.rs` | one recorded call's arguments, and the clip every tool's history summary reuses |
 | `registry.rs` | `TOOLS`, `spec`, `roster` |
@@ -24,10 +24,10 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `bash/bash/admit.rs` | `admit`: aliases → `#ref` → guard, and the line it hands the runner |
 | `bash/bash/segment.rs` | the separator set and the segment heads; the guard and the alias expansion share both |
 | `bash/bash/guard.rs` | the command classifier: `normalize`, `classify`, `Verdict`, `RuleHit` |
-| `bash/bash/shell.rs` | one command line: `run`, `run_to`, `OutputSink`, `Exit`, `StopFlag`; spawn and stop through `platform::proc` |
+| `bash/bash/shell.rs` | one command line: `run`, `run_to`, `OutputSink`, `Exit`, `StopFlag`; registers the stop action, spawns and signals through `platform::proc` |
 | `bash/read/{mod,tool}.rs` | `read` |
 | `bash/write/{mod,tool}.rs` | `write` |
-| `bash/edit/{mod,tool}.rs` | `edit` with `exact` and `mass`; `exact_text`, `mass_text` |
+| `bash/edit/{mod,tool}.rs` | `edit` with `exact` and `mass`; `exact_text`, `mass_text`, `parse_range`, the one-line receipt |
 | `bash/cd/{mod,tool}.rs` | `cd` |
 | `bash/alias/{mod,tool}.rs` | `alias` add/list/remove; the config layer is read-only here |
 | `bash/context/{mod,tool}.rs` | `context`: `query` through `Source::history`, `show` through `Source::block`, long listings to `Export::dir` |
@@ -62,7 +62,8 @@ What is here, what each file holds, who talks to whom. Current state only.
   browser keys, which the web domain reads itself.
 - **`platform`**: `time::now_stamp` (the effect stamp) and the local-time parts, `log::warn`,
   `env::temp_dir`, `shell::Shell` (the session's shell: program, one-shot argument shape,
-  stored-text read form), `proc` (process group spawn, group signal, tree teardown).
+  stored-text read form), `proc` (process group spawn, group signal, tree teardown), `stop::Stop`
+  (the session's stop signal and the actions a call registers on it).
 - **`request`**: `ToolCall`, `ToolDef`, `Message` for definitions and the context window.
 - **`web`**: `WebArgs`, `run` from the `web` tool; `shutdown` from `main`.
 - **Who calls it**: `loop/turn` (one batch at a time, `Batch::run`), `loop/turn/cycle` (`roster`
@@ -116,6 +117,12 @@ Engine::run
     root; the domain never decides where the session stands.
 11. The web domain's config keys and `src/web/README.md`: it reads them itself, so a rename here is
     a rename there.
+12. `platform::stop::Stop` and its three holders — the session handle, each job's `cancel`, and
+    `Env.stop`: one type, one flag, no second way to say stopped.
+13. `Pen::drop_calls` and `ask.results`: a call without a result has its request block dropped
+    before the commit; a result without a call is refused.
+14. `ToolOutput.fail` and `engine`: any reason makes the result `ok: false`; the front door adds
+    one for the stop it observed, and the tool reports its own deadline.
 
 ## Not wired yet
 

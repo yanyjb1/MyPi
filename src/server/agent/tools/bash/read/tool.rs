@@ -14,7 +14,7 @@ const LIMIT: usize = 2;
 const DEFAULT_LINES: usize = 500;
 
 const PARAMS: &[Param] = &[
-    Param::req("path", Kind::Text, "File path. `./` and `../` allowed."),
+    Param::req("path", Kind::Text, "File path."),
     Param::df(
         "offset",
         Kind::Line,
@@ -30,9 +30,9 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "read",
-    about: "Read a file with line numbers so later turns can cite exact lines. MUST read before editing; NEVER guess the current text.\n\
-            Files only, never directories; only inside the workspace (the session's start directory) and the temp directory.\n\
-            Past the line cap the output stops early and its footer names the offset to continue from.",
+    about: "Read a file with line numbers so later turns can cite exact lines. MUST read before \
+            editing; NEVER guess the current text. Files only, never directories. Past the line cap \
+            the output stops early and its footer names the offset to continue from.",
     params: PARAMS,
     run,
     summary,

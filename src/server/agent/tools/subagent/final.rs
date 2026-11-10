@@ -15,26 +15,29 @@ const OP: usize = 0;
 const CONTENT: usize = 1;
 const OLD: usize = 2;
 const NEW: usize = 3;
-const EDITS: usize = 4;
-
-const RECORD: &[Param] = &[
-    Param::req("line", Kind::Line, "Line number, 1-based."),
-    Param::req("text", Kind::Text, "New content for that line."),
-];
+const RANGE: usize = 4;
 
 pub(crate) const PARAMS: &[Param] = &[
     Param::req(
         "op",
         Kind::Choice(&["write", "edit", "read", "submit"]),
-        "The draft operation.",
+        "The operation.",
     ),
     Param::opt("content", Kind::Text, "Full draft for `write`."),
-    Param::opt("old", Kind::Text, "Exact text for `edit`."),
-    Param::opt("new", Kind::Text, "Replacement text for `edit`."),
     Param::opt(
-        "edits",
-        Kind::Table(RECORD),
-        "Line replacements for `edit`.",
+        "old",
+        Kind::Text,
+        "edit: text to replace. MUST match exactly and be unique.",
+    ),
+    Param::opt(
+        "new",
+        Kind::Text,
+        "edit: the replacement block; empty removes the target.",
+    ),
+    Param::opt(
+        "range",
+        Kind::Text,
+        "edit: the lines to replace, `12-14` or `12`.",
     ),
 ];
 
@@ -59,18 +62,18 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
             Ok(ToolOutput::text("draft written"))
         }
         "edit" => {
-            let rows = args.table(EDITS)?;
-            let (text, _, message) = if rows.is_empty() {
-                match (args.opt_str(OLD)?, args.opt_str(NEW)?) {
-                    (Some(old), Some(new)) => edit::exact_text(&draft.read()?, &old, &new)?,
-                    _ => anyhow::bail!("edit needs old/new or edits"),
+            let range = args.opt_str(RANGE)?;
+            anyhow::ensure!(
+                range.is_none() || args.opt_str(OLD)?.is_none(),
+                "`range` and `old` pick different ways to locate the edit; give one"
+            );
+            let (text, _, message) = match range {
+                Some(range) => {
+                    let (from, to) = edit::parse_range(&range)?;
+                    let block = args.opt_str(NEW)?.unwrap_or_default();
+                    edit::mass_text(&draft.read()?, from, to, &block)?
                 }
-            } else {
-                let mut edits = Vec::with_capacity(rows.len());
-                for row in &rows {
-                    edits.push((row.line(0)?, row.str(1)?));
-                }
-                edit::mass_text(&draft.read()?, &edits)?
+                None => edit::exact_text(&draft.read()?, &args.str(OLD)?, &args.str(NEW)?)?,
             };
             draft.write(&text)?;
             Ok(ToolOutput::text(message))

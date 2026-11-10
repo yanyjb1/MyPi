@@ -1,7 +1,7 @@
 //! One SSE stream: read, cancel, and how it ended.
 
+use crate::server::platform::stop::Stop;
 use std::io::BufRead;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -38,7 +38,7 @@ impl Budget {
 /// Read `data:` payloads until the stream ends; `take` returns `false` to stop reading.
 pub fn data(
     reader: &mut dyn BufRead,
-    cancel: &AtomicBool,
+    cancel: &Stop,
     mut take: impl FnMut(&str) -> anyhow::Result<bool>,
 ) -> anyhow::Result<End> {
     let mut buf: Vec<u8> = Vec::new();
@@ -47,7 +47,7 @@ pub fn data(
             Ok(0) => return Ok(ended(cancel)),
             Ok(_) => {}
             Err(e) => {
-                if cancel.load(Ordering::Relaxed) {
+                if cancel.is_stopped() {
                     return Ok(End::Canceled);
                 }
                 return Err(e).context("stream read interrupted");
@@ -68,14 +68,14 @@ pub fn data(
 /// Read `event:` / `data:` frames until the stream ends; `take` returns `false` to stop reading.
 pub fn events(
     reader: &mut dyn BufRead,
-    cancel: &AtomicBool,
+    cancel: &Stop,
     mut take: impl FnMut(&SseEvent) -> anyhow::Result<bool>,
 ) -> anyhow::Result<End> {
     loop {
         let event = match sse::read_event(reader) {
             Ok(event) => event,
             Err(e) => {
-                if cancel.load(Ordering::Relaxed) {
+                if cancel.is_stopped() {
                     return Ok(End::Canceled);
                 }
                 return Err(e).context("stream read interrupted");
@@ -84,7 +84,7 @@ pub fn events(
         let Some(event) = event else {
             break;
         };
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.is_stopped() {
             return Ok(End::Canceled);
         }
         if !take(&event)? {
@@ -97,8 +97,8 @@ pub fn events(
 /// The longest a provider may stay silent when it names no budget of its own.
 const SILENCE: Duration = Duration::from_secs(600);
 
-fn ended(cancel: &AtomicBool) -> End {
-    if cancel.load(Ordering::Relaxed) {
+fn ended(cancel: &Stop) -> End {
+    if cancel.is_stopped() {
         End::Canceled
     } else {
         End::Eof

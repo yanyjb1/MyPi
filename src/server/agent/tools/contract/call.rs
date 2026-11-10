@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 
 use anyhow::Result;
@@ -25,7 +24,7 @@ pub struct BatchInput {
     pub tools: Vec<String>,
     /// This batch, in execution order.
     pub calls: Vec<ToolCall>,
-    pub stop: Arc<AtomicBool>,
+    pub stop: Arc<crate::server::platform::stop::Stop>,
     pub out: Sender<Event>,
 }
 

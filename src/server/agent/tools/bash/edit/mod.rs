@@ -1,5 +1,5 @@
-//! edit: replace one unique run of text, or replace whole lines by number.
+//! edit: replace one unique run of text, or one range of lines.
 
 mod tool;
 
-pub(crate) use tool::{TOOL, exact_text, mass_text};
+pub(crate) use tool::{TOOL, exact_text, mass_text, parse_range};

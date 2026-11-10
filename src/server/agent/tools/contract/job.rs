@@ -1,7 +1,6 @@
 //! The job vocabulary a tool shares with the loop: what to run, when it is due, what came back.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -34,7 +33,7 @@ pub trait JobRunner: Send + Sync {
 
 /// One run's conditions.
 pub struct JobCtx<'a> {
-    pub cancel: Arc<AtomicBool>,
+    pub cancel: Arc<crate::server::platform::stop::Stop>,
     pub timeout: Duration,
     pub output: Option<&'a mut dyn OutputSink>,
 }

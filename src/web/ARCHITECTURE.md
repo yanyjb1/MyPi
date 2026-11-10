@@ -37,7 +37,6 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `ops/read.rs` | `read` |
 | `ops/open.rs` | `open` |
 | `ops/drive.rs` | `click`, `fill`, `press`, `select`, `scroll`, `eval` |
-| `ops/net.rs` | `net` |
 | `ops/screenshot.rs` | `screenshot` |
 
 ### search
@@ -78,7 +77,6 @@ run (permit)
   → search ───────→ tabs::with_search → verify::await_human
   → ops::open ────→ tabs::with_work → page
   → ops::drive ───→ tabs::with_work → page
-  → ops::net ─────→ tabs::with_work → page
   → ops::screenshot → tabs::with_work → page
 
 tabs::with_* → lifecycle::port → process::{launch, attach}

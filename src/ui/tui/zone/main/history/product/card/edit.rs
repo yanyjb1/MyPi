@@ -1,4 +1,4 @@
-//! edit: the old and new text as it streams, or the numbered diff of what changed.
+//! edit: the replaced text as it streams, or the numbered diff of what changed.
 
 use std::ops::Range;
 
@@ -22,15 +22,15 @@ impl ToolRenderer for Edit {
         edit_call(b)
     }
 
-    fn result_sections(&self, _b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
+    fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
         vec![Section {
             label: None,
-            lines: edit_result(o),
+            lines: edit_result(b, o),
         }]
     }
 }
 
-/// The call as it arrives: `old` and `new`, or one row per line-numbered write.
+/// The call as it arrives: the text going, then the text coming.
 fn edit_call(b: &ToolBlock<'_>) -> Vec<Row> {
     if b.result.is_some() {
         return Vec::new();
@@ -53,9 +53,6 @@ fn edit_call(b: &ToolBlock<'_>) -> Vec<Row> {
     if let Some(new) = new.as_deref() {
         push_text(&mut out, '+', new, changed.map(|(_, added)| added));
     }
-    if out.is_empty() {
-        push_edits(&mut out, b.args);
-    }
     out
 }
 
@@ -64,19 +61,6 @@ fn push_text(out: &mut Vec<Row>, sign: char, text: &str, span: Option<Range<usiz
     for (i, line) in text.lines().enumerate() {
         let span = if i == 0 { span.clone() } else { None };
         out.push(diff_row(sign, None, line, span, 0));
-    }
-}
-
-/// A by-line edit: the numbers that arrived, so far.
-fn push_edits(out: &mut Vec<Row>, args: &str) {
-    let rows = partial::records(args, "line", "text");
-    let width = rows
-        .iter()
-        .filter_map(|(at, _)| at.map(|at| at.to_string().len()))
-        .max()
-        .unwrap_or(0);
-    for (at, text) in rows {
-        out.push(diff_row('+', at, &text, None, width));
     }
 }
 
@@ -152,24 +136,34 @@ fn changed_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
     ))
 }
 
-fn edit_result(o: ToolOutcome<'_>) -> Vec<Row> {
+fn edit_result(b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Row> {
     if o.ok == Some(false) {
         return error_body(o.text);
     }
     match ToolView::from_details(o.details, o.text) {
-        ToolView::Diff {
-            deletions,
-            insertions,
-        } => diff_rows(&deletions, &insertions),
+        ToolView::Diff { at, old } => {
+            let at = at.or_else(|| range_start(b.args));
+            let old = old.or_else(|| partial::text(b.args, "old"));
+            diff_rows(b.args, at, old)
+        }
         ToolView::Plain { text } => output_lines(&text),
     }
 }
 
+/// The first line a `mass` call names.
+fn range_start(args: &str) -> Option<usize> {
+    let range = partial::text(args, "range")?;
+    range.trim().split('-').next()?.trim().parse().ok()
+}
+
 /// Removed lines, then added ones, each with the line it sat on.
-fn diff_rows(deletions: &[Numbered], insertions: &[Numbered]) -> Vec<Row> {
+fn diff_rows(args: &str, at: Option<usize>, old: Option<String>) -> Vec<Row> {
+    let new = partial::text(args, "new").unwrap_or_default();
+    let deletions = numbered(at, old.as_deref().unwrap_or_default());
+    let insertions = numbered(at, &new);
     let width = deletions
         .iter()
-        .chain(insertions)
+        .chain(&insertions)
         .filter_map(|line| line.at)
         .map(|at| at.to_string().len())
         .max()
@@ -215,6 +209,25 @@ fn diff_rows(deletions: &[Numbered], insertions: &[Numbered]) -> Vec<Row> {
         ));
     }
     out
+}
+
+/// A text's lines, numbered from `at`.
+fn numbered(at: Option<usize>, text: &str) -> Vec<Numbered> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if text.ends_with('\n') {
+        lines.pop();
+    }
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| Numbered {
+            at: at.map(|first| first + i),
+            text: line.to_string(),
+        })
+        .collect()
 }
 
 /// A row whose number goes when the line above already printed it.

@@ -1,7 +1,7 @@
 //! Chat Completions: SSE deltas in, pieces and blocks out.
 
+use crate::server::platform::stop::Stop;
 use std::io::BufRead;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::Context as _;
 use serde::Deserialize;
@@ -100,7 +100,7 @@ pub(crate) fn decode(
     mut reader: Box<dyn BufRead>,
     compat: &Resolved,
     out: &mut dyn Output,
-    cancel: &AtomicBool,
+    cancel: &Stop,
 ) -> anyhow::Result<AssistantMessage> {
     let mut content = String::new();
     let mut reasoning = String::new();
@@ -252,6 +252,10 @@ pub(crate) fn decode(
     let mut placed = calls.finish();
     placed.extend(healed);
     placed.retain(|call| call.complete());
+    // A reply the user cut short leaves no call behind: one call that never ran leaves a phantom.
+    if interrupted {
+        placed.clear();
+    }
 
     if !reasoning.is_empty() {
         out.block(blocks::text(Kind::Reasoning, &reasoning));

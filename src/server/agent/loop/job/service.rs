@@ -81,7 +81,7 @@ impl Inner {
     fn cancel_all(&self) {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         for task in st.tasks.values_mut() {
-            task.cancel.store(true, Ordering::Relaxed);
+            task.cancel.set();
             task.wake_on_done = false;
             task.state = TaskState::Canceled;
             if let Some(output) = task.output.take() {
@@ -230,7 +230,7 @@ impl port::JobHost for JobService {
                 ) {
                     bail!("{id} is already {}", task.state);
                 }
-                task.cancel.store(true, Ordering::Relaxed);
+                task.cancel.set();
                 task.wake_on_done = false;
                 task.state = TaskState::Canceled;
                 task.ended = Some(time::unix_now());

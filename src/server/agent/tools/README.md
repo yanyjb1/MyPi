@@ -45,12 +45,14 @@ no list can reach it.
 ### One call
 
 ```text
-ToolCall { name, args, intent }
+a batch with the turn's stop signal
+  → stop already set: the call never runs, and the batch ends there
   → registry::spec(name)
   → env.allows(name)                       the session's list; the only gate
   → budget gate (every call but `final`)
   → Args::fill(tool.params, args)          JSON object → positional values
   → (tool.run)(env, &args, progress)       Start, Progress and End events around it
+  → a stop that landed meanwhile makes the result `ok: false`, reason `interrupted`
   → every out.effects gets one ts
   → spill: over the inline budget, the full text moves to out.spill
   → ToolResult
@@ -61,29 +63,29 @@ Unknown names error.
 ### Schema
 
 A tool declares `params: &[Param]`; `Param { name, kind, required, default, about }` and
-`Kind = Text | Number | Line | Flag | Any | Choice(&[str]) | TextList | Numbers | Table(&[Param])`.
+`Kind = Text | Number | Line | Flag | Any | Choice(&[str]) | TextList | Numbers`.
 `schema_of` renders the JSON schema and injects one required string property, `intent`, into every
 tool; no tool declares it.
 
 | tool | parameters, in index order |
 |---|---|
 | `read` | `path` req, `offset` (1-based), `limit` (default 500, capped by the output line limit) |
-| `edit` | `type` req (`exact`/`mass`), `path` req, `old`, `new`, `edits` table of `{line, text}` |
+| `edit` | `type` req (`exact`/`mass`), `path` req, `old`, `new`, `range` (`12-14` or `12`) |
 | `write` | `path` req, `content` req |
 | `cd` | `path` req |
 | `bash` | `command` req |
 | `alias` | `op` req (`add`/`list`/`del`), `name`, `command` |
 | `kairos` | `op` req (`now`/`after`/`every`/`list`/`status`/`result`/`cancel`), `type` (`command`/`text`), `content`, `timeout`, `delay`, `expr`, `count`, `id` |
 | `task` | `template` req, `vars`, `cwd`, `maxToolCalls`, `name` |
-| `final` | `op` req (`write`/`edit`/`read`/`submit`), `content`, `old`, `new`, `edits` |
+| `final` | `op` req (`write`/`edit`/`read`/`submit`), `content`, `old`, `new`, `range` |
 | `mcp` | `op` req (`list`/`call`), `server`, `tool`, `args` |
-| `web` | `op` req (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`net`/`screenshot`), `url`, `raw`, `query`, `provider` req, `page`, `selector`, `value`, `filter`, `max`, `full_page` |
+| `web` | `op` req (`read`/`search`/`open`/`click`/`fill`/`press`/`select`/`scroll`/`eval`/`screenshot`), `url`, `raw`, `query`, `provider`, `page`, `selector`, `value`, `full_page` |
 | `memo` | `op` req (`add`/`mod`/`del`/`show`/`history`/`list`), `scope` (`current`/`global`, default `current`), `name`, `content` |
 | `todo` | `op` req (`set`/`tick`/`view`), `items` (the whole list), `ids` (item numbers, 1-based), `done` (default true) |
 | `context` | `op` req (`query`/`show`), `anchor`, `direction` (`before`/`after`), `limit` (default 3), `tool` (a name or `all`, default `bash`), `ids` |
 
-`provider` is required on `web`: one search runs against exactly one provider, so a call that
-names none is refused rather than spread across several tabs.
+`provider` is read by `search` only: one search runs against exactly one provider, so a call that
+names none is refused rather than spread across several tabs, and the other operations leave it out.
 
 `cd` lands its result with `memo {kind: "cwd", path, from}`: the history card relativizes from it
 and the front end marks the directory as a temporary move.
@@ -91,12 +93,15 @@ and the front end marks the directory as a temporary move.
 ### ToolOutput
 
 ```text
-ToolOutput { text: String, memo: Option<Value>, effects: Vec<Effect>, stop: bool }
-ToolResult { call_id, ok, result, memo, spill, duration_ms, effects, stop }
+ToolOutput { text, fail: Option<String>, memo: Option<Value>, effects: Vec<Effect>, stop: bool }
+ToolResult { call_id, ok, result, reason: Option<String>, memo, spill, duration_ms, effects, stop }
 Spill      { name: String, content: String }
 ```
 
 - `text` is what the model reads; `memo` is the structured payload the front end renders.
+- `fail` is why a call was cut short; any value makes the result `ok: false`. The front door moves
+  it to `reason` and appends `[reason]` after the body and its artifact note, so the marker is the
+  result's last line whatever the truncation did.
 - `spill` is filled by the front door, never by a tool.
 - `effects` are side effects that must land with this tool result. A tool appends one; the front
   door stamps its `ts` before returning.
@@ -121,7 +126,8 @@ re-exported at the `tools` root; callers write the group they mean.
 Env {
   workspace: Workspace,      // root + this batch's cwd snapshot
   limits: Limits,            // lines, bytes
-  bash: BashEnv,             // timeout, interrupt, shell
+  bash: BashEnv,             // timeout, shell
+  stop: Arc<Stop>,           // the session's stop signal; see Stopping
   session: i64,
   batch_len: usize,
   tools: BTreeSet<String>,   // the session's list; the one gate
@@ -190,8 +196,10 @@ every segment once.
 
 The command itself runs in the session's shell (`Env.bash.shell`): `bash` or `zsh` on unix, `pwsh`
 or `niu` on windows. `platform::shell` builds the command line and the `#<ref>` read form;
-`platform::proc` starts it as its own process group and stops it group-wide, TERM then KILL. The
-guard belongs to the unix shells only; `pwsh` and `niu` run the line as written.
+`platform::proc` starts it as its own process group and stops it group-wide, TERM then KILL. A stop
+arrives through the `Stop` the runner registered after the spawn; the tool thread itself only
+receives, so nothing wakes it on a timer. The guard belongs to the unix shells only; `pwsh` and
+`niu` run the line as written.
 
 ### context
 
@@ -215,19 +223,52 @@ optional, so no tool joins the table without one. It carries only the least that
 the path for `read`, `write`, `edit` and `cd`, the truncated command for `bash`, the name and
 command for `alias add`, the operation for the tools whose parameters are the interesting part
 (`memo`, `todo`, `context`, `kairos`, `mcp`, `final`), the template and its answer name for `task`,
-and for `web` the operation plus the argument it names: URL, query, selector, expression or filter.
+and for `web` the operation plus the argument it names: URL, query, selector or expression.
 A tool name the table no longer holds shows its clipped arguments.
+
+### edit
+
+`type: exact` needs `old` (one unique run) and `new`; `type: mass` needs `range` (`12-14` or `12`)
+and `new`, which may be empty to remove the range. The other group's fields are refused.
+
+The answer names the lines that went, the lines that took their place, and how far the rest moved:
+
+```text
+replaced lines 12-14 (3) with 5 lines; below +2; file now 144 lines: /p/src/foo.rs
+```
 
 ### edit's memo
 
 ```text
-{ "kind": "diff", "atLine": n,
-  "deletions":  [{ "line": n, "text": old }],
-  "insertions": [{ "line": n, "text": new }] }
+exact: { "kind": "diff", "atLine": 12 }
+mass:  { "kind": "diff", "old": "<the replaced lines, no trailing newline>" }
 ```
 
-Both `exact` and `mass` answer this shape. The old text is kept because the file may be gone by the
-time a front end renders the call; `line` is where each fragment sat, `atLine` the first of them.
+A memo holds only what the request cannot supply: `exact` already carries `old` and `new`, so it
+names the line the match sat on; `mass` already carries the range, so it carries the text that was
+there. New line numbers, counts and the shift are the front end's arithmetic.
+
+### Stopping
+
+`Stop` lives in `platform::stop`: a flag plus a table of actions. `set` sets the flag and runs every
+action once, on the caller's thread; `on_stop` registers an action and runs it at once if the
+signal already fired; the returned `Hook` takes it off again when dropped. `reset` clears the flag
+at the start of a turn.
+
+A tool that blocks registers what stopping it means: `bash` TERMs its process group and KILLs it
+after `platform::proc`'s grace period. A tool that finishes in microseconds registers nothing, and
+the front door does not pretend otherwise.
+
+What a stop leaves behind depends on whether the call started:
+
+| call | history |
+|---|---|
+| started | one failed result, `[interrupted: the user stopped the turn]` as its last line |
+| never started | nothing: no request block, no result |
+
+A reply cut short mid-stream keeps no calls at all. Calls that arrived whole but never ran have
+their request blocks dropped before the turn's one commit. A call's own deadline is not a stop:
+`bash` reports `timed out after Ns` through `ToolOutput::failure`.
 
 ### MCP
 
@@ -297,6 +338,8 @@ not checked here; a bad argument is the server's error to report.
 8. One call runs at a time inside a session; different sessions run concurrently.
 9. A tool starts no job and writes no session row; it describes both and the loop acts.
 10. The session's list is the whole gate; a tool adds no condition of its own.
+11. A stop is one `Stop`; only a tool that blocks registers what stopping it means.
+12. A call that never ran leaves no block and no result.
 
 ## 2. Design intent
 

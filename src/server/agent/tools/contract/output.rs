@@ -12,6 +12,8 @@ pub struct ToolResult {
     pub call_id: String,
     pub ok: bool,
     pub result: String,
+    /// Why the call failed, when it failed by being cut short.
+    pub reason: Option<String>,
     pub memo: Option<String>,
     pub spill: Option<Spill>,
     pub duration_ms: u64,
@@ -70,6 +72,8 @@ pub enum AliasOp {
 #[derive(Debug)]
 pub struct ToolOutput {
     pub text: String,
+    /// A failure the text alone cannot state: the call was cut short, and why.
+    pub fail: Option<String>,
     pub memo: Option<Value>,
     pub effects: Vec<Effect>,
     pub stop: bool,
@@ -79,6 +83,7 @@ impl ToolOutput {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
+            fail: None,
             memo: None,
             effects: Vec::new(),
             stop: false,
@@ -88,6 +93,7 @@ impl ToolOutput {
     pub fn with_memo(text: impl Into<String>, memo: Value) -> Self {
         Self {
             text: text.into(),
+            fail: None,
             memo: Some(memo),
             effects: Vec::new(),
             stop: false,
@@ -101,6 +107,12 @@ impl ToolOutput {
 
     pub fn stop(mut self) -> Self {
         self.stop = true;
+        self
+    }
+
+    /// The call did not finish: the text stays the output so far, the reason rides beside it.
+    pub fn failure(mut self, reason: impl Into<String>) -> Self {
+        self.fail = Some(reason.into());
         self
     }
 }
