@@ -32,7 +32,11 @@ lives in the local section; the running round and the finished conversation both
 
 The running round is an ordered list of entries; each entry is a block or a notice. A block entry
 takes an upstream id when the round's receipt arrives; a notice never does. The receipt is checked
-by type first: the number of ids must equal the number of block entries, notices are not counted.
+by count first: the number of ids must equal the number of block entries, notices are not counted.
+A receipt that does not line up means the turn was cut short — a call that never ran leaves no
+block behind — so the running round keeps the screen while the receipt's own rows are fetched;
+those rows then lead, positions are taken from them in id order, and only then does the running
+round go. While that wait lasts, the next round's entries grow beside it and take over on arrival.
 
 ### Product layer
 
@@ -58,13 +62,21 @@ A running block is rebuilt whenever content arrives. Only its last segment can s
 ### Tool cards
 
 A tool exchange draws as one card, built from the request and the result it pairs with. The card
-shows one of three phases: `Pending` (no settled result yet), `Ok`, `Err`. The phase picks the edge,
-the fill and the glyph. The file a call names sits in the header in the path color.
+shows one of five phases: `Pending` (no settled result yet), `Ok`, `Err`, `Stopped` (the user ended
+the turn while it ran) and `Timeout` (its own deadline cut it). The phase picks the edge, the fill
+and the glyph. The two cut-short phases read the result's last line, which names the reason in
+brackets; that line is drawn in the warning color and everything above it keeps the output color,
+so a killed command's output is not repainted as an error. The file a call names sits in the header
+in the path color.
 
 The call half is read from the arguments as they stream: `partial` decodes the fields a fragment has
 reached, so an edit draws its `old`/`new` text and a write its numbered content before the arguments
 finish. Only a key that is itself complete is trusted; a value cut mid-string is drawn as far as it
 arrived.
+
+An `edit` result is drawn from its memo plus its arguments: the memo names what the request cannot
+(the line an `exact` match sat on, the text a `mass` range replaced) and the arguments carry the
+rest. A call with no diff memo — `final`'s `edit` — draws the same shape from its arguments alone.
 
 A diff line carries its text in one color end to end — marker, number, bar and body — and only the
 run that changed is reversed, with the indentation never part of it. Its sign and line number are

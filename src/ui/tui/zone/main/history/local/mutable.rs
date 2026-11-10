@@ -18,37 +18,54 @@ pub enum Entry {
     },
 }
 
-/// The running turn, in source order.
+/// Where one turn's entries grow: the blocks in source order, and the one still open.
 #[derive(Default)]
-pub struct Mutable {
+struct Region {
     entries: Vec<Entry>,
     open: Option<usize>,
 }
 
+/// The running turn. While a close waits for its rows, the next turn's entries grow beside it.
+#[derive(Default)]
+pub struct Mutable {
+    live: Region,
+    next: Option<Region>,
+}
+
 impl Mutable {
     pub fn clear(&mut self) {
-        self.entries.clear();
-        self.open = None;
+        self.live = Region::default();
+        self.next = None;
     }
 
-    pub fn len(&self) -> usize {
-        self.entries.len()
+    /// A close is waiting for its rows: the next turn's entries stay out of the way.
+    pub fn seal(&mut self) {
+        self.next = Some(Region::default());
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    /// The close settled: the turn goes, and whatever the next one already said takes its place.
+    pub fn adopt(&mut self) {
+        self.live = self.next.take().unwrap_or_default();
     }
 
     pub fn entries(&self) -> &[Entry] {
-        &self.entries
+        &self.live.entries
+    }
+
+    pub fn len(&self) -> usize {
+        self.live.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.live.entries.is_empty()
     }
 
     pub fn get(&self, at: usize) -> Option<&Entry> {
-        self.entries.get(at)
+        self.live.entries.get(at)
     }
 
     pub fn block(&self, at: usize) -> Option<&Block> {
-        match self.entries.get(at) {
+        match self.live.entries.get(at) {
             Some(Entry::Block(block)) => Some(block),
             _ => None,
         }
@@ -56,47 +73,51 @@ impl Mutable {
 
     /// The result block of this call, when it is already in hand.
     pub fn result_of(&self, call_id: &str) -> Option<&Block> {
-        let at = self.find(BlockKind::ToolResult, call_id)?;
+        let at = self.live.find(BlockKind::ToolResult, call_id)?;
         self.block(at)
     }
 
     /// The position of this call's request, when it is already in hand.
     pub fn request_at(&self, call_id: &str) -> Option<usize> {
-        self.find(BlockKind::ToolRequest, call_id)
+        self.live.find(BlockKind::ToolRequest, call_id)
     }
 
     pub fn take(&mut self) -> Vec<Entry> {
-        self.open = None;
-        std::mem::take(&mut self.entries)
+        self.live.open = None;
+        std::mem::take(&mut self.live.entries)
     }
 
     pub fn text(&mut self, piece: &str) -> usize {
-        self.grow(BlockKind::Assistant, piece)
+        let region = self.target();
+        region.grow(BlockKind::Assistant, piece)
     }
 
     pub fn thinking(&mut self, piece: &str) -> usize {
-        self.grow(BlockKind::Reasoning, piece)
+        let region = self.target();
+        region.grow(BlockKind::Reasoning, piece)
     }
 
     pub fn boundary(&mut self) {
-        self.open = None;
+        self.target().open = None;
     }
 
     /// One wake message, its own block: the text names the reminder.
     pub fn wake(&mut self, text: &str) -> usize {
+        let region = self.target();
         let mut block = blank(BlockKind::Wake, None);
         block.text = Some(text.to_string());
-        self.open = None;
-        self.entries.push(Entry::Block(block));
-        self.entries.len() - 1
+        region.open = None;
+        region.entries.push(Entry::Block(block));
+        region.entries.len() - 1
     }
 
     /// A message this front end just put out: it leads the turn, above the reply.
     pub fn echo(&mut self, text: &str) -> usize {
+        let region = self.target();
         let mut block = blank(BlockKind::User, None);
         block.text = Some(text.to_string());
-        self.entries.insert(0, Entry::Block(block));
-        if let Some(open) = self.open.as_mut() {
+        region.entries.insert(0, Entry::Block(block));
+        if let Some(open) = region.open.as_mut() {
             *open += 1;
         }
         0
@@ -104,10 +125,11 @@ impl Mutable {
 
     /// The echo opened nothing: the leading message goes.
     pub fn retract(&mut self) {
-        let leading = matches!(self.entries.first(), Some(Entry::Block(block)) if block.kind == BlockKind::User);
+        let region = self.target();
+        let leading = matches!(region.entries.first(), Some(Entry::Block(block)) if block.kind == BlockKind::User);
         if leading {
-            self.entries.remove(0);
-            if let Some(open) = self.open.as_mut() {
+            region.entries.remove(0);
+            if let Some(open) = region.open.as_mut() {
                 *open = open.saturating_sub(1);
             }
         }
@@ -115,14 +137,16 @@ impl Mutable {
 
     /// A line only this front end says: it closes whatever block was still growing.
     pub fn notice(&mut self, text: String, level: Level, life: Life) -> usize {
-        self.open = None;
-        self.entries.push(Entry::Notice { text, level, life });
-        self.entries.len() - 1
+        let region = self.target();
+        region.open = None;
+        region.entries.push(Entry::Notice { text, level, life });
+        region.entries.len() - 1
     }
 
     pub fn arguments(&mut self, call_id: &str, name: &str, piece: &str) -> usize {
-        let at = self.request(call_id);
-        let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
+        let region = self.target();
+        let at = region.request(call_id);
+        let Some(Entry::Block(block)) = region.entries.get_mut(at) else {
             return at;
         };
         if !name.is_empty() && block.name.as_deref().is_none_or(str::is_empty) {
@@ -139,8 +163,9 @@ impl Mutable {
         args: &str,
         intent: Option<&str>,
     ) -> usize {
-        let at = self.request(call_id);
-        let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
+        let region = self.target();
+        let at = region.request(call_id);
+        let Some(Entry::Block(block)) = region.entries.get_mut(at) else {
             return at;
         };
         block.name = Some(name.to_string());
@@ -150,8 +175,9 @@ impl Mutable {
     }
 
     pub fn tool_progress(&mut self, call_id: &str, piece: &str) -> usize {
-        let at = self.result(call_id);
-        let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
+        let region = self.target();
+        let at = region.result(call_id);
+        let Some(Entry::Block(block)) = region.entries.get_mut(at) else {
             return at;
         };
         block.result.get_or_insert_with(String::new).push_str(piece);
@@ -166,8 +192,9 @@ impl Mutable {
         memo: Option<&str>,
         duration_ms: i64,
     ) -> usize {
-        let at = self.result(call_id);
-        let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
+        let region = self.target();
+        let at = region.result(call_id);
+        let Some(Entry::Block(block)) = region.entries.get_mut(at) else {
             return at;
         };
         block.ok = Some(ok);
@@ -177,6 +204,13 @@ impl Mutable {
         at
     }
 
+    /// Where this turn's writes land: the live region, or the one a seal opened.
+    fn target(&mut self) -> &mut Region {
+        self.next.as_mut().unwrap_or(&mut self.live)
+    }
+}
+
+impl Region {
     /// Append to the open block of this kind, or open one.
     fn grow(&mut self, kind: BlockKind, piece: &str) -> usize {
         let at = match self.open.filter(|at| {
@@ -186,7 +220,7 @@ impl Mutable {
             )
         }) {
             Some(at) => at,
-            None => {
+            _ => {
                 let mut block = blank(kind, None);
                 block.text = Some(String::new());
                 self.entries.push(Entry::Block(block));
@@ -202,6 +236,13 @@ impl Mutable {
             text.push_str(piece);
         }
         at
+    }
+
+    fn find(&self, kind: BlockKind, call_id: &str) -> Option<usize> {
+        self.entries.iter().position(|entry| match entry {
+            Entry::Block(block) => block.kind == kind && block.call_id.as_deref() == Some(call_id),
+            Entry::Notice { .. } => false,
+        })
     }
 
     fn request(&mut self, call_id: &str) -> usize {
@@ -222,13 +263,6 @@ impl Mutable {
                 self.entries.push(Entry::Block(block));
                 self.entries.len() - 1
             })
-    }
-
-    fn find(&self, kind: BlockKind, call_id: &str) -> Option<usize> {
-        self.entries.iter().position(|entry| match entry {
-            Entry::Block(block) => block.kind == kind && block.call_id.as_deref() == Some(call_id),
-            Entry::Notice { .. } => false,
-        })
     }
 }
 

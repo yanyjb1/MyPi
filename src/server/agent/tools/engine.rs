@@ -110,26 +110,24 @@ impl Engine {
         halted: &mut bool,
     ) -> ToolResult {
         let Some(tool) = registry::spec(&call.name) else {
-            return failed(call, format!("unknown tool: {}", call.name), started);
+            let why = format!("unknown tool: {}", call.name);
+            return self.refused(input, call, &why, started);
         };
         if !env.allows(tool.name) {
-            return failed(
-                call,
-                format!("tool `{}` is disabled by the active profile", tool.name),
-                started,
-            );
+            let why = format!("tool `{}` is disabled by the active profile", tool.name);
+            return self.refused(input, call, &why, started);
         }
         let charged = tool.name != "final";
         if charged && child.is_some_and(|c| c.left() == 0) {
-            return failed(
-                call,
-                "tool-call budget exhausted; finish with `final submit`",
-                started,
-            );
+            let why = "tool-call budget exhausted; finish with `final submit`";
+            return self.refused(input, call, why, started);
         }
         let args = match Args::fill(tool.params, &call.args) {
             Ok(args) => args,
-            Err(e) => return failed(call, e.to_string(), started),
+            Err(e) => {
+                let why = e.to_string();
+                return self.refused(input, call, &why, started);
+            }
         };
         self.start(input, call);
         // A stop that lands while this call runs is the front door's to report, not the tool's.
@@ -208,6 +206,19 @@ impl Engine {
                 intent: call.intent.clone(),
             }),
         });
+    }
+
+    /// A call refused before it runs: the live line hears it like any other result.
+    fn refused(
+        &self,
+        input: &BatchInput,
+        call: &ToolCall,
+        why: &str,
+        started: Instant,
+    ) -> ToolResult {
+        self.start(input, call);
+        self.end(input, call, false, why, None, started);
+        failed(call, why, started)
     }
 
     fn end(

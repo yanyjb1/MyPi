@@ -3,6 +3,10 @@
 pub(crate) const OK: &str = "[ok]";
 pub(crate) const ERR: &str = "[!!]";
 pub(crate) const PENDING: &str = "[*]";
+/// The user stopped the turn.
+pub(crate) const STOPPED: &str = "[-]";
+/// The call's own deadline passed.
+pub(crate) const TIMEOUT: &str = "[!]";
 
 pub(crate) const SEP: &str = "·";
 

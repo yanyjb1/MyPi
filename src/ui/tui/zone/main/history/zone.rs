@@ -158,6 +158,8 @@ pub struct HistoryZone {
     pub(super) asking: HashSet<[i64; 2]>,
     /// The newest block id this zone has numbered.
     pub(super) landed: i64,
+    /// A closed turn whose receipt does not line up: the ranges its own rows must come from.
+    pub(super) pending: Option<Vec<[i64; 2]>>,
     /// A fresh attach lays the structure out again.
     pub(super) needs_layout: bool,
     /// The place the window is waiting to point at, once its content is here.
@@ -190,6 +192,7 @@ impl Default for HistoryZone {
             structure: Turns::default(),
             asking: HashSet::new(),
             landed: 0,
+            pending: None,
             needs_layout: false,
             pending_focus: None,
             outbox: Vec::new(),
@@ -278,6 +281,13 @@ impl HistoryZone {
         self.run.forget(Idx::Fixed(num));
     }
 
+    /// Whether a waiting close owns this block id.
+    pub(super) fn pending_covers(&self, id: i64) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|ranges| ranges.iter().any(|[lo, hi]| (*lo..=*hi).contains(&id)))
+    }
+
     /// A line this front end has to say, on its own slot.
     pub fn notice(&mut self, text: String, level: Level, life: Life) {
         self.local.notice(text, level, life);
@@ -300,6 +310,7 @@ impl HistoryZone {
         self.todo_panel.changed();
         self.pending_focus = None;
         self.landed = 0;
+        self.pending = None;
         self.needs_layout = false;
     }
 

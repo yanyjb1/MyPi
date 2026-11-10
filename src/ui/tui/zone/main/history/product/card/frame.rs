@@ -237,14 +237,32 @@ pub(crate) enum State {
     Pending,
     Ok,
     Err,
+    /// The user stopped the turn while the call ran; its output is kept.
+    Stopped,
+    /// The call's own deadline cut it short.
+    Timeout,
+}
+
+/// Why a call was cut short, as the last line of its result states it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cut {
+    Interrupted,
+    TimedOut,
 }
 
 impl State {
     pub(crate) fn of(result: Option<ToolOutcome<'_>>) -> State {
-        match result.and_then(|o| o.ok) {
+        let Some(o) = result else {
+            return State::Pending;
+        };
+        match o.ok {
             None => State::Pending,
             Some(true) => State::Ok,
-            Some(false) => State::Err,
+            Some(false) => match cut_of(o.text) {
+                Some(Cut::Interrupted) => State::Stopped,
+                Some(Cut::TimedOut) => State::Timeout,
+                None => State::Err,
+            },
         }
     }
 
@@ -253,6 +271,8 @@ impl State {
             State::Pending => g::PENDING,
             State::Ok => g::OK,
             State::Err => g::ERR,
+            State::Stopped => g::STOPPED,
+            State::Timeout => g::TIMEOUT,
         }
     }
 
@@ -261,6 +281,7 @@ impl State {
             State::Pending => Ink::Accent,
             State::Ok => Ink::Fixed(fixed::OK),
             State::Err => Ink::Fixed(fixed::ERR),
+            State::Stopped | State::Timeout => Ink::Fixed(fixed::WARN),
         }
     }
 
@@ -269,16 +290,29 @@ impl State {
             State::Pending => Ink::Accent,
             State::Ok => Ink::Fixed(fixed::TOOL_EDGE_OK),
             State::Err => Ink::Fixed(fixed::TOOL_EDGE_ERR),
+            State::Stopped | State::Timeout => Ink::Fixed(fixed::WARN),
         }
     }
 
     fn bg(self) -> Ink {
         Ink::Fixed(match self {
-            State::Pending => fixed::TOOL_BG_PENDING,
+            State::Pending | State::Stopped | State::Timeout => fixed::TOOL_BG_PENDING,
             State::Ok => fixed::TOOL_BG_OK,
             State::Err => fixed::TOOL_BG_ERR,
         })
     }
+}
+
+/// The cut-short reason a result carries: its last non-empty line, in brackets.
+fn cut_of(text: &str) -> Option<Cut> {
+    let last = text.lines().rev().find(|line| !line.trim().is_empty())?;
+    let inner = last.trim().strip_prefix('[')?.strip_suffix(']')?;
+    if inner.starts_with("interrupted:") {
+        return Some(Cut::Interrupted);
+    }
+    inner
+        .starts_with("timed out after ")
+        .then_some(Cut::TimedOut)
 }
 
 /// What one tool family draws for the call and for the result.
@@ -311,10 +345,9 @@ pub(crate) trait ToolRenderer {
         default_call(b.name, b.args)
     }
 
-    fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
+    fn result_sections(&self, _b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
         let lines = match o.ok {
             Some(false) => error_body(o.text),
-            _ if b.name == "read" => file::read_body(o),
             _ => output_lines(o.text),
         };
         vec![Section { label: None, lines }]
@@ -409,15 +442,27 @@ pub(crate) fn output_lines(text: &str) -> Vec<Row> {
         .collect()
 }
 
-/// The failure text inside a card: every line in the error color.
+/// The text inside a card when the call failed. A call cut short keeps its output in the output
+/// ink and states why in its last line; anything else is an error end to end.
 pub(crate) fn error_body(text: &str) -> Vec<Row> {
     if text.trim().is_empty() {
         return output_lines(text);
     }
-    text.lines()
+    let mut lines: Vec<&str> = text
+        .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| Row::of(Lead::None, vec![Run::fixed(line, fixed::ERR)]))
-        .collect()
+        .collect();
+    let cut = cut_of(text).is_some();
+    let reason = if cut { lines.pop() } else { None };
+    let ink = if cut { fixed::TOOL_OUTPUT } else { fixed::ERR };
+    let mut out: Vec<Row> = lines
+        .into_iter()
+        .map(|line| Row::of(Lead::None, vec![Run::fixed(line, ink)]))
+        .collect();
+    if let Some(reason) = reason {
+        out.push(Row::of(Lead::None, vec![Run::fixed(reason, fixed::WARN)]));
+    }
+    out
 }
 
 /// The call as JSON, or as written when it does not parse.

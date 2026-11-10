@@ -35,12 +35,13 @@ HistoryZone
  ├── run: Run                   ── the laid segments, in render order
  ├── range: Range               ── `Latest` or one fixed place, plus the screen height
  ├── todo_panel: TodoPanel      ── the checklist's rows
- └── thinking / tool / fold / scroll_height / focus_line / placeholder / cwd
+ └── thinking / tool / fold / scroll_height / focus_line / placeholder / cwd / pending
 ```
 
 - `wire::read_frame` decodes one frame. A piece appends to the running entry and re-lays that
   entry's last segment, and the other half of its tool exchange with it. A round close hands the
-  entries over; the run starts again.
+  entries over and the run starts again; when the receipt does not line up, `pending` holds its
+  ranges, the running turn stays on screen, and its rows finish the handover when they land.
 - `zone::render_rows` spends the budget from `range`, draws the checklist under the transcript, and
   reports any block whose content is missing.
 - `Range::rows` walks forward from the start, laying segments as it goes; `Range::scroll` moves the

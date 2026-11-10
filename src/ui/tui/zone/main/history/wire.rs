@@ -3,7 +3,8 @@
 use serde_json::{Value, json};
 
 use super::focus::Target;
-use super::local::content::Block;
+use super::local::content::{Block, Kind as BlockKind};
+use super::local::mutable::Entry;
 use super::local::section::Idx;
 use super::local::slot::{Level, Life};
 use super::product::Task;
@@ -185,25 +186,82 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         .get("ranges")
         .and_then(ranges_of)
         .unwrap_or_default();
-    let handed = zone.local.handover(&ranges);
-    if handed {
+    // A close still waiting for its rows hands over now: the screen moves on either way.
+    take_pending(zone);
+    // A call that did not finish cleanly states why in the row the turn kept, not in the stream.
+    let failed = has_failure(zone);
+    ask_blocks(zone, &ranges, failed);
+    if zone.local.handover(&ranges) {
         let last = ranges.iter().map(|[_, hi]| *hi).max().unwrap_or(0);
         zone.landed = zone.landed.max(last);
-    } else {
+        zone.run.clear();
+        zone.outbox.push(Request::Structure);
+    } else if ranges.is_empty() {
         zone.local.running_mut().clear();
+        zone.run.clear();
+        zone.outbox.push(Request::Structure);
+    } else {
+        // The running turn does not line up with the receipt: it holds the screen until the
+        // receipt's own rows are in hand, and the next turn's entries wait beside it.
+        zone.local.running_mut().seal();
+        zone.pending = Some(ranges);
+        settle_pending(zone);
     }
-    zone.run.clear();
+    zone.shouts
+        .push(Shout::new(name::BUSY, json!({"on": false})));
+}
+
+/// Whether this turn holds a call that failed: its reason lives in the stored row alone.
+fn has_failure(zone: &HistoryZone) -> bool {
+    zone.local
+        .running()
+        .entries()
+        .iter()
+        .any(|entry| match entry {
+            Entry::Block(block) => block.kind == BlockKind::ToolResult && block.ok == Some(false),
+            Entry::Notice { .. } => false,
+        })
+}
+
+/// Ask for every range whose blocks are not in hand; `all` takes them whether they are or not.
+fn ask_blocks(zone: &mut HistoryZone, ranges: &[[i64; 2]], all: bool) {
     for [lo, hi] in ranges {
-        if (lo..=hi).all(|id| zone.local.has(id)) {
+        if !all && (*lo..=*hi).all(|id| zone.local.has(id)) {
             continue;
         }
         zone.outbox.push(Request::Blocks {
-            ranges: vec![[lo, hi]],
+            ranges: vec![[*lo, *hi]],
         });
     }
+}
+
+/// Whether every id of these ranges has its content.
+fn covered(zone: &HistoryZone, ranges: &[[i64; 2]]) -> bool {
+    ranges
+        .iter()
+        .all(|[lo, hi]| (*lo..=*hi).all(|id| zone.local.has(id)))
+}
+
+/// Finish a waiting close once its rows are in hand.
+fn settle_pending(zone: &mut HistoryZone) {
+    let ready = zone
+        .pending
+        .as_ref()
+        .is_some_and(|ranges| covered(zone, ranges));
+    if ready {
+        take_pending(zone);
+    }
+}
+
+/// Take the waiting close's positions from its receipt, whether its rows are here or not.
+fn take_pending(zone: &mut HistoryZone) {
+    let Some(ranges) = zone.pending.take() else {
+        return;
+    };
+    zone.local.settle(&ranges);
+    zone.landed = ranges.iter().map(|[_, hi]| *hi).max().unwrap_or(0);
+    zone.run.clear();
     zone.outbox.push(Request::Structure);
-    zone.shouts
-        .push(Shout::new(name::BUSY, json!({"on": false})));
 }
 
 /// Decode a `blocks` array, keep the content, and number the fresh ones.
@@ -228,7 +286,7 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
                 }
             }
         }
-        if !fresh {
+        if !fresh || zone.pending_covers(id) {
             continue;
         }
         zone.landed = id;
@@ -239,6 +297,9 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
         if zone.local.num_of(id).is_none() {
             zone.local.append_id(id);
         }
+    }
+    if zone.pending.is_some() {
+        settle_pending(zone);
     }
     zone.settle_focus();
 }
@@ -344,7 +405,7 @@ fn reconcile(zone: &mut HistoryZone) {
     for round in zone.structure.rounds().iter().rev() {
         for [lo, hi] in &round.ranges {
             for id in *lo..=*hi {
-                if id > floor && zone.local.num_of(id).is_none() {
+                if id > floor && zone.local.num_of(id).is_none() && !zone.pending_covers(id) {
                     zone.local.append_id(id);
                 }
             }

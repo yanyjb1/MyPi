@@ -17,23 +17,12 @@ pub(crate) struct FileTools;
 
 impl ToolRenderer for FileTools {
     fn path(&self, b: &ToolBlock<'_>) -> Option<String> {
-        let path = path_of(b)?;
-        if b.name != "read" {
-            return Some(path);
-        }
-        let details = b.result?.details?;
-        let offset = details.get("offset").and_then(|v| v.as_u64()).unwrap_or(1);
-        let lines = details.get("lines").and_then(|v| v.as_u64()).unwrap_or(0);
-        if offset > 1 && lines > 0 {
-            return Some(format!("{path}:{}-{}", offset, offset + lines - 1));
-        }
-        Some(path)
+        path_of(b)
     }
 
     fn meta(&self, b: &ToolBlock<'_>) -> Vec<String> {
         let mut out = Vec::new();
-        if b.name == "write"
-            && let Some(content) = partial::text(b.args, "content")
+        if let Some(content) = partial::text(b.args, "content")
             && !content.is_empty()
         {
             out.push(format!("{} lines", content.lines().count()));
@@ -42,11 +31,7 @@ impl ToolRenderer for FileTools {
     }
 
     fn call_body(&self, b: &ToolBlock<'_>) -> Vec<Row> {
-        if b.name == "write" {
-            write_preview(b)
-        } else {
-            Vec::new()
-        }
+        write_preview(b)
     }
 }
 

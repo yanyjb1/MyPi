@@ -146,8 +146,18 @@ fn edit_result(b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Row> {
             let old = old.or_else(|| partial::text(b.args, "old"));
             diff_rows(b.args, at, old)
         }
-        ToolView::Plain { text } => output_lines(&text),
+        ToolView::Plain { text } => match from_args(b.args) {
+            Some(rows) => rows,
+            None => output_lines(&text),
+        },
     }
+}
+
+/// A call that hands back no memo — `final`'s edit — draws the change from its own arguments.
+fn from_args(args: &str) -> Option<Vec<Row>> {
+    let at = range_start(args);
+    let old = partial::text(args, "old");
+    (at.is_some() || old.is_some()).then(|| diff_rows(args, at, old))
 }
 
 /// The first line a `mass` call names.
