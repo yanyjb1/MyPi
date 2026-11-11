@@ -4,9 +4,12 @@ use ratatui::style::Modifier;
 use serde_json::Value;
 
 use super::super::super::local::content::Block;
+use super::super::super::prefetch::color;
 use super::super::super::prefetch::color::code;
-use super::super::super::row::{Ink, Lead, Row, Run};
+use super::super::super::row::{self, Ink, Lead, Row, Run};
+use super::super::fold::breaks;
 use super::super::opts::Opts;
+use super::super::segment;
 use super::fold;
 use super::tool::{ToolBlock, ToolOutcome};
 use super::{alias, draft, file, kairos, mcp, partial, task, todo, web};
@@ -92,6 +95,70 @@ fn done(mut rows: Vec<Row>, block: &Block) -> Vec<Row> {
         rows.push(Row::of(Lead::None, vec![Run::fixed(text, fixed::DIM)]));
     }
     rows
+}
+
+/// Columns a line number takes, the way the card gutter always sized itself.
+pub(super) const GUTTER_MIN: usize = 3;
+
+/// A block of markdown as the conversation lays it: prose wrapped at this width, a fenced block
+/// colored, a table laid out. Every source line carries its number; a table's layout has no
+/// source line per row, so only its first row is numbered. The card draws its own left edge, so
+/// every row loses its lead.
+pub(super) fn markdown_numbered(text: &str, width: usize) -> Vec<Row> {
+    let gutter = gutter_of(text);
+    let avail = width.saturating_sub(gutter + 1).max(1);
+    let mut out: Vec<Row> = Vec::new();
+    for cut in segment::split_from(text, 0) {
+        let start = line_of(text, cut.at);
+        for (at, group) in color::rows_grouped(&cut.seg, avail, false)
+            .into_iter()
+            .enumerate()
+        {
+            for (i, row) in group.into_iter().enumerate() {
+                let head = if i == 0 {
+                    Run::fixed(format!("{:>gutter$} ", start + at), fixed::DIM)
+                } else {
+                    Run::fixed(" ".repeat(gutter + 1), fixed::DIM)
+                };
+                let mut runs = vec![head];
+                runs.extend(row.runs);
+                out.push(Row::of(Lead::None, runs));
+            }
+        }
+    }
+    out
+}
+
+/// Columns the numbers of this text take.
+pub(super) fn gutter_of(text: &str) -> usize {
+    text.lines().count().to_string().len().max(GUTTER_MIN)
+}
+
+/// The 1-based source line a byte offset sits on.
+fn line_of(text: &str, at: usize) -> usize {
+    let at = at.min(text.len());
+    text.as_bytes()[..at]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count()
+        + 1
+}
+
+/// Break every row at the columns the card leaves; a continued row starts at the card's own
+/// left edge, with no marker and no extra indent.
+pub(super) fn wrap_rows(rows: Vec<Row>, width: usize) -> Vec<Row> {
+    let width = width.max(1);
+    let mut out: Vec<Row> = Vec::new();
+    for row in rows {
+        let text: String = row.runs.iter().map(|run| run.text.as_str()).collect();
+        let cuts = breaks(&text, width.saturating_sub(row.lead.width()));
+        if cuts.is_empty() {
+            out.push(row);
+            continue;
+        }
+        out.extend(row::split(&row.runs, &cuts, row.lead));
+    }
+    out
 }
 
 /// Header, labeled sections, closing edge.

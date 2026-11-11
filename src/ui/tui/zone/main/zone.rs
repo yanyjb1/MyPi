@@ -111,9 +111,9 @@ impl MainZone {
 impl Zone for MainZone {
     fn keys(&self) -> Vec<Claim> {
         let mut out = Vec::new();
-        out.extend_from_slice(history::zone::CLAIMS);
-        out.extend_from_slice(input::InputZone::CLAIMS);
-        out.extend_from_slice(reserved::ReservedZone::CLAIMS);
+        out.extend_from_slice(self.history.claims());
+        out.extend_from_slice(self.input.claims());
+        out.extend_from_slice(self.reserved.claims());
         out
     }
 

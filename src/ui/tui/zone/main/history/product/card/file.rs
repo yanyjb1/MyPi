@@ -4,13 +4,12 @@ use ratatui::style::Modifier;
 
 use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
+use super::frame::{GUTTER_MIN, gutter_of, markdown_numbered, wrap_rows};
 use super::{
     State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, call_input, error_under, expand_tabs,
     indentation, partial, path_of, relativize,
 };
 use crate::ui::tui::theme::fixed;
-
-const WRITE_GUTTER_MIN_WIDTH: usize = 3;
 
 pub(crate) struct FileTools;
 
@@ -125,7 +124,7 @@ fn flush_numbered(numbered: &mut Vec<(usize, String)>, out: &mut Vec<Row>) {
         .map(|(n, _)| n.to_string().len())
         .max()
         .unwrap_or(1)
-        .max(WRITE_GUTTER_MIN_WIDTH);
+        .max(GUTTER_MIN);
     for (n, text) in numbered.drain(..) {
         let mut runs = vec![Run::fixed(format!("{n:>width$}│"), fixed::DIM)];
         let hl = code::line(&text, None);
@@ -138,15 +137,64 @@ fn flush_numbered(numbered: &mut Vec<(usize, String)>, out: &mut Vec<Row>) {
     }
 }
 
+/// How a written file's content is drawn, decided by the path it names.
+enum Body {
+    /// A document: the conversation's own markdown rendering, numbered by source line.
+    Markdown,
+    /// Plain text: numbered, indentation kept, long lines continued.
+    Text,
+    /// Source: colored line by line, never wrapped.
+    Code,
+}
+
+fn body_of(path: &str) -> Body {
+    // The alias table answers with a row's first spelling, so markdown comes back as `md`.
+    match code::language_for_path(path) {
+        Some("md") => Body::Markdown,
+        Some(_) => Body::Code,
+        None => Body::Text,
+    }
+}
+
 pub(crate) fn write_preview(b: &ToolBlock<'_>) -> Vec<Row> {
     let content = partial::text(b.args, "content").unwrap_or_default();
     if content.trim().is_empty() {
         return Vec::new();
     }
-    let lang = code::language_for_path(&partial::text(b.args, "path").unwrap_or_default());
+    let path = partial::text(b.args, "path").unwrap_or_default();
+    match body_of(&path) {
+        Body::Markdown => markdown_numbered(&content, b.inner_width()),
+        Body::Text => text_preview(&content, b.inner_width()),
+        Body::Code => code_preview(&content, &path),
+    }
+}
+
+/// Plain text: every source line numbered, its indentation kept, long lines continued.
+fn text_preview(content: &str, width: usize) -> Vec<Row> {
+    let gutter = gutter_of(content);
+    let mut out: Vec<Row> = Vec::new();
+    for (i, line) in content.lines().enumerate() {
+        let mut runs = vec![Run::fixed(format!("{:>gutter$} ", i + 1), fixed::DIM)];
+        let (glyphs, body) = indentation(line);
+        if !glyphs.is_empty() {
+            runs.push(Run::with(
+                glyphs,
+                Some(Ink::Fixed(fixed::DIM)),
+                Modifier::DIM,
+            ));
+        }
+        runs.push(Run::plain(body));
+        out.push(Row::of(Lead::None, runs));
+    }
+    wrap_rows(out, width)
+}
+
+/// Source: colored line by line, its own width the reader's business.
+fn code_preview(content: &str, path: &str) -> Vec<Row> {
+    let lang = code::language_for_path(path);
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
-    let gutter = total.to_string().len().max(WRITE_GUTTER_MIN_WIDTH);
+    let gutter = total.to_string().len().max(GUTTER_MIN);
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let mut runs = vec![Run::fixed(format!("{:>gutter$} ", i + 1), fixed::DIM)];

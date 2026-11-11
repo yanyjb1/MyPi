@@ -64,6 +64,10 @@ fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
             if content.get("signal").and_then(Value::as_str) == Some("rewind") {
                 zone.pin.clear();
                 zone.tick = 0;
+                // The cut rewrote the rounds: whatever a round was waiting on names rows the
+                // session no longer has, and nothing may stay exempt from the budget for them.
+                zone.pending = None;
+                zone.asking.clear();
                 zone.outbox.push(Request::Structure);
             }
             zone.shouts.push(Shout::new(name::SIGNAL, content.clone()));
@@ -252,6 +256,12 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         zone.shouts
             .push(Shout::new(name::BUSY, json!({"on": false})));
     }
+    // The running region lives exactly as long as one round: once the receipt has landed and
+    // nothing is owed by the backend, it must be empty.
+    debug_assert!(
+        zone.pending.is_some() || zone.local.running().entries().is_empty(),
+        "the running region outlived its round"
+    );
 }
 
 /// Whether this turn holds a call that failed: its reason lives in the stored row alone.
@@ -266,22 +276,30 @@ fn has_failure(zone: &HistoryZone) -> bool {
         })
 }
 
-/// Ask for a receipt's rows. A range asked for is noted so the draw does not ask again.
+/// Ask for a receipt's rows. One round is one request: its rows arrive together, so the
+/// handover it feeds is one event. Every range asked for is noted so the draw does not ask again.
 fn ask_blocks(zone: &mut HistoryZone, ranges: &[[i64; 2]]) {
-    for [lo, hi] in ranges {
-        zone.asking.insert([*lo, *hi]);
-        zone.outbox.push(Request::Blocks {
-            ranges: vec![[*lo, *hi]],
-        });
+    if ranges.is_empty() {
+        return;
     }
+    for range in ranges {
+        zone.asking.insert(*range);
+    }
+    zone.outbox.push(Request::Blocks {
+        ranges: ranges.to_vec(),
+    });
 }
 
 /// Finish a waiting close once the receipt's rows are all in hand.
+///
+/// `asking` is the one record of what is still owed: `take_blocks` drops a range from it the
+/// moment every id of that range has its content, so the round is done when none of its ranges
+/// is left there.
 fn settle_pending(zone: &mut HistoryZone) {
     let ready = zone
         .pending
         .as_ref()
-        .is_some_and(|ranges| covered(zone, ranges));
+        .is_some_and(|ranges| ranges.iter().all(|range| !zone.asking.contains(range)));
     if !ready {
         return;
     }
@@ -292,13 +310,6 @@ fn settle_pending(zone: &mut HistoryZone) {
     zone.shouts
         .push(Shout::new(name::BUSY, json!({"on": false})));
     zone.outbox.push(Request::Structure);
-}
-
-/// Whether every id of these ranges has its content.
-fn covered(zone: &HistoryZone, ranges: &[[i64; 2]]) -> bool {
-    ranges
-        .iter()
-        .all(|[lo, hi]| (*lo..=*hi).all(|id| zone.local.has(id)))
 }
 
 /// Decode a `blocks` array: every row carries its id and takes the slot that id owns.
@@ -323,10 +334,11 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
             }
         }
     }
-    settle_pending(zone);
     // A range whose blocks are all in hand is no longer waiting: it stops exempting content.
+    // This runs before the wait is judged, because `asking` is what judges it.
     zone.asking
         .retain(|[lo, hi]| !(*lo..=*hi).all(|id| zone.local.has(id)));
+    settle_pending(zone);
     zone.settle_focus();
 }
 

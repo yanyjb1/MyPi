@@ -26,9 +26,10 @@ impl Session {
         self.act("call", "pools", json!({}));
     }
 
-    /// `call config`: one configuration key.
+    /// `call config`: one configuration key. Not an action on the attached session, so no session
+    /// field rides along.
     pub fn config(&mut self, key: &str) {
-        self.act("call", "config", json!({"key": key}));
+        self.send("call", "config", json!({"key": key}), true);
     }
 
     /// `call blocks`: closed id ranges.

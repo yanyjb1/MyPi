@@ -9,16 +9,17 @@ use crate::ui::tui::zone::main::history::product::natural;
 use crate::ui::tui::zone::main::history::product::segment::Segment;
 use crate::ui::tui::zone::main::history::row::{Ink, Lead, Row, Run};
 
-/// One segment's rows: each natural line colored, then broken at the width.
-pub fn rows(seg: &Segment, width: usize, thinking: bool) -> Vec<Row> {
-    let mut out: Vec<Row> = Vec::new();
+/// One segment's rows: each natural line colored, then broken at the width, one group per
+/// source line.
+pub fn rows_grouped(seg: &Segment, width: usize, thinking: bool) -> Vec<Vec<Row>> {
+    let mut out: Vec<Vec<Row>> = Vec::new();
     for line in natural::lines(seg) {
         let mut laid = markdown::rows(&line);
         let mut runs = laid.pop().map(|row| row.runs).unwrap_or_default();
         if thinking {
             chain(&mut runs);
         }
-        out.extend(fold_row(Row::of(Lead::First, runs), width));
+        out.push(fold_row(Row::of(Lead::First, runs), width));
     }
     out
 }

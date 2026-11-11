@@ -14,20 +14,20 @@ a type of its own, and nothing is rewritten on the way out.
 | window | holds | keyed by |
 |---|---|---|
 | `Structure` | the rounds: turn id plus closed block ranges, newest first | turn id |
-| `ContentCache` | whole block rows, exactly as an answer carried them | block id |
+| `ContentCache` | whole blocks, exactly as an answer carried them | block id |
 
 - Content budget: `config.ui.session.preloadCache`, asked once at connect through `call config`;
   its answer feeds the window and is not forwarded.
 - Eviction: the earliest admission goes first, then the lowest id.
 - A pushed stream frame carrying `turn` and `ranges` sets that round.
-- A `call init` answer replaces both windows; a `call blocks` answer merges rows; a `post delete`
+- A `call init` answer replaces both windows; a `call blocks` answer merges blocks; a `post delete`
   answer for the attached session detaches.
 
 ### The rewind ledger
 
 A `post rewind` is noted before its frame leaves: the spot it names (a round and a block) is the
 whole of what this layer needs. When an accepted reply comes back the structure is cut at that
-spot and the rows outside it are dropped. A refused reply drops the note and changes nothing. The
+spot and the blocks outside it are dropped. A refused reply drops the note and changes nothing. The
 reply's own `cut` is forwarded untouched: what survived belongs to the zone that asked.
 
 ### Config answers
@@ -73,7 +73,7 @@ session in unless the caller named one, and expects a reply unless it is `watch`
 - **The postman does not open the mail.** What the front end draws is decoded by whoever draws
   it; this layer only keeps the two indexes every reader would otherwise have to rebuild.
 - **Answer from the window.** A block read the window already covers costs no round trip.
-- **Time before sequence.** The row admitted longest ago is the one the reader moved away from;
+- **Time before sequence.** The block admitted longest ago is the one the reader moved away from;
   ids only break ties.
 
 ## 3. Unresolved
@@ -89,4 +89,4 @@ session in unless the caller named one, and expects a reply unless it is `watch`
 
 | key | use |
 |---|---|
-| `config.ui.session.preloadCache` | rows kept in the content window; asked once at connect |
+| `config.ui.session.preloadCache` | blocks kept in the content window; asked once at connect |

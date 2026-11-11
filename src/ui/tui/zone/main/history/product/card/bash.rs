@@ -2,6 +2,7 @@
 
 use super::super::super::prefetch::color::code;
 use super::super::super::row::{Lead, Row, Run};
+use super::frame::wrap_rows;
 use super::{ToolBlock, ToolRenderer, partial};
 use crate::ui::tui::theme::fixed;
 
@@ -9,7 +10,7 @@ pub(crate) struct Bash;
 
 impl ToolRenderer for Bash {
     fn call_body(&self, b: &ToolBlock<'_>) -> Vec<Row> {
-        bash_call(b.args)
+        wrap_rows(bash_call(b.args), b.inner_width())
     }
 }
 

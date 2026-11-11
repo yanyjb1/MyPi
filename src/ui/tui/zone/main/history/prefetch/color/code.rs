@@ -192,11 +192,12 @@ static WARMING: LazyLock<Mutex<std::collections::HashSet<String>>> =
 
 type ScopeMatchers = Matchers;
 
-/// A fenced segment's rows at this width.
-pub(crate) fn rows(seg: &Segment, width: usize) -> Vec<Row> {
+/// A fenced segment's rows at this width, one group per source line: a fence line is a group of
+/// its own.
+pub(crate) fn rows_grouped(seg: &Segment, width: usize) -> Vec<Vec<Row>> {
     natural(seg)
         .into_iter()
-        .flat_map(|row| super::fold_row(row, width))
+        .map(|row| super::fold_row(row, width))
         .collect()
 }
 
@@ -375,7 +376,7 @@ pub(crate) fn warm(lang: &str) {
 }
 
 const LANG_ALIASES: &[(&[&str], &str)] = &[
-    (&["ts", "mts", "cts", "typescript"], "TypeScript"),
+    (&["ts", "mts", "cts", "tsx", "typescript"], "TypeScript"),
     (&["js", "jsx", "javascript", "mjs", "cjs"], "JavaScript"),
     (&["py", "python"], "Python"),
     (&["rb", "ruby"], "Ruby"),
@@ -398,7 +399,7 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
     (&["yaml", "yml"], "YAML"),
     (&["toml"], "TOML"),
     (&["xml"], "XML"),
-    (&["md", "markdown"], "Markdown"),
+    (&["md", "markdown", "mdx"], "Markdown"),
     (&["sql"], "SQL"),
     (&["lua"], "Lua"),
     (&["r"], "R"),
@@ -433,36 +434,23 @@ fn find_syntax(lang: &str) -> Option<&'static syntect::parsing::SyntaxReference>
         .or_else(|| set.find_syntax_by_token(target))
 }
 
-/// The language a path's extension names, for pre-highlighted tool output.
+/// The language a path names, for pre-highlighted tool output: the extension when it has one,
+/// the file name itself otherwise (`Dockerfile`, `Makefile`). The alias table is the only list,
+/// so a language is added in one place for both the fences and the files.
 pub(crate) fn language_for_path(path: &str) -> Option<&'static str> {
-    let ext = path.rsplit('.').next()?;
-    let ext = if ext == path { "" } else { ext };
-    Some(match ext {
-        "rs" => "rust",
-        "py" => "python",
-        "js" | "mjs" | "cjs" => "javascript",
-        "ts" | "mts" | "cts" => "typescript",
-        "tsx" => "typescript",
-        "jsx" => "javascript",
-        "go" => "go",
-        "java" => "java",
-        "kt" => "java",
-        "c" | "h" => "c",
-        "cpp" | "cc" | "hpp" | "hxx" => "cpp",
-        "cs" => "csharp",
-        "rb" => "ruby",
-        "php" => "php",
-        "sh" | "bash" | "zsh" => "bash",
-        "json" => "json",
-        "yaml" | "yml" => "yaml",
-        "toml" => "toml",
-        "md" => "markdown",
-        "sql" => "sql",
-        "lua" => "lua",
-        "html" | "htm" => "html",
-        "css" => "css",
-        "xml" => "xml",
-        "diff" | "patch" => "diff",
-        _ => "",
-    })
+    let name = path
+        .rsplit(|ch| ch == '/' || ch == '\\')
+        .next()
+        .unwrap_or(path);
+    let token = match name.rsplit_once('.') {
+        Some((_, ext)) => ext,
+        None => name,
+    };
+    if token.is_empty() {
+        return None;
+    }
+    LANG_ALIASES
+        .iter()
+        .find(|(aliases, _)| aliases.iter().any(|a| a.eq_ignore_ascii_case(token)))
+        .map(|(aliases, _)| aliases[0])
 }

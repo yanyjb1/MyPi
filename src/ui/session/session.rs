@@ -1,7 +1,7 @@
 //! The session: one connection, two windows, one outbox.
 //!
 //! Every frame crosses unchanged. The only things read out of a frame are the ones the windows
-//! cannot be kept without: a push's turn, a round's ranges, a row's id, the spot a rewind was
+//! cannot be kept without: a push's turn, a round's ranges, a block's id, the spot a rewind was
 //! asked for.
 
 use std::collections::VecDeque;
@@ -159,9 +159,9 @@ impl Session {
             return;
         };
         if self.content.covers(&ranges) {
-            let rows = self.content.select(&ranges);
+            let blocks = self.content.select(&ranges);
             self.outbox
-                .push(Packet::new("call", "blocks", json!({"blocks": rows})));
+                .push(Packet::new("call", "blocks", json!({"blocks": blocks})));
             return;
         }
         self.client.queue(
@@ -210,13 +210,13 @@ impl Session {
                 if let Some(turns) = reply.payload.get("structure").and_then(turns_of) {
                     self.structure.replace(turns);
                 }
-                if let Some(rows) = reply.payload.get("blocks").and_then(Value::as_array) {
-                    self.content.replace(rows.iter().cloned());
+                if let Some(blocks) = reply.payload.get("blocks").and_then(Value::as_array) {
+                    self.content.replace(blocks.iter().cloned());
                 }
             }
             ("call", "blocks") => {
-                if let Some(rows) = reply.payload.get("blocks").and_then(Value::as_array) {
-                    self.content.merge(rows.iter().cloned());
+                if let Some(blocks) = reply.payload.get("blocks").and_then(Value::as_array) {
+                    self.content.merge(blocks.iter().cloned());
                 }
             }
             ("call", "config") => {
@@ -280,10 +280,10 @@ fn ranges_of(value: &Value) -> Option<Vec<[i64; 2]>> {
 /// An `init` answer's `structure`: one `{turn, ranges}` per round.
 fn turns_of(value: &Value) -> Option<Vec<Turn>> {
     let mut out = Vec::new();
-    for row in value.as_array()? {
+    for entry in value.as_array()? {
         out.push(Turn::new(
-            row.get("turn")?.as_i64()?,
-            ranges_of(row.get("ranges")?)?,
+            entry.get("turn")?.as_i64()?,
+            ranges_of(entry.get("ranges")?)?,
         ));
     }
     out.reverse();

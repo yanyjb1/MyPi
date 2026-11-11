@@ -12,7 +12,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | `packet.rs` | `Packet { kind, name, content }`, the normalized unit | public |
 | `client.rs` | `Client`, `Incoming`: the queue, the matching, the send | private |
 | `session.rs` | `Session`: connect, forward, attach, send, the ingest of each frame | public |
-| `content.rs` | `ContentCache`: whole rows by id, the budget, the eviction | private |
+| `content.rs` | `ContentCache`: whole blocks by id, the budget, the eviction | private |
 | `structure.rs` | `Turn`, `Structure`: the rounds, their ranges, the cut at one spot | public |
 
 ## What it talks to
@@ -31,7 +31,7 @@ What is here, what each file holds, who calls whom. Current state only.
 Session
  ├── client::Client     ── the queue, the frames still owed an answer
  ├── structure::Structure ── which rounds exist and which blocks they own
- ├── content::ContentCache── the rows last seen, whole
+ ├── content::ContentCache── the blocks last seen, whole
  └── outbox: Vec<Packet>  ── what arrived since the last forward
 ```
 

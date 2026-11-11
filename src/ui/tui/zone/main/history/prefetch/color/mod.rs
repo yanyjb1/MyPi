@@ -12,10 +12,19 @@ pub(crate) mod prose;
 
 /// One segment's rows at this width. `thinking` is a text block's chain styling.
 pub fn rows(seg: &Segment, width: usize, thinking: bool) -> Vec<Row> {
+    rows_grouped(seg, width, thinking)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// The same rows, grouped by the source line each came from. A table is one group: its layout
+/// has no source line per row.
+pub fn rows_grouped(seg: &Segment, width: usize, thinking: bool) -> Vec<Vec<Row>> {
     match seg.kind {
-        Kind::Table => table::rows(seg, width),
-        Kind::Code => code::rows(seg, width),
-        _ => prose::rows(seg, width, thinking),
+        Kind::Table => vec![table::rows(seg, width)],
+        Kind::Code => code::rows_grouped(seg, width),
+        _ => prose::rows_grouped(seg, width, thinking),
     }
 }
 
