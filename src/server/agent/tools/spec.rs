@@ -125,7 +125,7 @@ pub fn schema_of(tool: &Tool) -> Value {
         "intent".to_string(),
         json!({
             "type": "string",
-            "description": "Capitalized 2-6 word present-participle intent, e.g. Reading model role settings. Shown to the user while the call runs. Emit it first."
+            "description": "Capitalized 2-6 word present-participle intent, e.g. Reading model role settings. Sits beside `input`, never inside it. Shown to the user while the call runs. Emit it first."
         }),
     );
     properties.insert(
@@ -141,6 +141,23 @@ pub fn schema_of(tool: &Tool) -> Value {
         "properties": properties,
         "required": ["intent", "input"],
     })
+}
+
+/// Whether a call put `intent` inside `input` instead of beside it.
+pub fn intent_nested(raw: &str) -> bool {
+    let text = raw.trim();
+    if text.is_empty() {
+        return false;
+    }
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|parsed| {
+            parsed
+                .get("input")
+                .and_then(|input| input.get("intent"))
+                .map(Value::is_string)
+        })
+        .unwrap_or(false)
 }
 
 // ---- reading values ----

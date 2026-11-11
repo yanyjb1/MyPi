@@ -38,8 +38,10 @@ pub(crate) fn run_to(
 ) -> Result<Exit> {
     let flag = Arc::new(StopFlag::default());
     let mut command = shell.command(cmd);
+    // A tool never reads the terminal: a prompt gets EOF, never a keystroke.
     command
         .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut child = proc::spawn_grouped(&mut command)

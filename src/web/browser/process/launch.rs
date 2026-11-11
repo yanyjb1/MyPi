@@ -63,6 +63,7 @@ fn command(exe: &Path, profile: &Path, cfg: &BrowserOptions) -> Command {
     }
     cmd.args(&cfg.extra_args)
         .arg("about:blank")
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     cmd
