@@ -245,7 +245,9 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         }
     }
     zone.pin.clear();
-    if zone.pending.is_none() && zone.busy {
+    // The receipt is the fact: the round is over, so the idle call goes out whether or not this
+    // zone ever saw a piece — a front end that opened the round never told this zone it was busy.
+    if zone.pending.is_none() {
         zone.busy = false;
         zone.shouts
             .push(Shout::new(name::BUSY, json!({"on": false})));
@@ -286,11 +288,9 @@ fn settle_pending(zone: &mut HistoryZone) {
     zone.pending = None;
     zone.local.drop_turn();
     zone.run.clear();
-    if zone.busy {
-        zone.busy = false;
-        zone.shouts
-            .push(Shout::new(name::BUSY, json!({"on": false})));
-    }
+    zone.busy = false;
+    zone.shouts
+        .push(Shout::new(name::BUSY, json!({"on": false})));
     zone.outbox.push(Request::Structure);
 }
 

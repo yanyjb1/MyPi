@@ -171,8 +171,7 @@ impl Handle {
     }
 
     /// The user stopped the turn: the flag goes up first, then the child that owns the sockets
-    /// goes down. The flag must be up before the read ends, or a waking turn reads its own
-    /// killed pipe as the upstream closing and settles as anything but interrupted.
+    /// goes down — a wake that saw no flag would read its own killed pipe as the upstream closing.
     pub(crate) fn interrupt(&self) {
         self.stop.set();
         self.worker.kill();
