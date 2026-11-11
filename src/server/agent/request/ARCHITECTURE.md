@@ -47,7 +47,7 @@
 ## Callers
 
 - The loop calls the three actions and implements `History` and `BlockSink`.
-- The configuration supplies `Options`: the provider table, the retry policy, the output cap, the
+- The configuration supplies `Options`: the provider table, the retry policy, the output caps, the
   streaming granularity, and the default retention.
 - The loop owns each session's `SessionWorker` on its handle: `LapInput` / `CompactInput` carry it,
   and `Handle::interrupt` is what kills the child.

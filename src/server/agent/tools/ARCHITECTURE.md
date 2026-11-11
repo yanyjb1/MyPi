@@ -108,7 +108,7 @@ Engine::run
 4. `ToolOutput.effects` and `contract::output::Effect`: the front door stamps `ts`, so a tool must
    never fill it.
 5. `bash` and `kairos`: every command goes through `admit`; the guard runs once, on the final text.
-6. `Workspace::zones` and `guard::escapes_zone`: two independent zone laws; changing one does not
+6. `licensed_zones` and `guard::escapes_zone`: two independent zone laws; changing one does not
    change the other.
 7. `subagent::template` and the parent roster: a template may only name tools the parent has.
 8. `contract::job::JobHost` and `loop/job`: the port is the whole surface a tool sees; a new job

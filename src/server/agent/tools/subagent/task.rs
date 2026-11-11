@@ -101,7 +101,7 @@ fn start_text(body: &str) -> String {
 
 fn cwd(env: &Env, args: &Args) -> Result<PathBuf> {
     let Some(raw) = args.opt_str(CWD)? else {
-        return Ok(env.workspace.cwd().to_path_buf());
+        return Ok(env.workspace.cwd());
     };
     anyhow::ensure!(env.allows("cd"), "`cwd` needs the parent's `cd` tool");
     let path = if std::path::Path::new(&raw).is_absolute() {

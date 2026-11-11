@@ -47,8 +47,7 @@ pub(crate) fn run(
         let reply = match inner.ask.compact(CompactInput {
             session: handle.id,
             history: history.clone(),
-            transport: config.model.transport(),
-            max_output_tokens: config.model.max_output_tokens,
+            transport: config.transport(),
             system: config.system.clone(),
             tools: config.manuals.clone(),
             tools_json: config.tools_json.clone(),
@@ -152,8 +151,7 @@ fn laps(
             session: handle.id,
             history: history.clone(),
             blocks: blocks.clone(),
-            transport: config.model.transport(),
-            max_output_tokens: config.model.max_output_tokens,
+            transport: config.transport(),
             system: config.system.clone(),
             tools: config.manuals.clone(),
             tools_json: config.tools_json.clone(),
@@ -239,10 +237,8 @@ fn laps(
                 id,
                 Birth {
                     session: id,
-                    provider: config.model.provider.clone(),
-                    model: config.model.model.clone(),
-                    endpoint: config.model.endpoint.clone(),
-                    max_output_tokens: config.model.max_output_tokens,
+                    provider: config.provider.clone(),
+                    model: config.model.clone(),
                     system: config.system.clone(),
                     tools: spec.tools,
                     manuals: spec.manuals,
@@ -355,8 +351,8 @@ fn effects(
                     blocks.push(vec![
                         Row::Request {
                             meta: RequestMeta {
-                                model: config.model.model.clone(),
-                                provider: config.model.provider.clone(),
+                                model: config.model.clone(),
+                                provider: config.provider.clone(),
                                 system: config.system.clone(),
                                 tools_json,
                                 baseline_prompt: None,
@@ -365,10 +361,7 @@ fn effects(
                         Row::Session {
                             started_at: now_stamp(),
                             cwd: cwd.to_string_lossy().into_owned(),
-                            model: Some((
-                                config.model.provider.clone(),
-                                config.model.model.clone(),
-                            )),
+                            model: Some((config.provider.clone(), config.model.clone())),
                             name: None,
                             anchor: Some(anchor),
                             meta: Some(Ref::Batch(meta_at)),

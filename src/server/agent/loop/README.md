@@ -18,9 +18,9 @@ Loop::change(session, Change) -> Result<()>
 Loop::write_mail(session, Message) -> Result<()>
 Loop::clear_mail(session) -> Result<()>
 
-Birth = { session, provider, model, endpoint, max_output_tokens, system, tools, compact, meta, cwd }   // tools = names
+Birth = { session, provider, model, system, tools, manuals, compact, meta, cwd }   // tools = names
 Message = Submit { prefix, text, suffix } | Compact { retention, focus }
-Change = Model(Model) | Cwd(path)
+Change = Model { provider, model } | Cwd(path)
 ```
 
 `ask` is `Arc<dyn request::Ask>`; `out` carries the live line. The loop builds the tool layer from
@@ -114,6 +114,7 @@ loop only adds tool events to it.
 - `config.server.agent.subagent.maxToolCalls` — the default budget for a sub-session.
 - `config.server.agent.loop.tools.task.timeoutSecs` — how long one sub-session may run; the runner stops it at the deadline.
 
-The output cap of a request body is not here: it belongs to the request half's startup options. The
-export folder is the platform's downloads directory, and the project root is the startup directory
-when it carries `.mypi`.
+The output cap of a request body is not here: the request half's startup options carry one per
+address. The loop's export folder for spilled texts is `<temp>/mypi`; the memo export written when
+a session is deleted belongs to the api. The project root is the startup directory when it carries
+`.mypi`.

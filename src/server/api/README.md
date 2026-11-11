@@ -60,7 +60,8 @@ Subscribe: `watch`, `submit`, `compact`.
   the stream for every watcher.
 - `interrupt`, `cwd`, `switch`, `delete`, `rewind` act on the running session or its rows.
   `interrupt` is silent: it stops what runs, and an idle session hears nothing. A rewind tells the
-  loop to read that session's history again.
+  loop to read that session's history again. `delete` writes one memo file per session it removes —
+  the session and every child under it — into the memo folder before the rows go.
 - A refusal the user can actually cause is said in the session's own stream — one `stream notice`
   frame — instead of only in the answer the front end may drop. Today that is `delete` on a busy
   session and `cwd` on a path that does not exist or is not a workspace.
@@ -189,6 +190,7 @@ brought onto its own exit.
 | `config.server.request.compact.retainTail` | a compaction's default tail |
 | `config.server.agent.loop.maxToolCalls` | the turn's tool-round fence; `false` turns it off |
 | `config.server.agent.loop.scrooge` | true refuses a mid-session model change |
+| `config.server.agent.loop.tools.memoFolder` | where `delete` writes the memo export; empty = the platform's download folder |
 | `config.server.storage.batchTools` | unused: the writer commits one submission at a time |
 | `config.ui.tui.fx.usdCny` | the display rate `usage` quotes in |
 | `config.ui.tui.fx.currency` | `CNY` or `USD`: the side of the rate a front end counts in |

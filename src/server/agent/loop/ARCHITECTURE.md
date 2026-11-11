@@ -13,7 +13,7 @@ job/wake.rs             Wake, WakeSink, the command wake texts
 session/mod.rs          session types
 session/book.rs         Loop, Birth, Message, scheduler, turn start, bind, book_child, unbook, forget
 session/handle.rs       per-session state: the two configs, the cwd handle, mailbox, transcript, flags
-session/config.rs       the request side: model, endpoint, output cap, system, manuals, compact
+session/config.rs       the request side: provider, model, system, manuals, compact
 session/jobs.rs         Slots (the wake router), the scheduler's values from config
 session/agent.rs        AgentRunner: books a child, waits for its turn, drops it
 session/settings.rs     fence and scrooge

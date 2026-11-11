@@ -68,8 +68,6 @@ pub struct LapInput {
     pub history: Arc<dyn History>,
     pub blocks: Arc<dyn BlockSink>,
     pub transport: Transport,
-    /// The model's declared output cap, resolved when the session was booked.
-    pub max_output_tokens: u32,
     pub system: String,
     /// The session's manuals, built once when it was booked.
     pub tools: Arc<Vec<ToolDef>>,
@@ -212,8 +210,6 @@ pub struct CompactInput {
     pub session: i64,
     pub history: Arc<dyn History>,
     pub transport: Transport,
-    /// The model's declared output cap, resolved when the session was booked.
-    pub max_output_tokens: u32,
     pub system: String,
     pub tools: Arc<Vec<ToolDef>>,
     /// Those manuals already serialized.

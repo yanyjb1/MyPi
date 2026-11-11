@@ -1,4 +1,4 @@
-//! One session's conditions for one batch: budgets, shell, folders, and the reads it holds.
+//! One session's conditions for its whole life: budgets, shell, folders, and the reads it holds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -8,9 +8,9 @@ use std::time::Duration;
 use super::view::{Export, Source};
 use crate::server::agent::tools::workspace::Workspace;
 
-/// What a tool reads: one session's conditions for one batch.
+/// What a tool reads: one session's conditions, built when it was booked.
 pub struct Env {
-    /// The start directory and the working directory this batch sees.
+    /// The working directory handle every call reads.
     pub workspace: Workspace,
     pub limits: Limits,
     pub bash: BashEnv,

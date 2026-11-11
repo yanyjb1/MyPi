@@ -40,7 +40,7 @@ fn run(env: &mut Env, args: &Args, progress: &mut dyn FnMut(ToolProgress)) -> Re
     anyhow::ensure!(!raw.is_empty(), "empty command");
     let admitted = admit::admit(env, raw)?;
 
-    let cwd = env.workspace.cwd().to_path_buf();
+    let cwd = env.workspace.cwd();
     let (text, exit) = shell::run(
         &env.bash.shell,
         &cwd,

@@ -137,7 +137,7 @@ re-exported at the `tools` root; callers write the group they mean.
 
 ```text
 Env {
-  workspace: Workspace,      // root + this batch's cwd snapshot
+  workspace: Workspace,      // the session's shared cwd handle
   limits: Limits,            // lines, bytes
   bash: BashEnv,             // timeout, shell
   stop: Arc<Stop>,           // the session's stop signal; see Stopping
@@ -161,9 +161,11 @@ reaches for a database or a config file.
 ### Workspace
 
 ```text
-Workspace { cwd, root }
+Workspace { shared }
 ```
 
+- `cwd` reads the handle as it stands; `chdir` writes it. The api's `/cdp` and the model's `cd`
+  write the same handle, so a move lands for both at once.
 - `resolve` licenses two zones only: the live `cwd` and the temp directory. A path outside both is
   refused; `must_exist` adds the file checks.
 - `cd` is licensed by one rule, `may_stand_in`: not the filesystem root, not a top-level directory

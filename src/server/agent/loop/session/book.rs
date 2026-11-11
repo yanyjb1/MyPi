@@ -16,9 +16,8 @@ use crate::server::agent::r#loop::turn;
 use crate::server::agent::r#loop::turn::ask::Ask;
 use crate::server::agent::r#loop::turn::cycle::Mode;
 use crate::server::agent::request::live::{Element, Event, Stream};
-use crate::server::agent::request::transport::Provider;
 use crate::server::agent::tools::contract::call::{Batch, Cwd};
-use crate::server::agent::tools::contract::env::Defaults;
+use crate::server::agent::tools::contract::env::{Aliases, Defaults};
 use crate::server::agent::tools::contract::view::Source;
 use crate::server::storage::Writer;
 
@@ -29,10 +28,6 @@ pub struct Birth {
     pub session: i64,
     pub provider: String,
     pub model: String,
-    /// The endpoint the model is reached at; already resolved by the caller.
-    pub endpoint: Provider,
-    /// The model's declared output cap.
-    pub max_output_tokens: u32,
     pub system: String,
     /// The session's tool names; manuals are built once, from `registry::roster`.
     pub tools: Vec<String>,
@@ -192,13 +187,24 @@ impl Loop {
 
     /// A rewind rewrote this session's list: drop the cache and read it again.
     pub fn forget(&self, session: i64) {
-        if let Ok(handle) = self.handle(session)
-            && let Err(e) = handle.transcript().reload()
-        {
+        let Ok(handle) = self.handle(session) else {
+            return;
+        };
+        if let Err(e) = handle.transcript().reload() {
             crate::server::platform::log::warn(
                 "loop",
                 format!("session {session}: history reload failed: {e:#}"),
             );
+        }
+        // A rewind cuts the rows behind aliases; the tool side holds a snapshot, so read it again.
+        match self.inner.source.aliases(session) {
+            Ok(aliases) => {
+                handle.env().aliases = Aliases::new(self.inner.defaults.aliases.clone(), aliases);
+            }
+            Err(e) => crate::server::platform::log::warn(
+                "loop",
+                format!("session {session}: alias reload failed: {e:#}"),
+            ),
         }
     }
 
@@ -243,8 +249,8 @@ pub(crate) fn bind(inner: &Arc<Inner>, birth: Birth) -> Result<Arc<Handle>> {
     let stop = crate::server::platform::stop::Stop::new();
     let env = inner
         .defaults
-        .session(birth.session, cwd, birth.tools.clone(), stop)?;
-    let handle = Arc::new(Handle::new(birth, env, transcript));
+        .session(birth.session, cwd.clone(), birth.tools.clone(), stop)?;
+    let handle = Arc::new(Handle::new(birth, env, cwd, transcript));
     if !inner.slots.insert(handle.id, handle.clone()) {
         bail!("session {} is already booked", handle.id);
     }

@@ -48,13 +48,14 @@ impl Handle {
     pub(crate) fn new(
         birth: super::book::Birth,
         env: Env,
+        cwd: Cwd,
         transcript: Arc<super::history::Transcript>,
     ) -> Self {
         let config = Config::new(&birth);
         Self {
             id: birth.session,
             config: Mutex::new(config),
-            cwd: env.workspace.shared(),
+            cwd,
             stop: env.stop.clone(),
             env: Mutex::new(env),
             mailbox: Arc::new(Mailbox::new()),
@@ -156,7 +157,7 @@ impl Handle {
     /// The model the next request would use.
     pub(crate) fn model(&self) -> (String, String) {
         let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
-        (config.model.provider.clone(), config.model.model.clone())
+        (config.provider.clone(), config.model.clone())
     }
 
     /// Where the tools stand now.

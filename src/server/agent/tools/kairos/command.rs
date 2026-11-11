@@ -24,7 +24,7 @@ impl Command {
         anyhow::ensure!(!text.is_empty(), "empty command");
         let admitted = admit::admit(env, text)?;
         Ok(Self {
-            cwd: env.workspace.cwd().to_path_buf(),
+            cwd: env.workspace.cwd(),
             cmd: admitted.cmd,
             warn: admitted.warn,
         })

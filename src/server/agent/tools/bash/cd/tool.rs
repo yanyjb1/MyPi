@@ -31,7 +31,7 @@ pub(crate) const TOOL: Tool = Tool {
 /// Change footing. The target must exist, be a directory, and pass `workspace::may_stand_in`.
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
     let path = args.str(PATH)?;
-    let from = env.workspace.cwd().to_path_buf();
+    let from = env.workspace.cwd();
     let real = workspace::resolve_cwd(&from, &path)?;
     env.workspace.chdir(real.clone());
     Ok(ToolOutput::with_memo(

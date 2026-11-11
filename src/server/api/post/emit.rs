@@ -33,20 +33,3 @@ pub(crate) fn model_of(value: &Value) -> Result<(String, String), Refuse> {
         .ok_or_else(|| Refuse::Bad("missing or bad `model.model`".into()))?;
     Ok((provider.to_string(), model.to_string()))
 }
-
-/// The endpoint and the output cap one address runs with; the model table is the only source.
-pub(crate) fn resolved(
-    api: &Api,
-    provider: &str,
-    model: &str,
-) -> Result<(crate::server::agent::request::Provider, u32), Refuse> {
-    let cfg = api.cfg();
-    let address = format!("{provider}:{model}");
-    let endpoint = cfg
-        .provider(provider)
-        .ok_or_else(|| Refuse::Bad(format!("no provider named {provider}")))?;
-    let cap = cfg
-        .output_cap(&address)
-        .ok_or_else(|| Refuse::Internal(format!("models.yml: {address} has no maxOutputTokens")))?;
-    Ok((endpoint, cap))
-}

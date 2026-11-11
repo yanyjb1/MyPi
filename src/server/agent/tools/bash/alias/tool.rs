@@ -110,7 +110,7 @@ fn vet(env: &Env, command: &str) -> Result<Option<String>> {
     if !env.bash.shell.guarded() {
         return Ok(None);
     }
-    let cwd = env.workspace.cwd().to_path_buf();
+    let cwd = env.workspace.cwd();
     let zone = cwd.canonicalize().unwrap_or(cwd);
     match guard::classify(command, &zone) {
         guard::Verdict::Allow => Ok(None),

@@ -16,11 +16,6 @@ impl Workspace {
         Self { shared }
     }
 
-    /// The session's own directory handle, for the session that builds this.
-    pub fn shared(&self) -> super::contract::call::Cwd {
-        self.shared.clone()
-    }
-
     /// The directory as it stands right now.
     pub fn cwd(&self) -> std::path::PathBuf {
         self.shared
@@ -29,16 +24,11 @@ impl Workspace {
             .clone()
     }
 
-    /// The licensed zones: **where the session stands**, plus temp. Hangs off `cwd`, not the start
-    /// directory, so a deliberate `cd` carries the licence with it.
-    pub fn zones(&self) -> Vec<std::path::PathBuf> {
-        licensed_zones(&self.cwd())
-    }
-
     /// Resolve a model-given path: relative to `cwd`, `..` and symlinks normalized first, and the
     /// result MUST land inside a licensed zone.
     pub fn resolve(&self, raw: &str, must_exist: bool) -> Result<std::path::PathBuf> {
-        resolve_path(&self.cwd(), &self.zones(), raw, must_exist)
+        let cwd = self.cwd();
+        resolve_path(&cwd, &licensed_zones(&cwd), raw, must_exist)
     }
 
     /// Land on a new working directory. The caller checks where it may land (see `cd`).
@@ -196,7 +186,7 @@ pub fn may_stand_in(real: &std::path::Path) -> Result<()> {
 
 /// The zones **file tools** may touch: the session workspace plus the system temp dir. `bash`'s
 /// delete rule reads the same two, so "inside" has one definition.
-pub fn licensed_zones(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+fn licensed_zones(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut zones = vec![canonicalize_lenient(root)];
     let tmp = crate::server::platform::env::temp_dir();
     zones.push(canonicalize_lenient(&tmp));

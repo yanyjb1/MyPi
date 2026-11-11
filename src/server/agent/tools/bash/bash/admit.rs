@@ -22,7 +22,7 @@ pub(crate) fn admit(env: &Env, raw: &str) -> Result<Admitted> {
     if !shell.guarded() {
         return Ok(Admitted { cmd, warn: None });
     }
-    let cwd = env.workspace.cwd().to_path_buf();
+    let cwd = env.workspace.cwd();
     let zone = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
     match guard::classify(&cmd, &zone) {
         guard::Verdict::Block(hits) => {

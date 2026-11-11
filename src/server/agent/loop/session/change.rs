@@ -1,17 +1,16 @@
-//! One field at a time, already resolved by the caller.
+//! One field at a time, as the caller named it.
 
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use super::config::Model;
 use super::handle::Handle;
 use crate::server::storage::{Row, Submit, Writer};
 
 /// One session-scoped change.
 #[derive(Debug, Clone)]
 pub enum Change {
-    Model(Model),
+    Model { provider: String, model: String },
     Cwd(PathBuf),
 }
 
@@ -22,16 +21,19 @@ pub(crate) fn apply(
     scrooge: bool,
 ) -> Result<Option<PathBuf>> {
     match change {
-        Change::Model(model) => {
+        Change::Model { provider, model } => {
             if scrooge {
                 bail!("this loop does not allow a model change mid-session");
             }
-            let switch = (model.provider.clone(), model.model.clone());
-            handle.config_mut().model = model;
+            {
+                let mut config = handle.config_mut();
+                config.provider = provider.clone();
+                config.model = model.clone();
+            }
             writer.push(Submit {
                 rows: vec![Row::Switch {
                     session: handle.id,
-                    model: Some(switch),
+                    model: Some((provider, model)),
                 }],
             })?;
         }

@@ -65,7 +65,7 @@ keys! {
     PATTERN_MODELS_MODEL_ID = "models", "model.<address>", "id", Text, DefaultValue::Null, "The wire model id.", true;
     PATTERN_MODELS_MODEL_NAME = "models", "model.<address>", "name", Text, DefaultValue::Null, "Display name; falls back to the id.", true;
     PATTERN_MODELS_MODEL_CONTEXT_WINDOW = "models", "model.<address>", "contextWindow", Int, DefaultValue::Null, "Context window; a model without one is not a legal configuration.", true;
-    PATTERN_MODELS_MODEL_MAX_OUTPUT_TOKENS = "models", "model.<address>", "maxOutputTokens", Int, DefaultValue::Null, "max_tokens per request; absent = req decides.", true;
+    PATTERN_MODELS_MODEL_MAX_OUTPUT_TOKENS = "models", "model.<address>", "maxOutputTokens", Int, DefaultValue::Null, "max_tokens per request; absent is a startup error.", true;
     PATTERN_MODELS_MODEL_CURRENCY = "models", "model.<address>", "currency", Text, DefaultValue::Text("CNY"), "Price display currency: CNY or USD.", true;
     PATTERN_MODELS_MODEL_COST_INPUT = "models", "model.<address>.cost", "input", Float, DefaultValue::Float(0.0), "Input price per 1M tokens.", true;
     PATTERN_MODELS_MODEL_COST_OUTPUT = "models", "model.<address>.cost", "output", Float, DefaultValue::Float(0.0), "Output price per 1M tokens.", true;

@@ -92,7 +92,7 @@ wake块的渲染还是不够有特色。🤔回头寻思一下。
 
 ### 会话配置与导出目录（2026-11-11）
 
-- `Live` 删了，一个会话两份配置：请求侧 `session/config.rs`（provider、model、endpoint、max output、system、manuals、tools_json、compact），工具侧 `contract::env::Env`（建立会话时建一次，`Defaults` 供料）。`BatchInput` 与每批重建的 `Env` 一并删除。
+- `Live` 删了，一个会话两份配置：请求侧 `session/config.rs`（provider、model、system、manuals、tools_json、compact），工具侧 `contract::env::Env`（建立会话时建一次，`Defaults` 供料）。`BatchInput` 与每批重建的 `Env` 一并删除。
 - cwd 挂在 `Handle` 上，工具每次用时读句柄；`/cdp` 与 `cd` 写同一句柄，回合中立即生效。起点目录（`root`）删除——全仓没有读者。
 - 仪表：`~` 回到百分数前，刻度不带标记；没有档案地板又不估算时读 `0.0%`。
 - 导出目录：临时工具结果固定 `<平台临时目录>/mypi`；memo 导出走 `config.server.agent.loop.tools.memoFolder`，缺省取平台下载目录（unix 读 `XDG_DOWNLOAD_DIR`，windows `USERPROFILE\Downloads`）。导出挂在删会话的门口（此前这条接口没有调用者）。

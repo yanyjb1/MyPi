@@ -213,24 +213,6 @@ impl Config {
         Ok(target)
     }
 
-    /// One provider, credentials expanded. `None` = no provider by that name.
-    pub fn provider(&self, name: &str) -> Option<crate::server::agent::request::Provider> {
-        let provider = self
-            .inner
-            .models
-            .providers
-            .iter()
-            .find(|p| p.name == name)?;
-        let protocol = crate::server::agent::request::ProtocolId::parse(&provider.api).ok()?;
-        Some(crate::server::agent::request::Provider {
-            name: provider.name.clone(),
-            base_url: provider.base_url.clone(),
-            protocol,
-            api_key: self.inner.models.resolve_key(provider),
-            auth_header: provider.auth_header,
-        })
-    }
-
     /// Every provider the request half can reach, credentials expanded.
     pub fn providers(&self) -> Vec<crate::server::agent::request::Provider> {
         self.inner
@@ -251,13 +233,20 @@ impl Config {
             .collect()
     }
 
-    /// One model's declared output cap, keyed `provider:model`.
-    pub fn output_cap(&self, address: &str) -> Option<u32> {
-        let (provider, id) = address.split_once(':')?;
-        self.models()
-            .find(|(name, entry)| *name == provider && entry.id == id)
-            .and_then(|(_, entry)| entry.max_output_tokens)
-            .and_then(|cap| u32::try_from(cap).ok())
+    /// The declared output cap of every configured model, keyed `provider:model`.
+    pub fn output_caps(&self) -> std::collections::BTreeMap<String, u32> {
+        let mut caps = std::collections::BTreeMap::new();
+        for (provider, entry) in self.models() {
+            let address = format!("{provider}:{}", entry.id);
+            let Some(cap) = entry
+                .max_output_tokens
+                .and_then(|cap| u32::try_from(cap).ok())
+            else {
+                panic!("models.yml: {address} has no maxOutputTokens")
+            };
+            caps.insert(address, cap);
+        }
+        caps
     }
 
     /// Where memo exports land; empty = the platform's download folder.

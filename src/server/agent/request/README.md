@@ -116,4 +116,4 @@ file.
 | `config.server.agent.loop.request.retryInterval` | fixed wait between attempts, in seconds |
 | `config.server.agent.loop.request.retryTimeout` | how long one attempt waits for the response head, in seconds |
 
-The output cap is not a configuration key: the caller must hand one in at startup.
+The output cap is not a `config.yaml` key: the caller hands the per-address table in at startup.
