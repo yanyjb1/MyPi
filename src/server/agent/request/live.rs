@@ -21,6 +21,11 @@ pub enum Element {
     Mailbox {
         turn: i64,
     },
+    /// A turn closed: the id ranges its blocks occupy, in landing order.
+    Structure {
+        turn: i64,
+        ranges: Vec<[i64; 2]>,
+    },
 }
 
 /// One piece of the reply as it arrives, or the end of a block.

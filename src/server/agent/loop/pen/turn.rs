@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::server::agent::r#loop::session::{Message, Retention};
 use crate::server::agent::r#loop::turn::ask::{Stop, Usage};
 use crate::server::agent::request::message::Message as Stored;
-use crate::server::storage::{BlockKind, NewBlock, Ref, Row, Submit, Writer};
+use crate::server::storage::{BlockKind, NewBlock, Ref, Row, Structure, Submit, Writer};
 
 /// How a turn opens.
 #[derive(Clone)]
@@ -215,14 +215,15 @@ pub fn borrow(
     Ok(())
 }
 
-/// Close one turn and lower the archive's prompt baseline.
+/// Close one turn and lower the archive's prompt baseline; the closed ranges come back for the
+/// live line, so the receipt travels the same queue as everything else this turn said.
 pub fn settle(
     w: &Writer,
     turn: i64,
     stop: Stop,
     baseline: Option<u64>,
     meta: Option<i64>,
-) -> Result<()> {
+) -> Result<Option<Structure>> {
     let mut rows = vec![Row::Settle {
         turn: Ref::Known(turn),
         stop_reason: Some(stop.as_str().to_string()),
@@ -233,6 +234,5 @@ pub fn settle(
             prompt,
         });
     }
-    w.push(Submit { rows })?;
-    Ok(())
+    Ok(w.push(Submit { rows })?.pieces.into_iter().next())
 }

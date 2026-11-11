@@ -39,8 +39,7 @@ describes the code as it stands.
 | item | what it does |
 |---|---|
 | `Writer::open(path)` | opens or creates the database, starts the writer thread |
-| `Writer::push(submit)` | one transaction; returns one id per row |
-| `Writer::relay(port)` | names the port live pieces go to |
+| `Writer::push(submit)` | one transaction; returns one id per row, and the closed rounds' ranges |
 | `Writer::rewind(target)` | cuts a session's list back and sweeps |
 | `Writer::delete_rows(table, ids)` | removes those rows and whatever only they held; returns how many |
 | `Writer::export_memos(session, dir)` | writes this session's memos into `dir`, resolved by the caller |
@@ -56,11 +55,11 @@ Everything else is `pub(crate)` or private.
 ## Relationships
 
 ```text
-        api  -- push / relay / rewind / delete_rows / export --> writer thread
+        api  -- push / rewind / delete_rows / export --> writer thread
         agent -- push rows ---------------------------> writer thread
                                                         |
                                                         v
-                                            Store: conn + relay port
+                                               Store: conn
                                               -> write/*, delete/*
                                                         |
                                                         v

@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 
 use super::change::{self, Change};
 use super::handle::Handle;
+use super::mailbox::Letter;
 use super::settings::Settings;
 use crate::server::agent::r#loop::job;
 use crate::server::agent::r#loop::pen;
@@ -165,8 +166,8 @@ impl Loop {
     }
 
     /// The front end's slot: written whole, taken by the loop, cleared by the front end.
-    pub fn write_mail(&self, session: i64, msg: Message) -> Result<()> {
-        self.handle(session)?.mailbox.write(msg);
+    pub fn write_mail(&self, session: i64, letter: Letter) -> Result<()> {
+        self.handle(session)?.mailbox.write(letter);
         Ok(())
     }
 
@@ -245,7 +246,11 @@ pub(crate) fn bind(inner: &Arc<Inner>, birth: Birth) -> Result<Arc<Handle>> {
         &inner.writer.path(),
         birth.session,
     )?);
-    let cwd: Cwd = Arc::new(std::sync::RwLock::new(birth.cwd.clone()));
+    // The handle's directory is one every tool can enter: a row whose directory has since gone
+    // lands in the temp dir instead of failing every `bash` call.
+    let cwd: Cwd = Arc::new(std::sync::RwLock::new(
+        crate::server::agent::tools::workspace::standing_dir(&birth.cwd),
+    ));
     let stop = crate::server::platform::stop::Stop::new();
     let env = inner
         .defaults
@@ -323,15 +328,15 @@ fn schedule(weak: Weak<Inner>, handle: Arc<Handle>) {
             break;
         };
         if !handle.busy.load(Ordering::Acquire) {
-            if let Err(e) = start_turn(&inner, &handle, start.clone(), queued) {
+            if let Err(e) = start_turn(&inner, &handle, start, queued) {
                 crate::server::platform::log::error(
                     "loop",
                     format!("session {}: queued mail did not start: {e:#}", handle.id),
                 );
-                requeue(&handle, start);
+                requeue(&handle, &next);
             }
         } else {
-            requeue(&handle, start);
+            requeue(&handle, &next);
         }
     }
 }
@@ -462,21 +467,10 @@ impl Drop for TurnGuard {
     }
 }
 
-fn requeue(handle: &Handle, start: pen::turn::Start) {
-    match start {
-        pen::turn::Start::Wake { text } => handle.mailbox.push_wake(text),
-        pen::turn::Start::User {
-            prefix,
-            text,
-            suffix,
-        } => handle.mailbox.write(Message::Submit {
-            prefix,
-            text,
-            suffix,
-        }),
-        pen::turn::Start::Compact { retention, focus } => {
-            handle.mailbox.write(Message::Compact { retention, focus });
-        }
+fn requeue(handle: &Handle, next: &Next) {
+    match next {
+        Next::Wake(text) => handle.mailbox.push_wake(text.clone()),
+        Next::Send(letter) => handle.mailbox.write(letter.clone()),
     }
 }
 
@@ -514,10 +508,10 @@ fn announce(inner: &Arc<Inner>, session: i64, turn: i64) {
     });
 }
 
-/// What the scheduler takes next: a wake text, or the front end's one message.
+/// What the scheduler takes next: a wake text, or the front end's one letter.
 enum Next {
     Wake(String),
-    Send(Message),
+    Send(Letter),
 }
 
 impl Next {
@@ -526,10 +520,14 @@ impl Next {
         matches!(self, Next::Send(_))
     }
 
-    fn start(self) -> pen::turn::Start {
+    fn start(&self) -> pen::turn::Start {
         match self {
-            Next::Wake(text) => pen::turn::Start::Wake { text },
-            Next::Send(msg) => start_of(msg),
+            Next::Wake(text) => pen::turn::Start::Wake { text: text.clone() },
+            Next::Send(letter) => pen::turn::Start::User {
+                prefix: letter.prefix.clone(),
+                text: letter.text.clone(),
+                suffix: letter.suffix.clone(),
+            },
         }
     }
 }
@@ -538,5 +536,5 @@ fn next_start(handle: &Handle) -> Option<Next> {
     if let Some(text) = handle.mailbox.take_wake() {
         return Some(Next::Wake(text));
     }
-    handle.mailbox.take_send().map(Next::Send)
+    handle.mailbox.take().map(Next::Send)
 }

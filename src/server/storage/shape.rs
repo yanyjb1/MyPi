@@ -314,6 +314,8 @@ pub struct Submit {
 #[derive(Debug, Clone, Default)]
 pub struct Landed {
     pub ids: Vec<i64>,
+    /// What this submission closed: the structure pieces the loop hands the live line.
+    pub pieces: Vec<Structure>,
 }
 
 /// What the writer tells a live surface once a round is over: where it sits, and the closed id

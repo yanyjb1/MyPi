@@ -82,7 +82,7 @@ impl Api {
     /// Open the writer, the relay, the request half and the loop, in that order.
     pub fn open(db: PathBuf, cfg: Config) -> anyhow::Result<Api> {
         let writer = Writer::open(&db)?;
-        let (relay, events) = Relay::start(&writer)?;
+        let (relay, events) = Relay::start()?;
         let settings = Settings {
             max_tool_rounds: cfg.tool_rounds(),
             scrooge: cfg.scrooge(),

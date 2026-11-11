@@ -8,31 +8,18 @@ use rusqlite::Connection;
 
 use super::super::delete::rewind::{Cut, Target};
 use super::super::schema;
-use super::super::shape::{Landed, Structure, Submit, Table};
+use super::super::shape::{Landed, Submit, Table};
 use super::job::{Answer, Job, What};
 use super::thread;
 
-/// What the writer thread owns: the connection and the relay port.
+/// What the writer thread owns: the write connection.
 pub(crate) struct Store {
     pub(crate) conn: Connection,
-    pub(crate) relay: Option<Sender<Structure>>,
 }
 
 impl Store {
     fn new(conn: Connection) -> Self {
-        Self { conn, relay: None }
-    }
-
-    /// Hand one piece to the relay port, if anybody listens.
-    pub(crate) fn relay_out(&mut self, piece: Structure) {
-        let dead = match self.relay.as_ref() {
-            Some(port) => port.send(piece).is_err(),
-            None => false,
-        };
-        if dead {
-            // The api's receiver is gone: stop relaying to it.
-            self.relay = None;
-        }
+        Self { conn }
     }
 }
 
@@ -70,11 +57,6 @@ impl Writer {
             Answer::Landed(landed) => Ok(landed),
             other => anyhow::bail!("the writer answered `{}` to a submit", other.name()),
         }
-    }
-
-    /// Take this port as the relay destination: every new piece goes there.
-    pub fn relay(&self, port: Sender<Structure>) -> Result<()> {
-        self.call(What::Relay(port)).map(|_| ())
     }
 
     /// Cut a session's list back to the picked block, then sweep what nothing references.

@@ -48,7 +48,7 @@ pair (`ipc/README.md`, `ipc/ARCHITECTURE.md`).
 | thread | created by | lives |
 |---|---|---|
 | the storage writer | the api's state | until the process ends |
-| the relay | the api's state | until the process ends; hands storage's pieces to the watchers |
+| the live line | the api's state | until the process ends; one queue, in the order the loop sent |
 | a round / a compaction | the api | one round |
 | the wire's accept loop | `ipc::server::serve` | until the server stops |
 | one per connection | the accept loop | one connection; a watch turns that thread into the stream's writer |

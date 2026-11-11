@@ -171,8 +171,10 @@ Workspace { shared }
 - `cd` is licensed by one rule, `may_stand_in`: not the filesystem root, not a top-level directory
   (`/tmp` and its children excepted), and nowhere under the home tree. Everything deeper is fair
   ground, and the licensed zones then follow `cwd`.
-- Where a session may stand is asked in two places only: `init` maps a barred launch directory to
-  the temp dir, and `cd` refuses it outright. `/cdp` asks only whether the directory exists.
+- Where a session may stand is asked in two places only: `init` and `bind` land a barred or
+  missing launch directory in the temp dir (`standing_dir`: it must exist, be a directory, and pass
+  `may_stand_in`; a row whose directory has since gone lands there too), and `cd` refuses it
+  outright. `/cdp` asks only whether the directory exists.
 - `with_write(path, f)` takes a process-wide write lock keyed by that path; `write_atomic` writes a
   sibling temp file and renames it over the target. `read` takes no lock.
 - `bash` takes no lock.

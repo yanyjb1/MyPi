@@ -133,20 +133,33 @@ pub fn resolve_dir(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBu
     Ok(real)
 }
 
-/// The launch directory `init` was handed: it exists, so only where it may stand is asked, and a
-/// directory it may not stand in becomes the temp dir.
+/// The directory `init` was handed, landed: `~` expanded, relative read from the process.
+/// Anything that is not an existing directory a session may stand in becomes the temp dir.
 pub fn launch_dir(raw: &str) -> std::path::PathBuf {
-    let given = std::path::Path::new(raw);
+    let raw = raw.trim();
+    let given = match raw.strip_prefix('~') {
+        Some(rest) => match crate::server::platform::env::home() {
+            Some(home) => home.join(rest.trim_start_matches('/')),
+            None => return canonicalize_lenient(&crate::server::platform::env::temp_dir()),
+        },
+        None => std::path::PathBuf::from(raw),
+    };
     let given = if given.is_absolute() {
-        given.to_path_buf()
+        given
     } else {
         std::env::current_dir().unwrap_or_default().join(given)
     };
-    let real = canonicalize_lenient(&given);
-    match may_stand_in(&real) {
-        Ok(()) => real,
-        Err(_) => canonicalize_lenient(&crate::server::platform::env::temp_dir()),
+    standing_dir(&given)
+}
+
+/// A directory a session can enter: the path when it exists and `may_stand_in` allows it.
+/// Otherwise the temp dir — a session never holds a directory `bash` cannot chdir into.
+pub fn standing_dir(dir: &std::path::Path) -> std::path::PathBuf {
+    let real = canonicalize_lenient(dir);
+    if real.is_dir() && may_stand_in(&real).is_ok() {
+        return real;
     }
+    canonicalize_lenient(&crate::server::platform::env::temp_dir())
 }
 
 /// Where a session may stand: not the filesystem root, not a top-level directory (the temp dir

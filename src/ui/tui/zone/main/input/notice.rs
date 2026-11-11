@@ -8,6 +8,8 @@ use crate::ui::tui::zone::{ModelId, Retention};
 pub enum Notice {
     /// `/cdp`: the directory asked for.
     Cwd(String),
+    /// `/cdp`: no such directory, so the move did not land.
+    NoDir(String),
     /// `/name`: the name asked for; `None` clears it.
     Named(Option<String>),
     /// `/switch`: the model this session moves to.
@@ -44,6 +46,7 @@ impl Notice {
             Self::ProfileAfterStart
             | Self::NoSession
             | Self::NothingToCompact
+            | Self::NoDir(_)
             | Self::MemoUsage => "warn",
 
             _ => "info",
@@ -53,6 +56,7 @@ impl Notice {
     fn en(&self) -> String {
         match self {
             Self::Cwd(path) => format!("working directory: {path}"),
+            Self::NoDir(path) => format!("no such directory: {path}"),
             Self::Named(Some(name)) => format!("session named {name}"),
             Self::Named(None) => "session name cleared".to_string(),
             Self::Switched(id) => format!("model switched to {}:{}", id.provider, id.model),
@@ -82,6 +86,7 @@ impl Notice {
     fn zh(&self) -> String {
         match self {
             Self::Cwd(path) => format!("工作目录：{path}"),
+            Self::NoDir(path) => format!("目录不存在：{path}"),
             Self::Named(Some(name)) => format!("会话命名为 {name}"),
             Self::Named(None) => "会话名已清除".to_string(),
             Self::Switched(id) => format!("已切换到 {}:{}", id.provider, id.model),

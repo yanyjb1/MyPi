@@ -5,7 +5,7 @@ use std::sync::mpsc::Sender;
 use anyhow::Result;
 
 use super::super::delete::rewind::{Cut, Target};
-use super::super::shape::{Landed, Structure, Submit, Table};
+use super::super::shape::{Landed, Submit, Table};
 
 /// What the writer is asked to do.
 pub(crate) enum What {
@@ -20,8 +20,6 @@ pub(crate) enum What {
         session: i64,
         dir: std::path::PathBuf,
     },
-    /// Take this port as the relay destination.
-    Relay(Sender<Structure>),
 }
 
 /// What the writer answers with.
@@ -34,8 +32,6 @@ pub(crate) enum Answer {
     Rows(usize),
     /// Where the export landed (`None` = nothing to export).
     Export(Option<std::path::PathBuf>),
-    /// Nothing to hand back.
-    Done,
 }
 
 impl Answer {
@@ -46,7 +42,6 @@ impl Answer {
             Answer::Cut(_) => "cut",
             Answer::Rows(_) => "rows",
             Answer::Export(_) => "export",
-            Answer::Done => "done",
         }
     }
 }

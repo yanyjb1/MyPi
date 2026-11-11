@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use super::boot::{DEFAULT_MODEL_KEY, FX_CURRENCY_KEY, GIT_SCAN_KEY, LANG_KEY};
 use super::ctx::{Context, Currency};
+use super::notice::Notice;
 use super::zone::InputZone;
 use crate::ui::lang::Lang;
 use crate::ui::tui::zone::{Frame, Request, Shout, SubZone, name};
@@ -22,9 +23,23 @@ impl InputZone {
             ("call", "usage") => {
                 self.read_usage(&frame.content);
             }
-            ("post", "cwd") | ("local", "cwd") => {
+            ("post", "cwd") => {
                 self.receipt("cwd", &frame.content, &mut out);
                 self.read_cwd(&frame.content);
+            }
+            ("local", "cwd") => {
+                self.receipt("cwd", &frame.content, &mut out);
+                match frame
+                    .content
+                    .get("error")
+                    .and_then(|error| error.get("path"))
+                {
+                    // A draft's own refusal: the path stayed where it was, so say why.
+                    Some(path) => self.say(&Notice::NoDir(
+                        path.as_str().unwrap_or_default().to_string(),
+                    )),
+                    None => self.read_cwd(&frame.content),
+                }
             }
             ("post", "name") | ("local", "name") => {
                 self.receipt("name", &frame.content, &mut out);

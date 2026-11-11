@@ -4,14 +4,20 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
-use super::book::Message;
+/// The one sentence a front end may leave in the slot.
+#[derive(Debug, Clone)]
+pub struct Letter {
+    pub prefix: Option<String>,
+    pub text: String,
+    pub suffix: Option<String>,
+}
 
 struct Inner {
     wake: VecDeque<String>,
-    send: Option<Message>,
+    send: Option<Letter>,
 }
 
-/// The wake queue and the one user message a front end may rewrite until it is taken.
+/// The wake queue and the one user letter a front end may rewrite until it is taken.
 pub struct Mailbox {
     inner: Mutex<Inner>,
     cv: Condvar,
@@ -37,13 +43,13 @@ impl Mailbox {
         self.cv.notify_all();
     }
 
-    /// Overwrite the slot whole; a message always carries a body.
-    pub fn write(&self, msg: Message) {
-        self.lock().send = Some(msg);
+    /// Overwrite the slot whole; a letter always carries a body.
+    pub fn write(&self, letter: Letter) {
+        self.lock().send = Some(letter);
         self.cv.notify_all();
     }
 
-    /// The front end takes its message back.
+    /// The front end takes its letter back.
     pub fn del(&self) {
         self.lock().send = None;
     }
@@ -52,8 +58,8 @@ impl Mailbox {
         self.lock().wake.pop_front()
     }
 
-    /// One message; taking the slot is clearing it.
-    pub fn take_send(&self) -> Option<Message> {
+    /// One letter; taking the slot is clearing it.
+    pub fn take(&self) -> Option<Letter> {
         self.lock().send.take()
     }
 

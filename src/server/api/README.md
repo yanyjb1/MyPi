@@ -112,13 +112,17 @@ the session's last block), and `memos` (how many distinct memo names the session
 
 ### The session stream
 
-Three sources feed one dispatcher:
+Two sources feed one dispatcher, one queue:
 
 ```text
 request half  --(Sender<Event>)-->  relay  -->  frames on every connection watching the session
-storage       --(Structure)------->  relay
+storage       --(ranges, by the loop's settle)-->  the same Sender<Event>
 api's own write doors ------------->  relay
 ```
+
+The loop settles a turn through `pen::turn::settle`, which hands back the closed ranges; the loop
+sends them as `Element::Structure` on the same sender as everything else that turn said. A front end
+therefore hears the receipt before the next turn's first frame, always — not usually.
 
 | event | `kind` | `name` | payload |
 |---|---|---|---|

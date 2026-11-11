@@ -15,11 +15,12 @@ Loop::interrupt(session)
 Loop::drop(session)
 Loop::forget(session)
 Loop::change(session, Change) -> Result<()>
-Loop::write_mail(session, Message) -> Result<()>
+Loop::write_mail(session, Letter) -> Result<()>
 Loop::clear_mail(session) -> Result<()>
 
 Birth = { session, provider, model, system, tools, manuals, compact, meta, cwd }   // tools = names
 Message = Submit { prefix, text, suffix } | Compact { retention, focus }
+Letter = { prefix, text, suffix }   // the one sentence the mailbox slot can hold
 Change = Model { provider, model } | Cwd(path)
 ```
 
@@ -44,13 +45,15 @@ idle session hears nothing. A turn stopped this way settles as `interrupted`, ne
 call that was already running keeps its output and reports the stop, one that never ran leaves
 nothing.
 
-`Mailbox` holds a wake queue and one user slot. A wake text is written as its own `wake` block when
-the loop takes it, and each wake block is its own user message. The slot is written whole by a front
-end, taken by the loop at a blocking point, and cleared by the take; the turn it opens is named after
-the slot. A turn stops when the user interrupts, or when the wake queue is empty and the model asks
-for no tools. A tool that asks for the round to end (`final submit`) settles the turn as `finished`,
-not as an interruption. A sub-session whose turn ends without `final submit` gets one more user
-message, up to three, before the turn is allowed to end.
+`Mailbox` holds a wake queue and one letter slot. Both are taken the same way, at every blocking
+point: the wake queue first, then the slot. A wake text is written as its own `wake` block and is a
+fact the loop made, so it needs no signal; a letter is written as a `user` block in the turn it
+landed in, and the take is announced on the live line so the front end that wrote it drops its queue
+head and echoes the letter. A turn stops when the user interrupts, or when the model asks for no
+tools and both boxes are empty — the only state that counts as fully blocked. A tool that asks for
+the round to end (`final submit`) settles the turn as `finished`, not as an interruption. A
+sub-session whose turn ends without `final submit` gets one more user message, up to three, before
+the turn is allowed to end.
 
 `job` is the scheduler behind every background task: a per-session service, a concurrency pool, a
 cron clock, one output file per run, and a wake that starts a turn. A tool describes a job and holds

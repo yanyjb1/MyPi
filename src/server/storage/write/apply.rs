@@ -6,9 +6,9 @@ use rusqlite::Connection;
 use super::super::shape::{Landed, Ref, Row, Structure, Submit};
 use super::{aliases, artifacts, blocks, memos, sessions, shared, turns};
 
-/// Carry one submission out. Ids the rows cannot know come back here; the relay pieces are
-/// returned for the writer's port.
-pub(crate) fn apply(conn: &mut Connection, submit: Submit) -> Result<(Landed, Vec<Structure>)> {
+/// Carry one submission out. Ids the rows cannot know come back here, with the structure pieces
+/// the closed turns produced.
+pub(crate) fn apply(conn: &mut Connection, submit: Submit) -> Result<Landed> {
     let tx = conn.transaction()?;
     let mut ids = vec![0i64; submit.rows.len()];
     let mut pieces: Vec<Structure> = Vec::new();
@@ -16,7 +16,7 @@ pub(crate) fn apply(conn: &mut Connection, submit: Submit) -> Result<(Landed, Ve
         ids[at] = one(&tx, row, &ids, &mut pieces)?;
     }
     tx.commit()?;
-    Ok((Landed { ids }, pieces))
+    Ok(Landed { ids, pieces })
 }
 
 /// Carry one row out, returning the id it produced (`0` when it produced none).

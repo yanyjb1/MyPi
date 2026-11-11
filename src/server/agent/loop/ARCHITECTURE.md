@@ -51,7 +51,9 @@ half's types, re-exported from this domain's root.
 - The scheduler waits on `Mailbox::wait_any`; when idle it takes a wake text first, then the slot,
   and opens a turn. A turn the slot opens is announced on the live line so the api can name it.
 - `start_turn` appends the turn's opening message to the session's transcript; `turn::cycle::run`
-  takes the wake queue into the running turn, appends each wake, expands the session's tool names
+  takes both boxes into the running turn at every blocking point (`take_mail`: wakes as `wake`
+  blocks, a letter as a `user` block plus the take signal) and ends the turn only when the model
+  asks for no tools and both boxes are empty; it expands the session's tool names
   through `tools::roster`, asks through `Ask::lap` with the session's shared snapshot, runs
   `Batch::run`, hands the finished calls back through `Ask::results`, appends the landed blocks and
   the effects anchored on their result blocks, flushes the lap, and settles through

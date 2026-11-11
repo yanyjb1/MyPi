@@ -11,7 +11,6 @@ use serde_json::{Value, json};
 use crate::ipc::contract::Frame;
 use crate::server::agent::r#loop::{Element, Event, NoticeLevel, Stream, ToolEvent};
 use crate::server::agent::request::message::Usage;
-use crate::server::storage::{Structure, Writer};
 
 /// One connection's outbound end and what it currently follows.
 struct Entry {
@@ -49,26 +48,13 @@ pub(crate) struct Relay {
 }
 
 impl Relay {
-    /// Take storage's structure port, and hand back the event sender the loop writes to.
-    pub(crate) fn start(writer: &Writer) -> Result<(Relay, Sender<Event>)> {
+    /// Hand back the one event sender the loop writes to: every frame a front end hears leaves by
+    /// this queue, in the order the loop sent it.
+    pub(crate) fn start() -> Result<(Relay, Sender<Event>)> {
         let relay = Relay {
             state: Arc::new(Mutex::new(State::default())),
             closer: Arc::new(Mutex::new(None)),
         };
-        let (port, pieces) = mpsc::channel::<Structure>();
-        writer
-            .relay(port)
-            .context("cannot register the api's relay port")?;
-        let me = relay.clone();
-        std::thread::Builder::new()
-            .name("api-relay".to_string())
-            .spawn(move || {
-                for piece in pieces {
-                    me.structure(piece);
-                }
-            })
-            .context("cannot start the relay thread")?;
-
         let (events, live) = mpsc::channel::<Event>();
         let me = relay.clone();
         std::thread::Builder::new()
@@ -353,13 +339,22 @@ impl Relay {
             }
             // Handled above: the slot opening names the turn instead of pushing a frame.
             Element::Mailbox { .. } => {}
+            Element::Structure { turn, ranges } => self.structure(session, turn, ranges),
         }
     }
 
-    /// The slot became a turn: the writer recorded at write time owns it, the door is the slot.
+    /// The slot was taken: the writer recorded at write time owns the turn, and the door is the
+    /// slot. A letter taken into a turn that is already running keeps that turn's door.
     fn slot_opened(&self, session: i64, turn: i64) {
         let mut state = self.state();
         let viewer = state.pending.remove(&session).unwrap_or_default();
+        if state
+            .active
+            .get(&session)
+            .is_some_and(|active| active.turn == turn)
+        {
+            return;
+        }
         state.active.insert(
             session,
             Active {
@@ -381,18 +376,18 @@ impl Relay {
         self.deliver(session, Frame::new("stream", door, payload), None);
     }
 
-    /// A turn closed: its ranges go out last, then the buffer and the turn go.
-    fn structure(&self, piece: Structure) {
-        let (_, door) = self.turn_of(piece.session);
+    /// The turn closed: its ranges go out last, then the buffer and the turn go.
+    fn structure(&self, session: i64, turn: i64, ranges: Vec<[i64; 2]>) {
+        let (_, door) = self.turn_of(session);
         let payload = json!({
-            "session": piece.session,
-            "turn": piece.turn,
-            "ranges": piece.ranges,
+            "session": session,
+            "turn": turn,
+            "ranges": ranges,
         });
-        self.deliver(piece.session, Frame::new("stream", door, payload), None);
+        self.deliver(session, Frame::new("stream", door, payload), None);
         let mut state = self.state();
-        state.buffers.remove(&piece.session);
-        state.active.remove(&piece.session);
+        state.buffers.remove(&session);
+        state.active.remove(&session);
     }
 
     fn turn_of(&self, session: i64) -> (i64, &'static str) {

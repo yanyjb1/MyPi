@@ -15,5 +15,5 @@ pub use crate::server::agent::request::contract::Transport;
 pub use book::{Birth, Loop, Message, Retention};
 pub use change::Change;
 pub use handle::Partial;
-pub use mailbox::Mailbox;
+pub use mailbox::{Letter, Mailbox};
 pub use settings::Settings;

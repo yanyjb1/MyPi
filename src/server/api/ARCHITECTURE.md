@@ -23,8 +23,7 @@ What is here, what each file holds, who talks to whom. Current state only.
   the retry policy, the per-address output caps, the streaming mode and the compaction tail.
 - **`agent::tools`**: `registry::{names, roster}` when `init` writes the archive.
 - **`storage`**: `Writer` for every row and every deletion, `Reader` for every read,
-  `query::{Sheet, Cond, Order, Query, Val}` for the filtered reads, `Structure` as the relay's
-  second source.
+  `query::{Sheet, Cond, Order, Query, Val}` for the filtered reads.
 - **`config`**: `Config`, read once at startup; `resolve_profile`, `default_model`, `models`,
   `profiles`, `get_json`, `set_default_model`, and the loop/request values read while `Api::open`
   builds them.
@@ -42,8 +41,7 @@ Api::receive
   → reply frame, or the error frame
 
 Relay::start
-  ← storage Writer relay port      (Structure: session, turn, ranges)
-  → Sender<Event> handed to Loop::new
+  → Sender<Event> handed to Loop::new    (live output, signals, and a turn's ranges)
 ```
 
 - `Api::open` builds the request half and the loop, in that order, so the loop's events already have

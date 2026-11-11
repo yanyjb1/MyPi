@@ -60,7 +60,10 @@ picked profile (`/profile`), a refusal notice, or `Hold` when an argument is mis
 the line in the box and sends nothing. A plain message leaves as `ExitRequest::Submit`.
 
 `/profile` is refused here once a session id exists. `/name`, `/cdp` and `/switch` work in a draft:
-the app keeps them until the row opens. `/compact` needs a session and is refused in a draft.
+the app keeps them until the row opens. A draft's `/cdp` lands only on a directory that exists — `~`
+expanded, a relative path read from where the draft stands — because the name travels into `init`,
+and a directory that is not there cannot be entered. Anything else is refused and said.
+`/compact` needs a session and is refused in a draft.
 Deletion has no command: the resume picker owns it.
 
 ### Submit, interrupt, Esc
@@ -80,7 +83,9 @@ Deletion has no command: the resume picker owns it.
 
 A write (`/switch`, `/model`, `/cdp`, `/name`, `/compact`) owes one line. The text is built from what
 this zone sent, in the display language, and spoken only when the receipt for that door arrives:
-`cwd`, `name`, `switch`, `default_model`, `compact`. A receipt carrying an error speaks nothing.
+`cwd`, `name`, `switch`, `default_model`, `compact`. A receipt carrying an error speaks nothing —
+except the one the app writes itself for a draft's `/cdp`, whose answer names the directory it could
+not land on (`noDir`, a warn).
 Draft writes are answered by the app with the same door names, prefixed `local`.
 
 A refusal decided here (no session for `/usage` or `/compact`, a profile asked for after the

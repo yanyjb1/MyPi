@@ -15,14 +15,41 @@ use crate::ui::tui::zone::{
     Frame, Kind, Memo, ModelId, Outcome, Request, Round, TermSize, Turns, Zone, ZoneId, matches,
 };
 
-/// A usable launch directory: the home directory and its parent are not workspaces, so a launch
-/// there lands in the temp dir instead.
+/// The barring `init` applies: no root, no top-level directory, nowhere directly under the home
+/// tree; the temp dir excepted. Barred lands in the temp dir, so a draft never claims more.
 fn workspace(dir: PathBuf) -> PathBuf {
+    let temp = std::env::temp_dir();
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let barred = home.as_ref().is_some_and(|home| {
-        dir == *home || home.parent().is_some_and(|parent| dir.as_path() == parent)
-    });
-    if barred { std::env::temp_dir() } else { dir }
+    let shallow = home
+        .as_ref()
+        .and_then(|home| home.parent())
+        .is_some_and(|tree| {
+            dir.starts_with(tree) && dir.components().count() <= tree.components().count() + 1
+        });
+    let barred = !dir.starts_with(&temp) && (dir.components().count() < 3 || shallow);
+    if barred { temp } else { dir }
+}
+
+/// The directory a draft's `/cdp` lands on: `~` expanded, a relative path read from where the
+/// draft stands, and the answer MUST be a directory that exists. `None` = it is not there.
+fn draft_dir(cwd: &std::path::Path, raw: &str) -> Option<PathBuf> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let given = match raw.strip_prefix('~') {
+        Some(rest) => std::env::var_os("HOME")
+            .map(PathBuf::from)?
+            .join(rest.trim_start_matches('/')),
+        None => PathBuf::from(raw),
+    };
+    let given = if given.is_absolute() {
+        given
+    } else {
+        cwd.join(given)
+    };
+    let real = given.canonicalize().ok()?;
+    real.is_dir().then(|| workspace(real))
 }
 
 /// One thing the loop hands the app.
@@ -309,13 +336,17 @@ impl App {
             self.session.set_cwd(&path);
             return;
         }
-        let target = if std::path::Path::new(&path).is_absolute() {
-            PathBuf::from(&path)
-        } else {
-            self.cwd.join(&path)
+        let Some(target) = draft_dir(&self.cwd, &path) else {
+            // A directory that is not there would open a session every `bash` call fails in.
+            let frame = Frame::new(
+                "local",
+                "cwd",
+                json!({"error": {"kind": "noDir", "path": path}}),
+            );
+            self.deliver(&frame);
+            return;
         };
-        let target = target.canonicalize().unwrap_or(target);
-        self.cwd = workspace(target);
+        self.cwd = target;
         let frame = Frame::new("local", "cwd", json!({"cwd": self.cwd.to_string_lossy()}));
         self.deliver(&frame);
     }

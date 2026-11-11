@@ -54,6 +54,8 @@ impl Queue {
     /// The loop took the head: drop it, and mirror whatever is next.
     pub fn took(&mut self) -> (Option<Outgoing>, Option<Request>) {
         let taken = self.items.pop_front();
+        // The slot is empty now, whatever the queue still holds: the next head goes in.
+        self.in_slot = false;
         let request = self.sync();
         (taken, request)
     }

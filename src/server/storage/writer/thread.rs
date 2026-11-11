@@ -11,22 +11,10 @@ use super::job::{Answer, Job, What};
 pub(crate) fn run(work: Receiver<Job>, mut store: Store) {
     while let Ok(job) = work.recv() {
         let answer = match job.what {
-            What::Submit(submit) => match apply(&mut store.conn, submit) {
-                Ok((landed, pieces)) => {
-                    for piece in pieces {
-                        store.relay_out(piece);
-                    }
-                    Ok(Answer::Landed(landed))
-                }
-                Err(e) => Err(e),
-            },
+            What::Submit(submit) => apply(&mut store.conn, submit).map(Answer::Landed),
             What::Rewind(target) => store.rewind(target).map(Answer::Cut),
             What::DeleteRows(table, ids) => store.delete_rows(table, &ids).map(Answer::Rows),
             What::Export { session, dir } => store.export_memos(session, &dir).map(Answer::Export),
-            What::Relay(port) => {
-                store.relay = Some(port);
-                Ok(Answer::Done)
-            }
         };
         let _ = job.back.send(answer);
     }

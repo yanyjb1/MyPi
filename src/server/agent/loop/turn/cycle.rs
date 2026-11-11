@@ -61,7 +61,7 @@ pub(crate) fn run(
             Ok(reply) => reply,
             Err(e) => {
                 if stopped(handle, &e) {
-                    pen::turn::settle(&inner.writer, turn, Stop::User, None, handle.meta())?;
+                    settle(inner, handle, turn, Stop::User, None)?;
                     return Ok(Stop::User);
                 }
                 broken(inner, handle, turn, None, &e);
@@ -74,7 +74,7 @@ pub(crate) fn run(
             pen::turn::append_summary(&inner.writer, turn, reply.text, usage)?;
         }
         pen::turn::borrow(&inner.writer, handle.id, &reply.borrows)?;
-        pen::turn::settle(&inner.writer, turn, Stop::Model, None, handle.meta())?;
+        settle(inner, handle, turn, Stop::Model, None)?;
         transcript.reload()?;
         return Ok(Stop::Model);
     }
@@ -95,19 +95,41 @@ pub(crate) fn run(
     );
     match outcome {
         Ok(stop) => {
-            pen::turn::settle(&inner.writer, turn, stop, baseline, handle.meta())?;
+            settle(inner, handle, turn, stop, baseline)?;
             Ok(stop)
         }
         Err(e) => {
             keep_blocks(pen, handle);
             if stopped(handle, &e) {
-                pen::turn::settle(&inner.writer, turn, Stop::User, baseline, handle.meta())?;
+                settle(inner, handle, turn, Stop::User, baseline)?;
                 return Ok(Stop::User);
             }
             broken(inner, handle, turn, baseline, &e);
             Err(e)
         }
     }
+}
+
+/// Close one turn: its receipt leaves on the same queue as everything else the turn said, so a
+/// front end can never see the next turn's first frame before it.
+fn settle(
+    inner: &Arc<Inner>,
+    handle: &Handle,
+    turn: i64,
+    stop: Stop,
+    baseline: Option<u64>,
+) -> Result<()> {
+    let Some(piece) = pen::turn::settle(&inner.writer, turn, stop, baseline, handle.meta())? else {
+        return Ok(());
+    };
+    let _ = inner.out.send(Event {
+        session: piece.session,
+        element: Element::Structure {
+            turn: piece.turn,
+            ranges: piece.ranges,
+        },
+    });
+    Ok(())
 }
 
 /// One turn's laps. Every early return lands here; the caller owns the settle.
@@ -130,15 +152,9 @@ fn laps(
         if handle.stop.is_stopped() {
             return Ok(Stop::User);
         }
-        let wakes = drain(inner, handle, turn)?;
-        let appended = !wakes.is_empty();
-        for text in wakes {
-            transcript.append_user(Stored::User {
-                prefix: None,
-                content: text,
-                suffix: None,
-            });
-        }
+        // The blocking point: the last request has returned, so whatever the boxes hold is taken
+        // into this turn before the next request goes out.
+        take_mail(inner, handle, turn, transcript)?;
         if fence.hit() {
             return Ok(Stop::Fence);
         }
@@ -169,27 +185,29 @@ fn laps(
         if lap.calls.is_empty() {
             let (_, landed_blocks) = blocks.flush()?;
             transcript.append(landed_blocks)?;
-            if !appended {
-                if let Some(text) = child.as_ref().and_then(|child| child.nag()) {
-                    pen::turn::append_user(
-                        &inner.writer,
-                        turn,
-                        Message::Submit {
-                            prefix: None,
-                            text: text.to_string(),
-                            suffix: None,
-                        },
-                    )?;
-                    transcript.append_user(Stored::User {
-                        prefix: None,
-                        content: text.to_string(),
-                        suffix: None,
-                    });
-                    continue;
-                }
-                return Ok(lap.stop);
+            // A turn is over only when the model asked for nothing and both boxes are empty. What
+            // landed while this lap ran is taken here, and gets a lap of its own.
+            if take_mail(inner, handle, turn, transcript)? {
+                continue;
             }
-            continue;
+            if let Some(text) = child.as_ref().and_then(|child| child.nag()) {
+                pen::turn::append_user(
+                    &inner.writer,
+                    turn,
+                    Message::Submit {
+                        prefix: None,
+                        text: text.to_string(),
+                        suffix: None,
+                    },
+                )?;
+                transcript.append_user(Stored::User {
+                    prefix: None,
+                    content: text.to_string(),
+                    suffix: None,
+                });
+                continue;
+            }
+            return Ok(lap.stop);
         }
 
         let calls = lap.calls.clone();
@@ -431,19 +449,52 @@ fn broken(
             text: format!("the turn broke: {why:#}"),
         }),
     });
-    let _ = pen::turn::settle(&inner.writer, turn, Stop::Broken, baseline, handle.meta());
+    let _ = settle(inner, handle, turn, Stop::Broken, baseline);
 }
 
-/// Take every wake text into this turn; the texts are the ones already written as blocks.
-fn drain(inner: &Arc<Inner>, handle: &Handle, turn: i64) -> Result<Vec<String>> {
-    let mut out = Vec::new();
+/// Take both boxes into the running turn at a blocking point: wakes first, then the slot.
+/// Every text taken is already a block row; `true` = something was taken, so the turn goes on.
+fn take_mail(
+    inner: &Arc<Inner>,
+    handle: &Handle,
+    turn: i64,
+    transcript: &super::super::session::history::Transcript,
+) -> Result<bool> {
+    let mut taken = false;
     while let Some(text) = handle.mailbox.take_wake() {
         pen::turn::append_wake(&inner.writer, turn, text.clone())?;
         let _ = inner.out.send(Event {
             session: handle.id,
             element: Element::Stream(Stream::Wake(text.clone())),
         });
-        out.push(text);
+        transcript.append_user(Stored::User {
+            prefix: None,
+            content: text,
+            suffix: None,
+        });
+        taken = true;
     }
-    Ok(out)
+    // A letter joins the turn it landed in; the writer's front end echoes it on the take signal.
+    if let Some(letter) = handle.mailbox.take() {
+        pen::turn::append_user(
+            &inner.writer,
+            turn,
+            Message::Submit {
+                prefix: letter.prefix.clone(),
+                text: letter.text.clone(),
+                suffix: letter.suffix.clone(),
+            },
+        )?;
+        let _ = inner.out.send(Event {
+            session: handle.id,
+            element: Element::Mailbox { turn },
+        });
+        transcript.append_user(Stored::User {
+            prefix: letter.prefix,
+            content: letter.text,
+            suffix: letter.suffix,
+        });
+        taken = true;
+    }
+    Ok(taken)
 }

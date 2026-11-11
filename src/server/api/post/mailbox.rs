@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::server::agent::r#loop::Message;
+use crate::server::agent::r#loop::Letter;
 use crate::server::api::route::{i64_of, opt_str_of};
 use crate::server::api::{Api, Refuse};
 
@@ -18,13 +18,13 @@ pub(crate) fn apply(api: &Api, conn: u64, viewer: &str, ask: &Value) -> Result<V
         api.relay().drop_mail(session);
         return Ok(json!({"written": false}));
     }
-    let message = Message::Submit {
+    let letter = Letter {
         prefix: opt_str_of(ask, "prefix")?.map(str::to_string),
         text: text.to_string(),
         suffix: opt_str_of(ask, "suffix")?.map(str::to_string),
     };
     api.ensure_booked(session)?;
-    api.ledger().write_mail(session, message)?;
+    api.ledger().write_mail(session, letter)?;
     api.relay().note_mail(conn, session, viewer);
     Ok(json!({"written": true}))
 }
