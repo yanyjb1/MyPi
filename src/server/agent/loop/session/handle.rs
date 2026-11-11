@@ -170,10 +170,10 @@ impl Handle {
         *self.cwd.write().unwrap_or_else(|e| e.into_inner()) = real;
     }
 
+    /// The user stopped the turn: the flag goes up first, then the child that owns the sockets
+    /// goes down. The flag must be up before the read ends, or a waking turn reads its own
+    /// killed pipe as the upstream closing and settles as anything but interrupted.
     pub(crate) fn interrupt(&self) {
-        if !self.busy.load(std::sync::atomic::Ordering::Acquire) {
-            return;
-        }
         self.stop.set();
         self.worker.kill();
         self.mailbox.notify();

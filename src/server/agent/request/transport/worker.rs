@@ -57,15 +57,15 @@ pub const WORKER_ENV: &str = "MYPI_HTTP_WORKER";
 
 /// One session's worker: the child that owns its sockets, made on demand and killed on demand.
 pub struct SessionWorker {
-    slot: Mutex<Option<SharedWorker>>,
-    pid: Arc<AtomicU32>,
+    /// The child, and the pid of that same child: one entry, so a kill can never name a pid
+    /// the slot no longer holds — and can read it without taking the worker's own lock.
+    slot: Mutex<Option<(u32, SharedWorker)>>,
 }
 
 impl SessionWorker {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             slot: Mutex::new(None),
-            pid: Arc::new(AtomicU32::new(0)),
         })
     }
 
@@ -74,43 +74,43 @@ impl SessionWorker {
         let mut slot = self.slot.lock().ok()?;
         if slot.is_none() {
             let fresh = HttpWorker::spawn().ok()?;
-            self.pid
-                .store(HttpWorker::pid(&fresh).unwrap_or(0), Ordering::Release);
-            *slot = Some(fresh);
+            let pid = HttpWorker::pid(&fresh).unwrap_or(0);
+            *slot = Some((pid, fresh));
         }
-        slot.clone()
+        slot.as_ref().map(|(_, worker)| worker.clone())
     }
 
     /// Kill the child that owns the sockets. A later request spawns its own.
     pub fn kill(&self) {
-        let pid = self.pid.swap(0, Ordering::AcqRel);
-        if pid == 0 {
+        let old = self.slot.lock().ok().and_then(|mut slot| slot.take());
+        let Some((pid, worker)) = old else {
             crate::server::platform::log::info("worker", "no child to kill");
+            return;
+        };
+        if pid == 0 {
+            crate::server::platform::log::info("worker", "the child carries no pid to kill");
         } else {
             crate::server::platform::log::info("worker", format!("killed the child on {pid}"));
             HttpWorker::kill_pid(pid);
         }
-        let old = self.slot.lock().ok().and_then(|mut slot| slot.take());
-        if let Some(old) = old {
-            std::thread::spawn(move || {
-                if let Ok(mut old) = old.lock() {
-                    old.reap();
-                }
-            });
-        }
+        std::thread::spawn(move || {
+            if let Ok(mut worker) = worker.lock() {
+                worker.reap();
+            }
+        });
     }
 }
 
 impl Drop for SessionWorker {
     fn drop(&mut self) {
-        let pid = self.pid.swap(0, Ordering::AcqRel);
+        let old = self.slot.lock().ok().and_then(|mut slot| slot.take());
+        let Some((pid, worker)) = old else {
+            return;
+        };
         if pid != 0 {
             HttpWorker::kill_pid(pid);
         }
-        if let Ok(mut slot) = self.slot.lock()
-            && let Some(worker) = slot.take()
-            && let Ok(mut worker) = worker.lock()
-        {
+        if let Ok(mut worker) = worker.lock() {
             let _ = worker.child.kill();
             let _ = worker.child.wait();
         }
