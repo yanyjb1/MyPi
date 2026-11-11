@@ -13,6 +13,7 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES,
     KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_INTERVAL,
     KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_TIMEOUT, KEY_CONFIG_SERVER_AGENT_LOOP_SCROOGE,
+    KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_MEMO_FOLDER,
     KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_TASK_TIMEOUT_SECS,
     KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BASH_TIMEOUT, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN,
@@ -212,6 +213,24 @@ impl Config {
         Ok(target)
     }
 
+    /// One provider, credentials expanded. `None` = no provider by that name.
+    pub fn provider(&self, name: &str) -> Option<crate::server::agent::request::Provider> {
+        let provider = self
+            .inner
+            .models
+            .providers
+            .iter()
+            .find(|p| p.name == name)?;
+        let protocol = crate::server::agent::request::ProtocolId::parse(&provider.api).ok()?;
+        Some(crate::server::agent::request::Provider {
+            name: provider.name.clone(),
+            base_url: provider.base_url.clone(),
+            protocol,
+            api_key: self.inner.models.resolve_key(provider),
+            auth_header: provider.auth_header,
+        })
+    }
+
     /// Every provider the request half can reach, credentials expanded.
     pub fn providers(&self) -> Vec<crate::server::agent::request::Provider> {
         self.inner
@@ -232,20 +251,29 @@ impl Config {
             .collect()
     }
 
-    /// The declared output cap of every configured model, keyed `provider:model`.
-    pub fn output_caps(&self) -> std::collections::BTreeMap<String, u32> {
-        let mut caps = std::collections::BTreeMap::new();
-        for (provider, entry) in self.models() {
-            let address = format!("{provider}:{}", entry.id);
-            let Some(cap) = entry
-                .max_output_tokens
-                .and_then(|cap| u32::try_from(cap).ok())
-            else {
-                panic!("models.yml: {address} has no maxOutputTokens")
-            };
-            caps.insert(address, cap);
-        }
-        caps
+    /// One model's declared output cap, keyed `provider:model`.
+    pub fn output_cap(&self, address: &str) -> Option<u32> {
+        let (provider, id) = address.split_once(':')?;
+        self.models()
+            .find(|(name, entry)| *name == provider && entry.id == id)
+            .and_then(|(_, entry)| entry.max_output_tokens)
+            .and_then(|cap| u32::try_from(cap).ok())
+    }
+
+    /// Where memo exports land; empty = the platform's download folder.
+    pub fn memo_folder(&self) -> Option<PathBuf> {
+        let effective = self.effective(None);
+        let named = effective
+            .values
+            .get(KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_MEMO_FOLDER)
+            .and_then(|value| value.as_text())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())?;
+        let named = match named.strip_prefix("~") {
+            Some(tail) => crate::server::platform::env::home()?.join(tail.trim_start_matches('/')),
+            None => PathBuf::from(named),
+        };
+        Some(named)
     }
 
     /// Tool-round fence; `None` turns it off.

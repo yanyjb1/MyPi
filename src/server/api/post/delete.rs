@@ -43,6 +43,16 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         .filter_map(|row| row["id"].as_i64())
         .collect();
     ids.push(session);
+    // The memos leave the database before the rows that hold them.
+    let folder = api
+        .cfg()
+        .memo_folder()
+        .or_else(crate::server::platform::env::downloads_dir);
+    if let Some(folder) = folder {
+        api.writer()
+            .export_memos(session, &folder)
+            .map_err(|e| Refuse::Internal(format!("{e:#}")))?;
+    }
     api.relay().change(
         session,
         json!({"signal": "delete", "session": session}),

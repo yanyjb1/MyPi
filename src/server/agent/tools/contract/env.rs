@@ -115,7 +115,46 @@ impl Default for Limits {
     }
 }
 
+/// What every session's [`Env`] starts from: the process-level facts, read once.
+#[derive(Clone)]
+pub struct Defaults {
+    pub limits: Limits,
+    pub bash: BashEnv,
+    pub aliases: BTreeMap<String, String>,
+    pub default_budget: u32,
+    pub export: Arc<dyn Export>,
+    pub paths: Paths,
+    pub source: Arc<dyn Source>,
+}
+
+impl Defaults {
+    /// One session's conditions: its own directory, tools, aliases and stop flag.
+    pub fn session(
+        &self,
+        session: i64,
+        cwd: super::call::Cwd,
+        tools: Vec<String>,
+        stop: Arc<crate::server::platform::stop::Stop>,
+    ) -> anyhow::Result<Env> {
+        Ok(Env {
+            workspace: Workspace::new(cwd),
+            limits: self.limits,
+            bash: self.bash.clone(),
+            stop,
+            session,
+            batch_len: 0,
+            tools: tools.into_iter().collect(),
+            aliases: Aliases::new(self.aliases.clone(), self.source.aliases(session)?),
+            default_budget: self.default_budget,
+            export: self.export.clone(),
+            paths: self.paths.clone(),
+            source: self.source.clone(),
+        })
+    }
+}
+
 /// What `bash` runs with.
+#[derive(Clone)]
 pub struct BashEnv {
     pub timeout: Duration,
     pub shell: crate::server::platform::shell::Shell,

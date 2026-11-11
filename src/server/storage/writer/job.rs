@@ -15,8 +15,11 @@ pub(crate) enum What {
     Rewind(Target),
     /// Delete rows of one table, then sweep.
     DeleteRows(Table, Vec<i64>),
-    /// Write this session's memos into the download folder.
-    Export(i64),
+    /// Write this session's memos into the folder the caller resolved.
+    Export {
+        session: i64,
+        dir: std::path::PathBuf,
+    },
     /// Take this port as the relay destination.
     Relay(Sender<Structure>),
 }

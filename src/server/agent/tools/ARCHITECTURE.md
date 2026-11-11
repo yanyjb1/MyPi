@@ -8,9 +8,9 @@ What is here, what each file holds, who talks to whom. Current state only.
 |---|---|
 | `mod.rs` | module declarations and re-exports |
 | `contract/mod.rs` | declares the five contract groups |
-| `contract/call.rs` | `Batch`, `BatchInput`, `Cwd` |
+| `contract/call.rs` | `Batch`, `Cwd` |
 | `contract/output.rs` | `ToolResult`, `ToolOutput`, `Effect`, `MemoOp`, `AliasOp` |
-| `contract/env.rs` | `Env` (its `stop`), `Limits`, `BashEnv`, `Paths` |
+| `contract/env.rs` | `Env`, `Defaults`, `Limits`, `BashEnv`, `Paths` |
 | `contract/view.rs` | the `Source`, `Export`, `Child`, `Draft`, `MemoRead` ports, the history shapes, and `MemoScope`, `MemoReadOp`, `MemoVersion`, `MemoView` |
 | `contract/job.rs` | the job vocabulary a tool shares with the loop: `JobSpec`, `Schedule`, `JobRunner`, `JobCtx`, `JobOutcome`, `Receipt`, `Row`, `Status`, `Exit`, `OutputSink`, and the `JobHost` port |
 | `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure, events; the stop that lands mid-call becomes the result's reason |
@@ -88,7 +88,7 @@ Engine::run
   → effect stamping → spill → ToolOutput
 ```
 
-- `Env` is built once per batch by `engine`, from the `BatchInput` the loop passes.
+- `Env` is built once when a session is booked, from `Defaults`; the engine runs it as it stands.
 - A `JobHost` and a sub-session's `Child` reach a tool through `Source`; the loop attaches both when
   it books a session and takes both off when it drops one. A job is only ever created by the loop.
 - The guard is used in two places — the `bash` tool and `alias add` — and judges the expanded

@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::server::agent::r#loop::Change;
+use crate::server::agent::r#loop::session::config::Model;
 use crate::server::api::route::i64_of;
 use crate::server::api::{Api, Refuse};
 
@@ -25,8 +26,16 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
     emit::require_writer(api, viewer, session)?;
     api.ensure_booked(session)?;
     let address = format!("{provider}:{model}");
-    api.ledger()
-        .change(session, Change::Model { provider, model })?;
+    let (endpoint, max_output_tokens) = emit::resolved(api, &provider, &model)?;
+    api.ledger().change(
+        session,
+        Change::Model(Model {
+            provider: provider.clone(),
+            model: model.clone(),
+            endpoint,
+            max_output_tokens,
+        }),
+    )?;
     emit::changed(api, viewer, session, json!({"model": address}));
     Ok(serde_json::json!({}))
 }

@@ -31,22 +31,9 @@ pub enum Streaming {
 pub struct Options {
     pub providers: Vec<Provider>,
     pub retry: RetryPolicy,
-    /// Per `provider:model` caps, from the model table; every address must have one.
-    pub output_caps: std::collections::BTreeMap<String, u32>,
     pub streaming: Streaming,
     /// Characters a compaction keeps when the caller names no budget.
     pub retain_tail: usize,
-}
-
-impl Options {
-    /// The cap one address runs with.
-    fn cap(&self, transport: &super::contract::Transport) -> u32 {
-        let address = format!("{}:{}", transport.provider, transport.model);
-        match self.output_caps.get(&address) {
-            Some(cap) => *cap,
-            None => panic!("models.yml: {address} has no maxOutputTokens"),
-        }
-    }
 }
 
 /// The request half.
@@ -58,9 +45,6 @@ pub struct Request {
 
 impl Request {
     pub fn new(options: Options) -> Result<Self> {
-        if options.output_caps.is_empty() {
-            bail!("the model table declares no output cap");
-        }
         Ok(Self {
             options,
             clients: Mutex::new(std::collections::BTreeMap::new()),
@@ -96,7 +80,7 @@ impl Ask for Request {
         let stored = Self::stored(input.history.as_ref(), input.session)?;
         let req = assembly::build(
             client.model(),
-            self.options.cap(&input.transport),
+            input.max_output_tokens,
             true,
             &input.system,
             &stored[..],
@@ -204,7 +188,7 @@ impl Ask for Request {
             compact::render_instruction(&input.instruction, input.focus.as_deref().unwrap_or(""));
         let req = assembly::compaction(
             client.model(),
-            self.options.cap(&input.transport),
+            input.max_output_tokens,
             true,
             &input.system,
             &plan.region,

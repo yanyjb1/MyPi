@@ -1,7 +1,6 @@
-//! The usage gauge — `>-8.3%--:1M`. The row's flexible deco.
+//! The usage gauge — `>--8.3%-----:1M`. The row's flexible deco.
 //!
-//! The first cell is the marker: `-` when the count was measured, `~` when it was estimated
-//! (before the first request, and between a compaction and the request that follows it).
+//! `~` prefixes the percentage when the count is an estimate; the dashes carry no mark.
 
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
@@ -34,7 +33,11 @@ impl Deco for Usage {
         } else {
             0.0
         };
-        let pct_txt = format!("{pct:.1}%");
+        let pct_txt = if estimated {
+            format!("~{pct:.1}%")
+        } else {
+            format!("{pct:.1}%")
+        };
         // An unconfigured window still gets a denominator slot: `?` is a fact too.
         let denom = match limit {
             0 => ":?".to_string(),
@@ -52,8 +55,7 @@ impl Deco for Usage {
 
         let mut out = vec![t.fg(">", Slot::Accent)];
         if used > 0 {
-            let mark = if estimated { "~" } else { "-" };
-            out.push(t.fg(format!("{mark}{}", "-".repeat(used - 1)), Slot::Accent));
+            out.push(t.fg("-".repeat(used), Slot::Accent));
         }
         out.push(t.fg(pct_txt, Slot::Accent));
         if plain_rest > 0 {

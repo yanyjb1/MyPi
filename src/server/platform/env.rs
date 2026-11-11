@@ -4,12 +4,11 @@ use std::path::PathBuf;
 
 use super::os::{self, Family};
 
-/// The user's home directory. `None` = this system has no answer yet, or the
-/// variable is unset.
+/// The user's home directory. `None` = the variable is unset.
 pub fn home() -> Option<PathBuf> {
     match os::current().family {
         Family::Unix => var_os("HOME").map(PathBuf::from),
-        Family::Windows => None,
+        Family::Windows => var_os("USERPROFILE").map(PathBuf::from),
     }
 }
 
@@ -25,9 +24,37 @@ pub fn config_dir() -> PathBuf {
     base("XDG_CONFIG_HOME", ".config").join("mypi")
 }
 
-/// The user's download folder, where the memo export on session delete lands: `~/Downloads`.
+/// The user's download folder: the desktop's own answer, else `~/Downloads`.
 pub fn downloads_dir() -> Option<PathBuf> {
-    home().map(|home| home.join("Downloads"))
+    match os::current().family {
+        Family::Unix => xdg_download(),
+        Family::Windows => home().map(|home| home.join("Downloads")),
+    }
+}
+
+/// `XDG_DOWNLOAD_DIR` from the user-dirs file; `~/Downloads` when it names nothing.
+fn xdg_download() -> Option<PathBuf> {
+    let home = home()?;
+    let dirs = var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("user-dirs.dirs");
+    if let Ok(text) = std::fs::read_to_string(&dirs) {
+        for line in text.lines() {
+            let Some(rest) = line.trim().strip_prefix("XDG_DOWNLOAD_DIR=") else {
+                continue;
+            };
+            let raw = rest.trim().trim_matches('"');
+            let named = match raw.strip_prefix("$HOME") {
+                Some(tail) => home.join(tail.trim_start_matches('/')),
+                None => PathBuf::from(raw),
+            };
+            if !raw.is_empty() {
+                return Some(named);
+            }
+        }
+    }
+    Some(home.join("Downloads"))
 }
 
 /// Scratch space: the system's per-user temporary directory.

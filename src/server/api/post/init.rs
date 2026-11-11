@@ -68,10 +68,13 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
         return Err(Refuse::Internal("the writer created no session row".into()));
     }
 
+    let (endpoint, max_output_tokens) = emit::resolved(api, &provider, &model)?;
     api.ledger().book(Birth {
         session,
         provider,
         model,
+        endpoint,
+        max_output_tokens,
         system,
         tools,
         manuals,

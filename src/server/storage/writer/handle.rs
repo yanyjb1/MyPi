@@ -93,9 +93,16 @@ impl Writer {
         }
     }
 
-    /// Write this session's memos into the download folder; `None` = nothing to export.
-    pub fn export_memos(&self, session: i64) -> Result<Option<std::path::PathBuf>> {
-        match self.call(What::Export(session))? {
+    /// Write this session's memos into `dir`; `None` = nothing to export.
+    pub fn export_memos(
+        &self,
+        session: i64,
+        dir: &std::path::Path,
+    ) -> Result<Option<std::path::PathBuf>> {
+        match self.call(What::Export {
+            session,
+            dir: dir.to_path_buf(),
+        })? {
             Answer::Export(path) => Ok(path),
             other => anyhow::bail!("the writer answered `{}` to an export", other.name()),
         }

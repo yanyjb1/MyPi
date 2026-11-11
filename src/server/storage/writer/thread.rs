@@ -22,7 +22,7 @@ pub(crate) fn run(work: Receiver<Job>, mut store: Store) {
             },
             What::Rewind(target) => store.rewind(target).map(Answer::Cut),
             What::DeleteRows(table, ids) => store.delete_rows(table, &ids).map(Answer::Rows),
-            What::Export(session) => store.export_memos(session).map(Answer::Export),
+            What::Export { session, dir } => store.export_memos(session, &dir).map(Answer::Export),
             What::Relay(port) => {
                 store.relay = Some(port);
                 Ok(Answer::Done)

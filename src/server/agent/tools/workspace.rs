@@ -6,44 +6,44 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-/// Where the session stands, plus the directory it started in. `cwd` is this batch's snapshot;
-/// `root` never moves; `chdir` writes the session's shared handle.
+/// Where the session stands. The handle is the one source: every read takes it, `chdir` writes it.
 pub struct Workspace {
-    cwd: std::path::PathBuf,
-    root: std::path::PathBuf,
     shared: super::contract::call::Cwd,
 }
 
 impl Workspace {
-    pub fn new(root: std::path::PathBuf, shared: super::contract::call::Cwd) -> Self {
-        let cwd = shared.read().unwrap_or_else(|e| e.into_inner()).clone();
-        Self { cwd, root, shared }
+    pub fn new(shared: super::contract::call::Cwd) -> Self {
+        Self { shared }
     }
 
-    pub fn root(&self) -> &std::path::Path {
-        &self.root
+    /// The session's own directory handle, for the session that builds this.
+    pub fn shared(&self) -> super::contract::call::Cwd {
+        self.shared.clone()
     }
 
-    pub fn cwd(&self) -> &std::path::Path {
-        &self.cwd
+    /// The directory as it stands right now.
+    pub fn cwd(&self) -> std::path::PathBuf {
+        self.shared
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// The licensed zones: **where the session stands**, plus temp. Hangs off `cwd`, not the start
     /// directory, so a deliberate `cd` carries the licence with it.
     pub fn zones(&self) -> Vec<std::path::PathBuf> {
-        licensed_zones(&self.cwd)
+        licensed_zones(&self.cwd())
     }
 
     /// Resolve a model-given path: relative to `cwd`, `..` and symlinks normalized first, and the
     /// result MUST land inside a licensed zone.
     pub fn resolve(&self, raw: &str, must_exist: bool) -> Result<std::path::PathBuf> {
-        resolve_path(&self.cwd, &self.zones(), raw, must_exist)
+        resolve_path(&self.cwd(), &self.zones(), raw, must_exist)
     }
 
     /// Land on a new working directory. The caller checks where it may land (see `cd`).
-    pub fn chdir(&mut self, real: std::path::PathBuf) {
-        *self.shared.write().unwrap_or_else(|e| e.into_inner()) = real.clone();
-        self.cwd = real;
+    pub fn chdir(&self, real: std::path::PathBuf) {
+        *self.shared.write().unwrap_or_else(|e| e.into_inner()) = real;
     }
 
     /// Run a read-modify-write under the path's exclusive lock.

@@ -34,6 +34,7 @@ keys! {
     KEY_CONFIG_SERVER_AGENT_TOOLS_KAIROS_MAX_RETAINED = "config", "server.agent.tools.kairos", "maxRetained", Int, DefaultValue::Int(8), "Completed unread results kept per session.", true;
     KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS = "config", "server.agent.subagent", "maxToolCalls", Int, DefaultValue::Int(1000), "Non-final tool calls one child may make.", true;
     KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_TASK_TIMEOUT_SECS = "config", "server.agent.loop.tools.task", "timeoutSecs", Int, DefaultValue::Int(3600), "How long one sub-session may run before it is stopped.", true;
+    KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_MEMO_FOLDER = "config", "server.agent.loop.tools", "memoFolder", Text, DefaultValue::Text(""), "Where memo exports land; empty = the platform's download folder.", true;
     KEY_CONFIG_SERVER_STORAGE_BATCH_TOOLS = "config", "server.storage", "batchTools", Int, DefaultValue::Int(10), "Completed tool calls per write batch.", true;
     KEY_CONFIG_SERVER_PLATFORM_TIMEZONE = "config", "server.platform", "timezone", Text, DefaultValue::Null, "Time zone by name; empty = the system's.", true;
     KEY_CONFIG_SERVER_PLATFORM_STAMP_ENABLED = "config", "server.platform.stamp", "enabled", Bool, DefaultValue::Bool(false), "Inject timestamps into new user messages.", true;

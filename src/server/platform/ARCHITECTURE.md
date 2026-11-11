@@ -24,7 +24,7 @@ keeps — is in `README.md`.
 | item | what it does |
 |---|---|
 | `os::{Family, Os, current()}` | which family, name and architecture this is |
-| `env::{home, data_dir, config_dir, temp_dir}` | the directories, XDG-based on unix; the IPC endpoint directory belongs to `ipc::endpoint` |
+| `env::{home, data_dir, config_dir, temp_dir, downloads_dir}` | the directories, XDG-based on unix, `USERPROFILE` on windows; `downloads_dir` reads `XDG_DOWNLOAD_DIR` and falls back to `~/Downloads`; the IPC endpoint directory belongs to `ipc::endpoint` |
 | `env::{var, var_os}` | one environment variable, as text or raw |
 | `time::init(name)` | take the zone from configuration, once, at startup (`None` = whatever the machine says) |
 | `time::now_stamp()` | now, in the process's zone, as `YYYY-MM-DD HH:MM:SS` |

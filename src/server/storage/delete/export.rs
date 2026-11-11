@@ -9,14 +9,18 @@ use super::super::write::shared::{in_ranges, session_blocks};
 use super::super::writer::Store;
 
 impl Store {
-    /// Write this session's memos into the download folder; `None` = nothing to export.
-    pub fn export_memos(&mut self, session: i64) -> Result<Option<PathBuf>> {
-        current(&self.conn, session)
+    /// Write this session's memos into `dir`; `None` = nothing to export.
+    pub fn export_memos(&mut self, session: i64, dir: &std::path::Path) -> Result<Option<PathBuf>> {
+        current(&self.conn, session, dir)
     }
 }
 
 /// Write one markdown file per session; `None` = there is nothing to export.
-pub(crate) fn current(conn: &Connection, session: i64) -> Result<Option<PathBuf>> {
+pub(crate) fn current(
+    conn: &Connection,
+    session: i64,
+    dir: &std::path::Path,
+) -> Result<Option<PathBuf>> {
     let ranges = session_blocks(conn, session)?;
     if ranges.is_empty() {
         return Ok(None);
@@ -46,9 +50,7 @@ pub(crate) fn current(conn: &Connection, session: i64) -> Result<Option<PathBuf>
     if groups.is_empty() {
         return Ok(None);
     }
-    let dir = crate::server::platform::env::downloads_dir()
-        .context("no download directory for the memo export")?;
-    std::fs::create_dir_all(&dir)
+    std::fs::create_dir_all(dir)
         .with_context(|| format!("cannot create export directory {}", dir.display()))?;
     let path = dir.join(format!("memos-{session}.md"));
     let mut out = format!("# Memos for session {session}\n\n");

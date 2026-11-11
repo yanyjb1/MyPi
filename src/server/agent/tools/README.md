@@ -127,9 +127,9 @@ re-exported at the `tools` root; callers write the group they mean.
 
 | module | holds |
 |---|---|
-| `contract::call` | `Batch`, `BatchInput`, `Cwd` |
+| `contract::call` | `Batch`, `Cwd` |
 | `contract::output` | `ToolResult`, `ToolOutput`, `Effect`, `MemoOp`, `AliasOp` |
-| `contract::env` | `Env`, `Limits`, `BashEnv`, `Paths` |
+| `contract::env` | `Env`, `Defaults`, `Limits`, `BashEnv`, `Paths` |
 | `contract::view` | `Source`, `Export`, `Child`, `Draft`, `MemoRead`, `MemoScope`, `MemoReadOp`, `MemoVersion`, `MemoView`, and the history shapes `CallRecord`, `BlockPair`, `Direction` |
 | `contract::job` | `JobSpec`, `Schedule`, `JobHost`, `JobRunner`, `JobCtx`, `JobOutcome`, `Receipt`, `Row`, `Status`, `Exit`, `OutputSink` |
 

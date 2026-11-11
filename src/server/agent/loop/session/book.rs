@@ -9,7 +9,6 @@ use anyhow::{Context, Result, bail};
 
 use super::change::{self, Change};
 use super::handle::Handle;
-use super::live::Live;
 use super::settings::Settings;
 use crate::server::agent::r#loop::job;
 use crate::server::agent::r#loop::pen;
@@ -17,7 +16,9 @@ use crate::server::agent::r#loop::turn;
 use crate::server::agent::r#loop::turn::ask::Ask;
 use crate::server::agent::r#loop::turn::cycle::Mode;
 use crate::server::agent::request::live::{Element, Event, Stream};
-use crate::server::agent::tools::contract::call::Batch;
+use crate::server::agent::request::transport::Provider;
+use crate::server::agent::tools::contract::call::{Batch, Cwd};
+use crate::server::agent::tools::contract::env::Defaults;
 use crate::server::agent::tools::contract::view::Source;
 use crate::server::storage::Writer;
 
@@ -28,6 +29,10 @@ pub struct Birth {
     pub session: i64,
     pub provider: String,
     pub model: String,
+    /// The endpoint the model is reached at; already resolved by the caller.
+    pub endpoint: Provider,
+    /// The model's declared output cap.
+    pub max_output_tokens: u32,
     pub system: String,
     /// The session's tool names; manuals are built once, from `registry::roster`.
     pub tools: Vec<String>,
@@ -69,8 +74,9 @@ pub(crate) struct Inner {
     pub(crate) ask: Arc<dyn Ask>,
     pub(crate) batch: Arc<dyn Batch>,
     pub(crate) source: Arc<super::source::Db>,
-    pub(crate) dir: PathBuf,
     pub(crate) slots: Arc<super::jobs::Slots>,
+    /// What every session's tool side starts from.
+    pub(crate) defaults: Defaults,
     /// One sub-session's deadline; `task` never borrows kairos' numbers.
     pub(crate) task_timeout: std::time::Duration,
 }
@@ -84,8 +90,7 @@ impl Loop {
         cfg: &crate::server::config::Config,
     ) -> Self {
         let path = writer.path();
-        let dir = cfg.export_dir();
-        let export = Arc::new(super::export::Files::new(path.clone(), dir.clone()));
+        let export = Arc::new(super::export::Files::new(path.clone(), cfg.export_dir()));
         let (lines, bytes) = cfg.limits();
         let global_mcp = cfg
             .paths()
@@ -97,14 +102,16 @@ impl Loop {
         let slots = super::jobs::Slots::new();
         let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
         let source = super::source::Db::new(path.clone(), global_mcp, factory);
-        let batch = crate::server::agent::tools::engine::Engine::new(
-            crate::server::agent::tools::contract::env::Limits { lines, bytes },
-            cfg.bash_timeout(),
-            cfg.subagent_budget(),
-            source.clone(),
+        let defaults = Defaults {
+            limits: crate::server::agent::tools::contract::env::Limits { lines, bytes },
+            bash: crate::server::agent::tools::contract::env::BashEnv {
+                timeout: cfg.bash_timeout(),
+                shell: crate::server::platform::shell::Shell::default(),
+            },
+            aliases: cfg.aliases(),
+            default_budget: cfg.subagent_budget(),
             export,
-            cfg.aliases(),
-            crate::server::agent::tools::contract::env::Paths {
+            paths: crate::server::agent::tools::contract::env::Paths {
                 agents: project.agents,
                 answers: project.answers,
                 global_agents: cfg
@@ -114,17 +121,18 @@ impl Loop {
                     .unwrap_or_default()
                     .join("agents"),
             },
-        );
+            source: source.clone(),
+        };
         Self {
             inner: Arc::new(Inner {
                 writer,
                 settings,
                 out,
                 ask,
-                batch: Arc::new(batch),
+                batch: Arc::new(crate::server::agent::tools::engine::Engine),
                 source,
-                dir,
                 slots,
+                defaults,
                 task_timeout: cfg.task_timeout(),
             }),
         }
@@ -145,18 +153,7 @@ impl Loop {
     /// Open a session. It stays lazy until the first message arrives.
     pub fn book(&self, birth: Birth) -> Result<i64> {
         let id = birth.session;
-        let transcript = Arc::new(super::history::Transcript::open(
-            &self.inner.writer.path(),
-            id,
-        )?);
-        let handle = Arc::new(Handle::new(birth, transcript));
-        if !self.inner.slots.insert(id, handle.clone()) {
-            bail!("session {id} is already booked");
-        }
-        if let Err(e) = spawn_scheduler(&self.inner, handle) {
-            self.inner.slots.remove(id);
-            return Err(e);
-        }
+        bind(&self.inner, birth)?;
         Ok(id)
     }
 
@@ -236,12 +233,18 @@ impl Loop {
     }
 }
 
-pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Result<Arc<Handle>> {
+/// One session on the table: its two sides built from the birth, then its scheduler.
+pub(crate) fn bind(inner: &Arc<Inner>, birth: Birth) -> Result<Arc<Handle>> {
     let transcript = Arc::new(super::history::Transcript::open(
         &inner.writer.path(),
         birth.session,
     )?);
-    let handle = Arc::new(Handle::new(birth, transcript));
+    let cwd: Cwd = Arc::new(std::sync::RwLock::new(birth.cwd.clone()));
+    let stop = crate::server::platform::stop::Stop::new();
+    let env = inner
+        .defaults
+        .session(birth.session, cwd, birth.tools.clone(), stop)?;
+    let handle = Arc::new(Handle::new(birth, env, transcript));
     if !inner.slots.insert(handle.id, handle.clone()) {
         bail!("session {} is already booked", handle.id);
     }
@@ -249,6 +252,11 @@ pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Res
         inner.slots.remove(handle.id);
         return Err(e);
     }
+    Ok(handle)
+}
+
+pub(crate) fn book_child(inner: &Arc<Inner>, birth: Birth, start: String) -> Result<Arc<Handle>> {
+    let handle = bind(inner, birth)?;
     start_turn(
         inner,
         &handle,
@@ -348,9 +356,8 @@ fn start_turn(
         _ => None,
     };
     let mode = mode_of(&start);
-    let live = handle.take_live(&inner.dir);
-    let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
-    let model = Some((live.provider.clone(), live.model.clone()));
+    let cwd = handle.cwd();
+    let model = Some(handle.model());
     let (turn, opening) = match pen::turn::open(&inner.writer, handle.id, start, &cwd, model) {
         Ok(pair) => pair,
         Err(e) => {
@@ -375,22 +382,15 @@ fn start_turn(
         .name(format!("turn-{}", thread_handle.id))
         .spawn(move || {
             // The handle goes back to idle however this thread ends, a panic included.
-            let mut session = TurnGuard {
+            let _guard = TurnGuard {
                 handle: thread_handle.clone(),
-                live: Some(live),
             };
             let mut current = turn;
             let mut mode = mode;
             let mut first_turn = first;
             loop {
-                let outcome = turn::cycle::run(
-                    &inner,
-                    &thread_handle,
-                    current,
-                    session.live(),
-                    mode.clone(),
-                    first_turn,
-                );
+                let outcome =
+                    turn::cycle::run(&inner, &thread_handle, current, mode.clone(), first_turn);
                 first_turn = false;
                 match outcome {
                     Ok(turn::Stop::User) => {
@@ -404,9 +404,8 @@ fn start_turn(
                         let start = next.start();
                         thread_handle.stop.reset();
                         mode = mode_of(&start);
-                        let live = session.live();
-                        let cwd = live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone();
-                        let model = Some((live.provider.clone(), live.model.clone()));
+                        let cwd = thread_handle.cwd();
+                        let model = Some(thread_handle.model());
                         match pen::turn::open(&inner.writer, thread_handle.id, start, &cwd, model) {
                             Ok((next, opening)) => {
                                 thread_handle.transcript().append_user(opening);
@@ -445,23 +444,13 @@ fn start_turn(
     Ok(turn)
 }
 
-/// A turn thread's share of the handle: the live state, and the one exit that returns it.
+/// A turn thread's share of the handle: the one exit that turns it back to idle.
 struct TurnGuard {
     handle: Arc<Handle>,
-    live: Option<Live>,
-}
-
-impl TurnGuard {
-    fn live(&mut self) -> &mut Live {
-        self.live.as_mut().expect("the guard holds the live state")
-    }
 }
 
 impl Drop for TurnGuard {
     fn drop(&mut self) {
-        if let Some(live) = self.live.take() {
-            self.handle.put_live(live);
-        }
         self.handle.stop.reset();
         self.handle.mark_idle();
     }

@@ -90,6 +90,13 @@ wake块的渲染还是不够有特色。🤔回头寻思一下。
 - 工具卡折行没做：头部、通用输出、截断行都靠 clip；表格与 diff 的边界未定，先只折头部和通用输出。
 - web 渲染没专门做：参数还在流时就只剩一个 `web` 头（`card/web.rs` 全 JSON 解析）；`read raw` 不显示落盘路径；`fill`/`select` 不显示填入值；search 不显示 `pages`。
 
+### 会话配置与导出目录（2026-11-11）
+
+- `Live` 删了，一个会话两份配置：请求侧 `session/config.rs`（provider、model、endpoint、max output、system、manuals、tools_json、compact），工具侧 `contract::env::Env`（建立会话时建一次，`Defaults` 供料）。`BatchInput` 与每批重建的 `Env` 一并删除。
+- cwd 挂在 `Handle` 上，工具每次用时读句柄；`/cdp` 与 `cd` 写同一句柄，回合中立即生效。起点目录（`root`）删除——全仓没有读者。
+- 仪表：`~` 回到百分数前，刻度不带标记；没有档案地板又不估算时读 `0.0%`。
+- 导出目录：临时工具结果固定 `<平台临时目录>/mypi`；memo 导出走 `config.server.agent.loop.tools.memoFolder`，缺省取平台下载目录（unix 读 `XDG_DOWNLOAD_DIR`，windows `USERPROFILE\Downloads`）。导出挂在删会话的门口（此前这条接口没有调用者）。
+
 ## 二、main 区
 
 - 内部各组件 shout→react 的行为没有核对过。
@@ -108,6 +115,7 @@ wake块的渲染还是不够有特色。🤔回头寻思一下。
 - 压缩之后、下一次请求之前，上下文条是估的（摘要 + 按截断点权重推算的尾巴 + 档案地板），带 `~`；下次请求落地即换成实测值。
 - git 扫描在帧里同步跑：一次 `git status` + 一次 `git branch`，每间隔一次几十毫秒。
 - 临时 `cd` 只活在前端与内存：重启后以库里会话行的 cwd 为准。
+- 回合进行中 `/cdp` 立刻改句柄，工具下一次调用就用新目录；但该回合的 `cwd_history` 行仍是回合开场时的目录。
 - `call usage` 每次都重扫整个会话：turns 一条条查、块正文全读出来算账。流式期间每遇到一块带 usage 就发一次，代价按块数线性涨，长会话上会变成每次全表扫描。
 
 ### tools

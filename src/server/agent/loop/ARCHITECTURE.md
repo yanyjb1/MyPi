@@ -11,11 +11,11 @@ job/output.rs           the per-run temp file, an OutputSink; the per-session di
 job/cron.rs             five-field cron parse and next
 job/wake.rs             Wake, WakeSink, the command wake texts
 session/mod.rs          session types
-session/book.rs         Loop, Birth, Message, scheduler, turn start, book_child, unbook, forget
-session/handle.rs       per-session state: birth, live, mailbox, transcript, flags
+session/book.rs         Loop, Birth, Message, scheduler, turn start, bind, book_child, unbook, forget
+session/handle.rs       per-session state: the two configs, the cwd handle, mailbox, transcript, flags
+session/config.rs       the request side: model, endpoint, output cap, system, manuals, compact
 session/jobs.rs         Slots (the wake router), the scheduler's values from config
 session/agent.rs        AgentRunner: books a child, waits for its turn, drops it
-session/live.rs         cwd handle, provider/model, system, tool names, compaction instruction, export dir
 session/settings.rs     fence and scrooge
 session/mailbox.rs      the wake queue, the one user slot, the wake wait
 session/change.rs       Model and Cwd
@@ -93,7 +93,7 @@ half's types, re-exported from this domain's root.
   `clear_mail`.
 - The scheduler, turn and job threads live inside this domain.
 - The request half implements `Ask`; the tool half implements `Batch` and its ports are answered by
-  `session::source` and `session::export`. Neither touches `Handle`, `Live` or `pen`.
+  `session::source` and `session::export`. Neither touches `Handle`, the session's config, or `pen`.
 - Storage consumes `Row`s and returns `Landed` ids; the loop never writes SQL.
 
 ## Not wired

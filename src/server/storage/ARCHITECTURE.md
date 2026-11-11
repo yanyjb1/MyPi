@@ -43,7 +43,7 @@ describes the code as it stands.
 | `Writer::relay(port)` | names the port live pieces go to |
 | `Writer::rewind(target)` | cuts a session's list back and sweeps |
 | `Writer::delete_rows(table, ids)` | removes those rows and whatever only they held; returns how many |
-| `Writer::export_memos(session)` | writes this session's memos into the download folder |
+| `Writer::export_memos(session, dir)` | writes this session's memos into `dir`, resolved by the caller |
 | `Reader::open(path)` | opens the read connection; every query lives behind it |
 | `Reader::query(plan)` | one read plan: sheet, columns, conditions, order, limit; rows out as JSON |
 | `Reader::sessions / session / list / turns / turn / ranges / turn_ranges / request / blocks / block / artifact / artifacts_by_ref / memos / aliases` | the named reads, decoded: rows out as JSON; `ranges` is every block interval a session's list covers, `turn_ranges` one round's |

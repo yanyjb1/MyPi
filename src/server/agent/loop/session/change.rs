@@ -4,13 +4,14 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
+use super::config::Model;
 use super::handle::Handle;
 use crate::server::storage::{Row, Submit, Writer};
 
 /// One session-scoped change.
 #[derive(Debug, Clone)]
 pub enum Change {
-    Model { provider: String, model: String },
+    Model(Model),
     Cwd(PathBuf),
 }
 
@@ -21,54 +22,27 @@ pub(crate) fn apply(
     scrooge: bool,
 ) -> Result<Option<PathBuf>> {
     match change {
-        Change::Model { provider, model } => {
+        Change::Model(model) => {
             if scrooge {
                 bail!("this loop does not allow a model change mid-session");
             }
-            {
-                let mut birth = handle.birth.lock().unwrap_or_else(|e| e.into_inner());
-                birth.provider = provider.clone();
-                birth.model = model.clone();
-            }
-            if let Some(live) = handle
-                .live
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_mut()
-            {
-                live.provider = provider.clone();
-                live.model = model.clone();
-            }
+            let switch = (model.provider.clone(), model.model.clone());
+            handle.config_mut().model = model;
             writer.push(Submit {
                 rows: vec![Row::Switch {
                     session: handle.id,
-                    model: Some((provider, model)),
+                    model: Some(switch),
                 }],
             })?;
         }
         Change::Cwd(path) => {
             // `/cdp` asks only whether the directory exists; `cd` answers where it may stand.
-            let base = match handle
-                .live
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-            {
-                Some(live) => live.cwd.read().unwrap_or_else(|e| e.into_inner()).clone(),
-                None => handle.birth().cwd,
-            };
+            let base = handle.cwd();
             let real = crate::server::agent::tools::workspace::resolve_dir(
                 &base,
                 &path.to_string_lossy(),
             )?;
-            if let Some(live) = handle
-                .live
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_mut()
-            {
-                *live.cwd.write().unwrap_or_else(|e| e.into_inner()) = real.clone();
-            }
+            handle.chdir(real.clone());
             // A move that lands where the session already stands is no row change.
             if real != base {
                 writer.push(Submit {

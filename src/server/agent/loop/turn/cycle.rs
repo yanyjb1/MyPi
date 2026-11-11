@@ -11,11 +11,9 @@ use crate::server::agent::r#loop::session::agent::AgentRunner;
 use crate::server::agent::r#loop::session::book::{Birth, Inner, Message, Retention};
 use crate::server::agent::r#loop::session::child::State as ChildState;
 use crate::server::agent::r#loop::session::handle::Handle;
-use crate::server::agent::r#loop::session::live::Live;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
 use crate::server::agent::request::live::{Element, Event, Notice, NoticeLevel, Stream};
 use crate::server::agent::request::message::Message as Stored;
-use crate::server::agent::tools::contract::call::BatchInput;
 use crate::server::agent::tools::contract::job::{JobRunner, JobSpec, Schedule};
 use crate::server::agent::tools::contract::output::Effect;
 use crate::server::agent::tools::contract::output::ToolResult;
@@ -39,23 +37,24 @@ pub(crate) fn run(
     inner: &Arc<Inner>,
     handle: &Arc<Handle>,
     turn: i64,
-    live: &mut Live,
     mode: Mode,
     first_turn: bool,
 ) -> Result<Stop> {
     let transcript = handle.transcript().clone();
     let history: Arc<dyn History> = transcript.clone();
     if let Mode::Compact { retention, focus } = mode {
+        let config = handle.config();
         let reply = match inner.ask.compact(CompactInput {
             session: handle.id,
             history: history.clone(),
-            transport: live.transport(),
-            system: live.system.clone(),
-            tools: live.manuals.clone(),
-            tools_json: live.tools_json.clone(),
+            transport: config.model.transport(),
+            max_output_tokens: config.model.max_output_tokens,
+            system: config.system.clone(),
+            tools: config.manuals.clone(),
+            tools_json: config.tools_json.clone(),
             retention,
             focus,
-            instruction: live.compact.clone(),
+            instruction: config.compact.clone(),
             stop: handle.stop.clone(),
             worker: handle.worker.clone(),
             live: inner.out.clone(),
@@ -88,7 +87,6 @@ pub(crate) fn run(
         inner,
         handle,
         turn,
-        live,
         &history,
         &transcript,
         &mut usage,
@@ -118,7 +116,6 @@ fn laps(
     inner: &Arc<Inner>,
     handle: &Arc<Handle>,
     turn: i64,
-    live: &mut Live,
     history: &Arc<dyn History>,
     transcript: &Arc<super::super::session::history::Transcript>,
     usage: &mut Usage,
@@ -149,14 +146,17 @@ fn laps(
 
         let blocks = Arc::new(Pen::new(inner.writer.clone(), turn));
         *pen = Some(blocks.clone());
+        // The session's request side, as it stands now: a switch mid-turn lands next lap.
+        let config = handle.config();
         let lap = inner.ask.lap(LapInput {
             session: handle.id,
             history: history.clone(),
             blocks: blocks.clone(),
-            transport: live.transport(),
-            system: live.system.clone(),
-            tools: live.manuals.clone(),
-            tools_json: live.tools_json.clone(),
+            transport: config.model.transport(),
+            max_output_tokens: config.model.max_output_tokens,
+            system: config.system.clone(),
+            tools: config.manuals.clone(),
+            tools_json: config.tools_json.clone(),
             stop: handle.stop.clone(),
             worker: handle.worker.clone(),
             live: inner.out.clone(),
@@ -194,16 +194,10 @@ fn laps(
             continue;
         }
 
-        let input = BatchInput {
-            session: handle.id,
-            root: live.root.clone(),
-            cwd: live.cwd.clone(),
-            tools: live.tools.clone(),
-            calls: lap.calls.clone(),
-            stop: handle.stop.clone(),
-            out: inner.out.clone(),
-        };
-        let results = inner.batch.run(input)?;
+        let calls = lap.calls.clone();
+        let mut env = handle.env();
+        let results = inner.batch.run(&mut env, &calls, inner.out.clone())?;
+        drop(env);
         // Calls the stop cut off never ran: their request blocks leave no trace.
         let unanswered: std::collections::BTreeSet<String> = lap
             .calls
@@ -212,7 +206,7 @@ fn laps(
             .map(|call| call.call_id.clone())
             .collect();
         blocks.drop_calls(&unanswered);
-        let (children, deletes) = effects(&blocks, &results, live)?;
+        let (children, deletes) = effects(&blocks, &results, &config)?;
         let stopped = results.iter().any(|result| result.stop);
         let reported = ResultsInput {
             session: handle.id,
@@ -245,12 +239,14 @@ fn laps(
                 id,
                 Birth {
                     session: id,
-                    provider: live.provider.clone(),
-                    model: live.model.clone(),
-                    system: live.system.clone(),
+                    provider: config.model.provider.clone(),
+                    model: config.model.model.clone(),
+                    endpoint: config.model.endpoint.clone(),
+                    max_output_tokens: config.model.max_output_tokens,
+                    system: config.system.clone(),
                     tools: spec.tools,
                     manuals: spec.manuals,
-                    compact: live.compact.clone(),
+                    compact: config.compact.clone(),
                     meta: Some(meta),
                     cwd: spec.cwd,
                 },
@@ -331,7 +327,7 @@ struct Spawn {
 fn effects(
     blocks: &Pen,
     results: &[ToolResult],
-    live: &Live,
+    config: &super::super::session::config::Config,
 ) -> Result<(Vec<(usize, Spawn)>, Vec<pen::effect::Delete>)> {
     let mut children = Vec::new();
     let mut deletes = Vec::new();
@@ -359,9 +355,9 @@ fn effects(
                     blocks.push(vec![
                         Row::Request {
                             meta: RequestMeta {
-                                model: live.model.clone(),
-                                provider: live.provider.clone(),
-                                system: live.system.clone(),
+                                model: config.model.model.clone(),
+                                provider: config.model.provider.clone(),
+                                system: config.system.clone(),
                                 tools_json,
                                 baseline_prompt: None,
                             },
@@ -369,7 +365,10 @@ fn effects(
                         Row::Session {
                             started_at: now_stamp(),
                             cwd: cwd.to_string_lossy().into_owned(),
-                            model: Some((live.provider.clone(), live.model.clone())),
+                            model: Some((
+                                config.model.provider.clone(),
+                                config.model.model.clone(),
+                            )),
                             name: None,
                             anchor: Some(anchor),
                             meta: Some(Ref::Batch(meta_at)),

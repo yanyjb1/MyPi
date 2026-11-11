@@ -37,7 +37,7 @@ failing test.
 
 ### What the server holds in memory
 
-The api's state (the writer, one session's live state per open session, the running rounds, the
+The api's state (the writer, every open session's two configs, the running rounds, the
 relay, the config), the config itself, the time zone, the log ring, and the wire's own bits (the
 database lock, the endpoint, the register of front ends). Everything else is the database or a file.
 

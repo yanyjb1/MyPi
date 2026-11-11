@@ -50,7 +50,7 @@ pub(crate) const TOOL: Tool = Tool {
 };
 
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
-    let bridge = env.source.mcp(env.session, env.workspace.cwd())?;
+    let bridge = env.source.mcp(env.session, &env.workspace.cwd())?;
     match args.choice(TYPE)?.as_str() {
         "list" => {
             let server = args.opt_str(SERVER)?;

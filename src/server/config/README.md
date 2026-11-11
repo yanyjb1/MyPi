@@ -92,7 +92,7 @@ This domain owns the keys below; consumers ask it for values.
 |---|---|
 | `config.server.api` | `defaultModel` |
 | `config.server.request` | `streaming`; `compact.retainTail`, `compact.instructionFile` |
-| `config.server.agent` | `loop.maxToolCalls`, `loop.scrooge`, `loop.tools.task.timeoutSecs`; `tools.*`; `subagent.maxToolCalls` |
+| `config.server.agent` | `loop.maxToolCalls`, `loop.scrooge`, `loop.tools.task.timeoutSecs`, `loop.tools.memoFolder`; `tools.*`; `subagent.maxToolCalls` |
 | `config.server.storage` | `batchTools` |
 | `config.server.platform` | `timezone`, `stamp.*`, `ipc` |
 | `config.server` | `pruneOnRewind` |

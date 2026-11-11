@@ -132,10 +132,10 @@ One row, exactly the terminal width. The deco table is `activity`, `model`, `cwd
 `Data` is filled from three places. The conversation row gives the name and the model address;
 the `models.model.<address>` answer gives the model pill and the gauge's denominator; `call usage`
 gives the cost in both currencies and where the context stands. The display currency comes from
-`config.ui.tui.fx.currency`, never from a model. The gauge's first cell is its marker: `-` for a
-measured count, `~` for an estimate. `activity` steps one glyph per `tick` shout. `git` scans on its
-own tick: the first one at once, then once per configured interval, and once more when a round
-starts or ends.
+`config.ui.tui.fx.currency`, never from a model. The gauge reads `~` in front of the percentage
+when the count is an estimate; the dashes carry no mark. `activity` steps one glyph per `tick`
+shout. `git` scans on its own tick: the first one at once, then once per configured interval, and
+once more when a round starts or ends.
 
 ### Invariants
 

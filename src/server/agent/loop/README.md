@@ -2,8 +2,8 @@
 
 ## 1. Design / Schema
 
-One `Loop` owns every session. A session is a handle, a mailbox and a lazy live state. A turn opens
-its rows, runs laps, takes the mailboxes and settles.
+One `Loop` owns every session. A session is a handle, a mailbox and two configs, both built when it
+is booked. A turn opens its rows, runs laps, takes the mailboxes and settles.
 
 Public surface:
 
@@ -18,9 +18,9 @@ Loop::change(session, Change) -> Result<()>
 Loop::write_mail(session, Message) -> Result<()>
 Loop::clear_mail(session) -> Result<()>
 
-Birth = { session, provider, model, system, tools, compact, meta, cwd }   // tools = names
+Birth = { session, provider, model, endpoint, max_output_tokens, system, tools, compact, meta, cwd }   // tools = names
 Message = Submit { prefix, text, suffix } | Compact { retention, focus }
-Change = Model { provider, model } | Cwd(path)
+Change = Model(Model) | Cwd(path)
 ```
 
 `ask` is `Arc<dyn request::Ask>`; `out` carries the live line. The loop builds the tool layer from
@@ -67,7 +67,7 @@ loop only adds tool events to it.
 ## 2. Design Intent
 
 - **One session owns its state.** No process-global current session; every lock is per session, and
-  a batch runs with the live state taken out of the slot.
+  a batch runs against the environment the session built when it was booked.
 - **One write point.** `pen` turns request blocks, tool effects, artifacts, turn openings and
   settlements into `Row`s. A lap's blocks and the effects their results produced land in one
   submission, so an effect's anchor is a row index in that same commit.

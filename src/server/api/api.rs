@@ -94,7 +94,6 @@ impl Api {
                 interval: cfg.retry_interval(),
                 timeout: cfg.retry_timeout(),
             },
-            output_caps: cfg.output_caps(),
             streaming: if cfg.streaming_immediate() {
                 Streaming::Immediate
             } else {
@@ -227,10 +226,13 @@ impl Api {
             }
         };
 
+        let (endpoint, max_output_tokens) = super::post::emit::resolved(self, &provider, &model)?;
         self.ledger.book(Birth {
             session,
             provider,
             model,
+            endpoint,
+            max_output_tokens,
             system,
             tools,
             manuals,
