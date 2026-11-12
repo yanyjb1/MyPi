@@ -54,7 +54,6 @@ fn main() -> anyhow::Result<()> {
         .context("cannot start the front end")?;
     let served = server::serve(bound);
     let _ = front.wait();
-    #[cfg(feature = "web")]
     mypi::web::shutdown();
     served
 }
@@ -68,7 +67,6 @@ fn run_server(db: &Path) -> anyhow::Result<()> {
     init_time(&cfg);
     let endpoint = Endpoint::for_db(db, ipc_kind(&cfg));
     let served = server::run(Api::open(db.to_path_buf(), cfg)?, db, endpoint, claim);
-    #[cfg(feature = "web")]
     mypi::web::shutdown();
     served
 }

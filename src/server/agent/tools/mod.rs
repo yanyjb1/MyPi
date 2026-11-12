@@ -12,5 +12,4 @@ pub(crate) mod subagent;
 mod summary;
 pub(crate) mod workspace;
 
-#[cfg(feature = "web")]
 pub(crate) mod web;

@@ -182,9 +182,10 @@ empty document, so the model can tell an unrendered page from a quiet one.
 ### Site rules
 
 A site whose `<body>` mixes prose with furniture needs naming, and the naming lives in a file the
-user owns: `<config dir>/web-rules.json`, beside `config.yaml`. A machine that has none is given
-the built-in set (`rules.json` in this directory) on first use; from then on the file is what is
-read, so a site deleted from it falls back to the generic conversion.
+user owns: `<config dir>/web-rules.json`, beside `config.yaml`. The file is read once, when the
+configuration is loaded; a file that cannot be read is named there, and the built-in set
+(`server/config/web-rules.json`) answers instead. A machine that has none is given a copy of that
+set on first use, so a site deleted from it falls back to the generic conversion.
 
 The file is one array of rules, tried in order. The first rule whose `match` — a regex over
 `host + path`, never the query — matches the page is the rule that applies.

@@ -10,6 +10,7 @@ use super::super::model::ModelsConfig;
 use super::super::notice::ConfigNotice;
 use super::super::paths::ConfigPaths;
 use super::super::registry::Value;
+use super::super::rules::Rules;
 
 #[derive(Clone)]
 pub struct Config {
@@ -21,6 +22,8 @@ pub(super) struct Inner {
     pub(super) models: ModelsConfig,
     pub(super) layers: Layers,
     pub(super) cache: Mutex<HashMap<String, Arc<Effective>>>,
+    /// The site rules the web tool narrows a page with: read once, beside `config.yaml`.
+    pub(super) web_rules: Arc<Rules>,
     pub(super) load_notices: Vec<ConfigNotice>,
     pub(super) runtime: Mutex<Vec<ConfigNotice>>,
 }

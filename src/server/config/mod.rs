@@ -3,6 +3,7 @@
 pub mod paths;
 pub mod profile;
 pub mod prompts;
+pub mod rules;
 
 mod load;
 mod model;

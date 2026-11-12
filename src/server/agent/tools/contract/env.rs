@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use super::view::{Export, Source};
 use crate::server::agent::tools::workspace::Workspace;
+use crate::server::config::rules::Rules;
 
 /// What a tool reads: one session's conditions, built when it was booked.
 pub struct Env {
@@ -25,6 +26,8 @@ pub struct Env {
     pub export: Arc<dyn Export>,
     pub paths: Paths,
     pub source: Arc<dyn Source>,
+    /// The site rules `web` narrows a page with: one read, when the config was loaded.
+    pub rules: Arc<Rules>,
 }
 
 impl Env {
@@ -125,6 +128,7 @@ pub struct Defaults {
     pub export: Arc<dyn Export>,
     pub paths: Paths,
     pub source: Arc<dyn Source>,
+    pub rules: Arc<Rules>,
 }
 
 impl Defaults {
@@ -149,6 +153,7 @@ impl Defaults {
             export: self.export.clone(),
             paths: self.paths.clone(),
             source: self.source.clone(),
+            rules: Arc::clone(&self.rules),
         })
     }
 }

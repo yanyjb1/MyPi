@@ -11,11 +11,9 @@ use super::spec::Tool;
 use super::subagent;
 use crate::server::agent::request::message::ToolDef;
 
-#[cfg(feature = "web")]
 use super::web;
 
-/// Every built-in tool, in the order the model reads them. With `web` off that row is absent from
-/// the table itself, not present-but-unavailable.
+/// Every built-in tool, in the order the model reads them.
 pub const TOOLS: &[Tool] = &[
     read::TOOL,
     edit::TOOL,
@@ -27,7 +25,6 @@ pub const TOOLS: &[Tool] = &[
     subagent::TASK,
     subagent::FINAL,
     mcp::TOOL,
-    #[cfg(feature = "web")]
     web::TOOL,
     memo_tool::TOOL,
     todo::TOOL,

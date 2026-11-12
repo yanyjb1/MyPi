@@ -154,7 +154,9 @@ impl Operable {
         }
         let rest = self.total.saturating_sub(self.controls.len());
         if rest > 0 {
-            out.push_str(&format!("- {rest} more not listed\n"));
+            out.push_str(&format!(
+                "\n{rest} more controls the page offers are not listed.\n"
+            ));
         }
         out
     }
@@ -162,17 +164,11 @@ impl Operable {
 
 /// The scan expression. `scope` names the regions to search, empty for the whole body.
 pub(crate) fn expression(scope: &[String]) -> String {
-    let mut list = String::new();
-    for (i, selector) in scope.iter().enumerate() {
-        if i > 0 {
-            list.push(',');
-        }
-        list.push_str(&crate::web::rules::literal(selector));
-    }
+    let scope = serde_json::to_string(scope).expect("selectors always serialize");
     SCAN.replace("%LISTED%", &LISTED.to_string())
         .replace("%SKIP%", SKIP)
         .replace("%DIRECT%", DIRECT)
-        .replace("%SCOPE%", &format!("[{list}]"))
+        .replace("%SCOPE%", &scope)
 }
 
 /// Read the answer: how much text the body held, and which controls it offered.

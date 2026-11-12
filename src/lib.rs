@@ -7,7 +7,6 @@ pub mod git;
 pub mod ipc;
 pub mod server;
 pub mod ui;
-#[cfg(feature = "web")]
 pub mod web;
 
 /// The layering rules as a test: a forbidden `crate::` reference has to fail something, and it

@@ -118,6 +118,7 @@ impl Loop {
                     .join("agents"),
             },
             source: source.clone(),
+            rules: cfg.web_rules(),
         };
         Self {
             inner: Arc::new(Inner {
@@ -294,7 +295,6 @@ pub(crate) fn unbook(inner: &Arc<Inner>, id: i64) {
     }
     // A finished session keeps no browser tabs: the work and search tabs belong to the session's
     // life, not to the browser's.
-    #[cfg(feature = "web")]
     crate::web::close_session(id);
 }
 

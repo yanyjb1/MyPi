@@ -6,6 +6,7 @@ use anyhow::{Context as _, anyhow};
 use super::super::model;
 use super::super::paths;
 use super::super::paths::ConfigPaths;
+use super::super::rules;
 use super::source;
 use super::types::{Config, Inner, Layers};
 
@@ -39,12 +40,14 @@ impl Config {
             source::bootstrap(&paths, first.as_deref())?;
         }
         let layers = Layers::read(&paths, &mut notices);
+        let web_rules = Arc::new(rules::load(&paths, &mut notices));
         Ok(Config {
             inner: Arc::new(Inner {
                 paths,
                 models,
                 layers,
                 cache: Mutex::new(HashMap::new()),
+                web_rules,
                 load_notices: notices,
                 runtime: Mutex::new(Vec::new()),
             }),

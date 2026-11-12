@@ -3,13 +3,6 @@ name = "mypi"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-# web 工具默认开启，`--no-default-features` 可整体剔除：
-# 那个构建不含 CDP 客户端、HTML→Markdown、URL 解析，也不会启动任何浏览器。
-# 会话本身（模型 API、bash、编辑、持久化）不需要它。
-default = ["web"]
-web = ["dep:tungstenite", "dep:html-to-markdown-rs", "dep:regex", "dep:url"]
-
 [dependencies]
 # 同步 HTTP 客户端：极轻、无异步运行时依赖。rustls = 纯 Rust 的 TLS，不依赖系统 OpenSSL
 ureq = { version = "3", features = ["rustls", "json", "charset"] }
@@ -30,14 +23,14 @@ parking_lot = "0.12"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 # 停止信号（TERM/QUIT/INT/HUP）：还屏后退出。crossterm 已经带着它，这里只是显式声明
 signal-hook = "0.3"
-# ---- web 特性专属（见 [features]）----
+# ---- web 工具（内置，不是可选特性）----
 # WebSocket（CDP 用）：同步、无 tokio，与 ureq 的风格一致。只做帧协议，
 # CDP 的会话/配对逻辑在 src/web/utils/cdp.rs 里手写
-tungstenite = { version = "0.30", optional = true }
+tungstenite = "0.30"
 # HTML→Markdown：omp 同款 crate（纯 Rust，带 Aggressive 预处理去 nav/footer/form）
-html-to-markdown-rs = { version = "3.14", default-features = false, optional = true }
+html-to-markdown-rs = { version = "3.14", default-features = false }
 # 站点规则里的 match 是正则
-regex = { version = "1", optional = true }
+regex = "1"
 # URL 解析（fetch 的 scheme 校验）
-url = { version = "2", optional = true }
+url = "2"
 

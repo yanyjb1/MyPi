@@ -5,6 +5,7 @@ use parking_lot::{Condvar, Mutex};
 
 use super::ops;
 use super::search;
+use crate::server::config::rules::Rules;
 use crate::web::WebArgs;
 
 static ACTIVE: Mutex<usize> = Mutex::new(0);
@@ -34,10 +35,10 @@ pub(crate) fn active() -> usize {
 }
 
 /// One operation under the permit; the op names which.
-pub fn run(args: &WebArgs, session: i64) -> Result<String> {
+pub fn run(args: &WebArgs, session: i64, rules: &Rules) -> Result<String> {
     let _permit = permit();
     match args.op.as_str() {
-        "read" => ops::read::run(args, session),
+        "read" => ops::read::run(args, session, rules),
         "search" => {
             let query = args
                 .query

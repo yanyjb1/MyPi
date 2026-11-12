@@ -110,7 +110,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         value,
         full_page: args.flag(FULL_PAGE)?,
     };
-    let text = crate::web::run(&a, env.session)?;
+    let text = crate::web::run(&a, env.session, &env.rules)?;
     Ok(ToolOutput::text(text))
 }
 

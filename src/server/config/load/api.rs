@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use serde_yaml::Mapping;
@@ -9,6 +10,7 @@ use super::super::notice::ConfigNotice;
 use super::super::paths::{self, ConfigPaths};
 use super::super::profile::{self, ResolvedProfile};
 use super::super::registry::{self, Value};
+use super::super::rules::Rules;
 use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES,
     KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_RETRY_INTERVAL,
@@ -165,6 +167,11 @@ impl Config {
             .get(KEY_CONFIG_SERVER_API_DEFAULT_MODEL)
             .and_then(Value::as_text);
         self.inner.models.default_model(configured)
+    }
+
+    /// The site rules the web tool narrows a page with: one read, at load.
+    pub fn web_rules(&self) -> Arc<Rules> {
+        Arc::clone(&self.inner.web_rules)
     }
 
     pub fn notices(&self, profile: Option<&str>) -> Vec<ConfigNotice> {

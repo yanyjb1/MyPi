@@ -57,8 +57,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `html/markdown.rs` | DOM → Markdown, the inline-image drop, and the JS-shell check |
 | `html/control.rs` | the page-side scan for clickable and fillable controls, and the selector each is reached by |
 | `html/tags.rs` | the tag scanner and entity decoder the providers use |
-| `rules.rs` | site rules: the file in the config directory, its first-use copy, the page-side narrowing |
-| `rules.json` | the built-in rule set a new machine is given |
+| `rules.rs` | the page-side half of a site rule: the kept regions, and the HTML read back |
 
 ## What it talks to
 
