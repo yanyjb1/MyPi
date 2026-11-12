@@ -20,23 +20,22 @@ const PARAMS: &[Param] = &[
     Param::df(
         "offset",
         Kind::Line,
-        "First line to read (1-based). The output footer names the offset for the next call.",
+        "First line to read (1-based).",
         "1",
     ),
     Param::df(
         "limit",
         Kind::Number,
-        "Max lines this call; 500 at most, and the configured output line limit caps it",
+        "Max lines this call.",
         "200",
     ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "read",
-    about: "Read a file with line numbers so later turns can cite exact lines. MUST read before \
-            editing; NEVER guess the current text. Files only, never directories. Past the line cap \
-            the output stops early and its footer names the offset to continue from.",
-    input: "path is the only field a call needs; offset and limit narrow the window.",
+    about: "Read a file with line numbers, so later turns can cite exact lines. MUST read before \
+            editing; NEVER guess the current text. Files only.",
+    input: "path is the only field a call needs.",
     params: PARAMS,
     run,
     summary,
@@ -75,8 +74,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         if line_no < offset {
             continue;
         }
-        let line = std::str::from_utf8(&buf)
-            .map_err(|_| anyhow!("not a UTF-8 text file (line {line_no} does not decode)"))?;
+        let line = std::str::from_utf8(&buf).map_err(|_| anyhow!("not a valid UTF-8 text file"))?;
         let line = line.trim_end_matches(['\n', '\r']);
         if shown >= max_lines {
             more = true;

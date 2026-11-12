@@ -227,8 +227,7 @@ fn resolve_path(
         .any(|z| !z.as_os_str().is_empty() && real.starts_with(z))
     {
         anyhow::bail!(
-            "denied: {} is outside the workspace ({}) and the temp dir — \
-             file tools read and write only those two places",
+            "denied: {} is outside the workspace ({}) and the temp dir",
             real.display(),
             zones
                 .first()
@@ -241,10 +240,7 @@ fn resolve_path(
             return Err(anyhow!("file not found: {}", real.display()));
         }
         if real.is_dir() {
-            return Err(anyhow!(
-                "{} is a directory; only files can be read or edited",
-                real.display()
-            ));
+            return Err(anyhow!("{} is a directory", real.display()));
         }
     }
     Ok(real)

@@ -83,7 +83,7 @@ Every field is optional in the schema; `always` below marks the ones every call 
 | tool | parameters, in index order |
 |---|---|
 | `read` | `path` always, `offset` (1-based, default 1), `limit` (default 200, at most 500, capped by the output line limit) |
-| `edit` | `type` always (`exact`/`mass`), `path` always, `old`, `new`, `range` (`12-14` or `12`) |
+| `edit` | `type` always (`exact`/`mass`), `path` always, `old`, `range` (`12-14` or `12`), `new` |
 | `write` | `path` always, `content` always |
 | `cd` | `path` always |
 | `bash` | `command` always |

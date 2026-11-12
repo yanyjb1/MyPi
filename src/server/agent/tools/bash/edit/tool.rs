@@ -13,8 +13,8 @@ use crate::server::agent::tools::workspace::write_atomic;
 const TYPE: usize = 0;
 const PATH: usize = 1;
 const OLD: usize = 2;
-const NEW: usize = 3;
-const RANGE: usize = 4;
+const RANGE: usize = 3;
+const NEW: usize = 4;
 
 const PARAMS: &[Param] = &[
     Param::new(
@@ -29,27 +29,22 @@ const PARAMS: &[Param] = &[
         "The text to replace. MUST match the file character for character, exactly once.",
     ),
     Param::new(
-        "new",
-        Kind::Text,
-        "The replacement block; an empty value removes the target.",
-    ),
-    Param::new(
         "range",
         Kind::Text,
         "The lines to replace, `12-14` or `12`.",
+    ),
+    Param::new(
+        "new",
+        Kind::Text,
+        "The replacement; any number of lines. Empty deletes the target.",
     ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "edit",
-    about: "Edit one file. `type: exact` replaces one run of text and requires `old` to match the \
-            file character for character exactly once. `type: mass` replaces the lines named by \
-            `range` with `new`; the block may be any number of lines. The other group's fields are \
-            rejected. The answer names the lines that went, the lines that took their place, and \
-            how far everything below moved.",
-    input: "type and path are always needed. type=exact: old (a unique run) and new. \
-            type=mass: range and new; an empty new removes the range. The other type's fields \
-            are refused.",
+    about: "Edit one file. `type: exact` replaces one run of `old` with `new`. `type: mass` \
+            replaces the lines named by `range` with `new`.",
+    input: "type and path are always needed. The other type's field is refused.",
     params: PARAMS,
     run,
     summary,
@@ -62,10 +57,10 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
     env.workspace.with_write(&p, || {
         let text = std::fs::read_to_string(&p).context("failed to read file")?;
-        let (updated, memo, message) = match kind.as_str() {
-            "exact" => exact(&text, args)?,
-            "mass" => mass(&text, args)?,
-            other => return Err(anyhow!("unknown edit type `{other}`")),
+        let (updated, memo, message) = if kind == "exact" {
+            exact(&text, args)?
+        } else {
+            mass(&text, args)?
         };
         write_atomic(&p, &updated)?;
         Ok(ToolOutput::with_memo(
@@ -95,9 +90,7 @@ pub(crate) fn exact_text(text: &str, old: &str, new: &str) -> Result<(String, Va
     anyhow::ensure!(!old.is_empty(), "`old` must not be empty");
 
     match text.matches(old).count() {
-        0 => Err(anyhow!(
-            "old text not found; it must match the file content exactly (including whitespace and newlines)"
-        )),
+        0 => Err(anyhow!("`old` not found in the file")),
         1 => {
             let pos = text.find(old).expect("count == 1 checked above");
             let at = line_of(text, pos);
@@ -111,9 +104,8 @@ pub(crate) fn exact_text(text: &str, old: &str, new: &str) -> Result<(String, Va
             ))
         }
         n => Err(anyhow!(
-            "old appears {n} times; edit requires a unique match. \
-             Use type=mass to replace by line number, or make old \
-             longer with surrounding context so it is unique"
+            "`old` appears {n} times; make it longer with surrounding context, \
+             or use type=mass to replace by line number"
         )),
     }
 }
