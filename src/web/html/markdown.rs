@@ -6,7 +6,7 @@ use html_to_markdown_rs::options::{ConversionOptions, PreprocessingOptions, Prep
 
 /// Tags emitted as HTML where they sit, so a control stays recognizable in the prose. The
 /// selector that reaches it is in the operable section, not here.
-const KEEP: &[&str] = &["button", "input", "textarea", "summary"];
+const KEEP: &[&str] = &["button", "input", "select", "textarea", "summary"];
 
 pub(crate) fn html_to_markdown(html: &str) -> anyhow::Result<String> {
     let options = ConversionOptions {

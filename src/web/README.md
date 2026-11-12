@@ -171,10 +171,10 @@ The answer is the page's prose, not its document. Four things shape it:
   date in the text.
 - **Landmarks go.** `<nav>`, `<footer>`, `<aside>` and `<form>` are removed, along with the
   elements whose class or role names them as chrome.
-- **Controls stay, named.** `button`, `input`, `textarea` and `summary` are emitted as HTML where
-  they sit, so the prose still shows a control was there, and the answer ends with an `operable`
-  section naming each one's selector: the tool's `click` and `fill` take a selector, and Markdown
-  has nowhere to put one.
+- **Controls stay, named.** `button`, `input`, `select`, `textarea` and `summary` are emitted as
+  HTML where they sit, so the prose still shows a control was there, and the answer ends with an
+  `operable` section naming each one's selector: the tool's `click` and `fill` take a selector, and
+  Markdown has nowhere to put one.
 
 A page whose body renders no text at all answers `target url has an empty body` rather than an
 empty document, so the model can tell an unrendered page from a quiet one.

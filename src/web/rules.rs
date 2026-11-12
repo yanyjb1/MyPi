@@ -30,12 +30,10 @@ pub(crate) struct Part {
     drop: Vec<String>,
 }
 
-/// The whole file: an ordered list, so a specific path may precede its site's catch-all.
+/// The whole file: one array, ordered so a specific path may precede its site's catch-all.
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub(crate) struct Rules {
-    #[serde(default)]
-    rules: Vec<Rule>,
-}
+#[serde(transparent)]
+pub(crate) struct Rules(Vec<Rule>);
 
 impl Rules {
     /// The file's own text, for the copy written on a machine that has none.
@@ -46,7 +44,7 @@ impl Rules {
     /// The regions to keep for this page, in order, or nothing when no rule matches.
     pub(crate) fn regions(&self, host: &str, path: &str) -> &[Part] {
         let subject = format!("{host}{path}");
-        self.rules
+        self.0
             .iter()
             .find(|rule| matches(&rule.matcher, &subject))
             .map_or(&[], |rule| rule.keep.as_slice())
@@ -68,9 +66,14 @@ fn matches(pattern: &str, subject: &str) -> bool {
     regex::Regex::new(pattern).is_ok_and(|re| re.is_match(subject))
 }
 
-/// Where the file lives: `config_dir()/web-rules.json`, beside `config.yaml`.
+/// Where the file lives: the config directory's root, beside `config.yaml`.
 fn path() -> PathBuf {
-    crate::server::platform::env::config_dir().join(FILE)
+    crate::server::config::paths::ConfigPaths::from_env()
+        .global_root()
+        .map_or_else(
+            || crate::server::platform::env::config_dir().join(FILE),
+            |root| root.join(FILE),
+        )
 }
 
 /// The rules in force. A machine without the file is given the built-in set, once; after that
