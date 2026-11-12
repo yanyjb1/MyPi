@@ -2,22 +2,10 @@
 
 /// The first string value of this key, complete or cut short by the stream.
 pub(crate) fn text(args: &str, key: &str) -> Option<String> {
-    let mut at = input_at(args)?;
+    let mut at = args.find('{')? + 1;
     while let Some((name, value)) = next_pair(args, at) {
         if name == key && args.as_bytes().get(value) == Some(&b'"') {
             return string_at(args, value).map(|(body, _, _)| body);
-        }
-        at = value_end(args, value);
-    }
-    None
-}
-
-/// The byte just past the `{` of the call's `input` object.
-fn input_at(args: &str) -> Option<usize> {
-    let mut at = 0;
-    while let Some((name, value)) = next_pair(args, at) {
-        if name == "input" && args.as_bytes().get(value) == Some(&b'{') {
-            return Some(value + 1);
         }
         at = value_end(args, value);
     }

@@ -51,7 +51,7 @@ pub(crate) const TOOL: Tool = Tool {
             `status` reports one, `result` hands back what it left, `cancel` stops it. A text task \
             only takes `after` or `every`. The receipt names the task; a wake reports when it is \
             done. Subagents cannot use this tool.",
-    input: "type is always needed. now: content (kind=command only). after: delay and content. \
+    fields: "type is always needed. now: content (kind=command only). after: delay and content. \
             every: expr and content, count limits the runs. status, result, cancel: id. list: \
             nothing else. kind and timeout apply to command tasks.",
     params: PARAMS,

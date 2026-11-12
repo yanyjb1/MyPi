@@ -80,12 +80,13 @@ impl Engine {
             .as_deref()
             .is_some_and(|intent| !intent.trim().is_empty());
         if !stated {
-            let why = if super::spec::intent_nested(&call.args) {
-                "`intent` sits beside `input`, never inside it"
-            } else {
-                "missing argument `intent`: 2-6 capitalized words, present participle"
-            };
-            return self.refused(env, call, out, why, started);
+            return self.refused(
+                env,
+                call,
+                out,
+                "missing argument `intent`: 2-6 capitalized words, present participle",
+                started,
+            );
         }
         let args = match Args::fill(tool.params, &call.args) {
             Ok(args) => args,

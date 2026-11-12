@@ -35,7 +35,7 @@ pub(crate) const TOOL: Tool = Tool {
     name: "read",
     about: "Read a file with line numbers, so later turns can cite exact lines. MUST read before \
             editing; NEVER guess the current text. Files only.",
-    input: "path is the only field a call needs.",
+    fields: "path is the only field a call needs.",
     params: PARAMS,
     run,
     summary,

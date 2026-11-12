@@ -234,10 +234,17 @@ pub(crate) fn error_body(text: &str) -> Vec<Row> {
         .collect()
 }
 
-/// The call as JSON, or as written when it does not parse.
+/// The call as JSON, its intent left to the header, or as written when it does not parse.
 pub(crate) fn default_call(name: &str, args: &str) -> Vec<Row> {
-    match call_input(args) {
-        Some(v) => {
+    let value = call_args(args).filter(|v| match v {
+        Value::Object(object) => object.keys().any(|key| key != "intent"),
+        _ => true,
+    });
+    match value {
+        Some(mut v) => {
+            if let Value::Object(object) = &mut v {
+                object.remove("intent");
+            }
             let pretty = serde_json::to_string_pretty(&v).unwrap_or_else(|_| args.to_string());
             pretty
                 .lines()
@@ -353,14 +360,13 @@ pub(crate) fn relativize(base: &str, path: &str) -> String {
     path.to_string()
 }
 
-/// A call's arguments with the envelope taken off: the `input` object.
-pub(crate) fn call_input(args: &str) -> Option<Value> {
-    let v: Value = serde_json::from_str(args).ok()?;
-    v.get("input").cloned()
+/// A call's arguments as an object.
+pub(crate) fn call_args(args: &str) -> Option<Value> {
+    serde_json::from_str(args).ok()
 }
 
 pub(crate) fn arg_bool(args: &str, key: &str) -> Option<bool> {
-    call_input(args)?.get(key)?.as_bool()
+    call_args(args)?.get(key)?.as_bool()
 }
 
 /// A value that may have arrived as a string holding JSON; the server reads that shape too.
@@ -372,12 +378,12 @@ pub(crate) fn loose(value: &Value) -> Value {
 }
 
 pub(crate) fn arg_str(args: &str, key: &str) -> Option<String> {
-    Some(call_input(args)?.get(key)?.as_str()?.to_string())
+    Some(call_args(args)?.get(key)?.as_str()?.to_string())
 }
 
 /// One argument as text: strings bare, numbers and flags spelled out.
 pub(crate) fn arg_scalar(args: &str, key: &str) -> Option<String> {
-    let value = call_input(args)?.get(key)?.clone();
+    let value = call_args(args)?.get(key)?.clone();
     Some(match value {
         Value::String(text) => text,
         Value::Null => return None,

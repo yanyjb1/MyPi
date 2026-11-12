@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::super::super::row::Row;
 use super::super::table;
 use super::{
-    Section, ToolBlock, ToolOutcome, ToolRenderer, arg_scalar, arg_str, call_input, output_lines,
+    Section, ToolBlock, ToolOutcome, ToolRenderer, arg_scalar, arg_str, call_args, output_lines,
 };
 
 pub(crate) struct Context;
@@ -94,7 +94,7 @@ fn table_of(b: &ToolBlock<'_>, details: &Value, raw: &str) -> Vec<Row> {
 
 /// One argument as it reads in a title: strings bare, arrays joined.
 fn listing(args: &str, key: &str) -> String {
-    match call_input(args) {
+    match call_args(args) {
         Some(value) => listing_of(value.get(key)),
         None => String::new(),
     }

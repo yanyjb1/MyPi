@@ -107,57 +107,32 @@ impl Param {
     }
 }
 
-/// One parameter table → the `input` object's properties. No `required` array: which fields a call
-/// needs is stated in the tool's `input` description, per `type`.
-fn properties_of(params: &[Param]) -> serde_json::Map<String, Value> {
-    let mut properties = serde_json::Map::new();
-    for p in params {
-        properties.insert(p.name.to_string(), p.json());
-    }
-    properties
-}
-
-/// One tool's manual: `intent` and `input` side by side, both required. `intent` is injected here,
-/// once for every tool, so no tool writes it out itself.
-pub fn schema_of(tool: &Tool) -> Value {
+/// One parameter table → the schema's properties, `intent` first. No `required` array for the
+/// fields: which ones a call needs is stated in the schema's description, per `type`.
+fn properties_of(tool: &Tool) -> serde_json::Map<String, Value> {
     let mut properties = serde_json::Map::new();
     properties.insert(
         "intent".to_string(),
         json!({
             "type": "string",
-            "description": "Capitalized 2-6 word present-participle intent, e.g. Reading model role settings. Sits beside `input`, never inside it. Shown to the user while the call runs. Emit it first."
+            "description": "Capitalized 2-6 word present-participle intent, e.g. Reading model role settings. Shown to the user while the call runs. Emit it first."
         }),
     );
-    properties.insert(
-        "input".to_string(),
-        json!({
-            "type": "object",
-            "description": tool.input,
-            "properties": properties_of(tool.params),
-        }),
-    );
-    json!({
-        "type": "object",
-        "properties": properties,
-        "required": ["intent", "input"],
-    })
+    for p in tool.params {
+        properties.insert(p.name.to_string(), p.json());
+    }
+    properties
 }
 
-/// Whether a call put `intent` inside `input` instead of beside it.
-pub fn intent_nested(raw: &str) -> bool {
-    let text = raw.trim();
-    if text.is_empty() {
-        return false;
-    }
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .and_then(|parsed| {
-            parsed
-                .get("input")
-                .and_then(|input| input.get("intent"))
-                .map(Value::is_string)
-        })
-        .unwrap_or(false)
+/// One tool's manual: `intent` beside the tool's own fields, all at one level. `intent` is injected
+/// here, once for every tool, so no tool writes it out itself.
+pub fn schema_of(tool: &Tool) -> Value {
+    json!({
+        "type": "object",
+        "description": tool.fields,
+        "properties": properties_of(tool),
+        "required": ["intent"],
+    })
 }
 
 // ---- reading values ----
@@ -169,7 +144,7 @@ pub struct Args {
 }
 
 impl Args {
-    /// Raw text → ordered arguments: unwrap the envelope, read by table, fill defaults.
+    /// Raw text → ordered arguments: read by table, fill defaults.
     pub fn fill(params: &'static [Param], raw: &str) -> Result<Self> {
         let text = raw.trim();
         let parsed: Value = if text.is_empty() {
@@ -177,29 +152,10 @@ impl Args {
         } else {
             serde_json::from_str(text).map_err(|e| anyhow!("arguments is not valid JSON: {e}"))?
         };
-        let Value::Object(mut map) = parsed else {
+        let Value::Object(map) = parsed else {
             bail!("arguments must be a JSON object");
         };
-        let input = match map.remove("input") {
-            None | Some(Value::Null) => serde_json::Map::new(),
-            Some(Value::Object(inner)) => inner,
-            Some(Value::String(text)) => match serde_json::from_str::<Value>(&text) {
-                Ok(Value::Object(inner)) => inner,
-                _ => bail!("`input` must be an object, not a string holding something else"),
-            },
-            Some(other) => bail!("`input` must be an object; got {other}"),
-        };
-        if map.keys().any(|key| key != "intent") {
-            for p in params {
-                if map.contains_key(p.name) && !input.contains_key(p.name) {
-                    bail!(
-                        "`{}` belongs inside `input`; only `intent` sits beside it",
-                        p.name
-                    );
-                }
-            }
-        }
-        Self::from_map(params, &input)
+        Self::from_map(params, &map)
     }
 
     /// A table + one object → ordered arguments. A value for an object parameter that arrived as a
@@ -367,8 +323,8 @@ pub struct Tool {
     pub name: &'static str,
     /// What the tool does, when to reach for it, what it answers. No field list.
     pub about: &'static str,
-    /// How `input` is composed: the fields each `type` needs, and what an omission means.
-    pub input: &'static str,
+    /// The schema's description: the fields each `type` needs, and what an omission means.
+    pub fields: &'static str,
     /// The parameter table; position is the index.
     pub params: &'static [Param],
     /// The one entry point.
@@ -378,7 +334,7 @@ pub struct Tool {
 }
 
 impl Tool {
-    /// The model-visible entry: name + manual + the `input` envelope (with `intent` beside it).
+    /// The model-visible entry: name + manual + the flat argument schema (`intent` beside the fields).
     pub fn definition(&self) -> crate::server::agent::request::message::ToolDef {
         crate::server::agent::request::message::ToolDef::function(
             self.name,

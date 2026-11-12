@@ -4,7 +4,7 @@ use ratatui::style::Modifier;
 use serde_json::Value;
 
 use super::super::super::row::{Ink, Lead, Row, Run};
-use super::{State, ToolOutcome, arg_bool, call_input, error_under, partial};
+use super::{State, ToolOutcome, arg_bool, call_args, error_under, partial};
 use crate::ui::tui::theme::fixed;
 
 /// The one row an exchange leaves: its state, its operation, and what it left behind.
@@ -72,7 +72,7 @@ fn meta(op: &str, outcome: Option<ToolOutcome<'_>>) -> Option<String> {
 
 /// The item numbers the call names, in parameter order.
 fn ids(args: &str) -> Vec<u64> {
-    let Some(Value::Array(list)) = call_input(args).and_then(|value| value.get("ids").cloned())
+    let Some(Value::Array(list)) = call_args(args).and_then(|value| value.get("ids").cloned())
     else {
         return Vec::new();
     };

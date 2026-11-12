@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, call_input, error_under, head,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, call_args, error_under, head,
     loose, output_lines,
 };
 use crate::ui::tui::theme::fixed;
@@ -47,10 +47,7 @@ impl ToolRenderer for Call {
 }
 
 fn arguments(args: &str) -> String {
-    match call_input(args)
-        .as_ref()
-        .and_then(|input| input.get("args"))
-    {
+    match call_args(args).as_ref().and_then(|args| args.get("args")) {
         Some(Value::Null) | None => "{}".to_string(),
         Some(other) => loose(other).to_string(),
     }

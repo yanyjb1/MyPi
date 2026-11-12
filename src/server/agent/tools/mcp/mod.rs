@@ -41,7 +41,7 @@ pub(crate) const TOOL: Tool = Tool {
     about: "MCP servers and their tools. `list` names the servers and their tools; naming one \
             server also prints each tool's parameters. `call` runs one tool with `args` of that \
             shape.",
-    input: "type is always needed. list: server prints that server's tools and their parameters; \
+    fields: "type is always needed. list: server prints that server's tools and their parameters; \
             omit it for the servers and their tool lists. call: server and tool, plus args built \
             from the parameters `list` printed.",
     params: PARAMS,

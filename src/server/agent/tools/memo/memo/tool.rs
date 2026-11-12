@@ -36,7 +36,7 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Named notes shared with the user. `add` creates, `mod` appends a version, `del` removes \
             every version, `show` reads the latest version, `history` reads every version, `list` \
             lists names. Reads accept both scopes; writes are current only.",
-    input: "type is always needed. add, mod and del write, and only in current scope. add and mod \
+    fields: "type is always needed. add, mod and del write, and only in current scope. add and mod \
             take name and content; del takes name. show and history read either scope, and take \
             name. list takes scope only.",
     params: PARAMS,

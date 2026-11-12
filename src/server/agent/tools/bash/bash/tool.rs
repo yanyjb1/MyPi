@@ -28,7 +28,7 @@ pub(crate) const TOOL: Tool = Tool {
             A `#<ref>` token (e.g. `#3xl`) stands for a stored artifact — it is replaced by the\n\
             path of a file holding that whole text, so `grep x #3xl` and `cat #3xl` both work; a\n\
             token that names nothing stays literal text.",
-    input: "command is the only field.",
+    fields: "command is the only field.",
     params: PARAMS,
     run,
     summary,

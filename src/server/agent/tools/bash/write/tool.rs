@@ -25,7 +25,7 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Write the whole file, **overwriting** any existing one. For new files, or when every line \
             changes; a single-location change is `edit`. A missing parent directory is refused. NEVER \
             create documentation or emojis unless asked.",
-    input: "both fields are always needed: the path, and the whole content.",
+    fields: "both fields are always needed: the path, and the whole content.",
     params: PARAMS,
     run,
     summary,

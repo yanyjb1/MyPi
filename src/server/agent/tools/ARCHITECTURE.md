@@ -103,8 +103,8 @@ Engine::run
 1. `contract::env::Env` and `engine`: every field is filled in one place; a new port is a field here
    and a trait in `contract::view`.
 2. `spec::Param` order and each tool's index constants: `Args` reads positionally.
-3. `schema_of` and `Args::fill`: one `Param` table feeds both; the envelope (`intent` beside
-   `input`) is built in one place and unwrapped in the other.
+3. `schema_of` and `Args::fill`: one `Param` table feeds both; `intent` is added to the flat
+   schema in one place and the same fields are read by position in the other.
 4. `ToolOutput.effects` and `contract::output::Effect`: the front door stamps `ts`, so a tool must
    never fill it.
 5. `bash` and `kairos`: every command goes through `admit`; the guard runs once, on the final text.

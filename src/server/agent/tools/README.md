@@ -50,7 +50,7 @@ a batch with the turn's stop signal
   → registry::spec(name)
   → env.allows(name)                       the session's list; the only gate
   → budget gate (every call but `final`)
-  → Args::fill(tool.params, args)          `input` → positional values
+  → Args::fill(tool.params, args)          fields → positional values
   → (tool.run)(env, &args, progress)       Start, Progress and End events around it
   → a stop that landed meanwhile makes the result `ok: false`, reason `interrupted`
   → every out.effects gets one ts
@@ -65,20 +65,20 @@ Unknown names error.
 A tool declares `params: &[Param]`; `Param { name, kind, default, about }` and
 `Kind = Text | Number | Line | Flag | Object | Choice(&[str]) | TextList | Numbers`.
 
-Every call is one envelope: `intent` beside `input`, both required, everything else inside `input`.
-`schema_of` builds it once for every tool, so no tool declares `intent`.
+Every call is one flat object: `intent` beside the tool's own fields, all at one level. `schema_of`
+adds `intent` once for every tool, so no tool declares it.
 
 - `about` says what the tool does and what it answers. No field list.
-- `input`'s description says, per `type`, which fields a call needs and what an omission means.
+- The schema's `description` is the tool's `fields` text: per `type`, which fields a call needs and
+  what an omission means.
 - Each field says what its value is; its type and enum come from the table.
-- No `required` array inside `input`: which fields are needed depends on `type`, and only the tool
-  knows that. `Args::fill` unwraps the envelope and fills defaults; a tool that needs a field errors
-  where it reads it, naming the field.
-- The front door refuses a call whose `intent` is missing or blank; a field placed outside `input`
-  is refused by name.
+- Only `intent` is `required`: which other fields are needed depends on `type`, and only the tool
+  knows that. `Args::fill` reads the fields by table and fills defaults; a tool that needs one
+  errors where it reads it, naming the field.
+- The front door refuses a call whose `intent` is missing or blank.
 
-Every field is optional in the schema; `always` below marks the ones every call of that tool needs
-(the tool checks them, not the schema).
+Every field but `intent` is optional in the schema; `always` below marks the ones every call of
+that tool needs (the tool checks them, not the schema).
 
 | tool | parameters, in index order |
 |---|---|

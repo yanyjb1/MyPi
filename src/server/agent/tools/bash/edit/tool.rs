@@ -44,7 +44,7 @@ pub(crate) const TOOL: Tool = Tool {
     name: "edit",
     about: "Edit one file. `type: exact` replaces one run of `old` with `new`. `type: mass` \
             replaces the lines named by `range` with `new`.",
-    input: "type and path are always needed. The other type's field is refused.",
+    fields: "type and path are always needed. The other type's field is refused.",
     params: PARAMS,
     run,
     summary,

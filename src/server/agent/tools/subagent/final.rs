@@ -45,7 +45,7 @@ pub(crate) const TOOL: Tool = Tool {
     name: "final",
     about: "Edit the draft a subagent leaves behind. `submit` writes the answer file and ends the \
             task; it must be the only call in its message.",
-    input: "type is always needed. type=write: content. type=edit: either old and new, or \
+    fields: "type is always needed. type=write: content. type=edit: either old and new, or \
             range and new. type=read and type=submit: nothing else; submit needs a non-empty draft.",
     params: PARAMS,
     run,

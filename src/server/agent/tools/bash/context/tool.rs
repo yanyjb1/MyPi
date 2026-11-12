@@ -56,7 +56,7 @@ pub(crate) const TOOL: Tool = Tool {
             JSON row per call: id, tool, ok, summary. `show` answers each block's request arguments \
             and result as JSON. A listing past ten calls, and a `show` past three block numbers, is \
             written to a file and the reply names that file.",
-    input: "type is always needed. query: anchor and direction, plus limit and tool to narrow \
+    fields: "type is always needed. query: anchor and direction, plus limit and tool to narrow \
             it. show: ids, one or more block ids; the request arguments and result come back as \
             JSON.",
     params: PARAMS,
@@ -134,10 +134,7 @@ fn show(env: &Env, args: &Args) -> Result<ToolOutput> {
         rows.push(match env.source.block(env.session, *id)? {
             Some(pair) => json!({
                 "id": id,
-                "request": parsed(pair.request.get("args"))
-                    .get("input")
-                    .cloned()
-                    .unwrap_or(Value::Null),
+                "request": parsed(pair.request.get("args")),
                 "result": parsed(pair.result.as_ref().and_then(|row| row.get("result"))),
             }),
             None => json!({ "id": id, "request": null, "result": null }),
@@ -180,10 +177,7 @@ fn parsed(text: Option<&Value>) -> Value {
 fn summary_of(record: &CallRecord) -> String {
     match registry::spec(&record.tool) {
         Some(tool) => (tool.summary)(record),
-        None => summary::clip(
-            &summary::input(&record.args).map_or_else(|| record.args.clone(), |v| v.to_string()),
-            96,
-        ),
+        None => summary::clip(&record.args, 96),
     }
 }
 
