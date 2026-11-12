@@ -210,7 +210,7 @@ fn block_ids(args: &Args) -> Result<Vec<i64>> {
             serde_json::Value::String(s) => s.trim().parse().ok(),
             _ => None,
         }
-        .ok_or_else(|| anyhow!("`ids` takes block numbers; got {one}"))?;
+        .ok_or_else(|| anyhow!("`ids` takes block numbers"))?;
         ids.push(id);
     }
     Ok(ids)

@@ -18,18 +18,15 @@ const PARAMS: &[Param] = &[
     Param::new(
         "type",
         Kind::Choice(&["add", "list", "del"]),
-        "Which operation this is.",
+        "`add` defines one, `list` shows them, `del` deletes one.",
     ),
     Param::new("name", Kind::Text, "Alias name."),
-    Param::new("command", Kind::Text, "The command the alias expands to."),
+    Param::new("command", Kind::Text, "The command the alias expands to; one line."),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "alias",
-    about: "Maintain shell aliases: `add` defines one, `list` shows them, `del` deletes one. The head \
-            word of every command segment expands once, as text, before the guard. A name fixed by \
-            the config is read-only for the session: `add` and `del` refuse it. `add` takes one \
-            line. Changes take effect for later bash calls in this session.",
+    about: "Maintain shell aliases for this session.",
     fields: "type is always needed. type=add: name and command. type=del: name. \
             type=list: nothing else.",
     params: PARAMS,
@@ -42,7 +39,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         "add" => add(env, args),
         "list" => Ok(list(env)),
         "del" => del(env, args),
-        other => Err(anyhow!("unknown alias type `{other}`")),
+        _ => unreachable!("Args::choice validates type"),
     }
 }
 
@@ -50,7 +47,7 @@ fn add(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     let name = alias_name(args)?;
     anyhow::ensure!(
         !env.aliases.fixed(&name),
-        "`{name}` is fixed by the config; pick another name"
+        "that name is fixed by the config; pick another name"
     );
     let command = args.str(COMMAND)?.trim().to_string();
     anyhow::ensure!(!command.is_empty(), "alias command must not be empty");
@@ -77,9 +74,9 @@ fn del(env: &mut Env, args: &Args) -> Result<ToolOutput> {
     let name = alias_name(args)?;
     if env.aliases.unset(&name).is_none() {
         if env.aliases.fixed(&name) {
-            bail!("`{name}` is fixed by the config; it is not the session's to delete");
+            bail!("that name is fixed by the config; not the session's to delete");
         }
-        bail!("no alias named `{name}`");
+        bail!("no alias by that name");
     }
     Ok(
         ToolOutput::text(format!("alias deleted: {name}")).effect(Effect::Alias {

@@ -20,7 +20,8 @@ const PARAMS: &[Param] = &[
     Param::new(
         "type",
         Kind::Choice(&["exact", "mass"]),
-        "Which edit this is.",
+        "`exact` replaces the one occurrence of `old` with `new`; \
+         `mass` replaces the lines named by `range` with `new`.",
     ),
     Param::new("path", Kind::Text, "File path."),
     Param::new(
@@ -31,7 +32,7 @@ const PARAMS: &[Param] = &[
     Param::new(
         "range",
         Kind::Text,
-        "The lines to replace, `12-14` or `12`.",
+        "The lines to replace, 1-based: `12-14` or `12`.",
     ),
     Param::new(
         "new",
@@ -42,9 +43,8 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "edit",
-    about: "Edit one file. `type: exact` replaces one run of `old` with `new`. `type: mass` \
-            replaces the lines named by `range` with `new`.",
-    fields: "type and path are always needed. The other type's field is refused.",
+    about: "Edit one file.",
+    fields: "type, path and new are always needed. exact takes `old`; mass takes `range`.",
     params: PARAMS,
     run,
     summary,

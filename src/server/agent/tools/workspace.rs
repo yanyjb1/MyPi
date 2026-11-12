@@ -128,8 +128,8 @@ pub fn resolve_dir(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBu
     };
     let real = target
         .canonicalize()
-        .with_context(|| format!("no such dir: {raw}"))?;
-    anyhow::ensure!(real.is_dir(), "not a directory: {raw}");
+        .with_context(|| "no such dir")?;
+    anyhow::ensure!(real.is_dir(), "not a directory");
     Ok(real)
 }
 
@@ -165,7 +165,6 @@ pub fn standing_dir(dir: &std::path::Path) -> std::path::PathBuf {
 /// Where a session may stand: not the filesystem root, not a top-level directory (the temp dir
 /// and everything under it excepted), and not a home directory itself.
 pub fn may_stand_in(real: &std::path::Path) -> Result<()> {
-    anyhow::ensure!(!real.as_os_str().is_empty(), "denied: that is no directory");
     let temp = canonicalize_lenient(&crate::server::platform::env::temp_dir());
     if !temp.as_os_str().is_empty() && real.starts_with(&temp) {
         return Ok(());
@@ -173,26 +172,19 @@ pub fn may_stand_in(real: &std::path::Path) -> Result<()> {
     if let Some(home) = crate::server::platform::env::home().map(|home| canonicalize_lenient(&home))
         && !home.as_os_str().is_empty()
     {
-        anyhow::ensure!(
-            real != home,
-            "denied: the home directory itself is not a workspace"
-        );
+        anyhow::ensure!(real != home, "Target directory is not allowed");
         // Every home directory under the parent is barred; work below one is fair ground.
         if let Some(tree) = home.parent()
             && tree.parent().is_some()
             && real.starts_with(tree)
             && real.components().count() <= tree.components().count() + 1
         {
-            anyhow::bail!(
-                "denied: {} is a home directory; stand inside one instead",
-                real.display()
-            );
+            anyhow::bail!("Target directory is not allowed");
         }
     }
     anyhow::ensure!(
         real.components().count() >= 3,
-        "denied: {} is a top-level directory; stand in one of its children",
-        real.display()
+        "Target directory is not allowed"
     );
     Ok(())
 }
@@ -226,14 +218,7 @@ fn resolve_path(
         .iter()
         .any(|z| !z.as_os_str().is_empty() && real.starts_with(z))
     {
-        anyhow::bail!(
-            "denied: {} is outside the workspace ({}) and the temp dir",
-            real.display(),
-            zones
-                .first()
-                .map(|z| z.display().to_string())
-                .unwrap_or_default()
-        );
+        anyhow::bail!("denied: target is outside the workspace and the temp dir");
     }
     if must_exist {
         if !real.exists() {

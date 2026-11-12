@@ -19,12 +19,13 @@ const PARAMS: &[Param] = &[
     Param::new(
         "type",
         Kind::Choice(&["add", "mod", "del", "show", "history", "list"]),
-        "Which operation this is.",
+        "`add` creates, `mod` appends a version, `del` removes every version, `show` reads the \
+         latest version, `history` reads every version, `list` lists names.",
     ),
     Param::df(
         "scope",
         Kind::Choice(&["current", "global"]),
-        "Where the memo lives.",
+        "Where the memo lives. Writes are `current` only.",
         "current",
     ),
     Param::new("name", Kind::Text, "Memo name."),
@@ -33,12 +34,9 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "memo",
-    about: "Named notes shared with the user. `add` creates, `mod` appends a version, `del` removes \
-            every version, `show` reads the latest version, `history` reads every version, `list` \
-            lists names. Reads accept both scopes; writes are current only.",
-    fields: "type is always needed. add, mod and del write, and only in current scope. add and mod \
-            take name and content; del takes name. show and history read either scope, and take \
-            name. list takes scope only.",
+    about: "Named notes shared with the user.",
+    fields: "type is always needed. add and mod take name and content; del takes name. \
+             show and history take name. list takes scope only.",
     params: PARAMS,
     run,
     summary,
@@ -55,7 +53,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         "add" | "mod" => write(scope, &op, args, true),
         "del" => write(scope, &op, args, false),
         "show" | "history" | "list" => read(env, scope, &op, args),
-        _ => Err(anyhow!("unknown memo type `{op}`")),
+        _ => unreachable!("Args::choice validates type"),
     }
 }
 

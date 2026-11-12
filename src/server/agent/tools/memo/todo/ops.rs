@@ -118,7 +118,7 @@ fn numbers(args: &Args) -> Result<Vec<i64>> {
             serde_json::Value::String(s) => s.trim().parse().ok(),
             _ => None,
         }
-        .ok_or_else(|| anyhow!("`ids` takes item numbers; got {one}"))?;
+        .ok_or_else(|| anyhow!("`ids` takes item numbers"))?;
         out.push(id);
     }
     Ok(out)

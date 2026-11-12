@@ -14,14 +14,12 @@ const PATH: usize = 0;
 const PARAMS: &[Param] = &[Param::new(
     "path",
     Kind::Text,
-    "Target directory. `./`, `../`, `~/`, and absolute paths allowed.",
+    "Target directory.",
 )];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "cd",
-    about: "Change the working directory for the rest of the session. Later tool calls and relative paths resolve from\n\
-            the new one. Directories only: not the filesystem root, not a top-level directory (the temp dir excepted),\n\
-            and not a home directory; confirm with `pwd` or `ls`.",
+    about: "Change the working directory for the rest of the session.",
     fields: "path is the only field.",
     params: PARAMS,
     run,

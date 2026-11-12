@@ -18,7 +18,7 @@ opens the database, the config file, or the loop.
 | 4 | `cd` | `bash/cd/tool.rs` |
 | 5 | `bash` | `bash/bash/tool.rs` |
 | 6 | `alias` | `bash/alias/tool.rs` |
-| 7 | `kairos` | `kairos/mod.rs` |
+| 7 | `kairos` | `kairos/tool.rs` |
 | 8 | `task` | `subagent/task.rs` |
 | 9 | `final` | `subagent/final.rs` |
 | 10 | `mcp` | `mcp/mod.rs` |
@@ -83,7 +83,7 @@ that tool needs (the tool checks them, not the schema).
 | tool | parameters, in index order |
 |---|---|
 | `read` | `path` always, `offset` (1-based, default 1), `limit` (default 200, at most 500, capped by the output line limit) |
-| `edit` | `type` always (`exact`/`mass`), `path` always, `old`, `range` (`12-14` or `12`), `new` |
+| `edit` | `type` always (`exact`/`mass`), `path` always, `old`, `range` (1-based, `12-14` or `12`), `new` always |
 | `write` | `path` always, `content` always |
 | `cd` | `path` always |
 | `bash` | `command` always |

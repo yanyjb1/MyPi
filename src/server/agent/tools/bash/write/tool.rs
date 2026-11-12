@@ -1,6 +1,6 @@
 //! The `write` tool: overwrite a whole file.
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::ToolOutput;
@@ -22,9 +22,7 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "write",
-    about: "Write the whole file, **overwriting** any existing one. For new files, or when every line \
-            changes; a single-location change is `edit`. A missing parent directory is refused. NEVER \
-            create documentation or emojis unless asked.",
+    about: "Write the whole file, **overwriting** any existing one.",
     fields: "both fields are always needed: the path, and the whole content.",
     params: PARAMS,
     run,
@@ -49,8 +47,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     env.workspace
         .with_write(&p, || {
             crate::server::agent::tools::workspace::write_atomic(&p, &content)
-        })
-        .context("failed to write file")?;
+        })?;
     let bytes = content.len();
     Ok(ToolOutput::text(format!(
         "{} {} ({bytes} bytes)",

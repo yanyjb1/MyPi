@@ -220,11 +220,7 @@ impl Args {
     }
 
     fn wrong(&self, i: usize, want: &str) -> anyhow::Error {
-        anyhow!(
-            "argument `{}` must be {want}; got {}",
-            self.name(i),
-            self.values.get(i).cloned().unwrap_or(Value::Null)
-        )
+        anyhow!("argument `{}` must be {want}", self.name(i))
     }
 
     /// A string.
@@ -246,7 +242,7 @@ impl Args {
     pub fn line(&self, i: usize) -> Result<usize> {
         let n = self.int(i)?;
         if n < 1 {
-            bail!("`{}` is 1-based; got {n}", self.name(i));
+            bail!("`{}` is 1-based", self.name(i));
         }
         Ok(n as usize)
     }
@@ -263,11 +259,7 @@ impl Args {
         let s = self.str(i)?;
         match self.params.get(i).map(|p| p.kind) {
             Some(Kind::Choice(list)) if !list.contains(&s.as_str()) => {
-                bail!(
-                    "`{}` must be one of {}; got `{s}`",
-                    self.name(i),
-                    list.join(" / ")
-                )
+                bail!("`{}` must be one of {}", self.name(i), list.join(" / "))
             }
             _ => Ok(s),
         }

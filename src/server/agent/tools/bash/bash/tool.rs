@@ -19,15 +19,7 @@ const PARAMS: &[Param] = &[Param::new(
 
 pub(crate) const TOOL: Tool = Tool {
     name: "bash",
-    about: "Run shell commands in the session's shell (`bash` or `zsh` on unix, `pwsh` on windows). \
-            One call may carry several lines, run in order as one script. Pipes, redirection, and\n\
-            composition are fine. The working directory is the permitted zone: deleting or moving things\n\
-            inside it is allowed, but rm/mv/find -delete that reaches outside (including ~ and system\n\
-            paths like /etc) is refused outright. Catastrophic patterns are blocked the same way: `dd`\n\
-            to a block device, fork bombs, reverse shells, `curl | sh`.\n\
-            A `#<ref>` token (e.g. `#3xl`) stands for a stored artifact — it is replaced by the\n\
-            path of a file holding that whole text, so `grep x #3xl` and `cat #3xl` both work; a\n\
-            token that names nothing stays literal text.",
+    about: "Run non-interactive shell commands (bash/zsh on unix, pwsh on windows).",
     fields: "command is the only field.",
     params: PARAMS,
     run,
