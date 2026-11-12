@@ -1,5 +1,6 @@
 //! Tool calls stitched out of stream deltas. Shared mechanics, no protocol switches.
 
+use anyhow::Result;
 use serde_json::Value;
 
 use super::super::message::WireCall;
@@ -12,12 +13,15 @@ pub struct Calls {
 
 impl Calls {
     /// Absorb one delta. Every argument fragment is handed to `emit` with its call id and name.
-    pub fn feed(&mut self, delta: &Value, emit: &mut dyn FnMut(&str, &str, &str)) {
+    /// A delta that names no slot fails: placing it would merge two calls into one.
+    pub fn feed(&mut self, delta: &Value, emit: &mut dyn FnMut(&str, &str, &str)) -> Result<()> {
         let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) else {
-            return;
+            return Ok(());
         };
         for raw in calls {
-            let index = raw.get("index").and_then(Value::as_u64).unwrap_or(0);
+            let Some(index) = raw.get("index").and_then(Value::as_u64) else {
+                anyhow::bail!("a tool call delta arrived without `index`");
+            };
             let entry = match self.pending.iter_mut().find(|(i, _)| *i == index) {
                 Some((_, call)) => call,
                 None => {
@@ -50,6 +54,7 @@ impl Calls {
                 emit(&id, &name, piece);
             }
         }
+        Ok(())
     }
 
     pub fn finish(self) -> Vec<WireCall> {

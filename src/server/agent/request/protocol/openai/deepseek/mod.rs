@@ -9,13 +9,13 @@ use serde_json::{Map, Value, json};
 use crate::server::agent::request::contract::Kind;
 use crate::server::agent::request::live::Stream;
 use crate::server::agent::request::message::{
-    AssistantMessage, DEFAULT_EMPTY_REPLY, INTERRUPTED_REPLY, Usage, WireMessage,
+    AssistantMessage, INTERRUPTED_REPLY, Usage, WireMessage,
 };
 use crate::server::agent::request::protocol::blocks;
 use crate::server::agent::request::protocol::stitch::Calls;
 use crate::server::agent::request::protocol::stream::{self, Budget};
 use crate::server::agent::request::protocol::{
-    Endpoint, Output, Protocol, ProtocolRequest, WireRequest,
+    Endpoint, Output, Protocol, ProtocolRequest, WireRequest, broken_calls, fault, silence,
 };
 
 pub struct Deepseek;
@@ -76,6 +76,7 @@ impl Protocol for Deepseek {
         let mut reasoning = String::new();
         let mut usage = Usage::default();
         let mut calls = Calls::default();
+        let mut finish: Option<String> = None;
 
         let end = stream::data(reader.as_mut(), cancel, |payload| {
             let chunk: Value = serde_json::from_str(payload)?;
@@ -88,6 +89,9 @@ impl Protocol for Deepseek {
                 return Ok(true);
             };
             let delta = &choice["delta"];
+            if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+                finish = Some(reason.to_string());
+            }
 
             if let Some(piece) = delta.get("reasoning_content").and_then(Value::as_str)
                 && !piece.is_empty()
@@ -107,18 +111,23 @@ impl Protocol for Deepseek {
                     name.to_string(),
                     text.to_string(),
                 ));
-            });
+            })?;
             Ok(true)
         })?;
         let interrupted = end == stream::End::Canceled;
 
         let mut placed = calls.finish();
+        let declared = placed.len();
         placed.retain(|call| call.complete());
+        let dropped = declared - placed.len();
         if interrupted {
             placed.clear();
         }
         if !reasoning.is_empty() {
             out.block(blocks::text(Kind::Reasoning, &reasoning));
+        }
+        if !interrupted && dropped > 0 {
+            return Err(fault(out, broken_calls(dropped, finish.as_deref())));
         }
         if placed.is_empty() {
             let body = if !content.is_empty() {
@@ -126,7 +135,10 @@ impl Protocol for Deepseek {
             } else if interrupted {
                 INTERRUPTED_REPLY.to_string()
             } else {
-                DEFAULT_EMPTY_REPLY.to_string()
+                match silence(finish.as_deref()) {
+                    Ok(text) => text.to_string(),
+                    Err(why) => return Err(fault(out, why)),
+                }
             };
             out.block(blocks::assistant(&body));
         } else {

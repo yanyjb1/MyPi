@@ -10,10 +10,10 @@ use serde_json::Value;
 use crate::server::agent::request::contract::Kind;
 use crate::server::agent::request::live::Stream;
 use crate::server::agent::request::message::{
-    AssistantMessage, DEFAULT_EMPTY_REPLY, INTERRUPTED_REPLY, Usage, WireCall,
+    AssistantMessage, INTERRUPTED_REPLY, Usage, WireCall,
 };
-use crate::server::agent::request::protocol::Output;
 use crate::server::agent::request::protocol::blocks;
+use crate::server::agent::request::protocol::{Output, broken_calls, fault, silence};
 use crate::server::agent::request::protocol::openai::completion::compat::Resolved;
 use crate::server::agent::request::protocol::openai::completion::inband::{ScanEvent, scanner_for};
 use crate::server::agent::request::protocol::openai::completion::markup::TemplateMarkupFilter;
@@ -197,7 +197,7 @@ pub(crate) fn decode(
                 name.to_string(),
                 text.to_string(),
             ));
-        });
+        })?;
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             finish = Some(reason.to_string());
         }
@@ -240,25 +240,21 @@ pub(crate) fn decode(
         }
     }
 
-    if !interrupted
-        && compat.empty_length_finish_is_context_error
-        && content.is_empty()
-        && reasoning.is_empty()
-        && finish.as_deref() == Some("length")
-    {
-        anyhow::bail!("the model stopped on `length` with no output at all");
-    }
-
     let mut placed = calls.finish();
     placed.extend(healed);
+    let declared = placed.len();
     placed.retain(|call| call.complete());
+    let dropped = declared - placed.len();
     // A reply the user cut short leaves no call behind: one call that never ran leaves a phantom.
     if interrupted {
         placed.clear();
     }
-
     if !reasoning.is_empty() {
         out.block(blocks::text(Kind::Reasoning, &reasoning));
+    }
+    // A call the model placed and the wire never closed is the upstream's fault, never a skip.
+    if !interrupted && dropped > 0 {
+        return Err(fault(out, broken_calls(dropped, finish.as_deref())));
     }
 
     if placed.is_empty() {
@@ -267,7 +263,10 @@ pub(crate) fn decode(
         } else if interrupted {
             INTERRUPTED_REPLY.to_string()
         } else {
-            DEFAULT_EMPTY_REPLY.to_string()
+            match silence(finish.as_deref()) {
+                Ok(text) => text.to_string(),
+                Err(why) => return Err(fault(out, why)),
+            }
         };
         out.block(blocks::assistant(&body));
     } else {

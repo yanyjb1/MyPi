@@ -343,9 +343,6 @@ compat_table! {
     /// Repair leaked template, tool-call and thinking markers.
     relay stream_markup_healing_pattern: MarkupHealing = None;
 
-    /// A stream that ends empty with `length` is a context-overflow error.
-    value empty_length_finish_is_context_error: bool = false;
-
     // ---------- misc ----------
     /// Thinking goes out as a text block delimited by `<thinking>`.
     value requires_thinking_as_text: bool = false;

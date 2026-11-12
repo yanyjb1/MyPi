@@ -16,7 +16,7 @@ use anyhow::Result;
 
 use super::contract::Block;
 use super::live::Stream;
-use super::message::{AssistantMessage, ToolDef, WireMessage};
+use super::message::{AssistantMessage, DEFAULT_EMPTY_REPLY, ToolDef, WireMessage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolId {
@@ -119,4 +119,41 @@ pub trait Protocol: Send + Sync {
         out: &mut dyn Output,
         cancel: &Stop,
     ) -> Result<AssistantMessage>;
+}
+
+/// The endings an upstream declares when it finished on purpose: the model chose to stop.
+const SILENT_ENDINGS: &[&str] = &["stop", "end_turn", "stop_sequence", "completed"];
+
+/// The verdict on a reply that delivered neither text nor one whole call. A declared normal ending
+/// is the model's own silence; anything else is the upstream breaking its side of the wire.
+pub(crate) fn silence(finish: Option<&str>) -> std::result::Result<&'static str, String> {
+    match finish {
+        Some(ending) if SILENT_ENDINGS.contains(&ending) => Ok(DEFAULT_EMPTY_REPLY),
+        Some(ending) => Err(format!(
+            "upstream ended on `{ending}` and delivered no text and no whole call"
+        )),
+        None => Err(
+            "upstream closed the stream without a finish reason and delivered no text and no whole call"
+                .to_string(),
+        ),
+    }
+}
+
+/// The verdict on calls the model placed and the wire never closed into one object.
+pub(crate) fn broken_calls(count: usize, finish: Option<&str>) -> String {
+    let calls = if count == 1 { "call" } else { "calls" };
+    let ending = match finish {
+        Some(ending) => format!("ended on `{ending}`"),
+        None => "no finish reason".to_string(),
+    };
+    format!(
+        "upstream sent {count} tool {calls} whose arguments never closed into one object ({ending})"
+    )
+}
+
+/// Land the fault as a stored block, so the turn says what happened, and make the error that ends
+/// the lap. The reader sees the machine speaking, never the model.
+pub(crate) fn fault(out: &mut dyn Output, text: String) -> anyhow::Error {
+    out.block(blocks::assistant(&format!("SYSTEM: ({text})")));
+    anyhow::anyhow!(text)
 }

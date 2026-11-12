@@ -10,13 +10,13 @@ use serde_json::{Value, json};
 use crate::server::agent::request::contract::Kind;
 use crate::server::agent::request::live::Stream;
 use crate::server::agent::request::message::{
-    AssistantMessage, ContentPart, DEFAULT_EMPTY_REPLY, INTERRUPTED_REPLY, ToolDef, Usage,
-    UserContent, WireCall, WireMessage,
+    AssistantMessage, ContentPart, INTERRUPTED_REPLY, ToolDef, Usage, UserContent, WireCall,
+    WireMessage,
 };
 use crate::server::agent::request::protocol::blocks;
 use crate::server::agent::request::protocol::stream;
 use crate::server::agent::request::protocol::{
-    Endpoint, Output, Protocol, ProtocolRequest, WireRequest,
+    Endpoint, Output, Protocol, ProtocolRequest, WireRequest, broken_calls, fault, silence,
 };
 
 pub struct Messages;
@@ -197,6 +197,7 @@ fn decode(
     let mut chunks: BTreeMap<u64, Chunk> = BTreeMap::new();
     let mut order: Vec<u64> = Vec::new();
     let mut usage = Usage::default();
+    let mut finish: Option<String> = None;
 
     let end = stream::events(reader.as_mut(), cancel, |event| {
         let Ok(data) = serde_json::from_str::<Value>(&event.data) else {
@@ -271,6 +272,13 @@ fn decode(
                 }
             }
             "message_delta" => {
+                if let Some(reason) = data
+                    .get("delta")
+                    .and_then(|d| d.get("stop_reason"))
+                    .and_then(Value::as_str)
+                {
+                    finish = Some(reason.to_string());
+                }
                 if let Some(output) = data
                     .get("usage")
                     .and_then(|u| u.get("output_tokens"))
@@ -300,14 +308,18 @@ fn decode(
             Role::Tool => calls.push(WireCall::new(chunk.id, chunk.name, chunk.args)),
         }
     }
+    let declared = calls.len();
     calls.retain(|call| call.complete());
+    let dropped = declared - calls.len();
     // A reply the user cut short leaves no call behind: one call that never ran leaves a phantom.
     if interrupted {
         calls.clear();
     }
-
     if !reasoning.is_empty() {
         out.block(blocks::text(Kind::Reasoning, &reasoning));
+    }
+    if !interrupted && dropped > 0 {
+        return Err(fault(out, broken_calls(dropped, finish.as_deref())));
     }
     if calls.is_empty() {
         let body = if !content.is_empty() {
@@ -315,7 +327,10 @@ fn decode(
         } else if interrupted {
             INTERRUPTED_REPLY.to_string()
         } else {
-            DEFAULT_EMPTY_REPLY.to_string()
+            match silence(finish.as_deref()) {
+                Ok(text) => text.to_string(),
+                Err(why) => return Err(fault(out, why)),
+            }
         };
         out.block(blocks::assistant(&body));
     } else {

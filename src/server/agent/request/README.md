@@ -94,9 +94,16 @@ the reader returns at once instead of waiting for the host to speak; a fresh chi
 before the next request. A cancelled lap is not a failure: it settles as interrupted, with no
 notice, no retry, and no error text.
 
-**A call is only what arrived whole.** A stream cut mid-arguments leaves no call block: the decoder
-drops it, so it is neither stored nor run, and the turn keeps the text it did say. The request side
-never carries a call whose arguments are not one object; an empty set goes out as `{}`.
+**A call is only what arrived whole.** A stream cut mid-arguments leaves no call for the tool layer:
+the decoder drops the fragment, so the wire is the one that broke its side. That is never a silent
+skip: the decoder lands a `SYSTEM:` block naming how many calls never closed and fails the lap, so
+what is stored and what the front end heard agree. A delta that names no call slot fails the same
+way, because placing it would merge calls into one unparsable argument string.
+
+**Silence is the model's, and only when the upstream says so.** A reply with neither text nor a call
+is the model's silence only when the upstream declared a normal ending (`stop`, `end_turn`,
+`stop_sequence`, `completed`). Any other ending, or none at all, lands a `SYSTEM:` block naming the
+ending and fails the lap. The placeholder therefore means one thing only.
 
 ## 3. Unresolved
 
