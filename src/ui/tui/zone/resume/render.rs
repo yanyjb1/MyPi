@@ -85,16 +85,25 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
     z.set_scroll(top);
 
     if count == 0 {
-        let msg = if !z.loaded() {
-            "正在读取…"
-        } else if z.scope() == Scope::Current {
-            "这个目录下还没有会话（Tab 看全部）"
-        } else if z.filter().is_empty() {
-            "还没有任何会话"
+        if let Some(error) = z.error() {
+            out.push(card_row(
+                Line::from(fg(format!("会话列表读取失败：{error}"), fixed::ERR)),
+                edge,
+                bg,
+                width,
+            ));
         } else {
-            "没有匹配的会话（退格改筛选）"
-        };
-        out.push(card_row(Line::from(fg(msg, fixed::MUTED)), edge, bg, width));
+            let msg = if !z.loaded() {
+                "正在读取…"
+            } else if z.scope() == Scope::Current {
+                "这个目录下还没有会话（Tab 看全部）"
+            } else if z.filter().is_empty() {
+                "还没有任何会话"
+            } else {
+                "没有匹配的会话（退格改筛选）"
+            };
+            out.push(card_row(Line::from(fg(msg, fixed::MUTED)), edge, bg, width));
+        }
     } else {
         for i in top..(top + blocks).min(count) {
             let Some(row) = z.row_at(i) else {

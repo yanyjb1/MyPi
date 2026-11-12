@@ -95,6 +95,8 @@ pub struct ResumeZone {
     pending_delete: Option<i64>,
     /// The last answer refused something; the render shows it.
     failed: bool,
+    /// The list itself was refused: the render says why instead of "no sessions".
+    error: Option<String>,
     /// Bumped whenever this zone's rows would differ.
     rev: u64,
 }
@@ -114,6 +116,7 @@ impl Default for ResumeZone {
             loaded: false,
             pending_delete: None,
             failed: false,
+            error: None,
             rev: 0,
         }
     }
@@ -126,6 +129,7 @@ impl ResumeZone {
         self.scroll = 0;
         self.pending_delete = None;
         self.failed = false;
+        self.error = None;
         self.filter.clear();
         self.list()
     }
@@ -145,6 +149,7 @@ impl ResumeZone {
     }
 
     fn load(&mut self, content: &Value) {
+        self.error = None;
         let rows = content
             .get("rows")
             .and_then(Value::as_array)
@@ -154,6 +159,17 @@ impl ResumeZone {
         self.loaded = true;
         self.seen = self.rows.len();
         self.refilter();
+    }
+
+    /// The list did not arrive: say so rather than draw the failure as an empty directory.
+    fn refused(&mut self, message: String) {
+        self.error = Some(message);
+        self.rows.clear();
+        self.visible.clear();
+        self.seen = 0;
+        self.selected = 0;
+        self.scroll = 0;
+        self.loaded = true;
     }
 
     fn row(&self) -> Option<&Row> {
@@ -215,7 +231,10 @@ impl ResumeZone {
 
     fn read(&mut self, frame: &Frame) -> Vec<Request> {
         match (frame.class.as_str(), frame.name.as_str()) {
-            ("call", "sessions") => self.load(&frame.content),
+            ("call", "sessions") => match error_of(&frame.content) {
+                Some(message) => self.refused(message),
+                None => self.load(&frame.content),
+            },
             ("call", "delete") => self.failed = frame.content.get("error").is_some(),
             _ => {}
         }
@@ -295,6 +314,18 @@ impl ResumeZone {
         }
         stay
     }
+}
+
+/// The error a refused answer carries.
+fn error_of(answer: &Value) -> Option<String> {
+    let error = answer.get("error")?;
+    Some(
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("会话列表读取失败")
+            .to_string(),
+    )
 }
 
 /// Everything about one session the filter can match on.
@@ -445,6 +476,10 @@ impl ResumeZone {
 
     pub(crate) fn failed(&self) -> bool {
         self.failed
+    }
+
+    pub(crate) fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     pub(crate) fn visible_len(&self) -> usize {
