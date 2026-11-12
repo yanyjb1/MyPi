@@ -193,7 +193,7 @@ The file is one array of rules, tried in order. The first rule whose `match` —
 ```json
 [
   {
-    "match": "^example\.com/doc/",
+    "match": "^example\\.com/doc/",
     "keep": [
       { "selector": "main", "drop": ["nav", "footer"] },
       { "selector": "#appendix", "drop": [] }

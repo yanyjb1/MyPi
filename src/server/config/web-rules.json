@@ -1,9 +1,15 @@
 [
   {
-    "match": "^example\\.com/doc/",
+    "match": "^www\\.poetryfoundation\\.org/(poems|poets)/",
     "keep": [
-      { "selector": "main", "drop": ["nav", "footer"] },
-      { "selector": "#appendix", "drop": [] }
+      { "selector": "h1", "drop": [] },
+      { "selector": "article .rich-text", "drop": [] }
+    ]
+  },
+  {
+    "match": "^www\\.poetryfoundation\\.org/?$",
+    "keep": [
+      { "selector": "main", "drop": ["nav", "footer", "aside", "header"] }
     ]
   }
 ]
