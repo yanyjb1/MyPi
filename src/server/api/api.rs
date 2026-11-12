@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::ipc::contract::ErrorCode;
 use crate::ipc::contract::Frame;
@@ -75,6 +75,8 @@ pub struct Api {
     cfg: Config,
     ledger: Loop,
     relay: Relay,
+    /// What the configuration had to say at load: handed to every front end as it opens.
+    notices: Value,
     next: AtomicU64,
 }
 
@@ -109,12 +111,14 @@ impl Api {
             let ledger = ledger.clone();
             Arc::new(move |session: i64| ledger.drop(session))
         });
+        let notices = startup_notices(&cfg);
         Ok(Api {
             db,
             writer,
             cfg,
             ledger,
             relay,
+            notices,
             next: AtomicU64::new(1),
         })
     }
@@ -281,7 +285,11 @@ impl Api {
                     }
                 };
                 self.relay.hello(conn.id, viewer);
-                Some(Frame::new("register", "opened", json!({})))
+                Some(Frame::new(
+                    "register",
+                    "opened",
+                    json!({ "notices": self.notices }),
+                ))
             }
             "bye" => {
                 self.relay.detach(conn.id);
@@ -290,6 +298,21 @@ impl Api {
             _ => None,
         }
     }
+}
+
+/// What the configuration said at load, as a front end reads it: one line per notice.
+fn startup_notices(cfg: &Config) -> Value {
+    let lines: Vec<Value> = cfg
+        .notices(None)
+        .iter()
+        .map(|notice| {
+            json!({
+                "level": "warn",
+                "text": format!("{}：{}（本次使用 {}）", notice.file, notice.problem, notice.used),
+            })
+        })
+        .collect();
+    Value::Array(lines)
 }
 
 fn error(request: &Frame, refuse: &Refuse) -> Frame {

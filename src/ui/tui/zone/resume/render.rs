@@ -38,8 +38,11 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
         return Vec::new();
     };
     let width = size.cols as usize;
-    // Frame: title + search + divider + list + divider + hint + bottom = 6 rows.
-    let body_rows = (size.rows as usize).saturating_sub(6);
+    // Frame: title + search + divider + list + divider + hint + bottom = 6 rows, plus whatever
+    // the opening word and a refusal take from the list.
+    let extra = usize::from(z.failed()) + usize::from(z.opening().is_some())
+        + usize::from(z.error().is_some());
+    let body_rows = (size.rows as usize).saturating_sub(6 + extra);
     let edge = Style::new().fg(fixed::DIM);
     let bg = Style::new();
 
@@ -79,6 +82,9 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
             width,
         ));
     }
+    if let Some(text) = z.opening() {
+        out.push(card_row(Line::from(fg(text, fixed::WARN)), edge, bg, width));
+    }
 
     // ---- List ----
     let (blocks, top) = window(z, body_rows);
@@ -87,7 +93,7 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
     if count == 0 {
         if let Some(error) = z.error() {
             out.push(card_row(
-                Line::from(fg(format!("会话列表读取失败：{error}"), fixed::ERR)),
+                Line::from(fg(error, fixed::ERR)),
                 edge,
                 bg,
                 width,

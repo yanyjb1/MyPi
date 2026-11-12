@@ -97,6 +97,8 @@ pub struct ResumeZone {
     failed: bool,
     /// The list itself was refused: the render says why instead of "no sessions".
     error: Option<String>,
+    /// The server's opening word: what the configuration had to say, drawn above the list.
+    opening: Option<String>,
     /// Bumped whenever this zone's rows would differ.
     rev: u64,
 }
@@ -117,6 +119,7 @@ impl Default for ResumeZone {
             pending_delete: None,
             failed: false,
             error: None,
+            opening: None,
             rev: 0,
         }
     }
@@ -163,13 +166,28 @@ impl ResumeZone {
 
     /// The list did not arrive: say so rather than draw the failure as an empty directory.
     fn refused(&mut self, message: String) {
-        self.error = Some(message);
+        self.error = Some(format!("会话列表读取失败：{message}"));
         self.rows.clear();
         self.visible.clear();
         self.seen = 0;
         self.selected = 0;
         self.scroll = 0;
         self.loaded = true;
+    }
+
+    /// The server's opening word: the configuration's warnings, kept until the page is left.
+    fn arrived(&mut self, content: &Value) {
+        let Some(notices) = content.get("notices").and_then(Value::as_array) else {
+            return;
+        };
+        let lines: Vec<String> = notices
+            .iter()
+            .filter_map(|notice| notice.get("text").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        if !lines.is_empty() {
+            self.opening = Some(lines.join("；"));
+        }
     }
 
     fn row(&self) -> Option<&Row> {
@@ -236,6 +254,7 @@ impl ResumeZone {
                 None => self.load(&frame.content),
             },
             ("call", "delete") => self.failed = frame.content.get("error").is_some(),
+            ("local", "opened") => self.arrived(&frame.content),
             _ => {}
         }
         Vec::new()
@@ -480,6 +499,10 @@ impl ResumeZone {
 
     pub(crate) fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    pub(crate) fn opening(&self) -> Option<&str> {
+        self.opening.as_deref()
     }
 
     pub(crate) fn visible_len(&self) -> usize {

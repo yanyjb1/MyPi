@@ -91,6 +91,11 @@ fn read(mut lines: Lines<BufReader<Stream>>, tx: mpsc::Sender<Frame>) {
             Err(_) => break,
         };
         if frame.name == "opened" {
+            // The hello reply is the server's opening word: kept, so a front end can read it.
+            let opened = Frame::new("local", "opened", frame.payload);
+            if tx.send(opened).is_err() {
+                break;
+            }
             continue;
         }
         if tx.send(frame).is_err() {

@@ -35,7 +35,26 @@ pub(super) fn read_frame(zone: &mut HistoryZone, frame: &Frame) {
             }
         }
         ("call", "config") => read_config(zone, &frame.content),
+        ("local", "opened") => read_opened(zone, &frame.content),
         _ => {}
+    }
+}
+
+/// The server's opening word: what the configuration had to say at load, as transcript lines.
+fn read_opened(zone: &mut HistoryZone, content: &Value) {
+    let Some(notices) = content.get("notices").and_then(Value::as_array) else {
+        return;
+    };
+    for notice in notices {
+        let Some(text) = notice.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        let level = match notice.get("level").and_then(Value::as_str) {
+            Some("error") => Level::Error,
+            Some("warn") => Level::Warn,
+            _ => Level::Info,
+        };
+        zone.notice(text.to_string(), level, Life::Long);
     }
 }
 
