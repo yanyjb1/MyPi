@@ -43,7 +43,11 @@ pub(crate) fn insert(tx: &rusqlite::Transaction<'_>, turn: i64, b: &NewBlock) ->
         r.get(0)
     })?;
     let mut index = parse_blocks(&raw)?;
-    index.push([id, id]);
+    // A run is one pair: an id adjacent to the last interval extends it instead of adding one.
+    match index.last_mut() {
+        Some(last) if last[1] + 1 == id => last[1] = id,
+        _ => index.push([id, id]),
+    }
     tx.execute(
         "UPDATE turns SET blocks = ?1 WHERE turn_id = ?2",
         rusqlite::params![encode_blocks(&index), turn],

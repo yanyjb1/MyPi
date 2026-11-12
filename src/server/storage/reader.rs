@@ -293,7 +293,7 @@ impl Reader {
                         .iter()
                         .map(|_| format!("{column} BETWEEN ? AND ?"))
                         .collect();
-                    parts.push(format!("({})", each.join(" OR ")));
+                    parts.push(any_of(&each));
                     for [lo, hi] in ranges {
                         params.push(Sql::Integer(*lo));
                         params.push(Sql::Integer(*hi));
@@ -363,6 +363,19 @@ fn column_of(plan: &super::query::Query, name: &str) -> Result<&'static str> {
     match plan.sheet.column(name) {
         Some(column) => Ok(column),
         None => bail!("no column `{name}` in {}", plan.sheet.name()),
+    }
+}
+
+/// `terms` ORed as a balanced tree: a flat chain nests past SQLite's 1000-node expression cap
+/// once a session has a thousand block ranges, and halving keeps the depth at `log2(len)`.
+fn any_of(terms: &[String]) -> String {
+    match terms {
+        [] => "0".to_string(),
+        [only] => only.clone(),
+        many => {
+            let mid = many.len() / 2;
+            format!("({} OR {})", any_of(&many[..mid]), any_of(&many[mid..]))
+        }
     }
 }
 
