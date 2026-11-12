@@ -8,7 +8,7 @@ edition = "2024"
 # 那个构建不含 CDP 客户端、HTML→Markdown、URL 解析，也不会启动任何浏览器。
 # 会话本身（模型 API、bash、编辑、持久化）不需要它。
 default = ["web"]
-web = ["dep:tungstenite", "dep:html-to-markdown-rs", "dep:url"]
+web = ["dep:tungstenite", "dep:html-to-markdown-rs", "dep:regex", "dep:url"]
 
 [dependencies]
 # 同步 HTTP 客户端：极轻、无异步运行时依赖。rustls = 纯 Rust 的 TLS，不依赖系统 OpenSSL
@@ -36,6 +36,8 @@ signal-hook = "0.3"
 tungstenite = { version = "0.30", optional = true }
 # HTML→Markdown：omp 同款 crate（纯 Rust，带 Aggressive 预处理去 nav/footer/form）
 html-to-markdown-rs = { version = "3.14", default-features = false, optional = true }
+# 站点规则里的 match 是正则
+regex = { version = "1", optional = true }
 # URL 解析（fetch 的 scheme 校验）
 url = { version = "2", optional = true }
 

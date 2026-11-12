@@ -157,6 +157,60 @@ sweep reads: a browser with an operation in flight is never closed.
 that path. `search` answers the provider, the page range, the count and a numbered list. The rest
 answer a status line, except `screenshot`, which names its file and its size.
 
+### What a read leaves out, and what it adds
+
+The answer is the page's prose, not its document. Four things shape it:
+
+- **Inline images go.** An `svg` element and an `img` whose `src` is a `data:` URI are dropped, and
+  the alt text is kept where there is one. A marketing page carries its icons and sprites inline,
+  and that payload routinely outnumbers the prose by a wide margin. An image naming a real address
+  is left as it is.
+- **The head's metadata goes.** No frontmatter is emitted at all. A page's `<meta>` tags are
+  written for crawlers and for the site's own scripts: nonces, signatures, catalogue hashes, a
+  visitor payload. None of it describes the article, and the article carries its own title and
+  date in the text.
+- **Landmarks go.** `<nav>`, `<footer>`, `<aside>` and `<form>` are removed, along with the
+  elements whose class or role names them as chrome.
+- **Controls stay, named.** `button`, `input`, `textarea` and `summary` are emitted as HTML where
+  they sit, so the prose still shows a control was there, and the answer ends with an `operable`
+  section naming each one's selector: the tool's `click` and `fill` take a selector, and Markdown
+  has nowhere to put one.
+
+A page whose body renders no text at all answers `target url has an empty body` rather than an
+empty document, so the model can tell an unrendered page from a quiet one.
+
+### Site rules
+
+A site whose `<body>` mixes prose with furniture needs naming, and the naming lives in a file the
+user owns: `<config dir>/web-rules.json`, beside `config.yaml`. A machine that has none is given
+the built-in set (`rules.json` in this directory) on first use; from then on the file is what is
+read, so a site deleted from it falls back to the generic conversion.
+
+The file is one array of rules, tried in order. The first rule whose `match` — a regex over
+`host + path`, never the query — matches the page is the rule that applies.
+
+```json
+[
+  {
+    "match": "^example\.com/doc/",
+    "keep": [
+      { "selector": "main", "drop": ["nav", "footer"] },
+      { "selector": "#appendix", "drop": [] }
+    ]
+  }
+]
+```
+
+- `keep` is the prose: each entry names one region, by a selector looked for from the body, and
+the first element it names is what is read. Several entries are read in order and concatenated.
+- `drop` applies inside its own entry only. A `nav` inside the kept region goes; a `nav` outside
+it was never read.
+- When no rule matches, or none of a rule's selectors resolve, the page is read whole: a broken
+rule must not hide a page.
+
+A site that writes no `<main>` gets no special handling. The regions above are how such a site is
+named, and until it is, its whole body is what is read.
+
 ## 2. Design intent
 
 - **A domain, not a tool.** The browser's behaviour is its own: when to start, how many tabs, when

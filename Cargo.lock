@@ -964,6 +964,7 @@ dependencies = [
  "parking_lot",
  "pulldown-cmark",
  "ratatui",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

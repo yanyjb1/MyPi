@@ -54,8 +54,11 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 | file | holds |
 |---|---|
-| `html/markdown.rs` | DOM → Markdown, and the JS-shell check |
+| `html/markdown.rs` | DOM → Markdown, the inline-image drop, and the JS-shell check |
+| `html/control.rs` | the page-side scan for clickable and fillable controls, and the selector each is reached by |
 | `html/tags.rs` | the tag scanner and entity decoder the providers use |
+| `rules.rs` | site rules: the file in the config directory, its first-use copy, the page-side narrowing |
+| `rules.json` | the built-in rule set a new machine is given |
 
 ## What it talks to
 
@@ -76,6 +79,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 ```text
 run (permit)
   → ops::read ────→ tabs::with_work → page
+                    rules::load → evaluate → rules::kept_html
   → search ───────→ tabs::with_search → verify::await_human
   → ops::open ────→ tabs::with_work → page
   → ops::drive ───→ tabs::with_work → page
@@ -95,6 +99,10 @@ lifecycle::signal → shutdown
 - `devtools` only speaks protocol: it never decides when a browser exists.
 - `verify` knows a page and a predicate, not an engine.
 - `idle` reads the permit count from `run`; the timer reads `idle` and `tabs`.
+- `html::control` scans the live page through `evaluate`, so its expression and `drive`'s selectors
+  meet at the same engine: what the scan names, `click` and `fill` can reach.
+- `rules` narrows a page through `evaluate` too, and states which regions survived. `read` hands
+  those selectors to the control scan, so both read the same part of the page.
 
 ## Must stay in step
 
