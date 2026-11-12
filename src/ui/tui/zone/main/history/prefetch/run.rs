@@ -250,6 +250,12 @@ impl Run {
         self.segs.retain(|laid| laid.id.idx != idx);
     }
 
+    /// This position's pieces from `from` on go: only its tail changed.
+    pub fn forget_pieces(&mut self, idx: Idx, from: usize) {
+        self.segs
+            .retain(|laid| !(laid.id.idx == idx && laid.id.piece >= from));
+    }
+
     /// Keep the rows between these two run rows, plus one segment of slack on each side.
     pub fn trim(&mut self, from: usize, to: usize) {
         super::trim::trim(&mut self.segs, from, to);

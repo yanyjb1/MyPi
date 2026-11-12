@@ -58,9 +58,14 @@ The product is built on the first use of a position and kept on the block. It go
 content changes, and when the width, the fold budget or the accent's options move. A product that
 would draw nothing is not kept.
 
-The running round rebuilds a block's product when a piece lands: a text block re-splits, a card is
-laid again from the stream it has. A running card builds only the rows its fold keeps, so a long
-output costs the budget, not the output.
+The running round rebuilds a block's product when a piece lands: a card is laid again from the
+stream it has, and a running card builds only the rows its fold keeps, so a long output costs the
+budget, not the output.
+
+A text block does not rebuild. Its product holds the segments already closed and re-splits only the
+open tail, so one piece costs the tail, not the block. The tail's rows go and the run lays that
+piece again; the closed segments keep theirs. A piece that only lengthens the open line still
+re-lays that line, which is the one quadratic left in the layer.
 
 ### Tool cards
 
@@ -132,10 +137,13 @@ One round belongs to the app: it drains what the terminal said, then what the co
 runs the side effects, then draws only if the showing zone's rows changed.
 
 Inside this zone a frame is three steps. Ingest appends to the model — a piece, a block, a receipt —
-and records the position it touched in a dirty set; it never lays anything. The tick applies the
-set: those positions lose their laid rows and their product, the content budget is settled against
-the window the last draw kept, and what the last draw lacked leaves as a block request. The draw
-then spends the window and trims the rows around it; it changes nothing.
+and records the position it touched in a dirty set; it never lays anything. A text piece is the one
+exception: it grows the position's product in place and records the piece the run must lay again,
+so a batch of pieces costs its tails, not the block. The tick applies both sets: a dirty position
+loses its laid rows and its product, a grown one loses the rows of its tail piece and everything
+after it, the content budget is settled against the window the last draw kept, and what the last
+draw lacked leaves as a block request. The draw then spends the window and trims the rows around
+it; it changes nothing.
 
 The zone counts its own revisions: every entry point that can change the rows bumps one. The app
 draws when that number moved since the last draw, or when the ESC row's clock fell due. Nothing else

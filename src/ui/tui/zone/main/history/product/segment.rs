@@ -108,11 +108,6 @@ pub fn split_from(text: &str, base: usize) -> Vec<Cut> {
     out
 }
 
-/// Split one block's text from the start.
-pub fn split(text: &str) -> Vec<Segment> {
-    split_from(text, 0).into_iter().map(|cut| cut.seg).collect()
-}
-
 /// Whether the line keeps the run of this kind going; a blank line never does.
 fn same(kind: Kind, lines: &[&str], at: usize) -> bool {
     let line = lines[at];

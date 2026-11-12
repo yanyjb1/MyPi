@@ -13,7 +13,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `markdown.rs` | markdown to runs: headings, lists, quotes, inline emphasis | private |
 | `display.rs` | laid rows to screen lines | private |
 | `local/` | `section` (`Local`, `Idx`), `slot` (`Slot`, `SlotKind`, `Held`, `Level`, `Life`), `content` (`Block`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
-| `product/` | `products` (`Product`, `Shape`, the derivation), `segment` (source to segments), `text`, `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `pin`, `card` | private |
+| `product/` | `products` (`Product`, `Shape`, the derivation), `segment` (source to segments), `text` (a text block's closed segments and its open tail), `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `pin`, `card` | private |
 | `product/pin/` | `esc` (the running label's row), `sweep` (the accent band over that label) | private |
 | `product/card/` | `frame` (dispatch, the card frame, the text and argument helpers), `tool` (the renderer contract and the family table), `state` (the three phases and their colors), `partial` (fields of arguments still arriving), one file per tool family | private |
 | `prefetch/` | `run` (the laid segments), `range` (the start and the budget), `segment` (`SegId`, `Laid`), `trim`, `walk`, `color` | private |
@@ -37,6 +37,7 @@ HistoryZone
  ├── range: Range               ── `Latest` or one fixed place, plus the screen height
  ├── margin: usize              ── blocks that keep their content and product
  ├── dirty: BTreeSet<Idx>       ── positions a piece or a block touched since the last tick
+ ├── grown: BTreeMap<Idx, usize> ── positions whose text grew, and the piece to lay again
  ├── missing: Vec<i64>          ── blocks the last draw lacked
  ├── todo_panel: TodoPanel      ── the checklist's rows
  ├── pin: Vec<Pin>              ── what is still running, in arrival order
@@ -47,16 +48,20 @@ HistoryZone
 ```
 
 - `wire::read_frame` decodes one frame and never lays: a piece appends to the running entry and marks
-  that entry's position (and the card position it draws), a block binds to the slot its id owns.
+  that entry's position (and the card position it draws), a text piece instead grows that position's
+  product in place and records the piece the run must lay again, a block binds to the slot its id
+  owns.
   `call init` lays the structure out before the blocks, so every id has its slot before its content
   arrives. A receipt either hands the running entries their numbers or, when the count does not line
   up, reserves its own positions and binds the fetched rows to them.
-- `zone::tick` applies the dirty set once: those positions lose their laid rows and their product,
-  the content budget is settled against the window the last draw kept, and the blocks the last draw
-  lacked leave as `Request::Blocks`. `zone::render_rows` rebuilds the pin, spends the window, and
+- `zone::tick` applies both sets once: a dirty position loses its laid rows and its product, a grown
+  one loses the rows of its tail piece and every piece after it while its product stays, the content
+  budget is settled against the window the last draw kept, and the blocks the last draw lacked leave
+  as `Request::Blocks`. `zone::render_rows` rebuilds the pin, spends the window, and
   trims the run; it changes nothing.
 - `Local::prepare` builds a position's product on first use and keeps it on the block; `Local::shape`
-  hands the run what that product is. The run lays only segments it does not hold.
+  hands the run what that product is. The run lays only segments it does not hold. A text product's
+  tail index and the piece the run lays again are the same number: the closed segments never move.
 - `Local::evict` drops content past `cacheMargin`, oldest admission first, skipping positions the run
   holds, the ranges asked for, and the ranges a close is waiting on. One exchange is kept or dropped
   as one, so a card never loses half its rows. A position whose content left draws `…` and asks
@@ -83,9 +88,12 @@ HistoryZone
     end there, or the ESC row sticks.
 12. A product's inputs and `Local::drop_products`: a new option, a new width-dependent renderer or a
     new block field means the invalidation points must know about it.
-13. An ingest path and `HistoryZone::mark`: whatever changes a position's content must mark it, or
-    the screen keeps the rows it drew before.
-14. A receipt and the rows fetched for it: the ids come from the receipt, the content from
+13. An ingest path and `HistoryZone::mark`, or `HistoryZone::grow` for a text piece: whatever
+    changes a position's content must mark it, or the screen keeps the rows it drew before; a text
+    piece that grows the product in place must record the piece the run lays again.
+14. `Mutable::regrow`, `Text::grow` and `Local::prepare`: a text product is grown in place only
+    while it is `Text`; every other product is dropped and rebuilt.
+15. A receipt and the rows fetched for it: the ids come from the receipt, the content from
     `call blocks`, and the positions from the receipt alone. Nothing gives a position to content
     that did not come from a receipt.
 

@@ -26,8 +26,10 @@ pub enum Entry {
 pub struct Mutable {
     entries: Vec<Entry>,
     open: Option<usize>,
-    /// The product each position handed over at the current width; a write clears it.
+    /// The product each position handed over at the current width; only a text append keeps it.
     products: HashMap<usize, Product>,
+    /// Positions whose text grew in place, and the piece the run must lay again from.
+    grown: HashMap<usize, usize>,
 }
 
 impl Mutable {
@@ -90,17 +92,25 @@ impl Mutable {
     pub fn take(&mut self) -> Vec<Entry> {
         self.open = None;
         self.products.clear();
+        self.grown.clear();
         std::mem::take(&mut self.entries)
     }
 
     pub fn text(&mut self, piece: &str) -> usize {
-        self.products.clear();
-        self.grow(BlockKind::Assistant, piece)
+        let at = self.grow(BlockKind::Assistant, piece);
+        self.regrow(at);
+        at
     }
 
     pub fn thinking(&mut self, piece: &str) -> usize {
-        self.products.clear();
-        self.grow(BlockKind::Reasoning, piece)
+        let at = self.grow(BlockKind::Reasoning, piece);
+        self.regrow(at);
+        at
+    }
+
+    /// A text position whose product grew in place: the run lays its tail again.
+    pub fn take_grown(&mut self) -> Vec<(usize, usize)> {
+        std::mem::take(&mut self.grown).into_iter().collect()
     }
 
     pub fn boundary(&mut self) {
@@ -109,7 +119,6 @@ impl Mutable {
 
     /// One wake message, its own block: the text names the reminder.
     pub fn wake(&mut self, text: &str) -> usize {
-        self.products.clear();
         let mut block = blank(BlockKind::Wake, None);
         block.text = Some(text.to_string());
         self.open = None;
@@ -119,7 +128,6 @@ impl Mutable {
 
     /// A message this front end just put out: it takes its place by arrival, like everything else.
     pub fn echo(&mut self, text: &str) -> usize {
-        self.products.clear();
         self.open = None;
         let mut block = blank(BlockKind::User, None);
         block.text = Some(text.to_string());
@@ -129,7 +137,9 @@ impl Mutable {
 
     /// The echo opened nothing: the user block this front end put out goes. `Some` = its position.
     pub fn retract(&mut self) -> Option<usize> {
+        // Positions move down: every product is keyed by position.
         self.products.clear();
+        self.grown.clear();
         let at = self.entries.iter().rposition(
             |entry| matches!(entry, Entry::Block(block) if block.kind == BlockKind::User),
         )?;
@@ -142,14 +152,12 @@ impl Mutable {
 
     /// A line only this front end says: it closes whatever block was still growing.
     pub fn notice(&mut self, text: String, level: Level, life: Life) -> usize {
-        self.products.clear();
         self.open = None;
         self.entries.push(Entry::Notice { text, level, life });
         self.entries.len() - 1
     }
 
     pub fn arguments(&mut self, call_id: &str, name: &str, piece: &str) -> usize {
-        self.products.clear();
         let at = self.request(call_id);
         let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
             return at;
@@ -168,7 +176,6 @@ impl Mutable {
         args: &str,
         intent: Option<&str>,
     ) -> usize {
-        self.products.clear();
         let at = self.request(call_id);
         let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
             return at;
@@ -180,7 +187,6 @@ impl Mutable {
     }
 
     pub fn tool_progress(&mut self, call_id: &str, piece: &str) -> usize {
-        self.products.clear();
         let at = self.result(call_id);
         let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
             return at;
@@ -198,7 +204,6 @@ impl Mutable {
         duration_ms: i64,
         truncated: Option<Truncation>,
     ) -> usize {
-        self.products.clear();
         let at = self.result(call_id);
         let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
             return at;
@@ -209,6 +214,31 @@ impl Mutable {
         block.duration_ms = duration_ms;
         block.truncated = truncated;
         at
+    }
+
+    /// The open text product takes the new piece: only its tail is split again.
+    fn regrow(&mut self, at: usize) {
+        let Mutable {
+            entries,
+            products,
+            grown,
+            ..
+        } = self;
+        let Some(Entry::Block(block)) = entries.get(at) else {
+            return;
+        };
+        let Some(body) = block.text.as_deref() else {
+            return;
+        };
+        let Some(Product::Text(text)) = products.get_mut(&at) else {
+            return;
+        };
+        let from = text.tail_index();
+        text.grow(body);
+        grown
+            .entry(at)
+            .and_modify(|at| *at = (*at).min(from))
+            .or_insert(from);
     }
 
     /// Append to the open block of this kind, or open one.

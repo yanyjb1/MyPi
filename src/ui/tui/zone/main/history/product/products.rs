@@ -4,11 +4,12 @@ use super::super::local::content::{Block, Kind as BlockKind};
 use super::super::row::Row;
 use super::opts::Opts;
 use super::segment::Segment;
+use super::text::Text;
 
 /// One block's product: segments, or rows laid at a width.
 pub enum Product {
     /// Segments; the color layer lays each at the width it has.
-    Text(Vec<Segment>),
+    Text(Text),
     /// Rows laid at a width; a resize drops them.
     Fixed(Vec<Row>),
 }
@@ -17,7 +18,7 @@ impl Product {
     /// Nothing to lay: a result block, or a block of empty text.
     pub(crate) fn is_empty(&self) -> bool {
         match self {
-            Product::Text(segs) => segs.is_empty(),
+            Product::Text(text) => text.is_empty(),
             Product::Fixed(rows) => rows.is_empty(),
         }
     }

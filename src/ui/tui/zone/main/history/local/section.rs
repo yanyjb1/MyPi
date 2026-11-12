@@ -259,8 +259,8 @@ impl Local {
                         Shape::Rows(product::notice_rows(text, *level))
                     }
                     Entry::Block(block) => match self.running.product(at) {
-                        Some(Product::Text(segs)) => {
-                            Shape::Segs(segs, block.kind == BlockKind::Reasoning)
+                        Some(Product::Text(text)) => {
+                            Shape::Segs(text.segs(), block.kind == BlockKind::Reasoning)
                         }
                         Some(Product::Fixed(rows)) => Shape::Fixed(rows),
                         None => Shape::Dead,
@@ -279,8 +279,8 @@ impl Local {
                     SlotKind::Block { id, held } => match held {
                         None => Shape::Missing(*id),
                         Some(held) => match &held.product {
-                            Some(Product::Text(segs)) => {
-                                Shape::Segs(segs, held.block.kind == BlockKind::Reasoning)
+                            Some(Product::Text(text)) => {
+                                Shape::Segs(text.segs(), held.block.kind == BlockKind::Reasoning)
                             }
                             Some(Product::Fixed(rows)) => Shape::Fixed(rows),
                             None => Shape::Dead,

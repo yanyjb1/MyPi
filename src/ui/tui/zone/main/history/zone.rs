@@ -1,6 +1,6 @@
 //! The history zone: what it claims, what it holds, and the contract it answers.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -151,6 +151,8 @@ pub struct HistoryZone {
     pub(super) margin: usize,
     /// Positions whose content changed since the last draw.
     pub(super) dirty: BTreeSet<Idx>,
+    /// Positions whose text grew in place: the piece the run lays again, and everything after it.
+    pub(super) grown: BTreeMap<Idx, usize>,
     /// Blocks the last draw lacked; the next tick asks for their rounds.
     pub(super) missing: Vec<i64>,
     /// The checklist's own product.
@@ -200,6 +202,7 @@ impl Default for HistoryZone {
             range: Range::default(),
             margin: DEFAULT_MARGIN,
             dirty: BTreeSet::new(),
+            grown: BTreeMap::new(),
             missing: Vec::new(),
             todo_panel: TodoPanel::default(),
             todo: Vec::new(),
@@ -293,6 +296,10 @@ impl HistoryZone {
             self.run.forget(idx);
             self.local.drop_product(idx);
         }
+        let grown = std::mem::take(&mut self.grown);
+        for (idx, from) in grown {
+            self.run.forget_pieces(idx, from);
+        }
         let HistoryZone {
             local,
             run,
@@ -368,6 +375,14 @@ impl HistoryZone {
         self.pin.retain(|pin| pin.call.as_deref() != Some(call));
     }
 
+    /// One position's text grew in place: the run lays its tail again, the product stays.
+    pub(super) fn grow(&mut self, idx: Idx, from: usize) {
+        self.grown
+            .entry(idx)
+            .and_modify(|at| *at = (*at).min(from))
+            .or_insert(from);
+    }
+
     /// One position's content changed: its rows are laid again at the next draw.
     pub(super) fn mark(&mut self, idx: Idx) {
         self.dirty.insert(idx);
@@ -400,6 +415,7 @@ impl HistoryZone {
         self.local.clear();
         self.run.clear();
         self.dirty.clear();
+        self.grown.clear();
         self.missing.clear();
         self.range.follow();
         self.structure.clear();

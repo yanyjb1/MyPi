@@ -109,13 +109,16 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
         }
     }
     let touched = match kind {
+        // A text piece grows its block in place: the product keeps its closed segments.
         "text" => {
             zone.thinking_ended();
-            Some(zone.local.running_mut().text(text))
+            zone.local.running_mut().text(text);
+            None
         }
         "thinking" => {
             zone.thinking_started();
-            Some(zone.local.running_mut().thinking(text))
+            zone.local.running_mut().thinking(text);
+            None
         }
         "arguments" => {
             let name = content
@@ -177,6 +180,9 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
     };
     if let Some(at) = touched {
         zone.mark(Idx::Turn(at as u32));
+    }
+    for (at, from) in zone.local.running_mut().take_grown() {
+        zone.grow(Idx::Turn(at as u32), from);
     }
     zone.shouts.push(Shout::new(name::TICK, json!({})));
 }
