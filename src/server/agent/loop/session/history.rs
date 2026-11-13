@@ -143,7 +143,13 @@ fn read_turns(reader: &Reader, session: i64) -> Result<Vec<TurnView>> {
         for block in reader.blocks(&ranges)? {
             pieces.push(piece(&block)?);
         }
-        view.push(TurnView { ranges, pieces });
+        // Only the marked round is the compaction; the ones borrowed after it are plain history.
+        let compacted = row["is_compaction"] == Value::Bool(true);
+        view.push(TurnView {
+            turn,
+            pieces,
+            compacted,
+        });
     }
     Ok(view)
 }
@@ -152,7 +158,7 @@ fn read_turns(reader: &Reader, session: i64) -> Result<Vec<TurnView>> {
 fn flatten(turns: Vec<TurnView>) -> Vec<Message> {
     turns
         .into_iter()
-        .flat_map(|turn| turn.pieces.into_iter().map(|piece| piece.message))
+        .flat_map(|turn| turn.sent().into_iter().map(|piece| piece.message))
         .collect()
 }
 

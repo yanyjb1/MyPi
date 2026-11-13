@@ -8,7 +8,7 @@ use super::ask::{CompactInput, LapInput, ResultsInput, Stop, Usage};
 use super::fence::Fence;
 use crate::server::agent::r#loop::pen::{self, Pen};
 use crate::server::agent::r#loop::session::agent::AgentRunner;
-use crate::server::agent::r#loop::session::book::{Birth, Inner, Message, Retention};
+use crate::server::agent::r#loop::session::book::{Birth, Inner, Retention};
 use crate::server::agent::r#loop::session::child::State as ChildState;
 use crate::server::agent::r#loop::session::handle::Handle;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
@@ -23,13 +23,17 @@ use crate::server::agent::tools::subagent::{FINAL, TASK};
 use crate::server::platform::time::now_stamp;
 use crate::server::storage::{Ref, RequestMeta, Row};
 
+/// The label a compaction's failure carries; the round itself is not the conversation's.
+const COMPACTION_FAILED: &str = "COMPACTION FAILED";
+
 /// Which machine a turn runs.
 #[derive(Clone)]
 pub enum Mode {
     Normal,
     Compact {
         retention: Option<Retention>,
-        focus: Option<String>,
+        /// Rendered when the round opened; the same text the round's own block holds.
+        instruction: String,
     },
 }
 
@@ -42,18 +46,22 @@ pub(crate) fn run(
 ) -> Result<Stop> {
     let transcript = handle.transcript().clone();
     let history: Arc<dyn History> = transcript.clone();
-    if let Mode::Compact { retention, focus } = mode {
+    if let Mode::Compact {
+        retention,
+        instruction,
+    } = mode
+    {
         let config = handle.config();
         let reply = match inner.ask.compact(CompactInput {
             session: handle.id,
+            turn,
             history: history.clone(),
             transport: config.transport(),
             system: config.system.clone(),
             tools: config.manuals.clone(),
             tools_json: config.tools_json.clone(),
             retention,
-            focus,
-            instruction: config.compact.clone(),
+            instruction: instruction.clone(),
             stop: handle.stop.clone(),
             worker: handle.worker.clone(),
             live: inner.out.clone(),
@@ -64,16 +72,23 @@ pub(crate) fn run(
                     settle(inner, handle, turn, Stop::User, None)?;
                     return Ok(Stop::User);
                 }
-                broken(inner, handle, turn, None, &e);
+                failed(inner, handle, turn, None, &e, COMPACTION_FAILED);
                 return Err(e);
             }
         };
         let usage = reply.usage;
         handle.publish(&usage, usage.prompt + usage.completion);
-        if !reply.text.is_empty() {
-            pen::turn::append_summary(&inner.writer, turn, reply.text, usage)?;
-        }
-        pen::turn::borrow(&inner.writer, handle.id, &reply.borrows)?;
+        // One submission: the summary, the rounds it kept, and the mark that makes this round the
+        // history's start. A compaction that broke above leaves the list exactly as it found it.
+        pen::turn::land_compaction(
+            &inner.writer,
+            handle.id,
+            turn,
+            instruction,
+            reply.text,
+            usage,
+            &reply.borrows,
+        )?;
         settle(inner, handle, turn, Stop::Model, None)?;
         transcript.reload()?;
         return Ok(Stop::Model);
@@ -191,15 +206,7 @@ fn laps(
                 continue;
             }
             if let Some(text) = child.as_ref().and_then(|child| child.nag()) {
-                pen::turn::append_user(
-                    &inner.writer,
-                    turn,
-                    Message::Submit {
-                        prefix: None,
-                        text: text.to_string(),
-                        suffix: None,
-                    },
-                )?;
+                pen::turn::append_user(&inner.writer, turn, None, text.to_string(), None)?;
                 transcript.append_user(Stored::User {
                     prefix: None,
                     content: text.to_string(),
@@ -442,11 +449,23 @@ fn broken(
     baseline: Option<u64>,
     why: &anyhow::Error,
 ) {
+    failed(inner, handle, turn, baseline, why, "the turn broke");
+}
+
+/// One round died: the watcher reads one line naming what kind of round it was, then the reason.
+fn failed(
+    inner: &Arc<Inner>,
+    handle: &Handle,
+    turn: i64,
+    baseline: Option<u64>,
+    why: &anyhow::Error,
+    label: &str,
+) {
     let _ = inner.out.send(Event {
         session: handle.id,
         element: Element::Notice(Notice {
             level: NoticeLevel::Error,
-            text: format!("the turn broke: {why:#}"),
+            text: format!("{label}: {why:#}"),
         }),
     });
     let _ = settle(inner, handle, turn, Stop::Broken, baseline);
@@ -479,11 +498,9 @@ fn take_mail(
         pen::turn::append_user(
             &inner.writer,
             turn,
-            Message::Submit {
-                prefix: letter.prefix.clone(),
-                text: letter.text.clone(),
-                suffix: letter.suffix.clone(),
-            },
+            letter.prefix.clone(),
+            letter.text.clone(),
+            letter.suffix.clone(),
         )?;
         let _ = inner.out.send(Event {
             session: handle.id,

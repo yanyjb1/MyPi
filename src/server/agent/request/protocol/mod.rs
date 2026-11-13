@@ -1,6 +1,5 @@
 //! The wire: protocol ids, the shapes one call takes, and what a decode hands back.
 
-pub mod anthropic;
 pub mod blocks;
 pub mod openai;
 pub mod sse;
@@ -22,8 +21,6 @@ use super::message::{AssistantMessage, DEFAULT_EMPTY_REPLY, ToolDef, WireMessage
 pub enum ProtocolId {
     Completion,
     Deepseek,
-    Responses,
-    Anthropic,
 }
 
 impl ProtocolId {
@@ -32,8 +29,6 @@ impl ProtocolId {
         Ok(match raw {
             "openai-completion" => Self::Completion,
             "openai-deepseek" => Self::Deepseek,
-            "openai-responses" => Self::Responses,
-            "anthropic-messages" => Self::Anthropic,
             other => return Err(ProtocolError(other.to_string())),
         })
     }
@@ -42,8 +37,6 @@ impl ProtocolId {
         match self {
             Self::Completion => "openai-completion",
             Self::Deepseek => "openai-deepseek",
-            Self::Responses => "openai-responses",
-            Self::Anthropic => "anthropic-messages",
         }
     }
 
@@ -52,8 +45,6 @@ impl ProtocolId {
         match self {
             Self::Completion => Box::new(openai::completion::Completion::new(base_url, model)),
             Self::Deepseek => Box::new(openai::deepseek::Deepseek::new()),
-            Self::Responses => Box::new(openai::responses::Responses::new()),
-            Self::Anthropic => Box::new(anthropic::Messages::new()),
         }
     }
 }

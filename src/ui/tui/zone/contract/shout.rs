@@ -44,4 +44,6 @@ pub mod name {
     pub const CURRENCY: &str = "currency";
     /// One model's config entry, addressed by its display. `{address, name, provider}`.
     pub const MODEL_ENTRY: &str = "model_entry";
+    /// The server took a `/compact`: a compaction round is running. No content.
+    pub const COMPACT_START: &str = "compact start";
 }

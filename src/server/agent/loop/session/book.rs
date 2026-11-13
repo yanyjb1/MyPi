@@ -163,7 +163,7 @@ impl Loop {
         if handle.busy.load(Ordering::Acquire) {
             bail!("session {} is already in a turn", handle.id);
         }
-        start_turn(&self.inner, &handle, start_of(msg), false)
+        start_turn(&self.inner, &handle, start_of(&handle, msg), false)
     }
 
     /// The front end's slot: written whole, taken by the loop, cleared by the front end.
@@ -376,7 +376,9 @@ fn start_turn(
             return Err(e);
         }
     };
-    handle.transcript().append_user(opening);
+    if let Some(opening) = opening {
+        handle.transcript().append_user(opening);
+    }
     handle.transcript().started();
     if queued {
         announce(inner, handle.id, turn);
@@ -419,7 +421,9 @@ fn start_turn(
                         let model = Some(thread_handle.model());
                         match pen::turn::open(&inner.writer, thread_handle.id, start, &cwd, model) {
                             Ok((next, opening)) => {
-                                thread_handle.transcript().append_user(opening);
+                                if let Some(opening) = opening {
+                                    thread_handle.transcript().append_user(opening);
+                                }
                                 if queued {
                                     announce(&inner, thread_handle.id, next);
                                 }
@@ -476,16 +480,21 @@ fn requeue(handle: &Handle, next: &Next) {
 
 fn mode_of(start: &pen::turn::Start) -> Mode {
     match start {
-        pen::turn::Start::Compact { retention, focus } => Mode::Compact {
+        pen::turn::Start::Compact {
+            retention,
+            instruction,
+            ..
+        } => Mode::Compact {
             retention: *retention,
-            focus: focus.clone(),
+            instruction: instruction.clone(),
         },
         _ => Mode::Normal,
     }
 }
 
-/// One message as the turn it opens.
-fn start_of(msg: Message) -> pen::turn::Start {
+/// One message as the turn it opens. A compaction's opening block is the instruction itself:
+/// one rendering, stored as the record and sent as the request's last message.
+fn start_of(handle: &Handle, msg: Message) -> pen::turn::Start {
     match msg {
         Message::Submit {
             prefix,
@@ -496,7 +505,17 @@ fn start_of(msg: Message) -> pen::turn::Start {
             text,
             suffix,
         },
-        Message::Compact { retention, focus } => pen::turn::Start::Compact { retention, focus },
+        Message::Compact { retention, focus } => {
+            let template = handle.config().compact;
+            let instruction = crate::server::agent::request::compact::render_instruction(
+                &template,
+                focus.as_deref().unwrap_or(""),
+            );
+            pen::turn::Start::Compact {
+                retention,
+                instruction,
+            }
+        }
     }
 }
 

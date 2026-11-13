@@ -116,6 +116,9 @@ impl InputZone {
         if content.get("error").is_some() {
             return;
         }
+        if door == "compact" {
+            self.shouts.push(Shout::new(name::COMPACT_START, json!({})));
+        }
         if let Notice::Default(id) = &wait.notice
             && self.session.is_none()
         {

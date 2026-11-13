@@ -92,7 +92,8 @@ A refusal decided here (no session for `/usage` or `/compact`, a profile asked f
 session started, `/memo` without a usable operation) speaks at once. The line leaves the box
 either way.
 
-Notices travel as a shout; the history zone draws them as short rows.
+Notices travel as a shout; the history zone draws them as short rows. A `/compact` receipt also
+puts `compact start` on the bus: a compaction round is running, and any zone may draw it.
 
 ### Completion hire
 

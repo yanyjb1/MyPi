@@ -37,7 +37,26 @@ struct Quote {
 pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     let reader = Reader::open(api.db())?;
     let turns = reader.turns(session)?;
+    // The list names the rounds; the round rows carry the intervals and how each ended. The
+    // estimate needs both, so it reads the joined view rather than the bare list.
     let list = reader.list(session)?;
+    let rounds: BTreeMap<i64, &Value> = turns
+        .iter()
+        .filter_map(|turn| Some((turn["turn_id"].as_i64()?, turn)))
+        .collect();
+    let ordered: Vec<Value> = list
+        .iter()
+        .filter_map(|row| {
+            let turn = row["turn_id"].as_i64()?;
+            let round = rounds.get(&turn)?;
+            Some(json!({
+                "turn_id": turn,
+                "is_compaction": row["is_compaction"].clone(),
+                "ranges": round["ranges"].clone(),
+                "stop_reason": round["stop_reason"].clone(),
+            }))
+        })
+        .collect();
     let baseline = baseline_prompt(&reader, session);
 
     let mut groups: BTreeMap<String, Tally> = BTreeMap::new();
@@ -75,6 +94,9 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
             tally.written += block["usage_cache_write"].as_i64().unwrap_or(0);
         }
     }
+    // Stamps in block order: a compaction's borrowed rounds sit after the summary in the list but
+    // carry older blocks, and the cut is a block id.
+    stamps.sort_by_key(|stamp| stamp.at);
     // The running turn is not stored yet: its laps arrive here, priced at the model in use.
     let running = api.ledger().running(session);
     if let Some((partial, (provider, model))) = &running {
@@ -146,7 +168,7 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     });
 
     let (context, estimated) = estimate::context(
-        &list,
+        &ordered,
         running.as_ref().map(|(partial, _)| partial),
         &stamps,
         baseline,

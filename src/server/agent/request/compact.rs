@@ -1,5 +1,7 @@
 //! Compaction: where to cut, what the summary request carries, and what may be kept.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Result, bail};
 
 use super::contract::{Borrow, Retention, TurnView};
@@ -12,24 +14,42 @@ pub struct Plan {
     pub borrows: Vec<Borrow>,
 }
 
-/// Cut from the newest block backwards, whole blocks at a time. The newest block always stays.
-pub fn plan(turns: &[TurnView], retention: Retention) -> Plan {
-    let flat: Vec<(i64, Message)> = turns
+/// Keep nothing: the whole history goes into the summary.
+fn keeps_nothing(retention: Retention) -> bool {
+    match retention {
+        Retention::Chars(budget) => budget == 0,
+        Retention::Blocks(want) => want == 0,
+    }
+}
+
+/// Cut from the newest block backwards, whole blocks at a time. The newest block always stays,
+/// unless the budget is zero: then nothing does. The round writing the compaction is not history
+/// yet, so its own blocks are never counted or kept.
+pub fn plan(turns: &[TurnView], retention: Retention, own: i64) -> Plan {
+    let turns: Vec<&TurnView> = turns.iter().filter(|turn| turn.turn != own).collect();
+    let flat: Vec<(i64, i64, Message)> = turns
         .iter()
         .flat_map(|turn| {
-            turn.pieces
-                .iter()
-                .map(|piece| (piece.block, piece.message.clone()))
+            turn.sent()
+                .into_iter()
+                .map(|piece| (turn.turn, piece.block, piece.message))
         })
         .collect();
+
+    if keeps_nothing(retention) {
+        return Plan {
+            region: flat.into_iter().map(|(_, _, message)| message).collect(),
+            borrows: Vec::new(),
+        };
+    }
 
     let mut kept_chars = 0usize;
     let mut kept_blocks = 0usize;
     let mut cut = None;
-    for (block, message) in flat.iter().rev() {
+    for (_, block, message) in flat.iter().rev() {
         let fits = match retention {
             Retention::Chars(budget) => kept_blocks == 0 || kept_chars + chars(message) <= budget,
-            Retention::Blocks(want) => kept_blocks == 0 || kept_blocks < want.max(1),
+            Retention::Blocks(want) => kept_blocks == 0 || kept_blocks < want,
         };
         if !fits {
             break;
@@ -45,37 +65,37 @@ pub fn plan(turns: &[TurnView], retention: Retention) -> Plan {
     };
 
     let mut region = Vec::new();
-    for (block, message) in &flat {
+    let mut kept: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for (turn, block, message) in &flat {
         if *block < cut {
             region.push(message.clone());
+        } else {
+            kept.entry(*turn).or_default().push(*block);
         }
     }
 
-    let borrows = turns
-        .iter()
-        .filter_map(|turn| {
-            let ranges = clip(&turn.ranges, cut);
-            (!ranges.is_empty()).then_some(Borrow { ranges })
+    // The intervals a turn keeps are the blocks it actually sends: a compaction round hands out
+    // only its summary, so its instruction is never borrowed back.
+    let borrows = kept
+        .into_values()
+        .map(|blocks| Borrow {
+            ranges: runs(&blocks),
         })
         .collect();
 
     Plan { region, borrows }
 }
 
-/// Keep what lies at or after the cut. A range straddling the cut starts at it.
-fn clip(ranges: &[[i64; 2]], cut: i64) -> Vec<[i64; 2]> {
-    ranges
-        .iter()
-        .filter_map(|[start, end]| {
-            if *end < cut {
-                None
-            } else if *start < cut {
-                Some([cut, *end])
-            } else {
-                Some([*start, *end])
-            }
-        })
-        .collect()
+/// Ascending block ids as closed intervals: adjacent ids share one.
+fn runs(blocks: &[i64]) -> Vec<[i64; 2]> {
+    let mut out: Vec<[i64; 2]> = Vec::new();
+    for block in blocks {
+        match out.last_mut() {
+            Some(last) if last[1] + 1 == *block => last[1] = *block,
+            _ => out.push([*block, *block]),
+        }
+    }
+    out
 }
 
 /// How many characters a string holds; the only unit this domain measures in.

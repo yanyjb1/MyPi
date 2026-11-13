@@ -23,7 +23,8 @@ it placed (call id, name, arguments verbatim, intent).
 directory, and the finished calls. A call without a result fails the whole batch; a result naming no
 call fails it too.
 
-`CompactInput` carries the same read end plus retention, focus and the instruction template.
+`CompactInput` carries the same read end plus retention and the instruction, already rendered from
+the template and the focus when the round opened.
 `CompactReply` carries the summary, its bill, and the intervals that stay verbatim, grouped by
 original turn, in block order.
 

@@ -80,11 +80,14 @@ half's types, re-exported from this domain's root.
 - `session::history::Transcript` answers `History`: it holds the session's list from its newest
   compaction marker on as one flat message list, hands it out as a shared snapshot, appends each
   landed block, and reads the list again on `reload`. `turns` reads the database for compaction, and
-  `holder` holds a citation's hash.
+  `holder` holds a citation's hash. A marked round contributes only its summary, and the summary
+  goes out under the user role: the request after a compaction opens with it.
+- `pen::turn::land_compaction` writes a finished compaction in one submission: the summary block,
+  one borrowed round per kept round, and the `Row::Compact` mark. The mark never rides the round's
+  opening rows, and nothing lands piecemeal, so a compaction that fails leaves the list as it
+  found it.
 - `pen::turn::settle` writes `Row::Settle` and, when the session's first turn reported a prompt, a
   `Row::Baseline`. Later turns and compaction turns never report one.
-- `pen::turn::borrow` writes one borrowed turn per kept original turn, each with its ranges and the
-  `borrowed` stop reason.
 - `session::change` writes `Row::Switch` or `Row::MoveCwd` and updates the handle. A change never
   touches the archive: a session keeps the one it was created with.
 - `Loop::new` reads the tool values out of `config`, builds `tools::Engine`, and keeps the same

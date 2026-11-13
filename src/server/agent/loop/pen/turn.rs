@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::server::agent::r#loop::session::{Message, Retention};
+use crate::server::agent::r#loop::session::Retention;
 use crate::server::agent::r#loop::turn::ask::{Stop, Usage};
 use crate::server::agent::request::message::Message as Stored;
 use crate::server::storage::{BlockKind, NewBlock, Ref, Row, Structure, Submit, Writer};
@@ -19,94 +19,78 @@ pub enum Start {
     },
     Compact {
         retention: Option<Retention>,
-        focus: Option<String>,
+        /// The rendered instruction; the round keeps it as its own record of this compaction.
+        instruction: String,
     },
     Wake {
         text: String,
     },
 }
 
-/// Open one turn: its row, its first block, its list place, its working directory.
+/// Open one turn: its row, its list place, its working directory, and its opening block when it
+/// has one. A compaction opens with no block: its instruction and its summary land together when
+/// it finishes, so a compaction that fails leaves nothing for the next request to read.
 pub fn open(
     w: &Writer,
     session: i64,
     start: Start,
     cwd: &Path,
     model: Option<(String, String)>,
-) -> Result<(i64, Stored)> {
-    let (block, compaction, message) = match start {
+) -> Result<(i64, Option<Stored>)> {
+    let (book, message) = match start {
         Start::User {
             prefix,
             text,
             suffix,
         } => (
-            NewBlock {
+            Some(NewBlock {
                 kind: BlockKind::User,
                 content: Some(text.clone()),
                 prefix: prefix.clone(),
                 suffix: suffix.clone(),
                 ts: Some(crate::server::platform::time::now_stamp()),
                 ..NewBlock::default()
-            },
-            false,
-            Stored::User {
+            }),
+            Some(Stored::User {
                 prefix,
                 content: text,
                 suffix,
-            },
+            }),
         ),
-        Start::Compact { focus, .. } => {
-            let content = focus.unwrap_or_default();
-            (
-                NewBlock {
-                    kind: BlockKind::User,
-                    content: Some(content.clone()),
-                    ts: Some(crate::server::platform::time::now_stamp()),
-                    ..NewBlock::default()
-                },
-                true,
-                Stored::User {
-                    prefix: None,
-                    content,
-                    suffix: None,
-                },
-            )
-        }
+        Start::Compact { .. } => (None, None),
         Start::Wake { text } => (
-            NewBlock {
+            Some(NewBlock {
                 kind: BlockKind::Wake,
                 content: Some(text.clone()),
                 ts: Some(crate::server::platform::time::now_stamp()),
                 ..NewBlock::default()
-            },
-            false,
-            Stored::User {
+            }),
+            Some(Stored::User {
                 prefix: None,
                 content: text,
                 suffix: None,
-            },
+            }),
         ),
     };
-    let rows = vec![
-        Row::Turn {
-            stop_reason: None,
-            model,
-        },
-        Row::Block {
+    let mut rows = vec![Row::Turn {
+        stop_reason: None,
+        model,
+    }];
+    if let Some(block) = book {
+        rows.push(Row::Block {
             turn: Ref::Batch(0),
             block,
-        },
-        Row::List {
-            session,
-            turn: Ref::Batch(0),
-            is_compaction: compaction,
-        },
-        Row::Cwd {
-            session,
-            turn: Ref::Batch(0),
-            cwd: cwd.to_string_lossy().into_owned(),
-        },
-    ];
+        });
+    }
+    rows.push(Row::List {
+        session,
+        turn: Ref::Batch(0),
+    });
+    rows.push(Row::Cwd {
+        session,
+        turn: Ref::Batch(0),
+        cwd: cwd.to_string_lossy().into_owned(),
+    });
     let landed = w.push(Submit { rows })?;
     let turn = landed
         .ids
@@ -118,26 +102,20 @@ pub fn open(
 }
 
 /// Append one user message to a running turn.
-pub fn append_user(w: &Writer, turn: i64, msg: Message) -> Result<()> {
-    let block = match msg {
-        Message::Submit {
-            prefix,
-            text,
-            suffix,
-        } => NewBlock {
-            kind: BlockKind::User,
-            content: Some(text),
-            prefix,
-            suffix,
-            ts: Some(crate::server::platform::time::now_stamp()),
-            ..NewBlock::default()
-        },
-        Message::Compact { focus, .. } => NewBlock {
-            kind: BlockKind::User,
-            content: Some(focus.unwrap_or_default()),
-            ts: Some(crate::server::platform::time::now_stamp()),
-            ..NewBlock::default()
-        },
+pub fn append_user(
+    w: &Writer,
+    turn: i64,
+    prefix: Option<String>,
+    text: String,
+    suffix: Option<String>,
+) -> Result<()> {
+    let block = NewBlock {
+        kind: BlockKind::User,
+        content: Some(text),
+        prefix,
+        suffix,
+        ts: Some(crate::server::platform::time::now_stamp()),
+        ..NewBlock::default()
     };
     w.push(Submit {
         rows: vec![Row::Block {
@@ -148,10 +126,29 @@ pub fn append_user(w: &Writer, turn: i64, msg: Message) -> Result<()> {
     Ok(())
 }
 
-/// Append the compacted summary to a running turn, carrying the compaction's bill.
-pub fn append_summary(w: &Writer, turn: i64, text: String, usage: Usage) -> Result<()> {
-    w.push(Submit {
-        rows: vec![Row::Block {
+/// Land a finished compaction in one submission: the instruction it sent, its summary, the rounds
+/// it borrowed back, and the mark that makes this round the start of the history. Either all of it
+/// lands or none does, so a compaction that breaks leaves no trace.
+pub fn land_compaction(
+    w: &Writer,
+    session: i64,
+    turn: i64,
+    instruction: String,
+    text: String,
+    usage: Usage,
+    borrows: &[crate::server::agent::r#loop::turn::ask::Borrow],
+) -> Result<()> {
+    let mut rows = vec![
+        Row::Block {
+            turn: Ref::Known(turn),
+            block: NewBlock {
+                kind: BlockKind::User,
+                content: Some(instruction),
+                ts: Some(crate::server::platform::time::now_stamp()),
+                ..NewBlock::default()
+            },
+        },
+        Row::Block {
             turn: Ref::Known(turn),
             block: NewBlock {
                 kind: BlockKind::Assistant,
@@ -165,8 +162,28 @@ pub fn append_summary(w: &Writer, turn: i64, text: String, usage: Usage) -> Resu
                 usage_reasoning: Some(usage.reasoning),
                 ..NewBlock::default()
             },
-        }],
-    })?;
+        },
+    ];
+    for borrow in borrows {
+        let at = rows.len();
+        rows.push(Row::Turn {
+            stop_reason: Some("borrowed".to_string()),
+            model: None,
+        });
+        rows.push(Row::Borrow {
+            turn: Ref::Batch(at),
+            ranges: borrow.ranges.clone(),
+        });
+        rows.push(Row::List {
+            session,
+            turn: Ref::Batch(at),
+        });
+    }
+    rows.push(Row::Compact {
+        session,
+        turn: Ref::Known(turn),
+    });
+    w.push(Submit { rows })?;
     Ok(())
 }
 
@@ -183,35 +200,6 @@ pub fn append_wake(w: &Writer, turn: i64, text: String) -> Result<()> {
             },
         }],
     })?;
-    Ok(())
-}
-
-/// Append the retained intervals as borrowed rounds after the compaction round.
-pub fn borrow(
-    w: &Writer,
-    session: i64,
-    borrows: &[crate::server::agent::r#loop::turn::ask::Borrow],
-) -> Result<()> {
-    let mut rows = Vec::new();
-    for borrow in borrows {
-        let turn = rows.len();
-        rows.push(Row::Turn {
-            stop_reason: Some("borrowed".to_string()),
-            model: None,
-        });
-        rows.push(Row::Borrow {
-            turn: Ref::Batch(turn),
-            ranges: borrow.ranges.clone(),
-        });
-        rows.push(Row::List {
-            session,
-            turn: Ref::Batch(turn),
-            is_compaction: false,
-        });
-    }
-    if !rows.is_empty() {
-        w.push(Submit { rows })?;
-    }
     Ok(())
 }
 

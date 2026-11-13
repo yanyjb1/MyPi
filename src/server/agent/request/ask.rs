@@ -195,13 +195,12 @@ impl Ask for Request {
         let retention = input
             .retention
             .unwrap_or(Retention::Chars(self.options.retain_tail));
-        let plan = compact::plan(&turns, retention);
+        let plan = compact::plan(&turns, retention, input.turn);
         if plan.region.is_empty() {
             bail!("nothing to compact");
         }
 
-        let instruction =
-            compact::render_instruction(&input.instruction, input.focus.as_deref().unwrap_or(""));
+        let instruction = input.instruction;
         let req = assembly::compaction(
             client.model(),
             self.options.cap(&input.transport),

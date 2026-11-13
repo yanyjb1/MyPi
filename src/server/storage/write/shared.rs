@@ -10,7 +10,6 @@ pub(crate) fn append_list_row(
     tx: &rusqlite::Transaction<'_>,
     session_id: i64,
     turn_id: i64,
-    is_compaction: bool,
 ) -> Result<i64> {
     let idx: i64 = tx.query_row(
         "SELECT COALESCE(MAX(idx) + 1, 0) FROM session_turns WHERE session_id = ?1",
@@ -18,9 +17,9 @@ pub(crate) fn append_list_row(
         |r| r.get(0),
     )?;
     tx.execute(
-        "INSERT INTO session_turns (session_id, idx, turn_id, is_compaction)
-         VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![session_id, idx, turn_id, is_compaction as i64],
+        "INSERT INTO session_turns (session_id, idx, turn_id)
+         VALUES (?1, ?2, ?3)",
+        rusqlite::params![session_id, idx, turn_id],
     )?;
     Ok(idx)
 }
@@ -53,6 +52,20 @@ pub(crate) fn session_of_turn(conn: &Connection, turn_id: i64) -> Result<Option<
             |r| r.get(0),
         )
         .optional()?)
+}
+
+/// Mark one round's list place as the start of the history a compaction wrote.
+pub(crate) fn mark_compaction(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: i64,
+    turn_id: i64,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE session_turns SET is_compaction = 1
+          WHERE session_id = ?1 AND turn_id = ?2",
+        rusqlite::params![session_id, turn_id],
+    )?;
+    Ok(())
 }
 
 /// Point a list place at another round.

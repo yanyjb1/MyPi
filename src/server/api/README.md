@@ -47,9 +47,10 @@ Subscribe: `watch`, `submit`, `compact`.
   in use, so one answer serves the cost pill, the usage panel and the context gauge.
 - `usage` also answers where the context stands. While a turn runs, that is the last lap's prompt
   plus its completion; idle, it is the newest turn that measured one. A compaction is the exception:
-  the next prompt is the summary plus the retained tail, so `usage` estimates it from the truncation
-  point — `context` is the summary's completion plus each cut turn's own added tokens weighted by
-  how much of its intervals the tail kept, plus the archive's floor — and says so with `estimated`.
+  the context is now the summary plus whatever tail it kept, so `usage` estimates it instead of
+  reporting the pre-compaction prompt. The compaction round measured what it replaced; the newest
+  measurement before it measured the context as it stood. Removing the first from the second leaves
+  the tail, which the summary's own completion is then added to. The answer says `estimated`.
   `baseline_prompt` is that floor: the smallest first-turn prompt among the sessions that share
   this request archive, which is what a front end shows before the first request lands.
 - `submit` and `compact` open a turn; a session already in a turn answers `busy`. Nothing is queued

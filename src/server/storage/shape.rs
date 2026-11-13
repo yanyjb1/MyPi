@@ -284,12 +284,10 @@ pub enum Row {
         turn: Ref,
         cwd: String,
     },
-    /// One place in a session's list.
-    List {
-        session: i64,
-        turn: Ref,
-        is_compaction: bool,
-    },
+    /// One place in a session's list. It is born unmarked; `Compact` marks it.
+    List { session: i64, turn: Ref },
+    /// Mark a list place as the start of the history a compaction wrote.
+    Compact { session: i64, turn: Ref },
     /// Borrow a set of block intervals into an existing round.
     Borrow { turn: Ref, ranges: Vec<[i64; 2]> },
 }

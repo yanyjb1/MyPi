@@ -175,10 +175,36 @@ pub struct Piece {
 /// One turn as the history reads it.
 #[derive(Debug, Clone)]
 pub struct TurnView {
-    /// The block id ranges this turn holds, in order. A turn has several when other sessions
-    /// wrote between its batches.
-    pub ranges: Vec<[i64; 2]>,
+    /// The round's own id.
+    pub turn: i64,
     pub pieces: Vec<Piece>,
+    /// This round wrote the history a compaction replaced.
+    pub compacted: bool,
+}
+
+impl TurnView {
+    /// What this round adds to a request. A compaction round adds only its summary, and the
+    /// summary takes the user role: the request after a compaction opens with it. The
+    /// instruction that produced it stays in storage as the record of that compaction.
+    pub fn sent(&self) -> Vec<Piece> {
+        if !self.compacted {
+            return self.pieces.clone();
+        }
+        self.pieces
+            .iter()
+            .filter_map(|piece| match &piece.message {
+                Message::Assistant { content } => Some(Piece {
+                    block: piece.block,
+                    message: Message::User {
+                        prefix: None,
+                        content: content.clone(),
+                        suffix: None,
+                    },
+                }),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// One citation already in use.
@@ -208,6 +234,8 @@ pub trait History {
 /// One compaction request.
 pub struct CompactInput {
     pub session: i64,
+    /// The round writing this compaction; its own blocks are not history yet.
+    pub turn: i64,
     pub history: Arc<dyn History>,
     pub transport: Transport,
     pub system: String,
@@ -216,9 +244,7 @@ pub struct CompactInput {
     pub tools_json: Arc<serde_json::Value>,
     /// How much to keep verbatim; `None` takes the configured default.
     pub retention: Option<Retention>,
-    /// What the summary should stress.
-    pub focus: Option<String>,
-    /// The instruction template; `{{focus}}` marks where the focus goes.
+    /// The instruction this compaction sends, rendered once when the round opened.
     pub instruction: String,
     pub stop: Arc<crate::server::platform::stop::Stop>,
     /// This session's worker: the child that owns its sockets.

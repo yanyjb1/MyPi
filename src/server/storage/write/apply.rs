@@ -125,12 +125,12 @@ fn one(
             sessions::cwd_row(tx, *session, id_of(ids, turn)?, cwd)?;
             0
         }
-        Row::List {
-            session,
-            turn,
-            is_compaction,
-        } => {
-            shared::append_list_row(tx, *session, id_of(ids, turn)?, *is_compaction)?;
+        Row::List { session, turn } => {
+            shared::append_list_row(tx, *session, id_of(ids, turn)?)?;
+            0
+        }
+        Row::Compact { session, turn } => {
+            shared::mark_compaction(tx, *session, id_of(ids, turn)?)?;
             0
         }
         Row::Borrow { turn, ranges } => {

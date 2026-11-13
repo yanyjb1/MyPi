@@ -97,9 +97,11 @@ loop only adds tool events to it.
 - **Baseline is the first request's prompt.** Only a session's first turn contributes, from its first
   lap; the archive keeps the smallest such value across the sessions that share it. It never rises,
   and later turns never contribute.
-- **Compaction is a turn mode.** Its first block is the user message carrying the focus, the summary
-  lands as an assistant block, its list place carries the marker, and the retained region is
-  borrowed by intervals, not copied blocks.
+- **Compaction is a turn mode.** The round opens empty: its instruction, its summary, the borrowed
+  rounds and the marker land in one submission when it finishes, so a compaction that fails leaves
+  the list as it found it and leaves nothing for a request to read. The retained region is borrowed
+  by intervals, not copied blocks. The marked round contributes only its summary to the next
+  request, and the summary goes out under the user role.
 
 ## 3. Unresolved
 
