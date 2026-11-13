@@ -15,7 +15,7 @@ use anyhow::Result;
 
 use super::contract::Block;
 use super::live::Stream;
-use super::message::{AssistantMessage, DEFAULT_EMPTY_REPLY, ToolDef, WireMessage};
+use super::message::{AssistantMessage, DEFAULT_EMPTY_REPLY, WireMessage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolId {
@@ -40,10 +40,10 @@ impl ProtocolId {
         }
     }
 
-    /// Build one protocol for one endpoint. Compatibility is settled here, once.
-    pub fn build(self, base_url: &str, model: &str) -> Box<dyn Protocol> {
+    /// Build one protocol for one endpoint.
+    pub fn build(self) -> Box<dyn Protocol> {
         match self {
-            Self::Completion => Box::new(openai::completion::Completion::new(base_url, model)),
+            Self::Completion => Box::new(openai::completion::Completion::new()),
             Self::Deepseek => Box::new(openai::deepseek::Deepseek::new()),
         }
     }
@@ -76,10 +76,8 @@ pub struct ProtocolRequest {
     pub max_output_tokens: u32,
     pub stream: bool,
     pub messages: Vec<WireMessage>,
-    pub tools: Arc<Vec<ToolDef>>,
-    /// The same manuals, already serialized by the session that owns them.
+    /// The session's manuals, already serialized by the one that owns them.
     pub tools_json: Arc<serde_json::Value>,
-    pub session_id: Option<String>,
 }
 
 /// One assembled HTTP call.

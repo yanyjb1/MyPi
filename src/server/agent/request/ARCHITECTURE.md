@@ -20,7 +20,7 @@
 | `protocol/stream.rs` | the stream loop: cancel, `data:` or `event:` frames, how it ended |
 | `protocol/stitch.rs` | tool calls stitched out of stream deltas |
 | `protocol/openai/` | the OpenAI family: `completion`, `deepseek`, each with its own body and decode |
-| `protocol/openai/completion/` | the completion dialect: its compatibility table, the text-embedded call scanner, the template-markup filter |
+| `protocol/openai/completion/` | the standard completion dialect: the request body, the message mapping, the SSE decode |
 | `transport/mod.rs` | `Provider`, and sending one call through the session's worker |
 | `transport/client.rs` | one provider connection: its protocol, retry loop, cancellable wait |
 | `transport/worker.rs` | `SessionWorker` (one child per session, spawned on demand and killed on demand), the child's line protocol, its persistent connection, its greeting deadline, and the stream's silence deadline |

@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use crate::server::agent::request::contract::Transport;
-use crate::server::agent::request::message::ToolDef;
 
 /// What every lap of one session sends: the model, the system prompt, the manuals, the cut.
 #[derive(Clone)]
@@ -11,9 +10,7 @@ pub struct Config {
     pub provider: String,
     pub model: String,
     pub system: String,
-    /// The manuals built when the session was booked; a lap never rebuilds them.
-    pub manuals: Arc<Vec<ToolDef>>,
-    /// Those manuals serialized once with the session.
+    /// The manuals serialized once when the session was booked; a lap never rebuilds them.
     pub tools_json: Arc<serde_json::Value>,
     /// The compaction instruction template; `{{focus}}` marks where the focus goes.
     pub compact: String,
@@ -27,7 +24,6 @@ impl Config {
             provider: birth.provider.clone(),
             model: birth.model.clone(),
             system: birth.system.clone(),
-            manuals: birth.manuals.clone(),
             tools_json: Arc::new(tools_json),
             compact: birth.compact.clone(),
         }

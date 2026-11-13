@@ -30,7 +30,7 @@ impl Client {
                 api_key: provider.api_key.clone(),
                 auth_header: provider.auth_header,
             },
-            protocol: provider.protocol.build(&base_url, model),
+            protocol: provider.protocol.build(),
             model: model.to_string(),
             retry,
         }

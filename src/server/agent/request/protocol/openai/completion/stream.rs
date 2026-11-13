@@ -9,16 +9,11 @@ use serde_json::Value;
 
 use crate::server::agent::request::contract::Kind;
 use crate::server::agent::request::live::Stream;
-use crate::server::agent::request::message::{
-    AssistantMessage, INTERRUPTED_REPLY, Usage, WireCall,
-};
+use crate::server::agent::request::message::{AssistantMessage, INTERRUPTED_REPLY, Usage};
 use crate::server::agent::request::protocol::blocks;
-use crate::server::agent::request::protocol::{Output, broken_calls, fault, silence};
-use crate::server::agent::request::protocol::openai::completion::compat::Resolved;
-use crate::server::agent::request::protocol::openai::completion::inband::{ScanEvent, scanner_for};
-use crate::server::agent::request::protocol::openai::completion::markup::TemplateMarkupFilter;
 use crate::server::agent::request::protocol::stitch::Calls;
 use crate::server::agent::request::protocol::stream;
+use crate::server::agent::request::protocol::{Output, broken_calls, fault, silence};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ApiUsage {
@@ -98,17 +93,12 @@ impl From<ApiUsage> for Usage {
 
 pub(crate) fn decode(
     mut reader: Box<dyn BufRead>,
-    compat: &Resolved,
     out: &mut dyn Output,
     cancel: &Stop,
 ) -> anyhow::Result<AssistantMessage> {
     let mut content = String::new();
     let mut reasoning = String::new();
     let mut finish: Option<String> = None;
-    let mut scanner = scanner_for(compat);
-    let mut healed: Vec<WireCall> = Vec::new();
-    let mut content_filter = TemplateMarkupFilter::for_compat(compat);
-    let mut reasoning_filter = TemplateMarkupFilter::for_compat(compat);
     let mut usage = Usage::default();
     let mut calls = Calls::default();
 
@@ -128,67 +118,21 @@ pub(crate) fn decode(
         let delta = &choice["delta"];
 
         for field in ["reasoning_content", "reasoning", "reasoning_text"] {
-            let Some(raw) = delta.get(field).and_then(Value::as_str) else {
+            let Some(piece) = delta.get(field).and_then(Value::as_str) else {
                 continue;
             };
-            let fresh = if compat.reasoning_deltas_may_be_cumulative && !reasoning.is_empty() {
-                if raw.len() > reasoning.len() && raw.starts_with(reasoning.as_str()) {
-                    raw[reasoning.len()..].to_string()
-                } else if raw == reasoning.as_str() {
-                    String::new()
-                } else {
-                    raw.to_string()
-                }
-            } else {
-                raw.to_string()
-            };
-            let mut emitted = String::new();
-            reasoning_filter.feed(&fresh, &mut emitted);
-            if !emitted.is_empty() {
-                reasoning.push_str(&emitted);
-                out.stream(Stream::thinking(emitted));
+            if !piece.is_empty() {
+                reasoning.push_str(piece);
+                out.stream(Stream::thinking(piece.to_string()));
             }
             break;
         }
 
-        if let Some(text) = delta.get("content").and_then(Value::as_str) {
-            let mut emitted = String::new();
-            content_filter.feed(text, &mut emitted);
-            if !emitted.is_empty() {
-                let structured = delta
-                    .get("tool_calls")
-                    .and_then(Value::as_array)
-                    .is_some_and(|a| !a.is_empty());
-                match scanner.as_mut() {
-                    Some(scanner) => {
-                        for event in scanner.feed(&emitted) {
-                            match event {
-                                ScanEvent::Text(t) => {
-                                    content.push_str(&t);
-                                    out.stream(Stream::text(t));
-                                }
-                                ScanEvent::Thinking(t) => {
-                                    reasoning.push_str(&t);
-                                    out.stream(Stream::thinking(t));
-                                }
-                                ScanEvent::ToolCall { name, arguments } => {
-                                    if !structured {
-                                        healed.push(WireCall::new(
-                                            format!("call_healed_{}", healed.len()),
-                                            name,
-                                            arguments,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        content.push_str(&emitted);
-                        out.stream(Stream::text(emitted));
-                    }
-                }
-            }
+        if let Some(text) = delta.get("content").and_then(Value::as_str)
+            && !text.is_empty()
+        {
+            content.push_str(text);
+            out.stream(Stream::text(text.to_string()));
         }
 
         calls.feed(delta, &mut |call_id, name, text| {
@@ -205,43 +149,7 @@ pub(crate) fn decode(
     })?;
     let interrupted = end == stream::End::Canceled;
 
-    if !interrupted && let Some(scanner) = scanner.as_mut() {
-        for event in scanner.flush() {
-            match event {
-                ScanEvent::Text(t) => {
-                    content.push_str(&t);
-                    out.stream(Stream::text(t));
-                }
-                ScanEvent::Thinking(t) => {
-                    reasoning.push_str(&t);
-                    out.stream(Stream::thinking(t));
-                }
-                ScanEvent::ToolCall { name, arguments } => healed.push(WireCall::new(
-                    format!("call_healed_{}", healed.len()),
-                    name,
-                    arguments,
-                )),
-            }
-        }
-    }
-
-    if !interrupted {
-        let mut tail = String::new();
-        content_filter.flush(&mut tail);
-        if !tail.is_empty() {
-            content.push_str(&tail);
-            out.stream(Stream::text(tail));
-        }
-        let mut thinking = String::new();
-        reasoning_filter.flush(&mut thinking);
-        if !thinking.is_empty() {
-            reasoning.push_str(&thinking);
-            out.stream(Stream::thinking(thinking));
-        }
-    }
-
     let mut placed = calls.finish();
-    placed.extend(healed);
     let declared = placed.len();
     placed.retain(|call| call.complete());
     let dropped = declared - placed.len();

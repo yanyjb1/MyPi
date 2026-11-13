@@ -1,4 +1,4 @@
-//! DeepSeek: its own body and its own decode. No compatibility table is shared with completions.
+//! DeepSeek: its own body and its own decode; the completion dialect is a different wire.
 
 use crate::server::platform::stop::Stop;
 use std::io::BufRead;

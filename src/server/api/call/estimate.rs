@@ -2,8 +2,6 @@
 
 use serde_json::Value;
 
-use crate::server::agent::r#loop::Partial;
-
 /// One lap's bill, stamped on the last block it landed.
 pub(crate) struct Stamp {
     pub at: i64,
@@ -14,14 +12,9 @@ pub(crate) struct Stamp {
 /// The context in use, and whether that number is an estimate.
 pub(crate) fn context(
     list: &[Value],
-    running: Option<&Partial>,
     stamps: &[Stamp],
     baseline: Option<u64>,
 ) -> (Option<u64>, bool) {
-    // A lap just landed: its prompt is the context, to the token.
-    if let Some(partial) = running {
-        return (Some(partial.context), false);
-    }
     // The newest stamp by block id, not by arrival: a compaction's borrowed rounds hold old
     // blocks, and they are read after the summary that replaced them.
     let Some(newest) = stamps.iter().max_by_key(|stamp| stamp.at) else {

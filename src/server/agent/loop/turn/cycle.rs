@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 
-use super::ask::{CompactInput, LapInput, ResultsInput, Stop, Usage};
+use super::ask::{CompactInput, LapInput, ResultsInput, Stop};
 use super::fence::Fence;
 use crate::server::agent::r#loop::pen::{self, Pen};
 use crate::server::agent::r#loop::session::agent::AgentRunner;
@@ -58,7 +58,6 @@ pub(crate) fn run(
             history: history.clone(),
             transport: config.transport(),
             system: config.system.clone(),
-            tools: config.manuals.clone(),
             tools_json: config.tools_json.clone(),
             retention,
             instruction: instruction.clone(),
@@ -77,7 +76,6 @@ pub(crate) fn run(
             }
         };
         let usage = reply.usage;
-        handle.publish(&usage, usage.prompt + usage.completion);
         // One submission: the summary, the rounds it kept, and the mark that makes this round the
         // history's start. A compaction that broke above leaves the list exactly as it found it.
         pen::turn::land_compaction(
@@ -94,7 +92,6 @@ pub(crate) fn run(
         return Ok(Stop::Model);
     }
 
-    let mut usage = Usage::default();
     let mut baseline = None;
     let mut pen: Option<Arc<Pen>> = None;
     let outcome = laps(
@@ -103,7 +100,6 @@ pub(crate) fn run(
         turn,
         &history,
         &transcript,
-        &mut usage,
         &mut baseline,
         &mut pen,
         first_turn,
@@ -155,7 +151,6 @@ fn laps(
     turn: i64,
     history: &Arc<dyn History>,
     transcript: &Arc<super::super::session::history::Transcript>,
-    usage: &mut Usage,
     baseline: &mut Option<u64>,
     pen: &mut Option<Arc<Pen>>,
     first_turn: bool,
@@ -185,7 +180,6 @@ fn laps(
             blocks: blocks.clone(),
             transport: config.transport(),
             system: config.system.clone(),
-            tools: config.manuals.clone(),
             tools_json: config.tools_json.clone(),
             stop: handle.stop.clone(),
             worker: handle.worker.clone(),
@@ -195,8 +189,6 @@ fn laps(
             *baseline = Some(lap.usage.prompt);
         }
         first_lap = false;
-        *usage += lap.usage;
-        handle.publish(usage, lap.usage.prompt + lap.usage.completion);
 
         if lap.calls.is_empty() {
             let (_, landed_blocks) = blocks.flush()?;

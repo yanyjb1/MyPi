@@ -66,9 +66,11 @@ instruction last. A summary not smaller than its region is an error and leaves t
 
 ## 2. Design Intent
 
-**The host owns the wire, the domain owns the block.** Compatibility switches decide field names,
-reasoning replay and streaming quirks. The block types are decided here, once, so the loop and the
-storage never learn a wire format.
+**The host owns the wire, the domain owns the block.** A request body is the standard chat
+completions shape and nothing else: model, messages, streaming with its usage, the token ceiling and
+the tools. A stored assistant turn's thinking is never replayed, so one history is one size whatever
+asks it. The block types are decided here, once, so the loop and the storage never learn a wire
+format.
 
 **The loop reads a session once.** The history port hands out one shared snapshot per session, so a
 lap never copies it. A restarted process seeds the same bytes from storage, so the prefix cache still

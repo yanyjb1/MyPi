@@ -4,21 +4,18 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::message::{Message, ToolDef, WireMessage};
+use super::message::{Message, WireMessage};
 use super::protocol::ProtocolRequest;
 use super::transcript;
 
 /// One lap's request body.
-#[allow(clippy::too_many_arguments)]
 pub fn build(
     model: &str,
     max_output_tokens: u32,
     stream: bool,
     system: &str,
     stored: &[Message],
-    tools: Arc<Vec<ToolDef>>,
     tools_json: Arc<serde_json::Value>,
-    session: i64,
 ) -> Result<ProtocolRequest> {
     let mut messages = Vec::with_capacity(stored.len() + 1);
     if !system.trim().is_empty() {
@@ -32,14 +29,11 @@ pub fn build(
         max_output_tokens,
         stream,
         messages,
-        tools,
         tools_json,
-        session_id: Some(session.to_string()),
     })
 }
 
 /// A compaction's request body: the region being replaced, then the instruction.
-#[allow(clippy::too_many_arguments)]
 pub fn compaction(
     model: &str,
     max_output_tokens: u32,
@@ -47,9 +41,7 @@ pub fn compaction(
     system: &str,
     region: &[Message],
     instruction: &str,
-    tools: Arc<Vec<ToolDef>>,
     tools_json: Arc<serde_json::Value>,
-    session: i64,
 ) -> Result<ProtocolRequest> {
     let mut messages = Vec::with_capacity(region.len() + 2);
     if !system.trim().is_empty() {
@@ -66,8 +58,6 @@ pub fn compaction(
         max_output_tokens,
         stream,
         messages,
-        tools,
         tools_json,
-        session_id: Some(session.to_string()),
     })
 }

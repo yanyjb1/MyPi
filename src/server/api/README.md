@@ -42,15 +42,16 @@ Subscribe: `watch`, `submit`, `compact`.
 - `todo` answers the whole list `Loop::todo` replayed from the session's own `todo` calls.
 - `usage` groups a session's turns by the `provider` and `model` each turn recorded, names each
   group by its `provider:model` address, orders the groups by their token share, and quotes each
-  one with `models.yml`'s price in its own currency plus both display currencies. It is live by
-  default: the running turn's partial usage comes from the loop's memory and is priced at the model
-  in use, so one answer serves the cost pill, the usage panel and the context gauge.
-- `usage` also answers where the context stands. While a turn runs, that is the last lap's prompt
-  plus its completion; idle, it is the newest turn that measured one. A compaction is the exception:
-  the context is now the summary plus whatever tail it kept, so `usage` estimates it instead of
-  reporting the pre-compaction prompt. The compaction round measured what it replaced; the newest
-  measurement before it measured the context as it stood. Removing the first from the second leaves
-  the tail, which the summary's own completion is then added to. The answer says `estimated`.
+  one with `models.yml`'s price in its own currency plus both display currencies. The bill is the
+  stored stamps and nothing else: a lap counts once, when the block carrying its usage lands. A
+  running turn therefore shows up one lap late and settles the moment it closes, so the answer only
+  ever grows inside a session. One answer serves the cost pill, the usage panel and the gauge.
+- `usage` also answers where the context stands: the prompt of the newest stored stamp. A
+  compaction is the exception: the context is then the summary plus whatever tail it kept, so
+  `usage` estimates it instead of reporting the pre-compaction prompt. The compaction round
+  measured what it replaced; the newest measurement before it measured the context as it stood.
+  Removing the first from the second leaves the tail, which the summary's own completion is then
+  added to. The answer says `estimated`.
   `baseline_prompt` is that floor: the smallest first-turn prompt among the sessions that share
   this request archive, which is what a front end shows before the first request lands.
 - `submit` and `compact` open a turn; a session already in a turn answers `busy`. Nothing is queued

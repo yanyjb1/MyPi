@@ -226,13 +226,6 @@ impl Loop {
         self.inner.slots.get(session).is_some()
     }
 
-    /// The running turn's tally and the model it runs on, from one handle.
-    pub fn running(&self, session: i64) -> Option<(super::handle::Partial, (String, String))> {
-        let handle = self.handle(session).ok()?;
-        let partial = handle.partial()?;
-        Some((partial, handle.model()))
-    }
-
     fn handle(&self, session: i64) -> Result<Arc<Handle>> {
         self.inner
             .slots
@@ -359,8 +352,6 @@ fn start_turn(
         bail!("session {} is gone", handle.id);
     }
     handle.stop.reset();
-    // A new turn spends its own tokens; the tally of the one before it is already in the rows.
-    handle.clear_partial();
     let first = handle.transcript().blank();
     let wake = match &start {
         pen::turn::Start::Wake { text } => Some(text.clone()),

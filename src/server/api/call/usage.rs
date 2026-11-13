@@ -1,6 +1,6 @@
 //! `usage` — tokens per model, the cache-hit share, what it cost, and where the context stands.
 //!
-//! The session's bill is the union of stamped blocks; the running turn's laps arrive from memory.
+//! The session's bill is the union of stamped blocks: one lap, one stamp, nothing else counted.
 
 use std::collections::BTreeMap;
 
@@ -97,15 +97,6 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     // Stamps in block order: a compaction's borrowed rounds sit after the summary in the list but
     // carry older blocks, and the cut is a block id.
     stamps.sort_by_key(|stamp| stamp.at);
-    // The running turn is not stored yet: its laps arrive here, priced at the model in use.
-    let running = api.ledger().running(session);
-    if let Some((partial, (provider, model))) = &running {
-        let tally = groups.entry(format!("{provider}:{model}")).or_default();
-        tally.prompt += partial.usage.prompt as i64;
-        tally.completion += partial.usage.completion as i64;
-        tally.cached += partial.usage.cached as i64;
-        tally.written += partial.usage.cache_write as i64;
-    }
 
     let cfg = api.cfg();
     let fx = cfg
@@ -167,12 +158,7 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let (context, estimated) = estimate::context(
-        &ordered,
-        running.as_ref().map(|(partial, _)| partial),
-        &stamps,
-        baseline,
-    );
+    let (context, estimated) = estimate::context(&ordered, &stamps, baseline);
 
     Ok(json!({
         "prompt_tokens": prompt,
