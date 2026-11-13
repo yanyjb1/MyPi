@@ -31,7 +31,8 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `bash/cd/{mod,tool}.rs` | `cd` |
 | `bash/alias/{mod,tool}.rs` | `alias` add/list/remove; the config layer is read-only here |
 | `bash/context/{mod,tool}.rs` | `context`: `query` through `Source::history`, `show` through `Source::block`, long listings to `Export::dir` |
-| `kairos/mod.rs` | the `kairos` tool manual and parameters |
+| `kairos/mod.rs` | declares the kairos modules |
+| `kairos/tool.rs` | the `kairos` tool manual and parameters |
 | `kairos/service.rs` | `kairos` operation dispatch and rendering |
 | `kairos/command.rs` | a line admitted at call time as a `JobRunner`: only `run_to` is left |
 | `kairos/text.rs` | the text `JobRunner`: nothing to run, so only the clock makes it due |
