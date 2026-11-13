@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use super::super::bash::{guard, segment};
+use crate::server::agent::request::contract::ItemOk;
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::{AliasOp, Effect, ToolOutput};
 use crate::server::agent::tools::contract::view::CallRecord;
@@ -66,6 +67,7 @@ fn add(env: &mut Env, args: &Args) -> Result<ToolOutput> {
 
     let mut lines = String::new();
     let mut effects = Vec::new();
+    let mut outcomes: Vec<ItemOk> = Vec::new();
     let mut failed = 0usize;
     for item in &items {
         match add_one(env, item) {
@@ -73,6 +75,7 @@ fn add(env: &mut Env, args: &Args) -> Result<ToolOutput> {
                 lines.push_str(&line);
                 lines.push('\n');
                 effects.push(effect);
+                outcomes.push(ItemOk::ok());
             }
             Err(e) => {
                 if items.len() == 1 {
@@ -80,11 +83,13 @@ fn add(env: &mut Env, args: &Args) -> Result<ToolOutput> {
                 }
                 failed += 1;
                 lines.push_str(&format!("[{}] {e:#}\n", item.label()));
+                outcomes.push(ItemOk::failed(format!("{e:#}")));
             }
         }
     }
 
     let mut produced = ToolOutput::text(lines.trim_end().to_string());
+    produced.items = outcomes;
     for effect in effects {
         produced = produced.effect(effect);
     }
@@ -132,6 +137,7 @@ fn del(env: &mut Env, args: &Args) -> Result<ToolOutput> {
 
     let mut lines = String::new();
     let mut effects = Vec::new();
+    let mut outcomes: Vec<ItemOk> = Vec::new();
     let mut failed = 0usize;
     for raw in &names {
         match del_one(env, raw) {
@@ -139,6 +145,7 @@ fn del(env: &mut Env, args: &Args) -> Result<ToolOutput> {
                 lines.push_str(&line);
                 lines.push('\n');
                 effects.push(effect);
+                outcomes.push(ItemOk::ok());
             }
             Err(e) => {
                 if names.len() == 1 {
@@ -146,11 +153,13 @@ fn del(env: &mut Env, args: &Args) -> Result<ToolOutput> {
                 }
                 failed += 1;
                 lines.push_str(&format!("[{raw}] {e:#}\n"));
+                outcomes.push(ItemOk::failed(format!("{e:#}")));
             }
         }
     }
 
     let mut produced = ToolOutput::text(lines.trim_end().to_string());
+    produced.items = outcomes;
     for effect in effects {
         produced = produced.effect(effect);
     }

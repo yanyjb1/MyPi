@@ -415,7 +415,7 @@ fn effects(
 fn report(result: ToolResult) -> Reported {
     Reported {
         call_id: result.call_id,
-        ok: result.ok,
+        items: result.items,
         result: result.result,
         reason: result.reason,
         memo: result.memo,

@@ -2,6 +2,7 @@
 
 use anyhow::{Context as _, Result, anyhow};
 
+use crate::server::agent::request::contract::ItemOk;
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::contract::view::CallRecord;
@@ -52,6 +53,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
     let total = items.len();
     let mut out = String::new();
+    let mut outcomes: Vec<ItemOk> = Vec::with_capacity(total);
     let mut failed = 0usize;
     for item in &items {
         match block(env, item, total > 1) {
@@ -60,6 +62,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
                     out.push('\n');
                 }
                 out.push_str(&text);
+                outcomes.push(ItemOk::ok());
             }
             Err(e) => {
                 // One file's failure is that file's own: the rest still run and still answer.
@@ -72,10 +75,12 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
                     out.push('\n');
                 }
                 out.push_str(&format!("==> {path}\n[error: {e:#}]"));
+                outcomes.push(ItemOk::failed(format!("{e:#}")));
             }
         }
     }
     let mut produced = ToolOutput::text(out);
+    produced.items = outcomes;
     if failed > 0 {
         produced = produced.failure(format!("{failed} of {total} files failed"));
     }

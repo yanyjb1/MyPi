@@ -5,8 +5,8 @@ use serde_json::Value;
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head, loose,
-    output_lines, partial,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head, item_error,
+    loose, output_lines, partial,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -27,30 +27,64 @@ pub(crate) struct Call;
 impl ToolRenderer for Call {
     fn title(&self, b: &ToolBlock<'_>) -> Option<String> {
         let items = partial::items(b.args, "calls");
-        let first = items.first()?;
-        let server = partial::field(first, "server").unwrap_or_default();
-        let tool = partial::field(first, "tool").unwrap_or_default();
-        let arguments = match first.get("args") {
-            Some(Value::Null) | None => "{}".to_string(),
-            Some(other) => loose(other).to_string(),
-        };
-        let mut text = format!("call {server} {tool} {arguments}");
-        if items.len() > 1 {
-            text.push_str(&format!(" (+{})", items.len() - 1));
-        }
-        Some(text)
+        (items.len() == 1).then(|| target(&items[0]))
     }
 
     fn call_body(&self, _b: &ToolBlock<'_>) -> Vec<Row> {
         Vec::new()
     }
 
-    fn result_sections(&self, _b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
+    fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
+        let calls = partial::items(b.args, "calls");
+        if o.items.len() <= 1 {
+            return vec![Section {
+                label: None,
+                lines: output_lines(o.text),
+            }];
+        }
+        let bodies = bodies(o.text);
+        let mut lines = Vec::new();
+        for (index, item) in calls.iter().enumerate() {
+            let mut runs = head(State::of_item(Some(o), index), "MCP");
+            runs.push(Run::fixed(format!(": {}", target(item)), fixed::MUTED));
+            lines.push(Row::of(Lead::None, runs));
+            if o.items.get(index).is_some_and(|item| item.error.is_some()) {
+                lines.extend(item_error(Some(o), index));
+            } else if let Some(body) = bodies.get(index) {
+                lines.extend(output_lines(&body.join("\n")));
+            }
+        }
         vec![Section {
             label: None,
-            lines: output_lines(o.text),
+            lines,
         }]
     }
+}
+
+/// One call item as its row names it.
+fn target(item: &Value) -> String {
+    let server = partial::field(item, "server").unwrap_or_default();
+    let tool = partial::field(item, "tool").unwrap_or_default();
+    let arguments = match item.get("args") {
+        Some(Value::Null) | None => "{}".to_string(),
+        Some(other) => loose(other).to_string(),
+    };
+    format!("call {server} {tool} {arguments}")
+}
+
+/// The text's item bodies: an `==> ` line starts the next one.
+fn bodies(text: &str) -> Vec<Vec<&str>> {
+    let mut out: Vec<Vec<&str>> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("==> ") {
+            out.push(Vec::new());
+        } else if out.is_empty() {
+            out.push(vec![line]);
+        } else if let Some(chunk) = out.last_mut() {
+            chunk.push(line);
+        }
+    }
+    out
 }
 
 fn servers(result: Option<ToolOutcome<'_>>) -> Vec<Row> {

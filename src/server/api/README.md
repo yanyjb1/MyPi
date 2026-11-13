@@ -137,6 +137,9 @@ turn's first frame, always — not usually.
 
 - `kind` in a live payload is one of `text`, `thinking`, `arguments`, `boundary`, `tool_start`,
   `tool_progress`, `tool_end`, `wake`. A `wake` piece is one job's reminder and keeps its own block.
+- `tool_end` carries `ok` as the array of item outcomes — one entry per item the call's arguments
+  named, `{ok, error}` — plus `result`, `memo`, `duration_ms` and `truncated`. The stored row's `ok`
+  column holds the same array.
 - `text`, `thinking` and `arguments` carry `usage`: the bill of the request that just ended, on the
   one piece the decoder wrote it onto; `null` on every other piece.
 - A write signal names the field its door changed: `cwd` with the landed path, `model` with the

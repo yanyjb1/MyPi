@@ -4,9 +4,7 @@ use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
-use super::{
-    State, ToolOutcome, error_under, head, loose, partial, relativize,
-};
+use super::{State, ToolOutcome, head, item_error, loose, partial, relativize};
 use crate::ui::tui::theme::fixed;
 
 /// The whole exchange: one line per child, each with its cwd and variables.
@@ -28,16 +26,12 @@ pub(crate) fn block(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) -> V
         if let Some(budget) = scalar(item, "maxToolCalls") {
             text.push_str(&format!(", toolbudget {budget}"));
         }
-        let mut runs = if index == 0 {
-            head(state, "task")
-        } else {
-            vec![Run::fixed("      ", fixed::DIM)]
-        };
+        let mut runs = head(State::of_item(result, index), "task");
         runs.push(Run::fixed(text, fixed::MUTED));
         out.push(Row::of(Lead::None, runs));
         out.extend(children(item, cwd));
+        out.extend(item_error(result, index));
     }
-    out.extend(error_under(result));
     out
 }
 

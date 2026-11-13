@@ -93,11 +93,36 @@ pub struct ToolCall {
     pub intent: Option<String>,
 }
 
+/// What one item of a call answered: its own outcome, and its failure text when it failed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ItemOk {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl ItemOk {
+    pub fn ok() -> Self {
+        Self {
+            ok: true,
+            error: None,
+        }
+    }
+
+    pub fn failed(error: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(error.into()),
+        }
+    }
+}
+
 /// One finished call, as the loop hands it back.
 #[derive(Debug, Clone)]
 pub struct ToolResult {
     pub call_id: String,
-    pub ok: bool,
+    /// One entry per item the call's arguments named.
+    pub items: Vec<ItemOk>,
     pub result: String,
     /// Why the call failed, when it failed by being cut short.
     pub reason: Option<String>,
@@ -141,7 +166,8 @@ pub struct Block {
     pub intent: Option<String>,
     /// Is this the batch's first call?
     pub first: Option<bool>,
-    pub ok: Option<bool>,
+    /// One outcome per item the call's arguments named.
+    pub ok: Option<Vec<ItemOk>>,
     pub result: Option<String>,
     /// Extra material for a front end; never enters a request.
     pub memo: Option<String>,

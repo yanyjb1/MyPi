@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
-use super::{State, ToolOutcome, arg_str, error_under, head, head_lines, partial};
+use super::{State, ToolOutcome, arg_str, error_under, head, item_error, partial};
+use crate::ui::tui::theme::fixed;
 
 /// The whole exchange: one line per alias, or a tree of names.
 pub(crate) fn block(args: &str, result: Option<ToolOutcome<'_>>) -> Vec<Row> {
@@ -13,29 +14,40 @@ pub(crate) fn block(args: &str, result: Option<ToolOutcome<'_>>) -> Vec<Row> {
     let mut out = Vec::new();
     match op.as_str() {
         "add" => {
-            let lines: Vec<String> = partial::items(args, "aliases")
-                .iter()
-                .map(|item| {
-                    let name = partial::field(item, "name").unwrap_or_default();
-                    let command = partial::field(item, "command").unwrap_or_default();
-                    format!("{name} => {command}")
-                })
-                .collect();
-            out.extend(head_lines(state, "Alias", &lines));
+            let items = partial::items(args, "aliases");
+            if items.is_empty() {
+                out.push(Row::of(Lead::None, head(state, "Alias")));
+            }
+            for (index, item) in items.iter().enumerate() {
+                let name = partial::field(item, "name").unwrap_or_default();
+                let command = partial::field(item, "command").unwrap_or_default();
+                let mut runs = head(State::of_item(result, index), "Alias");
+                runs.push(Run::fixed(format!(": {name} => {command}"), fixed::MUTED));
+                out.push(Row::of(Lead::None, runs));
+                out.extend(item_error(result, index));
+            }
         }
         "del" => {
-            let lines: Vec<String> = partial::items(args, "names")
-                .iter()
-                .map(|name| format!("del {}", name.as_str().unwrap_or_default()))
-                .collect();
-            out.extend(head_lines(state, "Alias", &lines));
+            let names = partial::items(args, "names");
+            if names.is_empty() {
+                out.push(Row::of(Lead::None, head(state, "Alias")));
+            }
+            for (index, name) in names.iter().enumerate() {
+                let mut runs = head(State::of_item(result, index), "Alias");
+                runs.push(Run::fixed(
+                    format!(": del {}", name.as_str().unwrap_or_default()),
+                    fixed::MUTED,
+                ));
+                out.push(Row::of(Lead::None, runs));
+                out.extend(item_error(result, index));
+            }
         }
         _ => {
             out.push(Row::of(Lead::None, head(state, "Alias")));
             out.extend(list(result));
+            out.extend(error_under(result));
         }
     }
-    out.extend(error_under(result));
     out
 }
 

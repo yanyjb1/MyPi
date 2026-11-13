@@ -34,7 +34,7 @@ impl ToolRenderer for Memo {
         if o.ok == Some(false) {
             return vec![Section {
                 label: None,
-                lines: error_body(o.text),
+                lines: error_body(&o.failure_text()),
             }];
         }
         let op = arg_str(b.args, "type").unwrap_or_default();

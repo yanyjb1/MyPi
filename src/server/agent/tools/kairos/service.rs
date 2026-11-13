@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
+use crate::server::agent::request::contract::ItemOk;
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::job::{JobHost, JobRunner, JobSpec, Schedule, Status};
 use crate::server::agent::tools::contract::output::ToolOutput;
@@ -47,6 +48,7 @@ fn start(env: &Env, jobs: &dyn JobHost, args: &Args, op: &str) -> Result<ToolOut
 
     let mut text = String::new();
     let mut receipts: Vec<Value> = Vec::new();
+    let mut outcomes: Vec<ItemOk> = Vec::new();
     let mut failed = 0usize;
     for item in &items {
         match start_one(env, jobs, item, op) {
@@ -54,6 +56,7 @@ fn start(env: &Env, jobs: &dyn JobHost, args: &Args, op: &str) -> Result<ToolOut
                 text.push_str(&serde_json::to_string_pretty(&value)?);
                 text.push('\n');
                 receipts.push(value);
+                outcomes.push(ItemOk::ok());
             }
             Err(e) => {
                 if items.len() == 1 {
@@ -63,11 +66,13 @@ fn start(env: &Env, jobs: &dyn JobHost, args: &Args, op: &str) -> Result<ToolOut
                 // Keep one slot per item, so a card can still index receipts by position.
                 receipts.push(Value::Null);
                 text.push_str(&format!("[{}] {e:#}\n", item.label()));
+                outcomes.push(ItemOk::failed(format!("{e:#}")));
             }
         }
     }
 
     let mut produced = ToolOutput::with_memo(text.trim_end().to_string(), Value::Array(receipts));
+    produced.items = outcomes;
     if failed > 0 {
         produced = produced.failure(format!("{failed} of {} tasks not started", items.len()));
     }

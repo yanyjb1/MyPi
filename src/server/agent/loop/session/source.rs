@@ -405,13 +405,13 @@ fn records(reader: &Reader, requests: Vec<Value>, ranges: &[[i64; 2]]) -> Result
                 ]),
         )?;
         for row in results {
-            let (Some(call), result, ok) = (
-                row["call_id"].as_str(),
-                row["result"].as_str().map(str::to_string),
-                row["ok"].as_i64().unwrap_or(0) != 0,
-            ) else {
+            let Some(call) = row["call_id"].as_str() else {
                 continue;
             };
+            let result = row["result"].as_str().map(str::to_string);
+            let ok = row["ok"]
+                .as_array()
+                .is_some_and(|items| items.iter().all(|item| item["ok"].as_bool() == Some(true)));
             paired.insert(call.to_string(), (result, ok));
         }
     }

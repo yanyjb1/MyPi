@@ -21,7 +21,7 @@ truth for every column.
 | `session_turns` | the session's round list: `session_id`, `idx`, `turn_id`, `is_compaction`. The mark is written when a compaction lands, not when it opens; the newest marked row is where reading starts |
 | `turns` | one row per round: `turn_id`, `blocks` (one `[start, end]` per landed batch), `stop_reason`, `provider` + `model` (the model that round ran on) |
 | `request_meta` | one row per distinct archive, deduplicated by hash: `provider`, `model`, `system`, `tools_json`, `baseline_prompt` |
-| `blocks` | one row per message: the id, `type`, body and injection, six usage columns, tool columns, `memo`, `duration_ms`, `ts` |
+| `blocks` | one row per message: the id, `type`, body and injection, six usage columns, tool columns (`ok` is the array of item outcomes), `memo`, `duration_ms`, `ts` |
 | `cwd_history` | round-anchored working directories |
 | `artifacts` | oversized tool output: one row per spilled block; `block_id` is the key, `hash` and `reference` carry the citation |
 | `memos` | append-only memo revisions: `anchor` (`NULL` = global), `name`, `content`, `ts` |

@@ -22,6 +22,15 @@ impl State {
         }
     }
 
+    /// One item's state: its own outcome, or the call's when the result carries none for it.
+    pub(crate) fn of_item(result: Option<ToolOutcome<'_>>, index: usize) -> State {
+        match result.and_then(|o| o.items.get(index)) {
+            Some(item) if item.ok => State::Ok,
+            Some(_) => State::Err,
+            None => State::of(result),
+        }
+    }
+
     pub(crate) fn glyph(self) -> &'static str {
         match self {
             State::Pending => g::PENDING,

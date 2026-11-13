@@ -54,7 +54,7 @@ pub(crate) fn block_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Block> {
         intent: r.get(14)?,
         text: r.get(15)?,
         first: flag(r, 16)?,
-        ok: flag(r, 17)?,
+        ok: json(r, 17)?,
         result: r.get(18)?,
         memo: r.get(19)?,
         duration_ms: r.get(20)?,
@@ -70,6 +70,17 @@ fn count(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<u64>> {
 /// A nullable 0/1 column as a flag.
 fn flag(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<bool>> {
     Ok(r.get::<_, Option<i64>>(i)?.map(|v| v != 0))
+}
+
+/// A nullable JSON column, read as a value; an unreadable one is a broken row.
+fn json(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<serde_json::Value>> {
+    let Some(raw) = r.get::<_, Option<String>>(i)? else {
+        return Ok(None);
+    };
+    let value = serde_json::from_str(&raw).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, e.into())
+    })?;
+    Ok(Some(value))
 }
 
 pub(crate) fn turn_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> {

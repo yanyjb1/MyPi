@@ -400,9 +400,14 @@ pub(crate) fn details_of(result: &Block) -> Option<Value> {
 }
 
 pub(crate) fn outcome_of<'a>(result: &'a Block, details: Option<&'a Value>) -> ToolOutcome<'a> {
+    let items = result.ok.as_deref().unwrap_or_default();
     ToolOutcome {
         text: result.result.as_deref().unwrap_or_default(),
-        ok: result.ok,
+        items,
+        ok: result
+            .ok
+            .as_ref()
+            .map(|items| items.iter().all(|item| item.ok)),
         details,
         duration_ms: result.duration_ms.max(0) as u64,
     }

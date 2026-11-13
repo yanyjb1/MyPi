@@ -5,12 +5,13 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::server::agent::request::contract::ItemOk;
 use crate::server::agent::tools::contract::env::Env;
-use crate::server::config::paths::project_dir;
 use crate::server::agent::tools::contract::output::{Effect, ToolOutput};
 use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::spec::{Args, Item, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
+use crate::server::config::paths::project_dir;
 
 use super::answer;
 use super::template;
@@ -78,12 +79,14 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     let mut taken: BTreeSet<String> = BTreeSet::new();
     let mut text = String::new();
     let mut effects = Vec::new();
+    let mut outcomes: Vec<ItemOk> = Vec::new();
     let mut failed = 0usize;
     for item in &items {
         match spawn(env, &project, item, &mut taken) {
             Ok((name, effect)) => {
                 text.push_str(&format!("{name} created\n"));
                 effects.push(effect);
+                outcomes.push(ItemOk::ok());
             }
             Err(e) => {
                 if items.len() == 1 {
@@ -91,11 +94,13 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
                 }
                 failed += 1;
                 text.push_str(&format!("[{}] {e:#}\n", item.label()));
+                outcomes.push(ItemOk::failed(format!("{e:#}")));
             }
         }
     }
 
     let mut produced = ToolOutput::text(text.trim_end().to_string());
+    produced.items = outcomes;
     for effect in effects {
         produced = produced.effect(effect);
     }

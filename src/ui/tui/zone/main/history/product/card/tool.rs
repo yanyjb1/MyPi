@@ -3,6 +3,7 @@
 use ratatui::style::Modifier;
 use serde_json::Value;
 
+use super::super::super::local::content::ItemOk;
 use super::super::super::row::{Ink, Lead, Row, Run};
 use super::frame::{default_call, error_body, non_empty_lines, one_line, output_lines};
 use super::state::State;
@@ -15,6 +16,8 @@ use crate::ui::tui::theme::fixed;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ToolOutcome<'a> {
     pub text: &'a str,
+    /// One entry per item the call's arguments named.
+    pub items: &'a [ItemOk],
     /// `None` while the call is still running.
     pub ok: Option<bool>,
     pub details: Option<&'a Value>,
@@ -24,6 +27,15 @@ pub(crate) struct ToolOutcome<'a> {
 impl ToolOutcome<'_> {
     fn duration_label(&self) -> Option<String> {
         (self.duration_ms >= 1_000).then(|| duration(self.duration_ms))
+    }
+
+    /// The failure text of every item that failed, in the call's order.
+    pub(crate) fn failure_text(&self) -> String {
+        self.items
+            .iter()
+            .filter_map(|item| item.error.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -166,7 +178,7 @@ pub(crate) trait ToolRenderer {
 
     fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
         let lines = match o.ok {
-            Some(false) => error_body(o.text),
+            Some(false) => error_body(&o.failure_text()),
             // A running result shows its tail: build only what the fold keeps.
             None if !b.expanded => super::frame::output_tail(o.text, b.budget),
             _ => output_lines(o.text),
@@ -198,32 +210,28 @@ pub(crate) fn head(state: State, label: &str) -> Vec<Run> {
     ]
 }
 
-/// The head with the first line after it; every later line on a row of its own.
-pub(crate) fn head_lines(state: State, label: &str, lines: &[String]) -> Vec<Row> {
-    let mut first = head(state, label);
-    let mut rest = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if index == 0 {
-            first.push(Run::fixed(format!(": {line}"), fixed::MUTED));
-        } else {
-            rest.push(Row::of(
-                Lead::None,
-                vec![Run::fixed(format!(": {line}"), fixed::MUTED)],
-            ));
-        }
-    }
-    let mut out = vec![Row::of(Lead::None, first)];
-    out.extend(rest);
-    out
-}
-
 /// The failure text under a one-line form: the card body, shifted under the title.
 pub(crate) fn error_under(result: Option<ToolOutcome<'_>>) -> Vec<Row> {
     let Some(o) = result.filter(|o| o.ok == Some(false)) else {
         return Vec::new();
     };
-    error_body(o.text)
-        .into_iter()
+    shifted(error_body(&o.failure_text()))
+}
+
+/// One item's failure text under its own row; nothing when that item answered.
+pub(crate) fn item_error(result: Option<ToolOutcome<'_>>, index: usize) -> Vec<Row> {
+    let error = result
+        .and_then(|o| o.items.get(index))
+        .and_then(|item| item.error.as_deref());
+    match error {
+        Some(text) => shifted(error_body(text)),
+        None => Vec::new(),
+    }
+}
+
+/// Rows moved under a title: the one-line form's own left margin.
+fn shifted(rows: Vec<Row>) -> Vec<Row> {
+    rows.into_iter()
         .map(|mut row| {
             if let Some(first) = row.runs.first_mut() {
                 first.text.insert_str(0, "  ");

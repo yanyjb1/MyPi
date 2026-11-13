@@ -117,7 +117,7 @@ impl ToolRenderer for Web {
         if o.ok == Some(false) {
             return vec![Section {
                 label: None,
-                lines: error_body(o.text),
+                lines: error_body(&o.failure_text()),
             }];
         }
         let lines = match op_of(b.args).as_str() {

@@ -138,7 +138,7 @@ fn changed_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
 
 fn edit_result(b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Row> {
     if o.ok == Some(false) {
-        return error_body(o.text);
+        return error_body(&o.failure_text());
     }
     match ToolView::from_details(o.details, o.text) {
         ToolView::Diff { at, old } => {

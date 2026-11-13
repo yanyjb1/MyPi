@@ -134,7 +134,9 @@ fn land(block: Block) -> NewBlock {
         intent: block.intent,
         text: None,
         first: block.first,
-        ok: block.ok,
+        ok: block
+            .ok
+            .map(|items| serde_json::to_value(&items).expect("item outcomes always serialize")),
         result: block.result,
         memo: block.memo,
         duration_ms: block.duration_ms.map(|ms| ms as i64),

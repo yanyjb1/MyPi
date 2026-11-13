@@ -7,8 +7,8 @@ use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
 use super::frame::{GUTTER_MIN, gutter_of, markdown_numbered, wrap_rows};
 use super::{
-    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, expand_tabs,
-    indentation, partial, path_of, relativize,
+    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, expand_tabs, head, indentation,
+    item_error, partial, path_of, relativize,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -35,27 +35,25 @@ impl ToolRenderer for FileTools {
 }
 
 pub(crate) fn read_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) -> Vec<Row> {
-    let state = State::of(result);
-    let mut runs = vec![
-        Run::with(state.glyph(), Some(state.glyph_ink()), Modifier::empty()),
-        Run::fixed(" Read", fixed::TOOL_TITLE).bold(),
-    ];
     let files = partial::items(args, "files");
-    if let Some(first) = files.first() {
-        let path = partial::field(first, "path").unwrap_or_default();
+    let mut out = Vec::new();
+    if files.is_empty() {
+        out.push(Row::of(Lead::None, head(State::of(result), "Read")));
+        return out;
+    }
+    for (index, item) in files.iter().enumerate() {
+        let mut runs = head(State::of_item(result, index), "Read");
+        let path = partial::field(item, "path").unwrap_or_default();
         if !path.trim().is_empty() {
             let mut target = relativize(cwd, &path);
-            if let Some(span) = read_range(first) {
+            if let Some(span) = read_range(item) {
                 target.push_str(&span);
-            }
-            if files.len() > 1 {
-                target.push_str(&format!(" (+{})", files.len() - 1));
             }
             runs.push(Run::fixed(format!(" {target}"), fixed::TOOL_PATH));
         }
+        out.push(Row::of(Lead::None, runs));
+        out.extend(item_error(result, index));
     }
-    let mut out = vec![Row::of(Lead::None, runs)];
-    out.extend(error_under(result));
     out
 }
 

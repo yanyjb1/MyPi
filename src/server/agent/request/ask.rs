@@ -175,7 +175,7 @@ impl Ask for Request {
                     kind: Kind::ToolResult,
                     ts: Some(ts.clone()),
                     call_id: Some(run.call_id.clone()),
-                    ok: Some(run.ok),
+                    ok: Some(run.items),
                     result: Some(text),
                     memo: run.memo.clone(),
                     duration_ms: Some(run.duration_ms),

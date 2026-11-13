@@ -13,6 +13,7 @@ use super::contract::output::ToolOutput;
 use super::contract::view::CallRecord;
 use super::spec::{Args, Item, Kind, Param, Tool, ToolProgress};
 use super::summary;
+use crate::server::agent::request::contract::ItemOk;
 
 use bridge::{McpBridge, McpContent, McpResult};
 
@@ -132,10 +133,14 @@ fn call(bridge: &dyn McpBridge, args: &Args) -> Result<ToolOutput> {
 
     let total = items.len();
     let mut out = String::new();
+    let mut outcomes: Vec<ItemOk> = Vec::with_capacity(total);
     let mut failed = 0usize;
     for item in &items {
         let (header, body) = match call_one(bridge, item) {
-            Ok((server, tool, text)) => (format!("{server}/{tool}"), text),
+            Ok((server, tool, text)) => {
+                outcomes.push(ItemOk::ok());
+                (format!("{server}/{tool}"), text)
+            }
             Err(e) => {
                 if total == 1 {
                     return Err(e);
@@ -143,6 +148,7 @@ fn call(bridge: &dyn McpBridge, args: &Args) -> Result<ToolOutput> {
                 failed += 1;
                 let server = item.text("server").unwrap_or_else(|_| item.label());
                 let tool = item.text("tool").unwrap_or_default();
+                outcomes.push(ItemOk::failed(format!("{e:#}")));
                 (format!("{server}/{tool}"), format!("[error: {e:#}]"))
             }
         };
@@ -156,6 +162,7 @@ fn call(bridge: &dyn McpBridge, args: &Args) -> Result<ToolOutput> {
     }
 
     let mut produced = ToolOutput::text(out);
+    produced.items = outcomes;
     if failed > 0 {
         produced = produced.failure(format!("{failed} of {total} calls failed"));
     }

@@ -309,7 +309,7 @@ impl Relay {
                     }
                     ToolEvent::End {
                         call_id,
-                        ok,
+                        items,
                         result,
                         memo,
                         duration_ms,
@@ -318,7 +318,7 @@ impl Relay {
                         "tool_end",
                         json!({
                             "call_id": call_id,
-                            "ok": ok,
+                            "ok": items,
                             "result": result,
                             "memo": memo,
                             "duration_ms": duration_ms,

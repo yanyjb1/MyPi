@@ -5,8 +5,8 @@ use serde_json::Value;
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head,
-    head_lines, output_lines, partial,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head, item_error,
+    output_lines, partial,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -21,40 +21,45 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
     let mut out = Vec::new();
     match op.as_str() {
         "now" | "after" | "every" => {
-            let lines: Vec<String> = partial::items(args, "tasks")
-                .iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    let content = partial::field(item, "content").unwrap_or_default();
-                    if op == "now" {
-                        format!(
-                            "escrowed {content} (timeout: {})",
-                            partial::field(item, "timeout").unwrap_or_default()
-                        )
-                    } else {
-                        format!("escrowed {content}, {op} {}", at(result, index))
-                    }
-                })
-                .collect();
-            out.extend(head_lines(state, "Kairos-Escrow", &lines));
+            let tasks = partial::items(args, "tasks");
+            if tasks.is_empty() {
+                out.push(Row::of(Lead::None, label("Kairos-Escrow")));
+            }
+            for (index, item) in tasks.iter().enumerate() {
+                let content = partial::field(item, "content").unwrap_or_default();
+                let line = if op == "now" {
+                    format!(
+                        "escrowed {content} (timeout: {})",
+                        partial::field(item, "timeout").unwrap_or_default()
+                    )
+                } else {
+                    format!("escrowed {content}, {op} {}", at(result, index))
+                };
+                let mut runs = head(State::of_item(result, index), "Kairos-Escrow");
+                runs.push(Run::fixed(format!(": {line}"), fixed::MUTED));
+                out.push(Row::of(Lead::None, runs));
+                out.extend(item_error(result, index));
+            }
         }
         "list" => {
             out.push(Row::of(Lead::None, label("Kairos-Inquiry")));
             out.extend(listing(result));
+            out.extend(error_under(result));
         }
         "status" => {
             let mut runs = label("Kairos-Inquiry");
             runs.push(Run::fixed(format!(": {}", status(result)), fixed::MUTED));
             out.push(Row::of(Lead::None, runs));
+            out.extend(error_under(result));
         }
         _ => {
             let id = arg_str(args, "id").unwrap_or_default();
             let mut runs = label("Kairos-Rescind");
             runs.push(Run::fixed(format!(": {id} canceled"), fixed::MUTED));
             out.push(Row::of(Lead::None, runs));
+            out.extend(error_under(result));
         }
     }
-    out.extend(error_under(result));
     Some(out)
 }
 

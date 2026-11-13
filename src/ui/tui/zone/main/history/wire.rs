@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::focus::Target;
-use super::local::content::{Block, Kind as BlockKind, Truncation};
+use super::local::content::{Block, Kind as BlockKind, Truncation, items_of};
 use super::local::mutable::Entry;
 use super::local::section::Idx;
 use super::local::slot::{Level, Life};
@@ -179,7 +179,8 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
         "tool_progress" => Some(zone.local.running_mut().tool_progress(call, text)),
         "wake" => Some(zone.local.running_mut().wake(text)),
         "tool_end" => {
-            let ok = content.get("ok").and_then(Value::as_bool).unwrap_or(false);
+            let items = content.get("ok").and_then(items_of).unwrap_or_default();
+            let ok = items.iter().all(|item| item.ok);
             let result = content
                 .get("result")
                 .and_then(Value::as_str)
@@ -200,7 +201,7 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
             Some(
                 zone.local
                     .running_mut()
-                    .tool_end(call, ok, result, memo, took, truncated),
+                    .tool_end(call, items, result, memo, took, truncated),
             )
         }
         _ => None,
@@ -309,7 +310,13 @@ fn has_failure(zone: &HistoryZone) -> bool {
         .entries()
         .iter()
         .any(|entry| match entry {
-            Entry::Block(block) => block.kind == BlockKind::ToolResult && block.ok == Some(false),
+            Entry::Block(block) => {
+                block.kind == BlockKind::ToolResult
+                    && block
+                        .ok
+                        .as_ref()
+                        .is_some_and(|items| items.iter().any(|item| !item.ok))
+            }
             Entry::Notice { .. } => false,
         })
 }

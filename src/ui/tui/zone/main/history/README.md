@@ -78,6 +78,15 @@ the fill and the glyph; a call the user interrupted or a deadline cut short is `
 failure, and its card body is the error color end to end. The file a call names sits in the header
 in the path color, red when the call failed.
 
+A result carries one outcome per item its arguments named, and every status the card draws comes
+from those outcomes, never from the result's text.
+
+A call that names several items draws one row per item, each with that item's own glyph, and a
+failed item's text under its own row. The five tools whose arguments are arrays — `read`, `alias`,
+`kairos`, `mcp` and `task` — draw this way; a single-item call draws exactly its one row, so the
+shape does not change with the count. Only a failed item's own text is drawn: the successful items'
+bodies never enter the card, which is what keeps a batch's file contents out of the history.
+
 A live result that was cut adds one row after the family's own rows, outside every fold:
 `[N lines & M truncated, see the #ref later]`, where M is the full text's byte count in KB or MB. It belongs to the live block alone; once the
 result lands, the stored text carries the same fact in its last line.

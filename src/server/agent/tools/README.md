@@ -52,7 +52,7 @@ a batch with the turn's stop signal
   → budget gate (every call but `final`)
   → Args::fill(tool.params, args)          fields → positional values
   → (tool.run)(env, &args, progress)       Start, Progress and End events around it
-  → a stop that landed meanwhile makes the result `ok: false`, reason `interrupted`
+  → a stop that landed meanwhile makes the call failed, reason `interrupted`
   → every out.effects gets one ts
   → spill: over the inline budget, the full text moves to out.spill (`read` excepted: it bounds itself)
   → ToolResult
@@ -116,8 +116,9 @@ are large enough that a batch would only move the same bytes into one argument.
 
 - Items run in the array's order, one after another; the answer is laid out in the same order.
 - Items are isolated: one item's failure is written where that item would have answered, and the
-  rest still run and still answer. The call as a whole is `ok: false` when any item failed, and
-  `fail` counts them.
+  rest still run and still answer. The call fails when any item failed, and `fail` counts them.
+- Every item states its own outcome in `items`, aligned with the arguments' order: the front end
+  never reads a status out of the text.
 - `read` budgets belong to each file, not to the call: every file gets its own 200-line and 64 KiB
   allowance, a line over the byte cap is cut where the characters still fit, and that file's footer
   points at bash instead of an offset.
@@ -133,15 +134,19 @@ are large enough that a batch would only move the same bytes into one argument.
 ### ToolOutput
 
 ```text
-ToolOutput { text, fail: Option<String>, memo: Option<Value>, effects: Vec<Effect>, stop: bool }
-ToolResult { call_id, ok, result, reason: Option<String>, memo, spill, duration_ms, effects, stop }
+ToolOutput { text, items: Vec<ItemOk>, fail: Option<String>, memo: Option<Value>, effects: Vec<Effect>, stop: bool }
+ToolResult { call_id, items: Vec<ItemOk>, result, reason: Option<String>, memo, spill, duration_ms, effects, stop }
 Spill      { name: String, content: String }
+ItemOk     { ok: bool, error: Option<String> }
 ```
 
 - `text` is what the model reads; `memo` is the structured payload the front end renders.
-- `fail` is why a call was cut short; any value makes the result `ok: false`. The front door moves
-  it to `reason` and appends `[reason]` after the body and its artifact note, so the marker is the
-  result's last line whatever the truncation did.
+- `items` is what each item of the call answered, in the arguments' order, and it is the only
+  source of the front end's status: the card draws one row per item and hangs that item's `error`
+  under it. A single-item tool leaves it empty and the front door answers one entry.
+- `fail` is why a call was cut short; any value fails the call. The front door moves it to `reason`
+  and appends `[reason]` after the body and its artifact note, so the marker is the result's last
+  line whatever the truncation did. A cut call states its reason in its one item.
 - `spill` is filled by the front door, never by a tool.
 - `effects` are side effects that must land with this tool result. A tool appends one; the front
   door stamps its `ts` before returning.

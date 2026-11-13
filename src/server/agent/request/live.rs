@@ -2,6 +2,7 @@
 
 use std::sync::mpsc::Sender;
 
+use super::contract::ItemOk;
 use super::message::Usage;
 
 /// One live moment, addressed to one session.
@@ -112,7 +113,8 @@ pub enum ToolEvent {
     },
     End {
         call_id: String,
-        ok: bool,
+        /// One outcome per item the call's arguments named.
+        items: Vec<ItemOk>,
         result: String,
         memo: Option<String>,
         duration_ms: u64,

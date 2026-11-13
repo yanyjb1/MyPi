@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::content::{Block, Kind as BlockKind, Truncation};
+use super::content::{Block, ItemOk, Kind as BlockKind, Truncation};
 use super::slot::{Level, Life};
 use crate::ui::tui::zone::main::history::product::Product;
 
@@ -198,7 +198,7 @@ impl Mutable {
     pub fn tool_end(
         &mut self,
         call_id: &str,
-        ok: bool,
+        items: Vec<ItemOk>,
         result: &str,
         memo: Option<&str>,
         duration_ms: i64,
@@ -208,7 +208,7 @@ impl Mutable {
         let Some(Entry::Block(block)) = self.entries.get_mut(at) else {
             return at;
         };
-        block.ok = Some(ok);
+        block.ok = Some(items);
         block.result = Some(result.to_string());
         block.memo = memo.map(str::to_string);
         block.duration_ms = duration_ms;

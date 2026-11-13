@@ -12,7 +12,7 @@ use super::contract::view::Child;
 use super::registry;
 use super::spec::{Args, ToolProgress};
 use super::subagent::FINAL;
-use crate::server::agent::request::contract::{Spill, ToolCall};
+use crate::server::agent::request::contract::{ItemOk, Spill, ToolCall};
 use crate::server::agent::request::live::{Element, Event, ToolEvent, Truncation};
 use crate::server::agent::tools::bash::read;
 use crate::server::platform::time::now_stamp;
@@ -117,8 +117,9 @@ impl Engine {
             Ok(out) => out,
             Err(e) => {
                 let text = format!("{e:#}");
-                self.end(env, call, out, false, &text, None, started, None);
-                return failed(call, text, started);
+                let items = vec![ItemOk::failed(text.clone())];
+                self.end(env, call, out, &items, &text, None, started, None);
+                return failed(call, items, text, started);
             }
         };
         if charged && let Some(child) = child {
@@ -131,6 +132,7 @@ impl Engine {
         }
         let ToolOutput {
             text,
+            items,
             memo,
             effects,
             stop,
@@ -139,19 +141,19 @@ impl Engine {
         let reason = fail.or_else(|| {
             (arrived_before_stop && env.stop.is_stopped()).then(|| INTERRUPTED.to_string())
         });
-        let ok = reason.is_none();
         // `read` bounds its own text (lines, bytes, a cut line), so the front door never spills it.
         let (text, spill, truncated) = if tool.name == read::TOOL.name {
             (text, None, None)
         } else {
             measure(tool.name, env.limits, text)
         };
+        let items = outcomes(items, reason.as_deref(), &text);
         let memo = memo.map(|value| serde_json::to_string(&value).unwrap_or_default());
         self.end(
             env,
             call,
             out,
-            ok,
+            &items,
             &text,
             memo.as_deref(),
             started,
@@ -162,7 +164,7 @@ impl Engine {
         }
         ToolResult {
             call_id: call.call_id.clone(),
-            ok,
+            items,
             result: text,
             reason,
             memo,
@@ -195,8 +197,9 @@ impl Engine {
         started: Instant,
     ) -> ToolResult {
         self.start(env, call, out);
-        self.end(env, call, out, false, why, None, started, None);
-        failed(call, why, started)
+        let items = vec![ItemOk::failed(why)];
+        self.end(env, call, out, &items, why, None, started, None);
+        failed(call, items, why, started)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -205,7 +208,7 @@ impl Engine {
         env: &Env,
         call: &ToolCall,
         out: &Sender<Event>,
-        ok: bool,
+        items: &[ItemOk],
         result: &str,
         memo: Option<&str>,
         started: Instant,
@@ -215,7 +218,7 @@ impl Engine {
             session: env.session,
             element: Element::Tool(ToolEvent::End {
                 call_id: call.call_id.clone(),
-                ok,
+                items: items.to_vec(),
                 result: result.to_string(),
                 memo: memo.map(str::to_string),
                 duration_ms: elapsed(started),
@@ -229,10 +232,15 @@ fn elapsed(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-fn failed(call: &ToolCall, text: impl Into<String>, started: Instant) -> ToolResult {
+fn failed(
+    call: &ToolCall,
+    items: Vec<ItemOk>,
+    text: impl Into<String>,
+    started: Instant,
+) -> ToolResult {
     ToolResult {
         call_id: call.call_id.clone(),
-        ok: false,
+        items,
         result: text.into(),
         reason: None,
         memo: None,
@@ -241,6 +249,18 @@ fn failed(call: &ToolCall, text: impl Into<String>, started: Instant) -> ToolRes
         effects: Vec::new(),
         stop: false,
     }
+}
+
+/// The outcomes a result carries: the tool's own items, or the one answer a single-item tool
+/// gives. A call cut short states its reason in that item's text, where the front end draws it.
+fn outcomes(items: Vec<ItemOk>, reason: Option<&str>, text: &str) -> Vec<ItemOk> {
+    if !items.is_empty() {
+        return items;
+    }
+    let Some(reason) = reason else {
+        return vec![ItemOk::ok()];
+    };
+    vec![ItemOk::failed(format!("{text}\n[{reason}]"))]
 }
 
 /// Measure: too big → split in two. The full text goes to `spill`, the body keeps the visible part;

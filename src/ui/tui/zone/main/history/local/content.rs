@@ -27,6 +27,32 @@ impl Kind {
     }
 }
 
+/// What one item of a call answered: its own outcome, and its failure text when it failed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemOk {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+impl ItemOk {
+    /// One entry; a missing flag reads as failed, which is the safe direction.
+    fn of(value: &Value) -> ItemOk {
+        ItemOk {
+            ok: value.get("ok").and_then(Value::as_bool).unwrap_or(false),
+            error: value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }
+    }
+}
+
+/// The outcomes a relayed result carries: one entry per item the call named.
+pub fn items_of(value: &Value) -> Option<Vec<ItemOk>> {
+    let list = value.as_array()?;
+    Some(list.iter().map(ItemOk::of).collect())
+}
+
 /// One block row, every column this front end draws from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
@@ -39,7 +65,8 @@ pub struct Block {
     pub intent: Option<String>,
     pub call_id: Option<String>,
     pub first: bool,
-    pub ok: Option<bool>,
+    /// One entry per item a call named; `None` while it runs.
+    pub ok: Option<Vec<ItemOk>>,
     pub result: Option<String>,
     pub memo: Option<String>,
     pub duration_ms: i64,
@@ -79,7 +106,7 @@ impl Block {
             intent: text_of(row, "intent"),
             call_id: text_of(row, "call_id"),
             first: row.get("first").and_then(Value::as_bool).unwrap_or(false),
-            ok: row.get("ok").and_then(Value::as_bool),
+            ok: row.get("ok").and_then(items_of),
             result: text_of(row, "result"),
             memo: text_of(row, "memo"),
             duration_ms: row.get("duration_ms").and_then(Value::as_i64).unwrap_or(0),

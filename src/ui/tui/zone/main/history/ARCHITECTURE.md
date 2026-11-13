@@ -12,7 +12,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `row.rs` | `Row`, `Run`, `Ink`, `Lead`, and how a color slot becomes a terminal style | private |
 | `markdown.rs` | markdown to runs: headings, lists, quotes, inline emphasis | private |
 | `display.rs` | laid rows to screen lines | private |
-| `local/` | `section` (`Local`, `Idx`), `slot` (`Slot`, `SlotKind`, `Held`, `Level`, `Life`), `content` (`Block`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
+| `local/` | `section` (`Local`, `Idx`), `slot` (`Slot`, `SlotKind`, `Held`, `Level`, `Life`), `content` (`Block`, `ItemOk`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
 | `product/` | `products` (`Product`, `Shape`, `Phase`, the derivation), `segment` (source to segments), `text` (a text block's closed segments and its open tail), `compact` (a compaction's banners, its folded summary and what the round measured), `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `pin`, `card` | private |
 | `product/pin/` | `esc` (the running label's row), `sweep` (the accent band over that label) | private |
 | `product/card/` | `frame` (dispatch, the card frame, the text and argument helpers), `tool` (the renderer contract and the family table), `state` (the three phases and their colors), `partial` (fields of arguments still arriving), one file per tool family | private |

@@ -31,7 +31,7 @@ pub(crate) fn insert(tx: &rusqlite::Transaction<'_>, turn: i64, b: &NewBlock) ->
             b.intent,
             b.text,
             b.first.map(|v| v as i64),
-            b.ok.map(|v| v as i64),
+            b.ok.as_ref().map(|v| v.to_string()),
             b.result,
             b.memo,
             b.duration_ms,

@@ -126,8 +126,9 @@ Engine::run
     `Env.stop`: one type, one flag, no second way to say stopped.
 13. `Pen::drop_calls` and `ask.results`: a call without a result has its request block dropped
     before the commit; a result without a call is refused.
-14. `ToolOutput.fail` and `engine`: any reason makes the result `ok: false`; the front door adds
-    one for the stop it observed, and the tool reports its own deadline.
+14. `ToolOutput.fail` and `engine`: any reason fails the call, and a call cut short states it in the
+    one item it answered; the front door adds one for the stop it observed, and the tool reports its
+    own deadline.
 15. `read`'s caps and `engine`: the front door skips `measure` for `read` because the tool cuts its
     own files; remove either half and a single-line file reaches the context whole.
 

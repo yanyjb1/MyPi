@@ -1,6 +1,8 @@
 //! Shapes: what one database row becomes in memory — the block, the round, the session, the
 //! request anchor, an artifact, and what a caller submits.
 
+use serde_json::Value;
+
 /// What a block is (the `type` column, typed).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Hash, serde::Serialize, serde::Deserialize,
@@ -79,8 +81,8 @@ pub struct NewBlock {
     pub text: Option<String>,
     /// Is this the reply's first tool call?
     pub first: Option<bool>,
-    /// Did the tool succeed? (tool result)
-    pub ok: Option<bool>,
+    /// One outcome per item, as an array (tool result).
+    pub ok: Option<Value>,
     /// The text handed back to the model (tool result).
     pub result: Option<String>,
     /// Extra material for a front end (tool result); never enters a request.
@@ -142,7 +144,8 @@ pub struct Block {
     pub intent: Option<String>,
     pub text: Option<String>,
     pub first: Option<bool>,
-    pub ok: Option<bool>,
+    /// One outcome per item, as an array (tool result).
+    pub ok: Option<Value>,
     pub result: Option<String>,
     pub memo: Option<String>,
     pub duration_ms: Option<i64>,
