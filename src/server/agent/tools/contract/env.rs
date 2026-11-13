@@ -109,15 +109,6 @@ pub struct Limits {
     pub bytes: usize,
 }
 
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            lines: 512,
-            bytes: 262_144,
-        }
-    }
-}
-
 /// What every session's [`Env`] starts from: the process-level facts, read once.
 #[derive(Clone)]
 pub struct Defaults {

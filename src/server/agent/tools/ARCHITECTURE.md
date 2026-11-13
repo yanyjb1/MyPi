@@ -13,7 +13,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `contract/env.rs` | `Env`, `Defaults`, `Limits`, `BashEnv`, `Paths` |
 | `contract/view.rs` | the `Source`, `Export`, `Child`, `Draft`, `MemoRead` ports, the history shapes, and `MemoScope`, `MemoReadOp`, `MemoVersion`, `MemoView` |
 | `contract/job.rs` | the job vocabulary a tool shares with the loop: `JobSpec`, `Schedule`, `JobRunner`, `JobCtx`, `JobOutcome`, `Receipt`, `Row`, `Status`, `Exit`, `OutputSink`, and the `JobHost` port |
-| `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure, events; the stop that lands mid-call becomes the result's reason |
+| `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure (every tool but `read`), events; the stop that lands mid-call becomes the result's reason |
 | `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `Item`, `Tool`, `Run`, `Summary`, `ToolProgress` |
 | `summary.rs` | one recorded call's arguments, and the clip every tool's history summary reuses |
 | `registry.rs` | `TOOLS`, `spec`, `roster` |
@@ -97,7 +97,8 @@ Engine::run
 - The MCP bridge is built by `Source::mcp(session, cwd)` on the session's first `mcp` call, from the
   table for its cwd; a later move rescans it. A broken table fails that call, not the turn. An empty
   table still mounts the bridge.
-- A child's tool list is corrected once, where the child is spawned: `task` out, `final` in.
+- A child's tool list is corrected once, where the child is spawned: `task` out, `final` in. A main
+  session never resolves `final`: `api::post::init` drops it from the list and its manuals.
 
 ## Must stay in step
 
@@ -127,6 +128,8 @@ Engine::run
     before the commit; a result without a call is refused.
 14. `ToolOutput.fail` and `engine`: any reason makes the result `ok: false`; the front door adds
     one for the stop it observed, and the tool reports its own deadline.
+15. `read`'s caps and `engine`: the front door skips `measure` for `read` because the tool cuts its
+    own files; remove either half and a single-line file reaches the context whole.
 
 ## Not wired yet
 

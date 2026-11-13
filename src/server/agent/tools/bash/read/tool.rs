@@ -10,13 +10,21 @@ use crate::server::agent::tools::summary;
 
 const FILES: usize = 0;
 
-/// The most one call may ask for; past it the call is cut and the footer says so.
-const MAX_LINES: usize = 500;
+/// The most lines one file may take; past it the read stops and the footer names the next offset.
+const MAX_LINES: usize = 200;
+
+/// The most bytes one file may take; a line over it is cut and the footer points at bash.
+const MAX_BYTES: usize = 64 * 1024;
 
 const FILE_FIELDS: &[Param] = &[
     Param::new("path", Kind::Text, "File path."),
     Param::df("offset", Kind::Line, "First line to read (1-based).", "1"),
-    Param::df("limit", Kind::Number, "Max lines this file may take.", "200"),
+    Param::df(
+        "limit",
+        Kind::Number,
+        "Max lines this file may take.",
+        "200",
+    ),
 ];
 
 const PARAMS: &[Param] = &[Param::new(
@@ -30,44 +38,23 @@ pub(crate) const TOOL: Tool = Tool {
     about: "Read files with line numbers, so later turns can cite exact lines. MUST read before \
             editing; NEVER guess the current text. Files only.",
     fields: "files is the only field a call needs: one item per file, with `path` and its own \
-             `offset` (1-based, default 1) and `limit` (default 200). The line cap is shared by \
-             the whole call.",
+             `offset` (1-based, default 1) and `limit` (default 200). Each file gets its own \
+             200-line and 64 KiB budget.",
     params: PARAMS,
     run,
     summary,
 };
-
-/// What the whole call may still show: lines and bytes, shared by every file. **Capped on
-/// purpose**: reading stops at the cap with a footer naming the next `offset`, so memory costs the
-/// cap.
-struct Room {
-    lines: usize,
-    bytes: usize,
-    /// The byte cap as it started, for the footer's wording.
-    cap: usize,
-}
 
 /// Read every named file, with line numbers, so later turns can cite exact lines.
 fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> Result<ToolOutput> {
     let items = args.objects(FILES)?;
     anyhow::ensure!(!items.is_empty(), "`files` must name at least one file");
 
-    let limits = env.limits;
-    let mut room = Room {
-        lines: MAX_LINES.min(limits.lines).max(1),
-        bytes: limits.bytes,
-        cap: limits.bytes,
-    };
     let total = items.len();
     let mut out = String::new();
     let mut failed = 0usize;
-    let mut skipped: Vec<String> = Vec::new();
     for item in &items {
-        if room.lines == 0 || room.bytes == 0 {
-            skipped.push(item.text("path").unwrap_or_else(|_| item.label()));
-            continue;
-        }
-        match block(env, item, &mut room, total > 1) {
+        match block(env, item, total > 1) {
             Ok(text) => {
                 if !out.is_empty() {
                     out.push('\n');
@@ -88,17 +75,6 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
             }
         }
     }
-    if !skipped.is_empty() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&format!(
-            "[{} file(s) not read: this call's line or byte budget ran out; call again for {}]",
-            skipped.len(),
-            skipped.join(", ")
-        ));
-    }
-
     let mut produced = ToolOutput::text(out);
     if failed > 0 {
         produced = produced.failure(format!("{failed} of {total} files failed"));
@@ -106,22 +82,19 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     Ok(produced)
 }
 
-/// One file's numbered body, plus its header when the call names more than one file.
-fn block(env: &Env, item: &Item, room: &mut Room, headed: bool) -> Result<String> {
+/// One file's numbered body, plus its header when the call names more than one file. Each file gets
+/// its own line and byte budget: a big file never shortens the ones beside it.
+fn block(env: &Env, item: &Item, headed: bool) -> Result<String> {
     use std::io::BufRead as _;
 
     let path = item.text("path")?;
     let offset = item.line("offset")?;
     let limit = item.int("limit")?;
-    anyhow::ensure!(
-        limit >= 1,
-        "`{}.limit` must be at least 1",
-        item.label()
-    );
+    anyhow::ensure!(limit >= 1, "`{}.limit` must be at least 1", item.label());
     let limit = limit as usize;
 
     let p = env.workspace.resolve(&path, true)?;
-    let max_lines = limit.min(room.lines).max(1);
+    let max_lines = limit.min(MAX_LINES);
 
     let file = std::fs::File::open(&p).context("failed to open file")?;
     let mut rdr = std::io::BufReader::new(file);
@@ -147,7 +120,14 @@ fn block(env: &Env, item: &Item, room: &mut Room, headed: bool) -> Result<String
             more = true;
             break;
         }
-        if shown > 0 && bytes + line.len() > room.bytes {
+        let room = MAX_BYTES.saturating_sub(bytes);
+        if line.len() > room {
+            // Over the byte cap: keep the whole characters that still fit, then stop.
+            let cut = floor_boundary(line, room);
+            if cut > 0 {
+                out.push_str(&format!("{:>5}\t{}\n", line_no, &line[..cut]));
+                shown += 1;
+            }
             more = true;
             by_bytes = true;
             break;
@@ -164,9 +144,13 @@ fn block(env: &Env, item: &Item, room: &mut Room, headed: bool) -> Result<String
             "(empty file)".to_string()
         };
     } else if more {
-        if limit > max_lines {
+        if by_bytes {
             out.push_str(&format!(
-                "\n[{max_lines} lines at most per call; lines {}-{}, continue with offset={}]",
+                "\n[cut at the {MAX_BYTES} byte cap; the rest of this file needs bash]"
+            ));
+        } else if limit > max_lines {
+            out.push_str(&format!(
+                "\n[{max_lines} lines at most per file; lines {}-{}, continue with offset={}]",
                 offset,
                 offset + shown.saturating_sub(1),
                 offset + shown
@@ -177,25 +161,22 @@ fn block(env: &Env, item: &Item, room: &mut Room, headed: bool) -> Result<String
                 offset + shown
             ));
         }
-        if by_bytes {
-            out.push_str(&format!(
-                " (hit the {} byte cap before EOF; total line count unknown)",
-                room.cap
-            ));
-        }
     }
 
-    room.lines = room.lines.saturating_sub(shown);
-    room.bytes = room.bytes.saturating_sub(bytes);
-    if by_bytes {
-        // The cap is spent: no later file starts on the few bytes that are left.
-        room.bytes = 0;
-    }
     Ok(if headed {
         format!("==> {path}\n{out}")
     } else {
         out
     })
+}
+
+/// The largest character boundary within the first `bytes` bytes.
+fn floor_boundary(line: &str, bytes: usize) -> usize {
+    let mut end = bytes.min(line.len());
+    while end > 0 && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 /// One line for a history listing: the files, the first named and the rest counted.

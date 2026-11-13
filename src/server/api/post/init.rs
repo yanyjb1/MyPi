@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::server::agent::r#loop::Birth;
 use crate::server::agent::tools::registry;
+use crate::server::agent::tools::subagent::FINAL;
 use crate::server::api::route::{opt_str_of, str_of};
 use crate::server::api::{Api, Refuse};
 use crate::server::storage::{Ref, RequestMeta, Row, Submit};
@@ -35,7 +36,14 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
             (default.provider_name, default.entry.id)
         }
     };
-    let tools = resolved.tools.unwrap_or_else(registry::names);
+    // A main session never resolves the child's `final`: no name, no manual, whatever the profile
+    // lists.
+    let tools: Vec<String> = resolved
+        .tools
+        .unwrap_or_else(registry::names)
+        .into_iter()
+        .filter(|name| name != FINAL.name)
+        .collect();
     let manuals = Arc::new(registry::roster(&tools));
     let tools_json =
         serde_json::to_string(&*manuals).map_err(|e| Refuse::Internal(e.to_string()))?;

@@ -14,6 +14,7 @@ use super::spec::{Args, ToolProgress};
 use super::subagent::FINAL;
 use crate::server::agent::request::contract::{Spill, ToolCall};
 use crate::server::agent::request::live::{Element, Event, ToolEvent, Truncation};
+use crate::server::agent::tools::bash::read;
 use crate::server::platform::time::now_stamp;
 
 /// What a call that the user stopped mid-flight reports as its reason.
@@ -139,7 +140,12 @@ impl Engine {
             (arrived_before_stop && env.stop.is_stopped()).then(|| INTERRUPTED.to_string())
         });
         let ok = reason.is_none();
-        let (text, spill, truncated) = measure(tool.name, env.limits, text);
+        // `read` bounds its own text (lines, bytes, a cut line), so the front door never spills it.
+        let (text, spill, truncated) = if tool.name == read::TOOL.name {
+            (text, None, None)
+        } else {
+            measure(tool.name, env.limits, text)
+        };
         let memo = memo.map(|value| serde_json::to_string(&value).unwrap_or_default());
         self.end(
             env,

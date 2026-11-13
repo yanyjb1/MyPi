@@ -54,7 +54,7 @@ a batch with the turn's stop signal
   → (tool.run)(env, &args, progress)       Start, Progress and End events around it
   → a stop that landed meanwhile makes the result `ok: false`, reason `interrupted`
   → every out.effects gets one ts
-  → spill: over the inline budget, the full text moves to out.spill
+  → spill: over the inline budget, the full text moves to out.spill (`read` excepted: it bounds itself)
   → ToolResult
 ```
 
@@ -87,7 +87,7 @@ that tool needs (the tool checks them, not the schema).
 
 | tool | parameters, in index order |
 |---|---|
-| `read` | `files` always: one item per file, with `path` and its own `offset` (1-based, default 1) and `limit` (default 200); the 500-line cap is shared by the whole call |
+| `read` | `files` always: one item per file, with `path` and its own `offset` (1-based, default 1) and `limit` (default 200); each file gets its own 200-line and 64 KiB budget |
 | `edit` | `type` always (`exact`/`mass`), `path` always, `old`, `range` (1-based, `12-14` or `12`), `new` always |
 | `write` | `path` always, `content` always |
 | `cd` | `path` always |
@@ -118,8 +118,9 @@ are large enough that a batch would only move the same bytes into one argument.
 - Items are isolated: one item's failure is written where that item would have answered, and the
   rest still run and still answer. The call as a whole is `ok: false` when any item failed, and
   `fail` counts them.
-- `read`'s line and byte caps belong to the whole call, not to each file; past them the footer
-  names the files left unread.
+- `read` budgets belong to each file, not to the call: every file gets its own 200-line and 64 KiB
+  allowance, a line over the byte cap is cut where the characters still fit, and that file's footer
+  points at bash instead of an offset.
 - A query operation — `alias list`, `kairos list/status/result/cancel`, `mcp list` — takes no
   array and refuses one.
 - A batch whose items produce structured payloads answers a memo array, and the history cards
@@ -378,12 +379,14 @@ not checked here; a bad argument is the server's error to report.
   file or another item of the same call already holds it. `final submit` writes it and is the only
   thing that ends a child.
 - A child takes no user messages. `task` is the only tool a child cannot hold; `final` is the only
-  one it never has to ask for.
+  one it never has to ask for. A main session never resolves `final` at all: `init` drops it from
+  the profile's list and from the manuals.
 
 ### Invariants
 
 1. A tool reads only `Env`; no database, no config file, no loop.
-2. A tool never measures or trims output; the front door does.
+2. A tool never measures or trims output; the front door does — `read` alone bounds its own files,
+   which is why the front door does not measure it.
 3. A tool names an effect kind; the front door stamps `call_id` and `ts`.
 4. File tools read and write only inside the licensed zones; atomically, under a per-path lock.
 5. The roster is the only way the model learns a tool exists.
@@ -441,8 +444,8 @@ not checked here; a bad argument is the server's error to report.
 |---|---|
 | `config.server.agent.tools.bashTimeout` | one shell command's deadline; default 600 s |
 | `config.server.agent.tools.aliases` | user aliases as `name=command`; every session reads them, nothing shadows them |
-| `config.server.agent.tools.outputMaxLines` | inline line budget; also caps `read`'s `limit` |
-| `config.server.agent.tools.outputMaxBytes` | inline byte budget |
+| `config.server.agent.tools.outputMaxLines` | inline line budget, default 120; `read` keeps its own |
+| `config.server.agent.tools.outputMaxBytes` | inline byte budget, default 32768; `read` keeps its own |
 | `config.server.agent.tools.browser.bin` | the browser executable; empty = `$MYPI_BROWSER_BIN`, else `/opt/helium/helium` |
 | `config.server.agent.tools.browser.profileDir` | the persistent profile; empty = `<data dir>/browser/profile` |
 | `config.server.agent.tools.browser.port` | attach to a running debugging port instead of launching |
