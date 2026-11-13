@@ -334,6 +334,11 @@ impl App {
     fn set_cwd(&mut self, path: String) {
         if self.session.attached().is_some() {
             self.session.set_cwd(&path);
+            // The next row opens where this session now stands, and its profiles come from there.
+            if let Some(landed) = draft_dir(&self.cwd, &path) {
+                self.cwd = landed;
+            }
+            self.session.pools();
             return;
         }
         let Some(target) = draft_dir(&self.cwd, &path) else {
@@ -347,6 +352,7 @@ impl App {
             return;
         };
         self.cwd = target;
+        self.session.pools_at(&self.cwd);
         let frame = Frame::new("local", "cwd", json!({"cwd": self.cwd.to_string_lossy()}));
         self.deliver(&frame);
     }

@@ -26,11 +26,12 @@ pub(crate) fn stem(name: &str) -> String {
 
 pub(crate) fn load(
     env: &Env,
+    project: &Path,
     name: &str,
     vars: &BTreeMap<String, String>,
     parent_tools: &BTreeSet<String>,
 ) -> Result<Template> {
-    let path = find(env, name)?;
+    let path = find(env, project, name)?;
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read the template {}", path.display()))?;
     let (front, body) = split_front(&text)?;
@@ -53,15 +54,15 @@ pub(crate) fn load(
     Ok(Template { body, tools })
 }
 
-fn find(env: &Env, name: &str) -> Result<PathBuf> {
+fn find(env: &Env, project: &Path, name: &str) -> Result<PathBuf> {
     let file = if name.ends_with(".md") {
         name.to_string()
     } else {
         format!("{name}.md")
     };
-    let project = env.paths.agents.join(&file);
-    if project.is_file() {
-        return Ok(project);
+    let local = project.join("agents").join(&file);
+    if local.is_file() {
+        return Ok(local);
     }
     let global = env.paths.global_agents.join(&file);
     if global.is_file() {
@@ -76,7 +77,7 @@ fn find(env: &Env, name: &str) -> Result<PathBuf> {
     anyhow::ensure!(
         path.is_file(),
         "no template `{name}`; looked at {}, {}, and {}",
-        project.display(),
+        local.display(),
         global.display(),
         path.display()
     );

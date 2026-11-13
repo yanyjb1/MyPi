@@ -4,29 +4,34 @@ use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
-use super::{State, ToolOutcome, arg_str, error_under, head};
-use crate::ui::tui::theme::fixed;
+use super::{State, ToolOutcome, arg_str, error_under, head, head_lines, partial};
 
-/// The whole exchange: one line, or a tree of names.
+/// The whole exchange: one line per alias, or a tree of names.
 pub(crate) fn block(args: &str, result: Option<ToolOutcome<'_>>) -> Vec<Row> {
     let state = State::of(result);
     let op = arg_str(args, "type").unwrap_or_default();
-    let mut runs = head(state, "Alias");
     let mut out = Vec::new();
     match op.as_str() {
         "add" => {
-            let name = arg_str(args, "name").unwrap_or_default();
-            let command = arg_str(args, "command").unwrap_or_default();
-            runs.push(Run::fixed(format!(": {name} => {command}"), fixed::MUTED));
-            out.push(Row::of(Lead::None, runs));
+            let lines: Vec<String> = partial::items(args, "aliases")
+                .iter()
+                .map(|item| {
+                    let name = partial::field(item, "name").unwrap_or_default();
+                    let command = partial::field(item, "command").unwrap_or_default();
+                    format!("{name} => {command}")
+                })
+                .collect();
+            out.extend(head_lines(state, "Alias", &lines));
         }
         "del" => {
-            let name = arg_str(args, "name").unwrap_or_default();
-            runs.push(Run::fixed(format!(": del {name}"), fixed::MUTED));
-            out.push(Row::of(Lead::None, runs));
+            let lines: Vec<String> = partial::items(args, "names")
+                .iter()
+                .map(|name| format!("del {}", name.as_str().unwrap_or_default()))
+                .collect();
+            out.extend(head_lines(state, "Alias", &lines));
         }
         _ => {
-            out.push(Row::of(Lead::None, runs));
+            out.push(Row::of(Lead::None, head(state, "Alias")));
             out.extend(list(result));
         }
     }

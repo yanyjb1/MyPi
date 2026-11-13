@@ -27,7 +27,7 @@ pub(crate) fn call(api: &Api, _viewer: &str, frame: &Frame) -> Result<Value, Ref
         ),
         "children" => call::children::answer(api, i64_of(ask, "session")?),
         "config" => call::config::answer(api, str_of(ask, "key")?),
-        "pools" => call::pools::answer(api),
+        "pools" => call::pools::answer(api, ask),
         "sessions" => call::sessions::answer(api, opt_str_of(ask, "under")?),
         other => Err(Refuse::Unknown(format!("no such name: {other}"))),
     }

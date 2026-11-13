@@ -26,6 +26,16 @@ impl Session {
         self.act("call", "pools", json!({}));
     }
 
+    /// `call pools` for a directory no session stands in yet: the draft's own.
+    pub fn pools_at(&mut self, cwd: &std::path::Path) {
+        self.send(
+            "call",
+            "pools",
+            json!({"cwd": cwd.to_string_lossy()}),
+            true,
+        );
+    }
+
     /// `call config`: one configuration key. Not an action on the attached session, so no session
     /// field rides along.
     pub fn config(&mut self, key: &str) {

@@ -22,6 +22,10 @@ pub(super) struct Inner {
     pub(super) models: ModelsConfig,
     pub(super) layers: Layers,
     pub(super) cache: Mutex<HashMap<String, Arc<Effective>>>,
+    /// One scope per project folder a session has stood in, read on first use.
+    pub(super) projects: Mutex<HashMap<PathBuf, Arc<ProjectScope>>>,
+    /// The same, for the values a scope resolves: the key carries the scope and the profile.
+    pub(super) scoped: Mutex<HashMap<String, Arc<Effective>>>,
     /// The site rules the web tool narrows a page with: read once, beside `config.yaml`.
     pub(super) web_rules: Arc<Rules>,
     pub(super) load_notices: Vec<ConfigNotice>,
@@ -31,6 +35,12 @@ pub(super) struct Inner {
 pub(super) struct Layers {
     pub(super) project: Option<(PathBuf, Mapping)>,
     pub(super) global: Option<(PathBuf, Mapping)>,
+}
+
+/// One directory's config roots and its project layer.
+pub(super) struct ProjectScope {
+    pub(super) paths: ConfigPaths,
+    pub(super) layer: Option<(PathBuf, Mapping)>,
 }
 
 pub struct Effective {

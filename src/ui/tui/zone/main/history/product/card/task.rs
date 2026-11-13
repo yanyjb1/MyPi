@@ -1,43 +1,49 @@
-//! task: the template, the budget, and the variables it was handed.
+//! task: the templates, their budgets, and the variables they were handed.
 
 use serde_json::Value;
 
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    State, ToolOutcome, arg_scalar, arg_str, call_args, error_under, head, loose, relativize,
+    State, ToolOutcome, error_under, head, loose, partial, relativize,
 };
 use crate::ui::tui::theme::fixed;
 
-/// The whole exchange: one line, then the cwd and the variables.
+/// The whole exchange: one line per child, each with its cwd and variables.
 pub(crate) fn block(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) -> Vec<Row> {
     let state = State::of(result);
-    let template = template(args, cwd);
-    let budget = arg_scalar(args, "maxToolCalls").unwrap_or_default();
-    let mut runs = head(state, "task");
-    let mut text = format!(": template -> {template}");
-    if !budget.is_empty() {
-        text.push_str(&format!(", toolbudget {budget}"));
+    let tasks = partial::items(args, "tasks");
+    let mut out = Vec::new();
+    if tasks.is_empty() {
+        out.push(Row::of(Lead::None, head(state, "task")));
     }
-    runs.push(Run::fixed(text, fixed::MUTED));
-    let mut out = vec![Row::of(Lead::None, runs)];
-    out.extend(children(args, cwd));
+    for (index, item) in tasks.iter().enumerate() {
+        let template = partial::field(item, "template").unwrap_or_default();
+        let template = if template.contains('/') {
+            relativize(cwd, &template)
+        } else {
+            template
+        };
+        let mut text = format!(": template -> {template}");
+        if let Some(budget) = scalar(item, "maxToolCalls") {
+            text.push_str(&format!(", toolbudget {budget}"));
+        }
+        let mut runs = if index == 0 {
+            head(state, "task")
+        } else {
+            vec![Run::fixed("      ", fixed::DIM)]
+        };
+        runs.push(Run::fixed(text, fixed::MUTED));
+        out.push(Row::of(Lead::None, runs));
+        out.extend(children(item, cwd));
+    }
     out.extend(error_under(result));
     out
 }
 
-fn template(args: &str, cwd: &str) -> String {
-    let raw = arg_str(args, "template").unwrap_or_default();
-    if raw.contains('/') {
-        relativize(cwd, &raw)
-    } else {
-        raw
-    }
-}
-
-fn children(args: &str, cwd: &str) -> Vec<Row> {
-    let landed = arg_str(args, "cwd").filter(|path| !path.trim().is_empty());
-    let vars = variables(args);
+fn children(item: &Value, cwd: &str) -> Vec<Row> {
+    let landed = partial::field(item, "cwd").filter(|path| !path.trim().is_empty());
+    let vars = variables(item);
     let mut out = Vec::new();
     let last_branch = vars.is_empty();
     if let Some(path) = landed {
@@ -58,14 +64,11 @@ fn children(args: &str, cwd: &str) -> Vec<Row> {
     out
 }
 
-fn variables(args: &str) -> Vec<(String, String)> {
-    let Some(object) = call_args(args)
-        .and_then(|args| args.get("vars").cloned())
-        .and_then(|vars| match loose(&vars) {
-            Value::Object(map) => Some(map),
-            _ => None,
-        })
-    else {
+fn variables(item: &Value) -> Vec<(String, String)> {
+    let Some(object) = item.get("vars").and_then(|vars| match loose(vars) {
+        Value::Object(map) => Some(map),
+        _ => None,
+    }) else {
         return Vec::new();
     };
     object
@@ -78,4 +81,12 @@ fn variables(args: &str) -> Vec<(String, String)> {
             (key.clone(), text)
         })
         .collect()
+}
+
+fn scalar(item: &Value, key: &str) -> Option<String> {
+    Some(match item.get(key)? {
+        Value::Null => return None,
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    })
 }

@@ -10,8 +10,10 @@ pub(crate) fn answer(api: &Api, key: &str) -> Result<Value, Refuse> {
     let cfg = api.cfg();
     // The default model is answered resolved: an unset key still names the table's fallback.
     if key == KEY_CONFIG_SERVER_API_DEFAULT_MODEL {
+        // This door asks before any session exists: the process's own directory answers.
+        let cwd = std::env::current_dir().unwrap_or_default();
         let address = cfg
-            .default_model(None)
+            .default_model(None, &cwd)
             .map(|model| format!("{}:{}", model.provider_name, model.entry.id));
         return Ok(address.map(Value::String).unwrap_or(Value::Null));
     }

@@ -63,10 +63,15 @@ Unknown names error.
 ### Schema
 
 A tool declares `params: &[Param]`; `Param { name, kind, default, about }` and
-`Kind = Text | Number | Line | Flag | Object | Choice(&[str]) | TextList | Numbers`.
+`Kind = Text | Number | Line | Flag | Object | Choice(&[str]) | TextList | Numbers | Objects(&[Param])`.
 
 Every call is one flat object: `intent` beside the tool's own fields, all at one level. `schema_of`
 adds `intent` once for every tool, so no tool declares it.
+
+`Objects` is an array of objects, and its items are the one place a field is read by name: a
+position indexes a call's top level only. Its own `Param` table is rendered under the array's
+`items`, and `Args::objects` hands back one `Item` per element, taking defaults, kinds and enums
+from that same table. An item error names itself, `files[2].path`.
 
 - `about` says what the tool does and what it answers. No field list.
 - The schema's `description` is the tool's `fields` text: per `type`, which fields a call needs and
@@ -82,16 +87,16 @@ that tool needs (the tool checks them, not the schema).
 
 | tool | parameters, in index order |
 |---|---|
-| `read` | `path` always, `offset` (1-based, default 1), `limit` (default 200, at most 500, capped by the output line limit) |
+| `read` | `files` always: one item per file, with `path` and its own `offset` (1-based, default 1) and `limit` (default 200); the 500-line cap is shared by the whole call |
 | `edit` | `type` always (`exact`/`mass`), `path` always, `old`, `range` (1-based, `12-14` or `12`), `new` always |
 | `write` | `path` always, `content` always |
 | `cd` | `path` always |
 | `bash` | `command` always |
-| `alias` | `type` (`add`/`list`/`del`), `name`, `command` |
-| `kairos` | `type` (`now`/`after`/`every`/`list`/`status`/`result`/`cancel`), `kind` (`command`/`text`, default `command`), `content`, `timeout`, `delay`, `expr`, `count` (default 3), `id` |
-| `task` | `template` always, `vars` (object of strings), `cwd`, `maxToolCalls`, `name` |
+| `alias` | `type` (`add`/`list`/`del`), `aliases` (type=add: one item per alias, `name` and `command`), `names` (type=del) |
+| `kairos` | `type` (`now`/`after`/`every`/`list`/`status`/`result`/`cancel`), `tasks` (type=now/after/every: one item per task, with `content`, `kind` (`command`/`text`, default `command`), `timeout`, `delay`, `expr`, `count` (default 3)), `id` |
+| `task` | `tasks` always: one item per child, with `template`, `vars` (object of strings), `cwd`, `maxToolCalls`, `name` |
 | `final` | `type` (`write`/`edit`/`read`/`submit`), `content`, `old`, `new`, `range` |
-| `mcp` | `type` (`list`/`call`), `server`, `tool`, `args` (object) |
+| `mcp` | `type` (`list`/`call`), `calls` (type=call: one item per call, `server`, `tool`, `args` (object)), `server` (type=list) |
 | `web` | `type` (`read`/`search`/`open`/`click`/`fill`/`select`/`scroll`/`eval`/`screenshot`), `url`, `raw` (default false), `query`, `provider`, `pages` (default 1), `selector`, `value`, `pixels` (default 600), `full_page` (default false) |
 | `memo` | `type` (`add`/`mod`/`del`/`show`/`history`/`list`), `scope` (`current`/`global`, default `current`), `name`, `content` |
 | `todo` | `type` (`set`/`tick`/`view`), `items` (the whole list), `ids` (item numbers, 1-based), `done` (default true) |
@@ -102,6 +107,27 @@ names none is refused rather than spread across several tabs, and the other oper
 
 `cd` lands its result with `memo {kind: "cwd", path, from}`: the history card relativizes from it
 and the front end marks the directory as a temporary move.
+
+### Batched calls
+
+Five tools take an array where they used to take one item: `read`, `alias`, `kairos`, `mcp` and
+`task`. `edit`, `write`, `memo`, `context`, `final` and `web` stay single, because their payloads
+are large enough that a batch would only move the same bytes into one argument.
+
+- Items run in the array's order, one after another; the answer is laid out in the same order.
+- Items are isolated: one item's failure is written where that item would have answered, and the
+  rest still run and still answer. The call as a whole is `ok: false` when any item failed, and
+  `fail` counts them.
+- `read`'s line and byte caps belong to the whole call, not to each file; past them the footer
+  names the files left unread.
+- A query operation — `alias list`, `kairos list/status/result/cancel`, `mcp list` — takes no
+  array and refuses one.
+- A batch whose items produce structured payloads answers a memo array, and the history cards
+  draw one entry per item.
+- A call with exactly one item answers as the single-item call always did: its one item's failure
+  is the call's failure, with no item label in the text.
+- `task` allocates every answer name against the ones the same call already handed out, so two
+  children with one stem get `probe` and `probe-1`, not the same file.
 
 ### ToolOutput
 
@@ -147,7 +173,7 @@ Env {
   aliases: Aliases,          // config layer above the session layer
   default_budget: u32,
   export: Arc<dyn Export>,   // a full text out of the database as a file
-  paths: Paths,              // agents, answers, globalAgents
+  paths: Paths,              // the user's templates; the project's folders come from the live cwd
   source: Arc<dyn Source>,   // reads the loop owns
 }
 ```
@@ -230,15 +256,17 @@ EOF, never the terminal the front end owns. The guard belongs to the unix shells
 
 The tools that read history answer JSON, and the same value rides along as the memo: `context`
 `query`/`show`, `memo` `show`/`history`/`list`, `alias` `list`, `kairos`
-`now`/`after`/`every`/`list`/`status`, `mcp` `list`. The front end draws what the memo carries and
-does not parse the text.
+`now`/`after`/`every`/`list`/`status`, `mcp` `list`. A starting `kairos` operation answers one
+receipt per task, so its memo is an array. The front end draws what the memo carries and does not
+parse the text.
 
 Every tool declares `summary`, one line that names the call in a history listing; the field is not
 optional, so no tool joins the table without one. It carries only the least that locates the call:
-the path for `read`, `write`, `edit` and `cd`, the truncated command for `bash`, the name and
-command for `alias add`, the operation for the tools whose parameters are the interesting part
-(`memo`, `todo`, `context`, `kairos`, `mcp`, `final`), the template and its answer name for `task`,
-and for `web` the operation plus the argument it names: URL, query, selector or expression.
+the first path plus a count for `read`, the path for `write`, `edit` and `cd`, the truncated
+command for `bash`, the first name and command for `alias`, the operation for the tools whose
+parameters are the interesting part (`memo`, `todo`, `context`, `kairos`, `final`), the first
+server and tool for `mcp`, the first template and its answer name for `task`, and for `web` the
+operation plus the argument it names: URL, query, selector or expression.
 A tool name the table no longer holds shows its clipped arguments.
 
 ### edit
@@ -341,8 +369,14 @@ not checked here; a bad argument is the server's error to report.
 - A child is a job too: `task` resolves a template and picks an answer name, the loop writes the
   session row, and a loop-side runner books the child, nudges it three times when it ends without a
   submit, then drops it.
-- The answer file is `<answers>/<name>.md`; the name is fixed at spawn, from `name` or the template's
-  stem, with `-1`, `-2` when taken. `final submit` writes it and is the only thing that ends a child.
+- The project folder is `<the parent's cwd>/.mypi`, taken where the `task` call is made: a child's
+  own `cwd` never moves it, and a `cd` before the call does. Nothing walks up to a parent folder.
+- Templates come from `<project>/agents`, then the user's global agents folder, then the path the
+  call names.
+- The answer file is `<project>/answers/<name>.md`, created when the first child of that project is
+  spawned; the name is fixed at spawn, from `name` or the template's stem, with `-1`, `-2` when a
+  file or another item of the same call already holds it. `final submit` writes it and is the only
+  thing that ends a child.
 - A child takes no user messages. `task` is the only tool a child cannot hold; `final` is the only
   one it never has to ask for.
 
@@ -353,7 +387,7 @@ not checked here; a bad argument is the server's error to report.
 3. A tool names an effect kind; the front door stamps `call_id` and `ts`.
 4. File tools read and write only inside the licensed zones; atomically, under a per-path lock.
 5. The roster is the only way the model learns a tool exists.
-6. `edit` has one path in, one read, one atomic write; `mass_edit` is not a tool.
+6. `edit` has one path in, one read, one atomic write; neither `edit` nor `write` takes an array.
 7. `alias` expands the head word of every command segment, once, and adds no variables, functions or
    multi-line bodies. A name a session writes is one word the scanner accepts as a segment head; a
    name the config fixes is read-only for the session.

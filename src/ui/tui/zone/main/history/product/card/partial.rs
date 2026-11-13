@@ -1,15 +1,125 @@
 //! Reading tool arguments while they are still arriving.
 
+use serde_json::Value;
+
 /// The first string value of this key, complete or cut short by the stream.
 pub(crate) fn text(args: &str, key: &str) -> Option<String> {
     let mut at = args.find('{')? + 1;
     while let Some((name, value)) = next_pair(args, at) {
-        if name == key && args.as_bytes().get(value) == Some(&b'"') {
-            return string_at(args, value).map(|(body, _, _)| body);
+        if name == key {
+            return match args.as_bytes().get(value) {
+                Some(b'"') => string_at(args, value).map(|(body, _, _)| body),
+                _ => None,
+            };
         }
-        at = value_end(args, value);
+        // An earlier value that is still arriving hides what follows it.
+        at = skip_value(args, value)?;
     }
     None
+}
+
+/// The elements of the array under this key that have arrived whole: objects and strings both.
+pub(crate) fn items(args: &str, key: &str) -> Vec<Value> {
+    let Some(bracket) = array_of(args, key) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut at = bracket + 1;
+    loop {
+        let Some(offset) = args[at..].find(|c: char| !c.is_whitespace() && c != ',') else {
+            break;
+        };
+        let start = at + offset;
+        match args.as_bytes()[start] {
+            b'{' => {
+                let Some(end) = balanced(args, start) else {
+                    break;
+                };
+                if let Ok(value) = serde_json::from_str::<Value>(&args[start..end]) {
+                    out.push(value);
+                }
+                at = end;
+            }
+            b'"' => {
+                let Some((body, end, closed)) = string_at(args, start) else {
+                    break;
+                };
+                if !closed {
+                    break;
+                }
+                out.push(Value::String(body));
+                at = end;
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// The byte just past the `[` of the array under this key.
+fn array_of(args: &str, key: &str) -> Option<usize> {
+    let mut at = args.find('{')? + 1;
+    loop {
+        let (name, value) = next_pair(args, at)?;
+        if name == key {
+            return (args.as_bytes().get(value) == Some(&b'[')).then_some(value);
+        }
+        at = skip_value(args, value)?;
+    }
+}
+
+/// The byte just past one whole value; `None` while any of it is still arriving.
+fn skip_value(args: &str, at: usize) -> Option<usize> {
+    match args.as_bytes().get(at)? {
+        b'"' => string_at(args, at)
+            .filter(|(_, _, closed)| *closed)
+            .map(|(_, end, _)| end),
+        b'{' | b'[' => balanced(args, at),
+        _ => {
+            let rest = &args[at..];
+            let end = rest.find([',', '}', ']'])?;
+            Some(at + end)
+        }
+    }
+}
+
+/// The byte just past the bracket that closes the one at `at`; `None` while it is still arriving.
+fn balanced(args: &str, at: usize) -> Option<usize> {
+    let bytes = args.as_bytes();
+    if !matches!(bytes.get(at), Some(b'{' | b'[')) {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut index = at;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                let (_, end, closed) = string_at(args, index)?;
+                if !closed {
+                    return None;
+                }
+                index = end;
+            }
+            b'{' | b'[' => {
+                depth += 1;
+                index += 1;
+            }
+            b'}' | b']' => {
+                depth -= 1;
+                index += 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+/// One string field of an item that has already arrived.
+pub(crate) fn field(item: &Value, key: &str) -> Option<String> {
+    item.get(key)?.as_str().map(str::to_string)
 }
 
 /// The next key and the byte its value starts at, at or after `from`.
@@ -33,14 +143,6 @@ fn next_pair(args: &str, from: usize) -> Option<(String, usize)> {
         return Some((name, skip(bytes, colon + 1)?));
     }
     None
-}
-
-/// Where the value starting at `at` ends; a non-string keeps its own position.
-fn value_end(args: &str, at: usize) -> usize {
-    if args.as_bytes().get(at) != Some(&b'"') {
-        return at;
-    }
-    string_at(args, at).map_or(args.len(), |(_, end, _)| end)
 }
 
 /// The decoded string that starts at this quote, and where it ends; `closed` is false at input end.

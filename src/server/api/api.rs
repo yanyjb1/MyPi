@@ -220,12 +220,12 @@ impl Api {
         drop(reader);
 
         let cfg = self.cfg();
-        let profile = cfg.resolve_profile(None)?;
+        let profile = cfg.resolve_profile(None, &cwd)?;
         let (provider, model) = match stated {
             Some(pair) => pair,
             None => {
                 let default = cfg
-                    .default_model(None)
+                    .default_model(None, &cwd)
                     .ok_or_else(|| Refuse::Internal("no default model is configured".into()))?;
                 (default.provider_name, default.entry.id)
             }

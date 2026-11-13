@@ -94,7 +94,6 @@ impl Loop {
             .map(|root| root.to_path_buf())
             .unwrap_or_default()
             .join("mcp.json");
-        let project = cfg.project_paths();
         let slots = super::jobs::Slots::new();
         let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
         let source = super::source::Db::new(path.clone(), global_mcp, factory);
@@ -108,8 +107,6 @@ impl Loop {
             default_budget: cfg.subagent_budget(),
             export,
             paths: crate::server::agent::tools::contract::env::Paths {
-                agents: project.agents,
-                answers: project.answers,
                 global_agents: cfg
                     .paths()
                     .global_root()
@@ -224,6 +221,11 @@ impl Loop {
     /// Is this session on the table?
     pub fn booked(&self, session: i64) -> bool {
         self.inner.slots.get(session).is_some()
+    }
+
+    /// The directory a booked session stands in.
+    pub fn cwd(&self, session: i64) -> Option<std::path::PathBuf> {
+        self.inner.slots.get(session).map(|handle| handle.cwd())
     }
 
     fn handle(&self, session: i64) -> Result<Arc<Handle>> {

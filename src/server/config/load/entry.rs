@@ -12,7 +12,7 @@ use super::types::{Config, Inner, Layers};
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
-        Self::load_from(ConfigPaths::from_env())
+        Self::load_from(ConfigPaths::startup())
     }
 
     pub fn load_from(paths: ConfigPaths) -> anyhow::Result<Self> {
@@ -47,6 +47,8 @@ impl Config {
                 models,
                 layers,
                 cache: Mutex::new(HashMap::new()),
+                projects: Mutex::new(HashMap::new()),
+                scoped: Mutex::new(HashMap::new()),
                 web_rules,
                 load_notices: notices,
                 runtime: Mutex::new(Vec::new()),

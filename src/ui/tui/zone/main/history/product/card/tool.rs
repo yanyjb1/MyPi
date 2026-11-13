@@ -198,6 +198,25 @@ pub(crate) fn head(state: State, label: &str) -> Vec<Run> {
     ]
 }
 
+/// The head with the first line after it; every later line on a row of its own.
+pub(crate) fn head_lines(state: State, label: &str, lines: &[String]) -> Vec<Row> {
+    let mut first = head(state, label);
+    let mut rest = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index == 0 {
+            first.push(Run::fixed(format!(": {line}"), fixed::MUTED));
+        } else {
+            rest.push(Row::of(
+                Lead::None,
+                vec![Run::fixed(format!(": {line}"), fixed::MUTED)],
+            ));
+        }
+    }
+    let mut out = vec![Row::of(Lead::None, first)];
+    out.extend(rest);
+    out
+}
+
 /// The failure text under a one-line form: the card body, shifted under the title.
 pub(crate) fn error_under(result: Option<ToolOutcome<'_>>) -> Vec<Row> {
     let Some(o) = result.filter(|o| o.ok == Some(false)) else {

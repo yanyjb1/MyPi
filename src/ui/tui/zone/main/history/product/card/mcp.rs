@@ -5,8 +5,8 @@ use serde_json::Value;
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, call_args, error_under, head,
-    loose, output_lines,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head, loose,
+    output_lines, partial,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -26,12 +26,19 @@ pub(crate) struct Call;
 
 impl ToolRenderer for Call {
     fn title(&self, b: &ToolBlock<'_>) -> Option<String> {
-        Some(format!(
-            "call {} {} {}",
-            arg_str(b.args, "server").unwrap_or_default(),
-            arg_str(b.args, "tool").unwrap_or_default(),
-            arguments(b.args),
-        ))
+        let items = partial::items(b.args, "calls");
+        let first = items.first()?;
+        let server = partial::field(first, "server").unwrap_or_default();
+        let tool = partial::field(first, "tool").unwrap_or_default();
+        let arguments = match first.get("args") {
+            Some(Value::Null) | None => "{}".to_string(),
+            Some(other) => loose(other).to_string(),
+        };
+        let mut text = format!("call {server} {tool} {arguments}");
+        if items.len() > 1 {
+            text.push_str(&format!(" (+{})", items.len() - 1));
+        }
+        Some(text)
     }
 
     fn call_body(&self, _b: &ToolBlock<'_>) -> Vec<Row> {
@@ -43,13 +50,6 @@ impl ToolRenderer for Call {
             label: None,
             lines: output_lines(o.text),
         }]
-    }
-}
-
-fn arguments(args: &str) -> String {
-    match call_args(args).as_ref().and_then(|args| args.get("args")) {
-        Some(Value::Null) | None => "{}".to_string(),
-        Some(other) => loose(other).to_string(),
     }
 }
 

@@ -32,9 +32,7 @@ struct File {
 
 /// The table for where the session stands: the project's copy when it exists, else the global one.
 pub fn table(cwd: &Path, global: &Path) -> Result<BTreeMap<String, ServerConfig>> {
-    let project = cwd
-        .join(crate::server::config::paths::PROJECT_DIR)
-        .join("mcp.json");
+    let project = crate::server::config::paths::project_dir(cwd).join("mcp.json");
     let path = if project.is_file() {
         project
     } else if global.is_file() {

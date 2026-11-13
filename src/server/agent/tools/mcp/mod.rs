@@ -1,32 +1,27 @@
-//! The static `mcp` tool: list configured servers/tools or call one tool.
+//! The static `mcp` tool: list configured servers/tools or call their tools.
 
 pub(crate) mod bridge;
 pub(crate) mod setup;
 mod stdio;
 pub(crate) mod sync;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
 use super::contract::env::Env;
 use super::contract::output::ToolOutput;
 use super::contract::view::CallRecord;
-use super::spec::{Args, Kind, Param, Tool, ToolProgress};
+use super::spec::{Args, Item, Kind, Param, Tool, ToolProgress};
 use super::summary;
 
 use bridge::{McpBridge, McpContent, McpResult};
 
 const TYPE: usize = 0;
-const SERVER: usize = 1;
-const TOOL_PARAM: usize = 2;
-const ARGS: usize = 3;
+const CALLS: usize = 1;
+const SERVER: usize = 2;
 
-const PARAMS: &[Param] = &[
-    Param::new(
-        "type",
-        Kind::Choice(&["list", "call"]),
-        "Which operation this is.",
-    ),
+/// One tool call a `call` operation carries.
+const CALL_FIELDS: &[Param] = &[
     Param::new("server", Kind::Text, "Server name."),
     Param::new("tool", Kind::Text, "Tool name, as `list` prints it."),
     Param::new(
@@ -36,14 +31,33 @@ const PARAMS: &[Param] = &[
     ),
 ];
 
+const PARAMS: &[Param] = &[
+    Param::new(
+        "type",
+        Kind::Choice(&["list", "call"]),
+        "Which operation this is.",
+    ),
+    Param::new(
+        "calls",
+        Kind::Objects(CALL_FIELDS),
+        "type=call: one item per call, run in this order. One item's failure never stops the \
+         ones after it.",
+    ),
+    Param::new(
+        "server",
+        Kind::Text,
+        "type=list: prints that server's tools and their parameters; omit it for the servers and \
+         their tool lists.",
+    ),
+];
+
 pub(crate) const TOOL: Tool = Tool {
     name: "mcp",
     about: "MCP servers and their tools. `list` names the servers and their tools; naming one \
-            server also prints each tool's parameters. `call` runs one tool with `args` of that \
-            shape.",
-    fields: "type is always needed. list: server prints that server's tools and their parameters; \
-            omit it for the servers and their tool lists. call: server and tool, plus args built \
-            from the parameters `list` printed.",
+            server also prints each tool's parameters. `call` runs the tools its items name, each \
+            with `args` of that shape.",
+    fields: "type is always needed. list: server is optional. call: calls, one item per call \
+            with server, tool and args built from the parameters `list` printed.",
     params: PARAMS,
     run,
     summary,
@@ -54,6 +68,10 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     let bridge = env.source.mcp(env.session, &cwd)?;
     match args.choice(TYPE)?.as_str() {
         "list" => {
+            anyhow::ensure!(
+                args.objects(CALLS)?.is_empty(),
+                "`calls` is only for type=call"
+            );
             let server = args.opt_str(SERVER)?;
             list(bridge.as_ref(), server.as_deref())
         }
@@ -103,26 +121,60 @@ fn server_json(bridge: &dyn McpBridge, server: &str, full: bool) -> Value {
     }
 }
 
+/// Run every call in the array, in order; one failure leaves the rest to run.
 fn call(bridge: &dyn McpBridge, args: &Args) -> Result<ToolOutput> {
-    let server = args.opt_str(SERVER)?;
-    let server = server
-        .as_deref()
-        .map(str::trim)
-        .filter(|server| !server.is_empty())
-        .ok_or_else(|| anyhow!("missing argument `server` for type=call"))?;
-    let tool = args.opt_str(TOOL_PARAM)?;
-    let tool = tool
-        .as_deref()
-        .map(str::trim)
-        .filter(|tool| !tool.is_empty())
-        .ok_or_else(|| anyhow!("missing argument `tool` for type=call"))?;
-    let arguments = match args.opt_any(ARGS) {
+    let items = args.objects(CALLS)?;
+    anyhow::ensure!(!items.is_empty(), "`calls` must name at least one call");
+    anyhow::ensure!(
+        args.opt_str(SERVER)?.is_none(),
+        "`server` is only for type=list; each call item names its own"
+    );
+
+    let total = items.len();
+    let mut out = String::new();
+    let mut failed = 0usize;
+    for item in &items {
+        let (header, body) = match call_one(bridge, item) {
+            Ok((server, tool, text)) => (format!("{server}/{tool}"), text),
+            Err(e) => {
+                if total == 1 {
+                    return Err(e);
+                }
+                failed += 1;
+                let server = item.text("server").unwrap_or_else(|_| item.label());
+                let tool = item.text("tool").unwrap_or_default();
+                (format!("{server}/{tool}"), format!("[error: {e:#}]"))
+            }
+        };
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        if total > 1 {
+            out.push_str(&format!("==> {header}\n"));
+        }
+        out.push_str(&body);
+    }
+
+    let mut produced = ToolOutput::text(out);
+    if failed > 0 {
+        produced = produced.failure(format!("{failed} of {total} calls failed"));
+    }
+    Ok(produced)
+}
+
+fn call_one(bridge: &dyn McpBridge, item: &Item) -> Result<(String, String, String)> {
+    let server = item.text("server")?;
+    let server = server.trim();
+    anyhow::ensure!(!server.is_empty(), "`{}.server` must not be empty", item.label());
+    let tool = item.text("tool")?;
+    let tool = tool.trim();
+    anyhow::ensure!(!tool.is_empty(), "`{}.tool` must not be empty", item.label());
+    let arguments = match item.object("args")? {
         None => json!({}),
-        Some(value) if value.is_null() => json!({}),
-        Some(value) if value.is_object() => value.clone(),
-        Some(_) => bail!("`args` must be an object: one key per parameter the tool declares"),
+        Some(map) => Value::Object(map),
     };
-    let result = bridge.call(&server, &tool, arguments)?;
+
+    let result = bridge.call(server, tool, arguments)?;
     let text = render(&result);
     if result.is_error {
         if text.is_empty() {
@@ -130,7 +182,7 @@ fn call(bridge: &dyn McpBridge, args: &Args) -> Result<ToolOutput> {
         }
         bail!("{text}");
     }
-    Ok(ToolOutput::text(text))
+    Ok((server.to_string(), tool.to_string(), text))
 }
 
 fn render(result: &McpResult) -> String {
@@ -152,8 +204,20 @@ fn render(result: &McpResult) -> String {
     out
 }
 
-/// One line for a history listing: the operation.
+/// One line for a history listing: the operation, and the first call it names.
 fn summary(call: &CallRecord) -> String {
     let op = summary::field(call, "type").unwrap_or_default();
-    summary::clip(&op, 96)
+    if op != "call" {
+        return summary::clip(&op, 96);
+    }
+    let items = summary::array(call, "calls");
+    let first = items
+        .first()
+        .map(|item| {
+            let server = item.get("server").and_then(Value::as_str).unwrap_or_default();
+            let tool = item.get("tool").and_then(Value::as_str).unwrap_or_default();
+            format!("call {server}/{tool}")
+        })
+        .unwrap_or_else(|| "call".to_string());
+    summary::clip(&summary::counted(&first, items.len()), 96)
 }

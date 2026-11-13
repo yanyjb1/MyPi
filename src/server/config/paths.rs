@@ -15,27 +15,12 @@ pub const PROJECT_DIR: &str = ".mypi";
 /// The startup directory as a project root: only when it carries `.mypi`.
 pub fn project_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
-    cwd.join(PROJECT_DIR).is_dir().then_some(cwd)
+    project_dir(&cwd).is_dir().then_some(cwd)
 }
 
-/// Where the project's two folders are. Without `.mypi` the startup directory is the project,
-/// and the folders are created when something writes there.
-pub struct ProjectDirs {
-    pub project: PathBuf,
-    pub agents: PathBuf,
-    pub answers: PathBuf,
-}
-
-pub fn project_dirs() -> ProjectDirs {
-    let project = project_root()
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_default();
-    let base = project.join(PROJECT_DIR);
-    ProjectDirs {
-        project,
-        agents: base.join("agents"),
-        answers: base.join("answers"),
-    }
+/// The folder a project keeps its own state in: its `.mypi`, never the directory around it.
+pub fn project_dir(cwd: &Path) -> PathBuf {
+    cwd.join(PROJECT_DIR)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,13 +47,29 @@ impl ConfigPaths {
         Self { roots: out }
     }
 
-    pub fn from_env() -> Self {
+    /// The process's roots: the startup project's `.mypi`, then the global root.
+    pub fn startup() -> Self {
         if let Some(dir) = env_root() {
             return Self::new(vec![(Origin::Global, dir)]);
         }
         let mut roots = Vec::new();
-        if let Some(cwd) = project_root() {
-            roots.push((Origin::Project, cwd));
+        if let Some(root) = project_root() {
+            roots.push((Origin::Project, project_dir(&root)));
+        }
+        roots.push((Origin::Global, crate::server::platform::env::config_dir()));
+        Self::new(roots)
+    }
+
+    /// One directory's roots: the project's `.mypi` when it exists, then the global root. Only
+    /// that directory is asked; no parent is searched.
+    pub fn for_cwd(cwd: &Path) -> Self {
+        if let Some(dir) = env_root() {
+            return Self::new(vec![(Origin::Global, dir)]);
+        }
+        let mut roots = Vec::new();
+        let project = project_dir(cwd);
+        if project.is_dir() {
+            roots.push((Origin::Project, project));
         }
         roots.push((Origin::Global, crate::server::platform::env::config_dir()));
         Self::new(roots)

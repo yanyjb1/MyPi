@@ -1,12 +1,13 @@
 //! read, write and cd: the one-line forms, the numbered body, the preview.
 
 use ratatui::style::Modifier;
+use serde_json::Value;
 
 use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
 use super::frame::{GUTTER_MIN, gutter_of, markdown_numbered, wrap_rows};
 use super::{
-    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, call_args, error_under, expand_tabs,
+    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, expand_tabs,
     indentation, partial, path_of, relativize,
 };
 use crate::ui::tui::theme::fixed;
@@ -39,13 +40,19 @@ pub(crate) fn read_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) 
         Run::with(state.glyph(), Some(state.glyph_ink()), Modifier::empty()),
         Run::fixed(" Read", fixed::TOOL_TITLE).bold(),
     ];
-    let path = partial::text(args, "path").unwrap_or_default();
-    if !path.trim().is_empty() {
-        let mut target = relativize(cwd, &path);
-        if let Some(span) = read_range(args) {
-            target.push_str(&span);
+    let files = partial::items(args, "files");
+    if let Some(first) = files.first() {
+        let path = partial::field(first, "path").unwrap_or_default();
+        if !path.trim().is_empty() {
+            let mut target = relativize(cwd, &path);
+            if let Some(span) = read_range(first) {
+                target.push_str(&span);
+            }
+            if files.len() > 1 {
+                target.push_str(&format!(" (+{})", files.len() - 1));
+            }
+            runs.push(Run::fixed(format!(" {target}"), fixed::TOOL_PATH));
         }
-        runs.push(Run::fixed(format!(" {target}"), fixed::TOOL_PATH));
     }
     let mut out = vec![Row::of(Lead::None, runs)];
     out.extend(error_under(result));
@@ -81,10 +88,9 @@ pub(crate) fn cd_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) ->
     vec![Row::of(Lead::None, runs)]
 }
 
-fn read_range(args: &str) -> Option<String> {
-    let v = call_args(args)?;
-    let offset = v.get("offset").and_then(|o| o.as_u64());
-    let limit = v.get("limit").and_then(|l| l.as_u64());
+fn read_range(item: &Value) -> Option<String> {
+    let offset = item.get("offset").and_then(|o| o.as_u64());
+    let limit = item.get("limit").and_then(|l| l.as_u64());
     if offset.is_none() && limit.is_none() {
         return None;
     }
@@ -99,6 +105,14 @@ pub(crate) fn read_body(o: ToolOutcome<'_>) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::new();
     let mut numbered: Vec<(usize, String)> = Vec::new();
     for line in o.text.lines() {
+        if let Some(path) = line.strip_prefix("==> ") {
+            flush_numbered(&mut numbered, &mut out);
+            out.push(Row::of(
+                Lead::None,
+                vec![Run::fixed(format!("==> {path}"), fixed::TOOL_PATH)],
+            ));
+            continue;
+        }
         let parsed = line
             .trim_start()
             .split_once('\t')

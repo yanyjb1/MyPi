@@ -25,12 +25,12 @@ pub(crate) fn apply(api: &Api, _conn: u64, _viewer: &str, ask: &Value) -> Result
     };
 
     let cfg = api.cfg();
-    let resolved = cfg.resolve_profile(profile.as_deref())?;
+    let resolved = cfg.resolve_profile(profile.as_deref(), &cwd)?;
     let (provider, model) = match stated {
         Some(pair) => pair,
         None => {
             let default = cfg
-                .default_model(profile.as_deref())
+                .default_model(profile.as_deref(), &cwd)
                 .ok_or_else(|| Refuse::Internal("no default model is configured".into()))?;
             (default.provider_name, default.entry.id)
         }

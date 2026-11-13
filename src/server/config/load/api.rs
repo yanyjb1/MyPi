@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -143,11 +143,6 @@ impl Config {
         crate::server::platform::env::temp_dir().join("mypi")
     }
 
-    /// The project root and its two folders.
-    pub fn project_paths(&self) -> super::super::paths::ProjectDirs {
-        paths::project_dirs()
-    }
-
     pub fn models(&self) -> impl Iterator<Item = (&str, &model::ModelEntry)> {
         self.inner.models.models()
     }
@@ -160,8 +155,8 @@ impl Config {
         self.inner.models.resolve_key(provider)
     }
 
-    pub fn default_model(&self, profile: Option<&str>) -> Option<ResolvedModel> {
-        let effective = self.effective(profile);
+    pub fn default_model(&self, profile: Option<&str>, cwd: &Path) -> Option<ResolvedModel> {
+        let effective = self.effective_in(cwd, profile);
         let configured = effective
             .values
             .get(KEY_CONFIG_SERVER_API_DEFAULT_MODEL)
@@ -191,16 +186,23 @@ impl Config {
         out
     }
 
-    pub fn resolve_profile(&self, name: Option<&str>) -> anyhow::Result<ResolvedProfile> {
+    /// One profile, as the project at `cwd` has it: the folder is looked for in that project's
+    /// `.mypi`, then in the global root.
+    pub fn resolve_profile(
+        &self,
+        name: Option<&str>,
+        cwd: &Path,
+    ) -> anyhow::Result<ResolvedProfile> {
+        let scope = self.scope(cwd);
         let name = name.unwrap_or(profile::DEFAULT_PROFILE);
         let compact = self
-            .effective(Some(name))
+            .effective_in(cwd, Some(name))
             .values
             .get(KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE)
             .and_then(Value::as_text)
             .map(PathBuf::from);
         let mut notices = Vec::new();
-        let resolved = profile::resolve(&self.inner.paths, name, compact.as_deref(), &mut notices);
+        let resolved = profile::resolve(&scope.paths, name, compact.as_deref(), &mut notices);
         if let Ok(mut runtime) = self.inner.runtime.lock() {
             runtime.extend(notices);
         }
@@ -215,6 +217,9 @@ impl Config {
         let target = self.write_target();
         write::write_key(&target, &["config", "server", "api", "defaultModel"], id)?;
         if let Ok(mut cache) = self.inner.cache.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.inner.scoped.lock() {
             cache.clear();
         }
         Ok(target)
@@ -351,8 +356,10 @@ impl Config {
     }
 
     /// Every profile name a session may name.
-    pub fn profiles(&self) -> Vec<String> {
-        profile::list(&self.inner.paths, &mut Vec::new())
+    /// The profile names the project at `cwd` may open with.
+    pub fn profiles(&self, cwd: &Path) -> Vec<String> {
+        let scope = self.scope(cwd);
+        profile::list(&scope.paths, &mut Vec::new())
     }
 
     fn write_target(&self) -> PathBuf {

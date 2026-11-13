@@ -165,13 +165,10 @@ pub struct BashEnv {
     pub shell: crate::server::platform::shell::Shell,
 }
 
-/// The folders a sub-session reads from.
+/// The one folder a sub-session reads from that is not the project's own: the user's templates.
+/// The project's `.mypi` is taken from the live working directory at call time.
 #[derive(Debug, Clone)]
 pub struct Paths {
-    /// The project's templates.
-    pub agents: PathBuf,
-    /// The answers a sub-session's final text lands in.
-    pub answers: PathBuf,
     /// The templates that belong to the user, not to this project.
     pub global_agents: PathBuf,
 }

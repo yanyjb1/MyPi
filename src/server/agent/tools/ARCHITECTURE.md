@@ -14,7 +14,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `contract/view.rs` | the `Source`, `Export`, `Child`, `Draft`, `MemoRead` ports, the history shapes, and `MemoScope`, `MemoReadOp`, `MemoVersion`, `MemoView` |
 | `contract/job.rs` | the job vocabulary a tool shares with the loop: `JobSpec`, `Schedule`, `JobRunner`, `JobCtx`, `JobOutcome`, `Receipt`, `Row`, `Status`, `Exit`, `OutputSink`, and the `JobHost` port |
 | `engine.rs` | `Engine`: `Batch::run` — env, gates, decode, run, stamp, measure, events; the stop that lands mid-call becomes the result's reason |
-| `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `Tool`, `Run`, `Summary`, `ToolProgress` |
+| `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `Item`, `Tool`, `Run`, `Summary`, `ToolProgress` |
 | `summary.rs` | one recorded call's arguments, and the clip every tool's history summary reuses |
 | `registry.rs` | `TOOLS`, `spec`, `roster` |
 | `workspace.rs` | `Workspace`, the licensed zones, the per-path write lock, `write_atomic`, `canonicalize_lenient` |
@@ -25,7 +25,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `bash/bash/segment.rs` | the separator set and the segment heads; the guard and the alias expansion share both |
 | `bash/bash/guard.rs` | the command classifier: `normalize`, `classify`, `Verdict`, `RuleHit` |
 | `bash/bash/shell.rs` | one command line: `run`, `run_to`, `OutputSink`, `Exit`, `StopFlag`; registers the stop action, spawns and signals through `platform::proc` |
-| `bash/read/{mod,tool}.rs` | `read` |
+| `bash/read/{mod,tool}.rs` | `read`: the file array, the shared line and byte caps, the per-file header |
 | `bash/write/{mod,tool}.rs` | `write` |
 | `bash/edit/{mod,tool}.rs` | `edit` with `exact` and `mass`; `exact_text`, `mass_text`, `parse_range`, the one-line receipt |
 | `bash/cd/{mod,tool}.rs` | `cd` |
@@ -48,11 +48,11 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `memo/todo/replay.rs` | the pure replay: a call sequence → the list, anchored on the newest reset |
 | `memo/todo/ops.rs` | the three todo operations (`set`, `tick`, `view`) and their batch apply |
 | `memo/todo/state.rs` | `TodoItem`, `counts` |
-| `subagent/mod.rs` | declarations and re-exports (`TASK`, `FINAL`) |
-| `subagent/task.rs` | the `task` tool: template, variables, answer name, the `Child` effect |
+| `subagent/mod.rs` | declarations and re-exports (`TASK`, `FINAL`), and `project_dir` |
+| `subagent/task.rs` | the `task` tool: the call's project folder, template, variables, answer name, the `Child` effect |
 | `subagent/final.rs` | the `final` tool: the child's draft, its edits, the one submit |
-| `subagent/template.rs` | template lookup, front matter, `{{var}}` rendering, roster subset checks, the stem |
-| `subagent/answer.rs` | the answer file: the first free name under the answers folder, and the one stamped write |
+| `subagent/template.rs` | template lookup (project, then global, then the named path), front matter, `{{var}}` rendering, roster subset checks, the stem |
+| `subagent/answer.rs` | the answer file: the first free name inside the project's `answers` folder, taken against the names one call already handed out, and the one stamped write |
 | `web/mod.rs` | the `web` tool entry: arguments to `WebArgs`, one call to the domain; built only with the `web` feature |
 
 ## What it talks to
@@ -103,7 +103,9 @@ Engine::run
 
 1. `contract::env::Env` and `engine`: every field is filled in one place; a new port is a field here
    and a trait in `contract::view`.
-2. `spec::Param` order and each tool's index constants: `Args` reads positionally.
+2. `spec::Param` order and each tool's index constants: `Args` reads positionally at the top
+   level, and `Args::objects` reads an array item's fields by name against the item table under
+   `Kind::Objects`.
 3. `schema_of` and `Args::fill`: one `Param` table feeds both; `intent` is added to the flat
    schema in one place and the same fields are read by position in the other.
 4. `ToolOutput.effects` and `contract::output::Effect`: the front door stamps `ts`, so a tool must

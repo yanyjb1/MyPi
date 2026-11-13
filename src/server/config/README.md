@@ -9,9 +9,9 @@ Every setting comes from one of three sources, and only this domain opens them: 
 
 | source | location | layers |
 |---|---|---|
-| configuration | `config.yaml` | profile overlay > project root > global root > built-in default |
+| configuration | `config.yaml` | profile overlay > the project's `.mypi` > global root > built-in default |
 | model | `models.yml` | global root only; one file, never written |
-| profile | `profiles/<name>/` | project root > global root |
+| profile | `profiles/<name>/` | the project's `.mypi` > global root |
 
 A configuration key is resolved per key: the highest layer that has a valid value wins. A value
 that does not parse, or an unknown key, produces a warning and the next layer is tried. A key that
@@ -21,10 +21,20 @@ directory.
 ### Platform
 
 The global root is not built here: `platform::env::config_dir()` answers it. Unix uses
-`$XDG_CONFIG_HOME/mypi`, else `~/.config/mypi`; Windows must answer `%APPDATA%\mypi`. The project
-root is the process startup directory. `MYPI_CONFIG_DIR`, when set, is the only root: no project
-search, no global search, and every source is read from under it. Paths are composed with `Path` and
-`PathBuf`; no separator is written literally.
+`$XDG_CONFIG_HOME/mypi`, else `~/.config/mypi`; Windows must answer `%APPDATA%\mypi`.
+
+The project root is the process startup directory, and it counts only when it carries `.mypi`. The
+project layer lives **inside** that folder — `<startup>/.mypi/config.yaml` and
+`<startup>/.mypi/profiles/` — so nothing this tool writes or reads scatters beside a project's own
+files. `MYPI_CONFIG_DIR`, when set, is the only root: no project search, no global search, and every
+source is read from under it. Paths are composed with `Path` and `PathBuf`; no separator is written
+literally.
+
+A profile is looked up for the directory the session stands in, not for the process: a session
+opened in `A/` reads `A/.mypi/profiles/`, one that opened in `B/` reads `B/.mypi/profiles/`. Only
+that directory is asked; no parent is searched. A profile is picked before the session opens, so a
+`cd` during a session moves neither its prompt nor its tools — it moves what the next session may
+open with. A directory without `.mypi` has no project layer at all.
 
 A profile is a directory under `profiles/`; its dotted relative path is its name. `system.md` is the
 prompt, `tools.yaml` is an optional tool list, `compact.md` an optional compaction instruction, and

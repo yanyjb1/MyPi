@@ -5,7 +5,8 @@ use serde_json::Value;
 use super::super::super::row::{Lead, Row, Run};
 use super::tree;
 use super::{
-    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head, output_lines,
+    Section, State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, error_under, head,
+    head_lines, output_lines, partial,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -19,25 +20,23 @@ pub(crate) fn inline(args: &str, result: Option<ToolOutcome<'_>>) -> Option<Vec<
     let label = |name: &str| head(state, name);
     let mut out = Vec::new();
     match op.as_str() {
-        "now" => {
-            let mut runs = label("Kairos-Escrow");
-            runs.push(Run::fixed(
-                format!(
-                    ": escrowed {} (timeout: {})",
-                    content(args),
-                    arg_str(args, "timeout").unwrap_or_default()
-                ),
-                fixed::MUTED,
-            ));
-            out.push(Row::of(Lead::None, runs));
-        }
-        "after" | "every" => {
-            let mut runs = label("Kairos-Escrow");
-            runs.push(Run::fixed(
-                format!(": escrowed {}, {op} {}", content(args), at(result)),
-                fixed::MUTED,
-            ));
-            out.push(Row::of(Lead::None, runs));
+        "now" | "after" | "every" => {
+            let lines: Vec<String> = partial::items(args, "tasks")
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let content = partial::field(item, "content").unwrap_or_default();
+                    if op == "now" {
+                        format!(
+                            "escrowed {content} (timeout: {})",
+                            partial::field(item, "timeout").unwrap_or_default()
+                        )
+                    } else {
+                        format!("escrowed {content}, {op} {}", at(result, index))
+                    }
+                })
+                .collect();
+            out.extend(head_lines(state, "Kairos-Escrow", &lines));
         }
         "list" => {
             out.push(Row::of(Lead::None, label("Kairos-Inquiry")));
@@ -81,14 +80,13 @@ impl ToolRenderer for Payload {
     }
 }
 
-fn content(args: &str) -> String {
-    arg_str(args, "content").unwrap_or_default()
-}
-
-fn at(result: Option<ToolOutcome<'_>>) -> String {
+fn at(result: Option<ToolOutcome<'_>>, index: usize) -> String {
     result
         .and_then(|o| o.details)
-        .and_then(|d| d.get("at")?.as_str().map(str::to_string))
+        .and_then(|d| d.get(index))
+        .and_then(|d| d.get("at"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
         .unwrap_or_default()
 }
 

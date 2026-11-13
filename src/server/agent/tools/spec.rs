@@ -28,6 +28,8 @@ pub enum Kind {
     TextList,
     /// An array of integers.
     Numbers,
+    /// An array of objects, each with the fields in this table, read by name rather than position.
+    Objects(&'static [Param]),
 }
 
 /// One parameter's declaration. **Its position in the table is its index**: values are read by
@@ -90,6 +92,17 @@ impl Param {
             Kind::Numbers => json!({
                 "type": "array",
                 "items": {"type": "integer"},
+                "description": about,
+            }),
+            Kind::Objects(fields) => json!({
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": fields
+                        .iter()
+                        .map(|p| (p.name.to_string(), p.json()))
+                        .collect::<serde_json::Map<String, Value>>(),
+                },
                 "description": about,
             }),
         }
@@ -206,6 +219,40 @@ impl Args {
         self.params.get(i).map(|p| p.name).unwrap_or("?")
     }
 
+    /// An array of objects: one [`Item`] per element, its fields read by name. Empty when absent.
+    pub fn objects(&self, i: usize) -> Result<Vec<Item>> {
+        let fields = match self.params.get(i).map(|p| p.kind) {
+            Some(Kind::Objects(fields)) => fields,
+            _ => bail!("no object array at position {i}"),
+        };
+        let outer = self.name(i);
+        let Some(value) = self.maybe(i) else {
+            return Ok(Vec::new());
+        };
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong(i, "an array of objects"))?;
+        let mut out = Vec::with_capacity(array.len());
+        for (at, element) in array.iter().enumerate() {
+            let map = match element {
+                Value::Object(map) => map.clone(),
+                // A host that stringified a nested item costs nothing.
+                Value::String(text) => match serde_json::from_str::<Value>(text) {
+                    Ok(Value::Object(map)) => map,
+                    _ => return Err(self.wrong(i, "an array of objects")),
+                },
+                _ => return Err(self.wrong(i, "an array of objects")),
+            };
+            out.push(Item {
+                outer,
+                at: at + 1,
+                fields,
+                map,
+            });
+        }
+        Ok(out)
+    }
+
     fn at(&self, i: usize) -> Result<&Value> {
         match self.values.get(i) {
             Some(v) if !v.is_null() => Ok(v),
@@ -236,15 +283,6 @@ impl Args {
         self.at(i)?
             .as_i64()
             .ok_or_else(|| self.wrong(i, "an integer"))
-    }
-
-    /// A line number (1-based).
-    pub fn line(&self, i: usize) -> Result<usize> {
-        let n = self.int(i)?;
-        if n < 1 {
-            bail!("`{}` is 1-based", self.name(i));
-        }
-        Ok(n as usize)
     }
 
     /// A boolean.
@@ -281,14 +319,120 @@ impl Args {
         }
     }
 
+}
+
+// ---- one item of an object array ----
+
+/// One element of an object array. Its fields are named, not positional: a table's order only
+/// indexes a call's top level. Defaults and kinds come from the same table the schema is built
+/// from, so a field is declared once.
+pub struct Item {
+    /// The array's own parameter name, and this element's 1-based position, for error messages.
+    outer: &'static str,
+    at: usize,
+    fields: &'static [Param],
+    map: serde_json::Map<String, Value>,
+}
+
+impl Item {
+    /// `files[2]`: what an error calls this element.
+    pub fn label(&self) -> String {
+        format!("{}[{}]", self.outer, self.at)
+    }
+
+    /// `files[2].path`: how an error names one field of one item.
+    fn field_path(&self, name: &str) -> String {
+        format!("{}.{name}", self.label())
+    }
+
+    fn param(&self, name: &str) -> Result<&'static Param> {
+        self.fields
+            .iter()
+            .find(|p| p.name == name)
+            .ok_or_else(|| anyhow!("`{}` has no field `{name}`", self.outer))
+    }
+
+    /// The value as it stands, with the table's default filled in.
+    fn value(&self, name: &str) -> Result<Value> {
+        let p = self.param(name)?;
+        let mut value = self.map.get(name).cloned().unwrap_or(Value::Null);
+        if value.is_null()
+            && let Some(d) = p.default
+        {
+            value = p.typed_default(d);
+        }
+        Ok(value)
+    }
+
+    fn wrong(&self, name: &str, want: &str) -> anyhow::Error {
+        anyhow!("`{}` must be {want}", self.field_path(name))
+    }
+
+    /// A string.
+    pub fn text(&self, name: &str) -> Result<String> {
+        self.value(name)?
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| self.wrong(name, "a string"))
+    }
+
+    /// An optional string.
+    pub fn opt_str(&self, name: &str) -> Result<Option<String>> {
+        match self.value(name)? {
+            Value::Null => Ok(None),
+            Value::String(text) => Ok(Some(text)),
+            _ => Err(self.wrong(name, "a string")),
+        }
+    }
+
+    /// An integer.
+    pub fn int(&self, name: &str) -> Result<i64> {
+        self.value(name)?
+            .as_i64()
+            .ok_or_else(|| self.wrong(name, "an integer"))
+    }
+
     /// An optional integer.
-    pub fn opt_int(&self, i: usize) -> Result<Option<i64>> {
-        match self.values.get(i) {
-            None | Some(Value::Null) => Ok(None),
-            Some(v) => v
+    pub fn opt_int(&self, name: &str) -> Result<Option<i64>> {
+        match self.value(name)? {
+            Value::Null => Ok(None),
+            value => value
                 .as_i64()
                 .map(Some)
-                .ok_or_else(|| self.wrong(i, "an integer")),
+                .ok_or_else(|| self.wrong(name, "an integer")),
+        }
+    }
+
+    /// A line number (1-based).
+    pub fn line(&self, name: &str) -> Result<usize> {
+        let n = self.int(name)?;
+        if n < 1 {
+            bail!("`{}` is 1-based", self.field_path(name));
+        }
+        Ok(n as usize)
+    }
+
+    /// One of an enum.
+    pub fn choice(&self, name: &str) -> Result<String> {
+        let text = self.text(name)?;
+        match self.param(name)?.kind {
+            Kind::Choice(list) if !list.contains(&text.as_str()) => {
+                bail!("`{}` must be one of {}", self.field_path(name), list.join(" / "))
+            }
+            _ => Ok(text),
+        }
+    }
+
+    /// A JSON object, or the string form of one.
+    pub fn object(&self, name: &str) -> Result<Option<serde_json::Map<String, Value>>> {
+        match self.value(name)? {
+            Value::Null => Ok(None),
+            Value::Object(map) => Ok(Some(map)),
+            Value::String(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(Value::Object(map)) => Ok(Some(map)),
+                _ => Err(self.wrong(name, "an object")),
+            },
+            _ => Err(self.wrong(name, "an object")),
         }
     }
 }

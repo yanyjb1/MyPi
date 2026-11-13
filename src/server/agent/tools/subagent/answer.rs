@@ -1,20 +1,22 @@
 //! The answer file: the one name a sub-session's final text lands under, and its one write.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 use crate::server::agent::tools::workspace::write_atomic;
 
-/// The first free name: the plain stem, then `-1`, `-2` and on.
-pub(crate) fn free(dir: &Path, stem: &str) -> Result<String> {
+/// The first free name: the plain stem, then `-1`, `-2` and on. Names the same call has already
+/// handed out are taken too, so two children of one call never share a file.
+pub(crate) fn free_avoiding(dir: &Path, stem: &str, taken: &BTreeSet<String>) -> Result<String> {
     let stem = clean(stem)?;
-    if !file(dir, &stem).exists() {
+    if !taken.contains(&stem) && !file(dir, &stem).exists() {
         return Ok(stem);
     }
     for n in 1..=999u32 {
         let candidate = format!("{stem}-{n}");
-        if !file(dir, &candidate).exists() {
+        if !taken.contains(&candidate) && !file(dir, &candidate).exists() {
             return Ok(candidate);
         }
     }

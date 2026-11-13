@@ -1,4 +1,4 @@
-//! The `kairos` tool: accept one background operation and return its receipt.
+//! The `kairos` tool: accept background operations and return their receipts.
 
 use anyhow::Result;
 
@@ -11,13 +11,23 @@ use crate::server::agent::tools::summary;
 use super::service;
 
 pub(crate) const TYPE: usize = 0;
-pub(crate) const KIND: usize = 1;
-pub(crate) const CONTENT: usize = 2;
-pub(crate) const TIMEOUT: usize = 3;
-pub(crate) const DELAY: usize = 4;
-pub(crate) const EXPR: usize = 5;
-pub(crate) const COUNT: usize = 6;
-pub(crate) const ID: usize = 7;
+pub(crate) const TASKS: usize = 1;
+pub(crate) const ID: usize = 2;
+
+/// One task a starting operation carries.
+pub(crate) const TASK_FIELDS: &[Param] = &[
+    Param::new("content", Kind::Text, "The command or wake text."),
+    Param::df(
+        "kind",
+        Kind::Choice(&["command", "text"]),
+        "What the task is: `command` runs a shell command, `text` wakes with the content.",
+        "command",
+    ),
+    Param::new("timeout", Kind::Text, "Command timeout, e.g. `10min`."),
+    Param::new("delay", Kind::Text, "Delay, e.g. `10min`."),
+    Param::new("expr", Kind::Text, "Five-field cron."),
+    Param::df("count", Kind::Number, "Runs; -1 is unlimited.", "3"),
+];
 
 pub(crate) const PARAMS: &[Param] = &[
     Param::new(
@@ -25,31 +35,26 @@ pub(crate) const PARAMS: &[Param] = &[
         Kind::Choice(&[
             "now", "after", "every", "list", "status", "result", "cancel",
         ]),
-        "`now` starts a command immediately, `after` waits for a delay, `every` repeats on a \
+        "`now` starts tasks immediately, `after` waits for a delay, `every` repeats on a \
          five-field cron, `list` shows the held tasks, `status` reports one, `result` hands back \
          what it left, `cancel` stops it.",
     ),
-    Param::df(
-        "kind",
-        Kind::Choice(&["command", "text"]),
-        "What the task is: `command` runs a shell command, `text` wakes with the content.",
-        "command",
+    Param::new(
+        "tasks",
+        Kind::Objects(TASK_FIELDS),
+        "type=now/after/every: one item per task, in this order. One item's failure never stops \
+         the ones after it.",
     ),
-    Param::new("content", Kind::Text, "The command or wake text."),
-    Param::new("timeout", Kind::Text, "Command timeout, e.g. `10min`."),
-    Param::new("delay", Kind::Text, "Delay, e.g. `10min`."),
-    Param::new("expr", Kind::Text, "Five-field cron."),
-    Param::df("count", Kind::Number, "Runs; -1 is unlimited.", "3"),
     Param::new("id", Kind::Text, "Task, schedule, or run id."),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "kairos",
-    about: "Hold one background task and return its id.",
-    fields: "type is always needed. now: content (kind=command only). after: delay and content. \
-             every: expr and content, count limits the runs. status, result, cancel: id. list: \
-             nothing else. kind and timeout apply to command tasks. text tasks only take \
-             `after` or `every`.",
+    about: "Hold background tasks and return their ids.",
+    fields: "type is always needed. now: tasks (kind=command only). after: every task names \
+             delay and content. every: every task names expr and content, and count limits the \
+             runs. status, result, cancel: id. list: nothing else. kind and timeout apply to \
+             command tasks; text tasks only take `after` or `every`.",
     params: PARAMS,
     run,
     summary,

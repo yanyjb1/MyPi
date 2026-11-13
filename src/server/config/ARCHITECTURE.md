@@ -10,7 +10,7 @@
 | `load/` | `types` (`Config`, `Inner`, `Layers`, `Effective`), `entry` (load/reload), `api` (default model, profiles, writes), `source` (layer reading, bootstrap), `effective` (per-key merge), `check` (merged-value checks) |
 | `model/` | `types` (providers, models, prices, currency), `parse` (the file and providers), `entry` (one model), `query` (keyed lookup) |
 | `profile/` | `types` (`ResolvedProfile`), `discover` (scan, precedence, duplicate names), `resolve` (prompts, tools, compaction) |
-| `paths.rs` | `ConfigPaths`: project and global roots, the files and folders under them |
+| `paths.rs` | `ConfigPaths`: the project's `.mypi` and the global root, the files and folders under them, and `project_dir` |
 | `notice.rs` | `ConfigNotice` and the shared warning constructor |
 | `write.rs` | textual `write_key` for `config.yaml` |
 | `prompts/` | compiled prompts: `system`, `compaction` |
@@ -19,9 +19,11 @@
 
 - `Config::load`, `Config::load_from(ConfigPaths)`, `Config::reload()`
 - `Config::get(key, profile)`, `Config::get_json(key, profile)` — one value; unknown key is an error
-- `Config::effective(profile)` — all `config.*` values for one profile
-- `Config::models`, `model_by_id`, `default_model(profile)`, `resolve_key(provider)`
-- `Config::resolve_profile(name)`, `Config::notices(profile)`, `Config::set_default_model(id)`
+- `Config::effective(profile)` — all `config.*` values for one profile, at the process's roots
+- `Config::effective_in(cwd, profile)` — the same, at one directory's roots
+- `Config::models`, `model_by_id`, `default_model(profile, cwd)`, `resolve_key(provider)`
+- `Config::resolve_profile(name, cwd)`, `Config::profiles(cwd)`, `Config::notices(profile)`,
+  `Config::set_default_model(id)`
 - `Config::paths`
 - `Value`, `ConfigNotice`, `ResolvedProfile`
 - `ModelsConfig`, `Provider`, `ModelEntry`, `Cost`, `Currency`, `ResolvedModel`
@@ -33,6 +35,10 @@
 
 - **Who calls config**: the api (`Call::Config`, default model, pools), the agent register
   (`resolve_profile`, models, default model), and the web tools (browser settings through values).
+- **One directory's roots**: a profile is resolved for the directory a session stands in, so
+  `effective_in`, `resolve_profile`, `profiles` and `default_model` take a `cwd`. The project layer
+  and its profile list are read once per project folder and kept; nothing caches "the current
+  project".
 - **Who config calls**: `platform::env` — the environment and the global config root; its
   `config_dir()` must answer the platform's native directory (`%APPDATA%\mypi` on Windows) —
   `platform::os` indirectly through it, and `agent::request::protocols::ProtocolId` to validate a
