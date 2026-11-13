@@ -1,10 +1,13 @@
 //! The local section: render order and the content each position holds.
 
+use std::collections::BTreeMap;
+
 use super::content::{Block, Kind as BlockKind};
 use super::immutable::Immutable;
 use super::mutable::{Entry, Mutable};
 use super::slot::{Held, Level, Life, Slot, SlotKind};
-use crate::ui::tui::zone::main::history::product::{self, Opts, Product, Shape};
+use crate::ui::tui::zone::main::history::product::compact;
+use crate::ui::tui::zone::main::history::product::{self, Opts, Phase, Product, Shape};
 
 /// Where one render position sits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -15,17 +18,56 @@ pub enum Idx {
     Turn(u32),
 }
 
-/// The whole conversation, in render order, with the content behind it.
+/// The whole conversation, in render order, and the content behind it.
 #[derive(Default)]
 pub struct Local {
     fixed: Immutable,
     running: Mutable,
+    /// A compaction is in flight: its summary lays as rows, not segments.
+    compacting: bool,
+    /// The blocks a finished compaction round holds, and what its banners read.
+    marks: BTreeMap<i64, compact::Mark>,
 }
 
 impl Local {
     pub fn clear(&mut self) {
         self.fixed.clear();
         self.running.clear();
+        self.compacting = false;
+        self.marks.clear();
+    }
+
+    /// A compaction started: the running summary stops being an ordinary reply.
+    pub fn set_compacting(&mut self, on: bool) {
+        self.compacting = on;
+    }
+
+    /// Whether the running round is the compaction.
+    pub fn compacting(&self) -> bool {
+        self.compacting
+    }
+
+    /// The blocks of one compacted round take their banner, unless they already have one.
+    pub fn mark_compact(&mut self, blocks: &[i64], mark: compact::Mark) {
+        for block in blocks {
+            self.marks.entry(*block).or_insert(mark);
+        }
+    }
+
+    /// The figure a compaction left behind, on the blocks of that round that have none yet.
+    pub fn set_after(&mut self, blocks: &[i64], after: Option<u64>) {
+        for block in blocks {
+            if let Some(mark) = self.marks.get_mut(block)
+                && mark.after.is_none()
+            {
+                mark.after = after;
+            }
+        }
+    }
+
+    /// What this block's round reads, when it is a compaction at all.
+    pub fn mark_of(&self, block: i64) -> Option<compact::Mark> {
+        self.marks.get(&block).copied()
     }
 
     /// One finished block, appended above zero.
@@ -328,7 +370,12 @@ impl Local {
             .call_id
             .as_deref()
             .and_then(|call| self.running.result_of(call));
-        Some(product::of(block, paired, opts, width))
+        let phase = if self.compacting {
+            Phase::Running
+        } else {
+            Phase::Off
+        };
+        Some(product::of(block, paired, opts, width, phase))
     }
 
     fn fixed_product(&self, num: i64, opts: &Opts<'_>, width: usize) -> Option<Product> {
@@ -340,6 +387,10 @@ impl Local {
             .and_then(|pair| pair.result)
             .and_then(|id| self.num_of(id))
             .and_then(|num| self.fixed.block(num));
-        Some(product::of(block, paired, opts, width))
+        let phase = match self.mark_of(block.id) {
+            Some(mark) => Phase::Done(mark),
+            None => Phase::Off,
+        };
+        Some(product::of(block, paired, opts, width, phase))
     }
 }

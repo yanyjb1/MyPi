@@ -9,9 +9,10 @@ use super::focus::{Focus, Target};
 use super::local::section::{Idx, Local};
 use super::local::slot::{Level, Life, SlotKind};
 use super::prefetch::{Range, Run, Start, walk};
-use super::product::{Opts, Task, TodoPanel, esc_row, pin_rows};
+use super::product::{Opts, Task, TodoPanel, compact, esc_row, pin_rows};
 use super::row::Row;
 use super::{display, wire};
+use crate::ui::lang::Lang;
 use crate::ui::tui::text::glyphs as g;
 
 use super::super::pane::Pane;
@@ -123,12 +124,18 @@ const DEFAULT_SCROLL: usize = 10;
 
 /// The config keys this zone asks for once per attachment.
 pub(super) const CONFIG_KEYS: &[&str] = &[
+    "config.ui.lang",
     "config.ui.tui.zone.main.history.focusLine",
     "config.ui.tui.zone.main.history.cardFoldBudget",
     "config.ui.tui.zone.main.history.cacheMargin",
     "config.ui.tui.zone.main.history.scrollHeight",
     "config.ui.tui.zone.main.history.todoFold",
 ];
+
+/// Every block id these ranges name, in order.
+fn blocks_of(ranges: &[[i64; 2]]) -> Vec<i64> {
+    ranges.iter().flat_map(|[lo, hi]| *lo..=*hi).collect()
+}
 
 /// One running label: a call or a thought, and when it started.
 pub(super) struct Pin {
@@ -137,6 +144,19 @@ pub(super) struct Pin {
     pub since: Instant,
     /// The call this label belongs to; `None` for a thought.
     pub call: Option<String>,
+    /// The compaction's own row: no call owns it, and a thought ending leaves it alone.
+    pub compact: bool,
+}
+
+/// What the last context figure was asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Ask {
+    /// The gauge as it stood before a compaction started.
+    Before,
+    /// The gauge the compaction left behind.
+    After,
+    /// A fresh attachment: what the gauge reads now is the newest compaction's aftermath.
+    Attach,
 }
 
 /// The chat history: what the reader sees of the conversation.
@@ -176,6 +196,18 @@ pub struct HistoryZone {
     pub(super) cwd: String,
     /// The structural window as it last stood.
     pub(super) structure: Turns,
+    /// The language the banners and the numbers read in.
+    pub(super) lang: Lang,
+    /// The compaction the server took: its clock, while it runs.
+    pub(super) compacting: Option<Instant>,
+    /// The context as it stood before this compaction.
+    pub(super) before: Option<u64>,
+    /// The context the newest compaction left behind, as the gauge estimates it.
+    pub(super) after: Option<u64>,
+    /// What the outstanding context ask is for.
+    pub(super) ask: Option<Ask>,
+    /// The blocks of a round whose aftermath has not arrived yet.
+    pub(super) awaiting: Vec<i64>,
     /// The id ranges asked for and not yet answered.
     pub(super) asking: HashSet<[i64; 2]>,
     /// A closed turn whose receipt does not line up: the ranges its own rows must come from.
@@ -219,6 +251,12 @@ impl Default for HistoryZone {
             placeholder: "thinking…".to_string(),
             cwd: String::new(),
             structure: Turns::default(),
+            lang: Lang::default(),
+            compacting: None,
+            before: None,
+            after: None,
+            ask: None,
+            awaiting: Vec::new(),
             asking: HashSet::new(),
             pending: None,
             needs_layout: false,
@@ -246,6 +284,7 @@ impl HistoryZone {
             placeholder,
             cwd,
             fold,
+            lang,
             ..
         } = self;
         let opts = Opts {
@@ -254,6 +293,7 @@ impl HistoryZone {
             placeholder: placeholder.as_str(),
             cwd: cwd.as_str(),
             fold: *fold,
+            lang: *lang,
         };
         f(local, run, range, &opts)
     }
@@ -336,7 +376,7 @@ impl HistoryZone {
                 g::STAR[*tick % g::STAR.len()],
                 running.since.elapsed(),
                 &running.label,
-                running.call.is_none(),
+                running.call.is_none() || running.compact,
             )
         });
         pin_rows(checklist, esc)
@@ -351,12 +391,79 @@ impl HistoryZone {
             label: "thinking".to_string(),
             since: Instant::now(),
             call: None,
+            compact: false,
         });
     }
 
-    /// The thought is over.
+    /// The thought is over; the compaction's own row is not a thought and stays.
     pub(super) fn thinking_ended(&mut self) {
-        self.pin.retain(|pin| pin.call.is_some());
+        self.pin.retain(|pin| pin.call.is_some() || pin.compact);
+    }
+
+    /// The server took a `/compact`: its row leads the pin, and its summary draws as one.
+    pub(super) fn compact_started(&mut self) {
+        if self.compacting.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        self.compacting = Some(now);
+        self.before = None;
+        self.after = None;
+        self.awaiting.clear();
+        self.pin.retain(|pin| !pin.compact);
+        self.pin.push(Pin {
+            label: compact::LABEL.to_string(),
+            since: now,
+            call: None,
+            compact: true,
+        });
+        // The summary has not arrived yet: the round needs a position for its banners.
+        let at = self.local.running_mut().text("");
+        self.local.set_compacting(true);
+        self.mark(Idx::Turn(at as u32));
+        self.ask = Some(Ask::Before);
+        self.outbox.push(Request::Usage);
+    }
+
+    /// The compaction round is over. Its banner keeps the figures this process measured; a round
+    /// this front end never watched start keeps only what the snapshot says.
+    pub(super) fn compact_closed(&mut self, compact: bool, ranges: &[[i64; 2]]) {
+        let opened = self.compacting.take();
+        self.local.set_compacting(false);
+        if !compact {
+            return;
+        }
+        let blocks = blocks_of(ranges);
+        let mark = compact::Mark {
+            opened: opened.is_some(),
+            before: self.before.take(),
+            after: self.after,
+        };
+        self.local.mark_compact(&blocks, mark);
+        self.local.drop_products();
+        self.run.clear();
+        if opened.is_some() {
+            self.awaiting = blocks;
+            self.ask = Some(Ask::After);
+            self.outbox.push(Request::Usage);
+        }
+    }
+
+    /// A snapshot names the compaction rounds it holds: give their blocks the banner.
+    pub(super) fn stamp_structure(&mut self) {
+        let blocks = self.structure.compact_blocks();
+        if blocks.is_empty() {
+            return;
+        }
+        self.local.mark_compact(
+            &blocks,
+            compact::Mark {
+                opened: false,
+                before: None,
+                after: self.after,
+            },
+        );
+        self.local.set_after(&blocks, self.after);
     }
 
     /// One call started; a running thought ends with it.
@@ -367,6 +474,7 @@ impl HistoryZone {
             label: intent.unwrap_or_default().to_string(),
             since: Instant::now(),
             call: Some(call.to_string()),
+            compact: false,
         });
     }
 
@@ -428,6 +536,11 @@ impl HistoryZone {
         self.pending = None;
         self.needs_layout = false;
         self.busy = false;
+        self.compacting = None;
+        self.before = None;
+        self.after = None;
+        self.ask = None;
+        self.awaiting.clear();
     }
 
     /// Frames this zone asked for, taken by the host.
@@ -702,6 +815,10 @@ impl SubZone for HistoryZone {
                 key: (*key).to_string(),
             });
         }
+        // A restored session shows the newest compaction's aftermath, if that is still where
+        // the gauge stands.
+        self.ask = Some(Ask::Attach);
+        self.outbox.push(Request::Usage);
         self.bump();
     }
 
@@ -721,6 +838,7 @@ impl SubZone for HistoryZone {
 
     fn hear(&mut self, event: &str, content: &Value) {
         match event {
+            name::COMPACT_START => self.compact_started(),
             name::CWD => {
                 if let Some(path) = content.get("path").and_then(Value::as_str)
                     && self.cwd != path

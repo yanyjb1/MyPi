@@ -54,6 +54,23 @@ pub(crate) fn session_of_turn(conn: &Connection, turn_id: i64) -> Result<Option<
         .optional()?)
 }
 
+/// Whether this round's list place carries the compaction mark.
+pub(crate) fn is_compaction(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: i64,
+    turn_id: i64,
+) -> Result<bool> {
+    Ok(tx
+        .query_row(
+            "SELECT is_compaction FROM session_turns
+              WHERE session_id = ?1 AND turn_id = ?2 LIMIT 1",
+            rusqlite::params![session_id, turn_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some_and(|marked| marked != 0))
+}
+
 /// Mark one round's list place as the start of the history a compaction wrote.
 pub(crate) fn mark_compaction(
     tx: &rusqlite::Transaction<'_>,

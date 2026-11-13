@@ -76,6 +76,7 @@ fn one(
                     session,
                     turn,
                     ranges: turns::ranges(tx, turn)?,
+                    compact: shared::is_compaction(tx, session, turn)?,
                 });
             }
             0

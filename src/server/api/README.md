@@ -79,7 +79,7 @@ Subscribe: `watch`, `submit`, `compact`.
 |---|---|---|---|
 | `register` | `hello` | `viewer` | an empty `opened` frame |
 | `register` | `bye` | — | nothing |
-| `call` | `init` | `session` | `structure` (`turn` + `ranges` per round), `blocks` (newest 32, whole rows), `todo` (the list, or null) |
+| `call` | `init` | `session` | `structure` (`turn` + `ranges` + `compact` per round), `blocks` (newest 32, whole rows), `todo` (the list, or null) |
 | `call` | `blocks` | `session`, `ranges` | `blocks`, whole rows, in request order |
 | `call` | `meta` | `session` | the session row |
 | `call` | `usage` | `session` | session totals, `cache_hit_rate`, `cny`, `usd`, `context`, `estimated`, `baseline_prompt`, and `groups` by `provider:model` |
@@ -121,9 +121,10 @@ storage       --(ranges, by the loop's settle)-->  the same Sender<Event>
 api's own write doors ------------->  relay
 ```
 
-The loop settles a turn through `pen::turn::settle`, which hands back the closed ranges; the loop
-sends them as `Element::Structure` on the same sender as everything else that turn said. A front end
-therefore hears the receipt before the next turn's first frame, always — not usually.
+The loop settles a turn through `pen::turn::settle`, which hands back the closed ranges and whether
+the round carries the compaction mark; the loop sends both as `Element::Structure` on the same
+sender as everything else that turn said. A front end therefore hears the receipt before the next
+turn's first frame, always — not usually.
 
 | event | `kind` | `name` | payload |
 |---|---|---|---|
@@ -131,7 +132,7 @@ therefore hears the receipt before the next turn's first frame, always — not u
 | slot taken | `stream` | `signal` | `signal: mailbox` |
 | live output | `stream` | the door that opened the turn | `session`, `turn`, `kind`, the piece |
 | notice | `stream` | `notice` | `session`, `level`, `content` |
-| round structure | `stream` | the door that opened the turn | `session`, `turn`, `ranges` |
+| round structure | `stream` | the door that opened the turn | `session`, `turn`, `ranges`, `compact` |
 
 - `kind` in a live payload is one of `text`, `thinking`, `arguments`, `boundary`, `tool_start`,
   `tool_progress`, `tool_end`, `wake`. A `wake` piece is one job's reminder and keeps its own block.

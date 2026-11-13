@@ -1,6 +1,7 @@
 //! The product layer: a block in, segments or rows out, kept by block.
 
 pub(crate) mod card;
+pub(crate) mod compact;
 pub(crate) mod fold;
 pub(crate) mod natural;
 mod notice;
@@ -17,5 +18,5 @@ mod wake;
 pub(crate) use notice::rows as notice_rows;
 pub(crate) use opts::Opts;
 pub(crate) use pin::{esc_row, rows as pin_rows};
-pub(crate) use products::{Product, Shape, of};
+pub(crate) use products::{Phase, Product, Shape, of};
 pub(crate) use todo::{Task, TodoPanel};

@@ -29,7 +29,11 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
             None => continue,
         };
         let ranges = reader.turn_ranges(turn_id)?;
-        structure.push(json!({"turn": turn_id, "ranges": ranges}));
+        structure.push(json!({
+            "turn": turn_id,
+            "ranges": ranges,
+            "compact": row["is_compaction"],
+        }));
         let borrowed = reader
             .turn(turn_id)?
             .map(|turn| turn["stop_reason"].as_str() == Some("borrowed"))

@@ -1,15 +1,20 @@
 //! The structural window: which rounds exist and the closed block ranges each owns.
 
-/// One round: its id and the closed block id ranges it owns.
+/// One round: its id, the closed block id ranges it owns, and whether it is a compaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Turn {
     pub id: i64,
     pub ranges: Vec<[i64; 2]>,
+    pub compact: bool,
 }
 
 impl Turn {
-    pub fn new(id: i64, ranges: Vec<[i64; 2]>) -> Turn {
-        Turn { id, ranges }
+    pub fn new(id: i64, ranges: Vec<[i64; 2]>, compact: bool) -> Turn {
+        Turn {
+            id,
+            ranges,
+            compact,
+        }
     }
 
     /// Whether one block id falls in this round.

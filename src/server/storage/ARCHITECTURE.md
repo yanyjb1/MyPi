@@ -64,7 +64,8 @@ Everything else is `pub(crate)` or private.
                                                         |
                                                         v
                                             Structure (turn,
-                                             its block id ranges)
+                                             its block id ranges,
+                                             its compaction mark)
                                                         |
                                                         v
                                             api -> whoever asked

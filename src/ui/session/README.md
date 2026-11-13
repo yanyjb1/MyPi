@@ -13,13 +13,13 @@ a type of its own, and nothing is rewritten on the way out.
 
 | window | holds | keyed by |
 |---|---|---|
-| `Structure` | the rounds: turn id plus closed block ranges, newest first | turn id |
+| `Structure` | the rounds: turn id, closed block ranges, and whether the round is a compaction, newest first | turn id |
 | `ContentCache` | whole blocks, exactly as an answer carried them | block id |
 
 - Content budget: `config.ui.session.preloadCache`, asked once at connect through `call config`;
   its answer feeds the window and is not forwarded.
 - Eviction: the earliest admission goes first, then the lowest id.
-- A pushed stream frame carrying `turn` and `ranges` sets that round.
+- A pushed stream frame carrying `turn` and `ranges` sets that round, compaction mark included.
 - A `call init` answer replaces both windows; a `call blocks` answer merges blocks; a `post delete`
   answer for the attached session detaches.
 

@@ -38,8 +38,9 @@ truth for every column.
   submission (the id exists only after that row runs).
 - The writer fills what only it can: auto-increment ids, the round's interval and byte count when a
   block lands, the session anchor's hash and its deduplication.
-- A settle answers with the round's structure: its id and the closed id ranges its blocks occupy,
-  in `Landed::pieces`, so the caller hands it to the live line itself.
+- A settle answers with the round's structure: its id, the closed id ranges its blocks occupy, and
+  whether the round carries the compaction mark, in `Landed::pieces`, so the caller hands it to the
+  live line itself.
 - Deletion is one door: `delete_rows(table, ids)` — the rows, whatever only they held, then the
   same sweep. A session's deletion is its row; the memo export is its own queued job.
 - A rewind is not row deletion: it rewrites a round's interval, then deletes the tail rows and

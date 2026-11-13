@@ -142,6 +142,7 @@ fn settle(
         element: Element::Structure {
             turn: piece.turn,
             ranges: piece.ranges,
+            compact: piece.compact,
         },
     });
     Ok(())

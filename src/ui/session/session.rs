@@ -197,7 +197,11 @@ impl Session {
         if let Some(turn) = content.get("turn").and_then(Value::as_i64)
             && let Some(ranges) = content.get("ranges").and_then(ranges_of)
         {
-            self.structure.set(Turn::new(turn, ranges));
+            let compact = content
+                .get("compact")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            self.structure.set(Turn::new(turn, ranges, compact));
         }
         self.outbox
             .push(Packet::new(frame.kind, frame.name, content));
@@ -277,13 +281,17 @@ fn ranges_of(value: &Value) -> Option<Vec<[i64; 2]>> {
     Some(out)
 }
 
-/// An `init` answer's `structure`: one `{turn, ranges}` per round.
+/// An `init` answer's `structure`: one `{turn, ranges, compact}` per round.
 fn turns_of(value: &Value) -> Option<Vec<Turn>> {
     let mut out = Vec::new();
     for entry in value.as_array()? {
         out.push(Turn::new(
             entry.get("turn")?.as_i64()?,
             ranges_of(entry.get("ranges")?)?,
+            entry
+                .get("compact")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         ));
     }
     out.reverse();

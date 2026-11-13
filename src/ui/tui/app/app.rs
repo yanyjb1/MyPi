@@ -286,7 +286,7 @@ impl App {
         let rounds: Vec<Round> = snapshot
             .turns()
             .iter()
-            .map(|turn| Round::new(turn.id, turn.ranges.clone()))
+            .map(|turn| Round::new(turn.id, turn.ranges.clone(), turn.compact))
             .collect();
         // One snapshot answers the ask; a nested ask would only loop.
         let requests: Vec<Request> = self.zones[owner.index()]

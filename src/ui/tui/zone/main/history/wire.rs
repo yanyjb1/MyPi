@@ -8,8 +8,9 @@ use super::local::mutable::Entry;
 use super::local::section::Idx;
 use super::local::slot::{Level, Life};
 use super::product::Task;
-use super::zone::HistoryZone;
+use super::zone::{Ask, HistoryZone};
 
+use crate::ui::lang::Lang;
 use crate::ui::tui::TodoFold;
 use crate::ui::tui::zone::{Frame, Request, Round, Shout, Turns, name};
 
@@ -35,6 +36,7 @@ pub(super) fn read_frame(zone: &mut HistoryZone, frame: &Frame) {
             }
         }
         ("call", "config") => read_config(zone, &frame.content),
+        ("call", "usage") => read_usage(zone, &frame.content),
         ("local", "opened") => read_opened(zone, &frame.content),
         _ => {}
     }
@@ -131,8 +133,14 @@ fn piece(zone: &mut HistoryZone, content: &Value) {
         // A text piece grows its block in place: the product keeps its closed segments.
         "text" => {
             zone.thinking_ended();
-            zone.local.running_mut().text(text);
-            None
+            let at = zone.local.running_mut().text(text);
+            // A compaction summary is laid as rows, not segments, so every piece re-lays it.
+            if zone.local.compacting() {
+                zone.local.drop_product(Idx::Turn(at as u32));
+                Some(at)
+            } else {
+                None
+            }
         }
         "thinking" => {
             zone.thinking_started();
@@ -273,7 +281,12 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
             settle_pending(zone);
         }
     }
+    let compact = content
+        .get("compact")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     zone.pin.clear();
+    zone.compact_closed(compact, &ranges);
     // The receipt is the fact: the round is over, so the idle call goes out whether or not this
     // zone ever saw a piece — a front end that opened the round never told this zone it was busy.
     if zone.pending.is_none() {
@@ -367,6 +380,37 @@ fn take_blocks(zone: &mut HistoryZone, rows: &Value) {
     zone.settle_focus();
 }
 
+/// The context figure. Every asker of `usage` reads the same session, so any answer settles it;
+/// what the ask was for decides which end of a compaction it names.
+fn read_usage(zone: &mut HistoryZone, content: &Value) {
+    let Some(ask) = zone.ask.take() else {
+        return;
+    };
+    let context = content.get("context").and_then(Value::as_u64);
+    // Only the gauge's estimate is a compaction's aftermath; an exact prompt is somebody's request.
+    let estimated = content
+        .get("estimated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let aftermath = if estimated { context } else { None };
+    match ask {
+        Ask::Before => zone.before = context,
+        Ask::After => {
+            zone.after = aftermath;
+            let blocks = std::mem::take(&mut zone.awaiting);
+            zone.local.set_after(&blocks, aftermath);
+            zone.local.drop_products();
+            zone.run.clear();
+        }
+        Ask::Attach => {
+            zone.after = aftermath;
+            zone.stamp_structure();
+            zone.local.drop_products();
+            zone.run.clear();
+        }
+    }
+}
+
 /// The checklist, as one flat list.
 fn take_todo(zone: &mut HistoryZone, value: &Value) {
     if value.is_null() {
@@ -396,6 +440,17 @@ fn read_config(zone: &mut HistoryZone, content: &Value) {
     };
     let number = content.get("value").and_then(Value::as_u64);
     match key {
+        "config.ui.lang" => {
+            if let Some(lang) = content
+                .get("value")
+                .and_then(Value::as_str)
+                .and_then(Lang::parse)
+            {
+                zone.lang = lang;
+                zone.local.drop_products();
+                zone.run.clear();
+            }
+        }
         "config.ui.tui.zone.main.history.focusLine" => {
             if let Some(n) = number {
                 zone.focus_line = usize::try_from(n).unwrap_or(usize::MAX);
@@ -446,6 +501,7 @@ pub(super) fn apply_structure(zone: &mut HistoryZone, snapshot: &Turns) {
     } else if !zone.needs_layout {
         drop_unowned(zone);
     }
+    zone.stamp_structure();
     drop_stale_focus(zone);
     zone.settle_focus();
     zone.ensure_around();
@@ -504,13 +560,17 @@ fn drop_unowned(zone: &mut HistoryZone) {
     }
 }
 
-/// An `init` answer's `structure`: one `{turn, ranges}` per round, oldest first on the wire.
+/// An `init` answer's `structure`: one `{turn, ranges, compact}` per round, oldest first on the wire.
 fn turns_of(value: &Value) -> Option<Turns> {
     let mut rounds = Vec::new();
     for item in value.as_array()? {
         let id = item.get("turn").and_then(Value::as_i64)?;
         let ranges = item.get("ranges").and_then(ranges_of)?;
-        rounds.push(Round::new(id, ranges));
+        let compact = item
+            .get("compact")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        rounds.push(Round::new(id, ranges, compact));
     }
     rounds.reverse();
     Some(Turns::of(rounds))

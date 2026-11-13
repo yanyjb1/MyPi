@@ -339,7 +339,11 @@ impl Relay {
             }
             // Handled above: the slot opening names the turn instead of pushing a frame.
             Element::Mailbox { .. } => {}
-            Element::Structure { turn, ranges } => self.structure(session, turn, ranges),
+            Element::Structure {
+                turn,
+                ranges,
+                compact,
+            } => self.structure(session, turn, ranges, compact),
         }
     }
 
@@ -377,12 +381,13 @@ impl Relay {
     }
 
     /// The turn closed: its ranges go out last, then the buffer and the turn go.
-    fn structure(&self, session: i64, turn: i64, ranges: Vec<[i64; 2]>) {
+    fn structure(&self, session: i64, turn: i64, ranges: Vec<[i64; 2]>, compact: bool) {
         let (_, door) = self.turn_of(session);
         let payload = json!({
             "session": session,
             "turn": turn,
             "ranges": ranges,
+            "compact": compact,
         });
         self.deliver(session, Frame::new("stream", door, payload), None);
         let mut state = self.state();

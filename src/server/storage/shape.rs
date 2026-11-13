@@ -316,11 +316,12 @@ pub struct Landed {
     pub pieces: Vec<Structure>,
 }
 
-/// What the writer tells a live surface once a round is over: where it sits, and the closed id
-/// ranges its blocks occupy, in order and split where they are discontinuous.
+/// What the writer tells a live surface once a round is over: where it sits, the closed id
+/// ranges its blocks occupy, and whether the round is the compaction that rewrote the history.
 #[derive(Debug, Clone)]
 pub struct Structure {
     pub session: i64,
     pub turn: i64,
     pub ranges: Vec<[i64; 2]>,
+    pub compact: bool,
 }

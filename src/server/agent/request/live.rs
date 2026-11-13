@@ -21,10 +21,12 @@ pub enum Element {
     Mailbox {
         turn: i64,
     },
-    /// A turn closed: the id ranges its blocks occupy, in landing order.
+    /// A turn closed: the id ranges its blocks occupy, in landing order, and whether it is the
+    /// compaction that rewrote the history.
     Structure {
         turn: i64,
         ranges: Vec<[i64; 2]>,
+        compact: bool,
     },
 }
 

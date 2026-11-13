@@ -46,8 +46,8 @@ Session
 ## Must stay in sync
 
 1. `content::ContentCache` and the `preloadCache` key.
-2. `structure::Turn` and the wire's `ranges`: pairwise, closed intervals, newest first once
-   loaded.
+2. `structure::Turn` and the wire's `ranges` and `compact`: pairwise, closed intervals, newest
+   first once loaded.
 3. `Session::attach` and both windows: they live exactly as long as one attachment.
 4. `Packet` and the front end's `Kind` table: a new upstream kind is a string here and a
    declaration there.

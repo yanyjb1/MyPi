@@ -36,8 +36,35 @@ pub enum Shape<'a> {
     Dead,
 }
 
-/// One block's product: a card, a text block, a band, a notice.
-pub(crate) fn of(block: &Block, paired: Option<&Block>, opts: &Opts, width: usize) -> Product {
+/// Whether a position belongs to a compaction round, and which end of it.
+pub(crate) enum Phase {
+    /// An ordinary block.
+    Off,
+    /// The compaction is running: the summary is still arriving.
+    Running,
+    /// The round is over, and the mark says what its banners read.
+    Done(super::compact::Mark),
+}
+
+/// One block's product: a card, a text block, a band, a notice, a compaction.
+pub(crate) fn of(
+    block: &Block,
+    paired: Option<&Block>,
+    opts: &Opts,
+    width: usize,
+    phase: Phase,
+) -> Product {
+    match phase {
+        // Only the summary carries the round's frames; the instruction stays the record.
+        Phase::Running if block.kind == BlockKind::Assistant => {
+            return Product::Fixed(super::compact::running(block, opts, width));
+        }
+        Phase::Done(_) if block.kind == BlockKind::User => return Product::Fixed(Vec::new()),
+        Phase::Done(mark) if block.kind == BlockKind::Assistant => {
+            return Product::Fixed(super::compact::done(block, mark, opts, width));
+        }
+        Phase::Running | Phase::Done(_) | Phase::Off => {}
+    }
     match block.kind {
         BlockKind::ToolResult => Product::Fixed(Vec::new()),
         BlockKind::ToolRequest => Product::Fixed(super::card::rows(block, paired, opts, width)),

@@ -13,7 +13,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `markdown.rs` | markdown to runs: headings, lists, quotes, inline emphasis | private |
 | `display.rs` | laid rows to screen lines | private |
 | `local/` | `section` (`Local`, `Idx`), `slot` (`Slot`, `SlotKind`, `Held`, `Level`, `Life`), `content` (`Block`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
-| `product/` | `products` (`Product`, `Shape`, the derivation), `segment` (source to segments), `text` (a text block's closed segments and its open tail), `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `pin`, `card` | private |
+| `product/` | `products` (`Product`, `Shape`, `Phase`, the derivation), `segment` (source to segments), `text` (a text block's closed segments and its open tail), `compact` (a compaction's banners, its folded summary and what the round measured), `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `pin`, `card` | private |
 | `product/pin/` | `esc` (the running label's row), `sweep` (the accent band over that label) | private |
 | `product/card/` | `frame` (dispatch, the card frame, the text and argument helpers), `tool` (the renderer contract and the family table), `state` (the three phases and their colors), `partial` (fields of arguments still arriving), one file per tool family | private |
 | `prefetch/` | `run` (the laid segments), `range` (the start and the budget), `segment` (`SegId`, `Laid`), `trim`, `walk`, `color` | private |
@@ -43,9 +43,15 @@ HistoryZone
  ├── pin: Vec<Pin>              ── what is still running, in arrival order
  ├── tick: usize                ── the phase the spinner reads
  ├── busy: bool                 ── the statusline's busy glyph
+ ├── compacting: Option<Instant> ── the compaction in flight, and its clock
+ ├── before / after / ask / awaiting ── the gauge's two figures and what was asked for
+ ├── lang: Lang                 ── the language the banners' numbers read in
  ├── rev: u64                   ── what the app compares to decide on a draw
  └── thinking / tool / fold / scroll_height / focus_line / placeholder / cwd / pending
 ```
+
+`Local` carries the other half of it: `compacting` for the round in flight and `marks`, the blocks a
+finished round holds with what its banners read.
 
 - `wire::read_frame` decodes one frame and never lays: a piece appends to the running entry and marks
   that entry's position (and the card position it draws), a text piece instead grows that position's
@@ -96,6 +102,13 @@ HistoryZone
 15. A receipt and the rows fetched for it: the ids come from the receipt, the content from
     `call blocks`, and the positions from the receipt alone. Nothing gives a position to content
     that did not come from a receipt.
+16. `product::compact::Mark`, `Local::mark_compact` and `wire::apply_structure`: a round's blocks
+    take their banners from the structural window, and `zone::compact_closed` is what gives them
+    the figures this front end measured.
+17. `zone::compact_started`, `zone::compact_closed` and the `Pin` identity: a compaction that starts
+    never closes its row, and one that closes never clears it, unless the two move together.
+18. `product::of`'s `Phase` and `Local::prepare`: a position drawn inside a compaction round must
+    be told so, and a summary laid as rows must drop its product on every piece.
 
 ## Not wired
 

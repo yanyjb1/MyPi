@@ -41,7 +41,7 @@ Api::receive
   → reply frame, or the error frame
 
 Relay::start
-  → Sender<Event> handed to Loop::new    (live output, signals, and a turn's ranges)
+  → Sender<Event> handed to Loop::new    (live output, signals, a turn's ranges and its mark)
 ```
 
 - `Api::open` builds the request half and the loop, in that order, so the loop's events already have

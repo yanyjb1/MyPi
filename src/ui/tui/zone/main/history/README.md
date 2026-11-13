@@ -67,6 +67,9 @@ open tail, so one piece costs the tail, not the block. The tail's rows go and th
 piece again; the closed segments keep theirs. A piece that only lengthens the open line still
 re-lays that line, which is the one quadratic left in the layer.
 
+A compaction summary is rows rather than segments: each piece of it drops the product and lays it
+again, which is what keeps its two banners outside the summary's own tail.
+
 ### Tool cards
 
 A tool exchange draws as one card, built from the request and the result it pairs with. The card
@@ -102,6 +105,26 @@ named with their item text, and the counts the result carries. A `tick` with `do
 `untick` and leaves the text uncrossed. The checklist itself is the pinned product, never part of
 the card.
 
+### A compaction round
+
+The round a compaction writes is bracketed by two banners, and only its summary draws. Its other
+block is the instruction the request carried: the record, never a row.
+
+A banner is one row: `>>>---label---<<<`. The arrow runs narrow tier by tier as the width goes —
+three, then two, then one — and the rule between them takes what is left; a width that cannot frame
+the label draws it bare, cut to the row. The label is `compaction started` for the banner the round
+opens with and `compacted` for the one it closes with; on that one the gauge's figures follow as
+`compacted · 245.0K -> ~18.9K`, the context before the round and the estimate it left, marked with a
+tilde as an estimate. A figure this front end did not measure is left out, and a round it only reads
+back never shows the lower figure.
+
+The summary is folded to one row — `summarizing` while it arrives, `summary` once the round is over
+— and `Ctrl + O` lays it out as markdown.
+
+Which blocks belong to a compaction round comes from the structural window; the figures come from
+this front end's own `call usage` asks, one when the round starts and one when it closes. The brief
+window between the two is the only state the round owns.
+
 ### Prefetch layer
 
 The unit is the segment: it enters whole and leaves whole. A segment is colored once, then kept with
@@ -118,11 +141,12 @@ not a segment and takes no `SegId`; `len` and `row` count it, `trim` and `at` do
 rebuilds it every draw from the checklist and from what is still running, so a round close never
 has to clear it.
 
-The pin is the checklist, then the ESC row while a call or a thought runs. It scrolls like any other
-row: it is not an overlay, and going up walks into the transcript above it. The ESC row reads
-`spinner ESC <elapsed> · <label>`; the label is the intent of the earliest unfinished call, or
-`thinking` while only reasoning arrives. A thought keeps `ESC` in the accent and sweeps the label; a
-call keeps the label in the accent and sweeps `ESC`. The starburst turns one frame per tick and the
+The pin is the checklist, then the ESC row while a call, a thought or a compaction runs. It scrolls
+like any other row: it is not an overlay, and going up walks into the transcript above it. The ESC
+row reads `spinner ESC <elapsed> · <label>`; the label is the intent of the earliest unfinished
+call, `thinking` while only reasoning arrives, or `COMPACTING` while the history is being folded. A
+thought keeps `ESC` in the accent and sweeps the label; a call keeps the label in the accent and
+sweeps `ESC`; a compaction sweeps its own label. The starburst turns one frame per tick and the
 sweep walks 30 columns a second on the row's own clock.
 
 The display range is a start plus the rows the screen has. Three starts:
@@ -198,6 +222,10 @@ opens a natural line), or `Wrapped` (it is a continuation).
   result landing re-lays that position, not only its own.
 - **A card is rebuilt from the stream it has**, so partial arguments produce a partial card and
   nothing waits for the call to finish.
+- **A compaction round is bracketed, not boxed** so that the fold reads as one place in the
+  conversation, the summary below it staying ordinary text.
+- **A compaction's figures are asked for, not stored** so that nothing about the gauge has to cross
+  the structure the app hands down.
 
 ## 3. Unresolved
 
@@ -221,3 +249,4 @@ opens a natural line), or `Wrapped` (it is a continuation).
 | `config.ui.tui.zone.main.history.cardFoldBudget` | rows a card head or tail may take |
 | `config.ui.tui.zone.main.history.scrollHeight` | rows one wheel notch walks |
 | `config.ui.tui.zone.main.history.todoFold` | task-list folding policy |
+| `config.ui.lang` | the language a compaction banner's figures read in |
