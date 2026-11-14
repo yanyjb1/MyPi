@@ -50,8 +50,8 @@ Subscribe: `watch`, `submit`, `compact`.
   compaction is the exception: the context is then the summary plus whatever tail it kept, so
   `usage` estimates it instead of reporting the pre-compaction prompt. The compaction round
   measured what it replaced; the newest measurement before it measured the context as it stood.
-  Removing the first from the second leaves the tail, which the summary's own completion is then
-  added to. The answer says `estimated`.
+  Removing the first from the second leaves the tail, which the summary's own completion and the
+  overhead every request carries (the baseline) are then added to. The answer says `estimated`.
   `baseline_prompt` is that floor: the smallest first-turn prompt among the sessions that share
   this request archive, which is what a front end shows before the first request lands.
 - `submit` and `compact` open a turn; a session already in a turn answers `busy`. Nothing is queued

@@ -36,12 +36,7 @@ pub(crate) fn context(
     }
 }
 
-/// The tail the compaction kept, plus the summary that replaced the rest.
-///
-/// The compaction round measured two things: what it sent (the region it replaced, plus the
-/// system prompt and the manuals), and what the summary cost. The newest measurement before it
-/// is the context as it stood. Subtracting the region from that leaves the tail, and the summary
-/// is added back on top.
+/// The tail the compaction kept, plus its summary and the overhead every request carries.
 fn estimate(list: &[Value], stamps: &[Stamp], baseline: Option<u64>) -> Option<u64> {
     let at = list
         .iter()
@@ -60,7 +55,9 @@ fn estimate(list: &[Value], stamps: &[Stamp], baseline: Option<u64>) -> Option<u
     // What the compaction sent, less the part every request carries anyway.
     let overhead = baseline.unwrap_or(0);
     let region = summary.prompt.saturating_sub(overhead);
-    Some(head.prompt.saturating_sub(region) + summary.completion)
+    // The overhead is no part of the region: take it off before the clamp, put it back after.
+    let tail = head.prompt.saturating_sub(overhead).saturating_sub(region);
+    Some(tail + overhead + summary.completion)
 }
 
 /// `[[lo, hi], ...]` as pairs.
