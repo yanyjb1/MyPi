@@ -1,0 +1,9 @@
+[
+  {
+    "match": "^techcrunch\\.com/\\d{4}/\\d{2}/\\d{2}/",
+    "keep": [
+      { "selector": ".article-hero", "drop": [".article-hero__share"] },
+      { "selector": ".entry-content", "drop": ["figure.wp-block-embed", ".wp-block-techcrunch-jw-player-embed", ".tc-event-inline-cta", ".hellobar_disrupt_promo_slot"] }
+    ]
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "match": "^siliconangle\\.com/\\d{4}/\\d{2}/\\d{2}/",
+    "keep": [
+      { "selector": "#single-post-meta .sa-post-title", "drop": [] },
+      { "selector": "#single-post-meta .sa-post-byline", "drop": [".post-author-image"] },
+      { "selector": ".single-post-content", "drop": [".silic-after-content"] }
+    ]
+  }
+]

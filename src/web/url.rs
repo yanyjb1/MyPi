@@ -82,3 +82,22 @@ pub(crate) fn normalize(raw: &str) -> anyhow::Result<String> {
         },
     )
 }
+
+/// What a page's files are called: the site it came from, without the `www.` it may or may not
+/// print, and in a shape a file name can hold.
+pub(crate) fn site(address: &str) -> String {
+    let host = ::url::Url::parse(address)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string))
+        .unwrap_or_default();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    let name: String = host
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' })
+        .collect();
+    if name.is_empty() {
+        "page".to_string()
+    } else {
+        name
+    }
+}

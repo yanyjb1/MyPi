@@ -1,0 +1,9 @@
+[
+  {
+    "match": "^www\\.sohu\\.com/a/\\d+_\\d+$",
+    "keep": [
+      { "selector": ".text-title", "drop": [] },
+      { "selector": "article#mp-editor", "drop": ["#backsohucom"] }
+    ]
+  }
+]

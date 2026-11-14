@@ -60,8 +60,20 @@ error, never a default.
 ### Bootstrap
 
 When an artifact is missing, it is written next to `models.yml` in the global root: `config.yaml`
-from the table, and `profiles/default/system.md` plus `compact.md` from the compiled prompts. Nothing
-existing is overwritten. Other profiles are created by the user in the same layout.
+from the table, `profiles/default/system.md` plus `compact.md` from the compiled prompts, and the
+site-rule manifest `web-rules.json` plus every `web-rulesets/` file it names. Nothing existing is
+overwritten. Other profiles are created by the user in the same layout.
+
+### Site rules
+
+`web-rules.json` is a manifest: one array whose entries are either a rule written in place or a
+string naming another file of rules, resolved against the manifest's own directory and written with
+forward slashes. Each set is flattened in where it is named, so one ordered list of rules emerges.
+
+The built-in manifest names one set per site under `web-rulesets/`, and each is compiled into the
+binary, so a machine with no manifest runs the same rules it would be given. A set that cannot be
+read warns, and only that set is lost. The web domain is the reader: it asks for the regions a page
+keeps, and for the drops inside each.
 
 ### Warnings
 

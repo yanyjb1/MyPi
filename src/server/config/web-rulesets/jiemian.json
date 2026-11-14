@@ -1,0 +1,10 @@
+[
+  {
+    "match": "^www\\.jiemian\\.com/article/\\d+\\.html$",
+    "keep": [
+      { "selector": ".article-view .article-header", "drop": [] },
+      { "selector": ".article-view .article-info", "drop": [] },
+      { "selector": ".article-view .article-main", "drop": ["#ad_content"] }
+    ]
+  }
+]

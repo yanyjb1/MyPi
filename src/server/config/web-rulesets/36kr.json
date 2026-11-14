@@ -1,0 +1,11 @@
+[
+  {
+    "match": "^(?:www\\.)?36kr\\.com/p/\\d+$",
+    "keep": [
+      { "selector": "h1.article-title", "drop": [] },
+      { "selector": ".article-title-icon", "drop": [] },
+      { "selector": ".summary", "drop": [] },
+      { "selector": ".articleDetailContent", "drop": [] }
+    ]
+  }
+]

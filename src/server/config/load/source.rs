@@ -7,6 +7,7 @@ use super::super::notice::{ConfigNotice, warn};
 use super::super::paths::{self, ConfigPaths};
 use super::super::profile;
 use super::super::registry;
+use super::super::rules;
 use super::super::write;
 use super::types::Layers;
 
@@ -72,6 +73,7 @@ pub(super) fn bootstrap(paths: &ConfigPaths, default_model: Option<&str>) -> any
     let Some(root) = paths.global_root() else {
         return Ok(());
     };
+    rules::install(root)?;
     let config = root.join(paths::CONFIG_FILE);
     if paths.config_files().is_empty() {
         let text = registry::template();

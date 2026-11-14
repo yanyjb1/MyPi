@@ -1,0 +1,9 @@
+[
+  {
+    "match": "^www\\.bjnews\\.com\\.cn/detail/\\d+\\.html$",
+    "keep": [
+      { "selector": ".bodyTitle", "drop": [".fontChanges"] },
+      { "selector": ".article-text", "drop": [".interact"] }
+    ]
+  }
+]

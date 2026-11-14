@@ -1,15 +1,26 @@
 [
-  {
-    "match": "^www\\.poetryfoundation\\.org/(poems|poets)/",
-    "keep": [
-      { "selector": "h1", "drop": [] },
-      { "selector": "article .rich-text", "drop": [] }
-    ]
-  },
-  {
-    "match": "^www\\.poetryfoundation\\.org/?$",
-    "keep": [
-      { "selector": "main", "drop": ["nav", "footer", "aside", "header"] }
-    ]
-  }
+  "web-rulesets/cac.json",
+  "web-rulesets/court.json",
+  "web-rulesets/thepaper.json",
+  "web-rulesets/techcrunch.json",
+  "web-rulesets/21jingji.json",
+  "web-rulesets/36kr.json",
+  "web-rulesets/bjnews.json",
+  "web-rulesets/cn-sec.json",
+  "web-rulesets/cnbc.json",
+  "web-rulesets/forbes.json",
+  "web-rulesets/geekwire.json",
+  "web-rulesets/gov.cn.json",
+  "web-rulesets/huxiu.json",
+  "web-rulesets/jiemian.json",
+  "web-rulesets/mrjjxw.json",
+  "web-rulesets/pbc.json",
+  "web-rulesets/poetryfoundation.json",
+  "web-rulesets/qq.json",
+  "web-rulesets/siliconangle.json",
+  "web-rulesets/sina.json",
+  "web-rulesets/sohu.json",
+  "web-rulesets/stdaily.json",
+  "web-rulesets/tmtpost.json",
+  "web-rulesets/yicai.json"
 ]

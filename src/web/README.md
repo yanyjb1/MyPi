@@ -153,13 +153,18 @@ sweep reads: a browser with an operation in flight is never closed.
 
 ### Output
 
-`read` answers Markdown; with `raw` it writes the DOM to `<temp>/mypi/web/<stamp>.html` and answers
-that path. `search` answers the provider, the page range, the count and a numbered list. The rest
-answer a status line, except `screenshot`, which names its file and its size.
+`read` answers Markdown; with `raw` it writes the DOM to `<temp>/mypi/web/<site>-<n>.html` and
+answers that path. `search` answers the provider, the page range, the count and a numbered list. The
+rest answer a status line, except `screenshot`, which names its file and its size.
+
+Every file under `<temp>/mypi/web` is named for the site it came from and numbered in the order it
+was written, so two calls in the same second never land on each other.
 
 ### What a read leaves out, and what it adds
 
-The answer is the page's prose, not its document. Four things shape it:
+The answer is the page's prose, not its document. A read that names a URL navigates first, and
+the document is polled until its `<body>` has been parsed and the text is not a script shell;
+a page still unfinished when the budget ends is read as it stands. Four things shape it:
 
 - **Inline images go.** An `svg` element and an `img` whose `src` is a `data:` URI are dropped, and
   the alt text is kept where there is one. A marketing page carries its icons and sprites inline,
@@ -174,7 +179,8 @@ The answer is the page's prose, not its document. Four things shape it:
 - **Controls stay, named.** `button`, `input`, `select`, `textarea` and `summary` are emitted as
   HTML where they sit, so the prose still shows a control was there, and the answer ends with an
   `operable` section naming each one's selector: the tool's `click` and `fill` take a selector, and
-  Markdown has nowhere to put one.
+  Markdown has nowhere to put one. Ten controls are listed inline; the rest are written to one
+  file, and the section ends with a line naming how many and where.
 
 A page whose body renders no text at all answers `target url has an empty body` rather than an
 empty document, so the model can tell an unrendered page from a quiet one.
@@ -183,23 +189,41 @@ empty document, so the model can tell an unrendered page from a quiet one.
 
 A site whose `<body>` mixes prose with furniture needs naming, and the naming lives in a file the
 user owns: `<config dir>/web-rules.json`, beside `config.yaml`. The file is read once, when the
-configuration is loaded; a file that cannot be read is named there, and the built-in set
-(`server/config/web-rules.json`) answers instead. A machine that has none is given a copy of that
-set on first use, so a site deleted from it falls back to the generic conversion.
+configuration is loaded; a file that cannot be read is named there, and the built-in set answers
+instead. A machine that has none is given the built-in one on first launch, sets and all, so a site
+deleted from it falls back to the generic conversion.
 
-The file is one array of rules, tried in order. The first rule whose `match` — a regex over
-`host + path`, never the query — matches the page is the rule that applies.
+The file is a manifest: one array whose entries are either a rule written in place or a string
+naming another file of rules. Each set is flattened in at the position it is named, and the
+top-level order is the order rules are tried in.
 
 ```json
 [
-  {
-    "match": "^example\\.com/doc/",
-    "keep": [
-      { "selector": "main", "drop": ["nav", "footer"] },
-      { "selector": "#appendix", "drop": [] }
-    ]
-  }
+  "web-rulesets/court.json",
+  { "match": "^example\\.com/doc/", "keep": [{ "selector": "main", "drop": ["nav"] }] },
+  "web-rulesets/thepaper.json"
 ]
+```
+
+A set's path is relative to the manifest's own directory and written with forward slashes. A set
+that cannot be read is one warning and one hole: the rest of the manifest still applies.
+
+The built-in set is authored the same way — the manifest names one set per site under
+`server/config/web-rulesets/`, and every one of them is compiled into the binary. Launching on a
+machine with no manifest writes the manifest and the sets it names, so the files the user edits
+are the files that were read.
+
+Within a manifest or a set, rules are tried in order. The first rule whose `match` — a regex over
+`host + path`, never the query — matches the page is the rule that applies.
+
+```json
+{
+  "match": "^example\\.com/doc/",
+  "keep": [
+    { "selector": "main", "drop": ["nav", "footer"] },
+    { "selector": "#appendix", "drop": [] }
+  ]
+}
 ```
 
 - `keep` is the prose: each entry names one region, by a selector looked for from the body, and
@@ -207,7 +231,11 @@ the first element it names is what is read. Several entries are read in order an
 - `drop` applies inside its own entry only. A `nav` inside the kept region goes; a `nav` outside
 it was never read.
 - When no rule matches, or none of a rule's selectors resolve, the page is read whole: a broken
-rule must not hide a page.
+  rule must not hide a page.
+
+The `operable` section obeys the same regions. A read that narrowed the page scans the kept
+regions only, and an entry's `drop` is left out of the control list exactly as it was left out of
+the prose; a control in no kept region is not listed either.
 
 A site that writes no `<main>` gets no special handling. The regions above are how such a site is
 named, and until it is, its whole body is what is read.

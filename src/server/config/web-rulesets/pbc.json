@@ -1,0 +1,9 @@
+[
+  {
+    "match": "^www\\.pbc\\.gov\\.cn/tiaofasi/\\S+/index\\.html$",
+    "keep": [
+      { "selector": "h2", "drop": [] },
+      { "selector": "td.content #zoom", "drop": [] }
+    ]
+  }
+]

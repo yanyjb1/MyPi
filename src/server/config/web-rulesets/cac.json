@@ -1,0 +1,9 @@
+[
+  {
+    "match": "^www\\.cac\\.gov\\.cn/\\d{4}-\\d{2}/\\d{2}/c_.+\\.htm$",
+    "keep": [
+      { "selector": ".main-title", "drop": [".set_font", ".bdsharebuttonbox"] },
+      { "selector": ".main-content", "drop": [".zwfenye"] }
+    ]
+  }
+]

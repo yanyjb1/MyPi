@@ -1,0 +1,10 @@
+[
+  {
+    "match": "^news\\.qq\\.com/rain/a/\\w+$",
+    "keep": [
+      { "selector": "h1#article-title", "drop": [] },
+      { "selector": "#article-author", "drop": [".qqcom-follow-button"] },
+      { "selector": "#article-content", "drop": [".article-top-content"] }
+    ]
+  }
+]

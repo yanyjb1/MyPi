@@ -8,7 +8,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 |---|---|
 | `mod.rs` | declares the modules; exports `WebArgs`, `run`, `close_session`, `shutdown`, `ENGINES` |
 | `args.rs` | `WebArgs`: the shared input shape of every operation |
-| `artifact.rs` | the files the model reads back: `<temp>/mypi/web/<stamp>`, one writer |
+| `artifact.rs` | the files the model reads back: one writer, named for the site and numbered |
 | `run.rs` | the two-operation permit, the in-flight count, and the `op` dispatch |
 | `url.rs` | URL normalisation, query encoding, percent and base64 decoding |
 
@@ -55,7 +55,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | file | holds |
 |---|---|
 | `html/markdown.rs` | DOM → Markdown, the inline-image drop, and the JS-shell check |
-| `html/control.rs` | the page-side scan for clickable and fillable controls, and the selector each is reached by |
+| `html/control.rs` | the page-side scan for clickable and fillable controls, the region each is searched in, and the selector each is reached by |
 | `html/tags.rs` | the tag scanner and entity decoder the providers use |
 | `rules.rs` | the page-side half of a site rule: the kept regions, and the HTML read back |
 
@@ -101,7 +101,8 @@ lifecycle::signal → shutdown
 - `html::control` scans the live page through `evaluate`, so its expression and `drive`'s selectors
   meet at the same engine: what the scan names, `click` and `fill` can reach.
 - `rules` narrows a page through `evaluate` too, and states which regions survived. `read` hands
-  those selectors to the control scan, so both read the same part of the page.
+  each surviving region, with the drops its rule wrote for it, to the control scan, so the two read
+  the same part of the page and leave out the same furniture.
 
 ## Must stay in step
 

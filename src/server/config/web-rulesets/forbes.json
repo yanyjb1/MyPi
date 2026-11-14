@@ -1,0 +1,10 @@
+[
+  {
+    "match": "^www\\.forbes\\.com/sites/\\S+$",
+    "keep": [
+      { "selector": "h1", "drop": [] },
+      { "selector": "[class*='_51GWpoAk']", "drop": [] },
+      { "selector": ".article-body", "drop": [".vestpocket", ".d-none", "section"] }
+    ]
+  }
+]

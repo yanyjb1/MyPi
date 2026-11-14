@@ -1,0 +1,10 @@
+[
+  {
+    "match": "^www\\.mrjjxw\\.com/articles/\\S+$",
+    "keep": [
+      { "selector": ".m-articleBox", "drop": [] },
+      { "selector": ".g-article-abstract", "drop": [] },
+      { "selector": ".m-articleContent", "drop": [] }
+    ]
+  }
+]

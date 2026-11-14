@@ -1,0 +1,17 @@
+[
+  {
+    "match": "^www\\.court\\.gov\\.cn/\\w+/xiangqing/\\d+\\.html$",
+    "keep": [
+      { "selector": ".detail .title", "drop": [] },
+      { "selector": ".detail .message", "drop": [] },
+      { "selector": ".detail .txt_txt", "drop": [] },
+      { "selector": ".detail .txt_etr", "drop": [] }
+    ]
+  },
+  {
+    "match": "^www\\.court\\.gov\\.cn/zixun/gengduo/104(_\\d+)?\\.html$",
+    "keep": [
+      { "selector": ".sec_list > ul", "drop": [] }
+    ]
+  }
+]

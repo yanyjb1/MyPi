@@ -1,0 +1,10 @@
+[
+  {
+    "match": "^finance\\.sina\\.com\\.cn/\\S+/doc-\\w+\\.shtml$",
+    "keep": [
+      { "selector": "h1.main-title", "drop": [] },
+      { "selector": ".date-source", "drop": [] },
+      { "selector": "#artibody", "drop": [] }
+    ]
+  }
+]

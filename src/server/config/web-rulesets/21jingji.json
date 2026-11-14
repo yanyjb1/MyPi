@@ -1,0 +1,16 @@
+[
+  {
+    "match": "^www\\.21jingji\\.com/article/\\d{8}/herald/\\w+\\.html$",
+    "keep": [
+      { "selector": ".col-l .main", "drop": [".xgplayer", ".cmsAD", ".share-wrap"] }
+    ]
+  },
+  {
+    "match": "^m\\.21jingji\\.com/article/\\d{8}/herald/\\w+\\.html$",
+    "keep": [
+      { "selector": ".titleHead", "drop": [".author-avatar", ".gznch"] },
+      { "selector": ".txtContent .description", "drop": [] },
+      { "selector": ".txtContent .main_content", "drop": [] }
+    ]
+  }
+]

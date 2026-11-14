@@ -1,21 +1,24 @@
 //! The controls a Markdown document cannot express: what the page offers to click or to fill,
 //! and the selector that reaches each one.
 
-use anyhow::Context as _;
+use anyhow::{Context as _, Result};
 use serde_json::Value;
 
-/// How many controls the answer lists. Past this a page is mostly chrome, and the count of the
-/// rest is the useful part.
-const LISTED: usize = 40;
+use crate::server::config::rules::Part;
+use crate::web::artifact;
+
+/// How many controls the answer lists inline. Past this the rest go to one file, so a reader
+/// still has somewhere to look.
+const LISTED: usize = 10;
 
 /// The page-side half: one expression whose value is a JSON object. The placeholders are
 /// filled by `expression`, so the script itself stays one readable literal.
 const SCAN: &str = r#"(() => {
   const body = document.body;
-  if (!body) return JSON.stringify({ text: 0, total: 0, items: [] });
-  const LIMIT = %LISTED%;
+  if (!body) return JSON.stringify({ text: 0, items: [] });
   const SCOPE = %SCOPE%;
-  const SKIP = '%SKIP%';
+  const SKIP = %SKIP%;
+  const DIRECT = %DIRECT%;
   const NAMES = ['aria-label', 'title', 'alt', 'placeholder', 'value'];
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
   const clip = s => (s.length > 60 ? s.slice(0, 60) + '…' : s);
@@ -75,36 +78,44 @@ const SCAN: &str = r#"(() => {
 
   const roots = [];
   if (SCOPE.length === 0) {
-    roots.push(body);
+    roots.push({ at: body, drop: [] });
   } else {
-    for (const selector of SCOPE) {
-      const found = document.querySelector(selector);
-      if (found) roots.push(found);
+    for (const part of SCOPE) {
+      const found = document.querySelector(part.selector);
+      if (found) roots.push({ at: found, drop: part.drop });
     }
   }
 
+  // A rule's drops belong to the region they were written for; a match above that region says
+  // nothing about what is inside it.
+  const skipped = (el, region, drops) => {
+    if (el.closest(SKIP)) return true;
+    return drops.some(selector => {
+      const hit = el.closest(selector);
+      return hit !== null && hit !== region && region.contains(hit);
+    });
+  };
+
   const seen = new Set();
   const items = [];
-  let total = 0;
-  const add = el => {
-    if (seen.has(el) || el.closest(SKIP) || el.getClientRects().length === 0) return;
-    if (seen.size >= 400) return;
+  const add = (el, region, drops) => {
+    if (seen.has(el) || skipped(el, region, drops) || el.getClientRects().length === 0) return;
     seen.add(el);
-    total++;
-    if (items.length >= LIMIT) return;
     items.push({ select: path(el), kind: kind(el), name: name(el), context: context(el) });
   };
 
   for (const root of roots) {
-    for (const el of root.querySelectorAll('%DIRECT%')) add(el);
-    for (const el of root.querySelectorAll('div, span, li, td')) {
-      if (seen.has(el) || el.closest(SKIP)) continue;
-      if (getComputedStyle(el).cursor === 'pointer') add(el);
+    const region = root.at;
+    const drops = root.drop;
+    for (const el of region.querySelectorAll(DIRECT)) add(el, region, drops);
+    for (const el of region.querySelectorAll('div, span, li, td')) {
+      if (seen.has(el) || skipped(el, region, drops)) continue;
+      if (getComputedStyle(el).cursor === 'pointer') add(el, region, drops);
     }
   }
 
-  const text = roots.reduce((sum, root) => sum + clean(root.innerText).length, 0);
-  return JSON.stringify({ text: text, total: total, items: items });
+  const text = roots.reduce((sum, root) => sum + clean(root.at.innerText).length, 0);
+  return JSON.stringify({ text: text, items: items });
 })()"#;
 
 /// Elements the conversion drops, or that carry no prose a reader asked for, are not controls a
@@ -125,49 +136,67 @@ struct Control {
     context: String,
 }
 
+impl Control {
+    /// One line, the same one inline and in the file the rest go to.
+    fn line(&self) -> String {
+        let mut out = String::from("- ");
+        out.push_str(&self.kind);
+        if !self.name.is_empty() {
+            out.push_str(&format!(" {:?}", self.name));
+        }
+        if !self.context.is_empty() {
+            out.push_str(&format!(" under {:?}", self.context));
+        }
+        out.push_str(&format!(" -> `{}`\n", self.select));
+        out
+    }
+}
+
 /// What the page offers, and whether it holds any text at all.
 pub(crate) struct Operable {
     /// Trimmed length of the body's rendered text.
     pub(crate) text: usize,
     controls: Vec<Control>,
-    /// Controls the page offered in all, listed or not.
-    total: usize,
 }
 
 impl Operable {
-    /// The section appended to the answer, or nothing when the page offers no control.
-    pub(crate) fn section(&self) -> String {
+    /// The section appended to the answer, or nothing when the page offers no control. The ones
+    /// past the inline budget are written out, and the answer names where they went.
+    pub(crate) fn section(&self, site: &str) -> Result<String> {
         if self.controls.is_empty() {
-            return String::new();
+            return Ok(String::new());
         }
         let mut out = String::from("\n## operable\n\n");
-        for control in &self.controls {
-            out.push_str("- ");
-            out.push_str(&control.kind);
-            if !control.name.is_empty() {
-                out.push_str(&format!(" {:?}", control.name));
-            }
-            if !control.context.is_empty() {
-                out.push_str(&format!(" under {:?}", control.context));
-            }
-            out.push_str(&format!(" -> `{}`\n", control.select));
+        let (listed, rest) = self.controls.split_at(self.controls.len().min(LISTED));
+        for control in listed {
+            out.push_str(&control.line());
         }
-        let rest = self.total.saturating_sub(self.controls.len());
-        if rest > 0 {
+        if !rest.is_empty() {
+            let body: String = rest.iter().map(Control::line).collect();
+            let path = artifact::save(site, "md", body.as_bytes())?;
             out.push_str(&format!(
-                "\n{rest} more controls the page offers are not listed.\n"
+                "\n{} more controls: {}\n",
+                rest.len(),
+                path.display()
             ));
         }
-        out
+        Ok(out)
     }
 }
 
-/// The scan expression. `scope` names the regions to search, empty for the whole body.
-pub(crate) fn expression(scope: &[String]) -> String {
-    let scope = serde_json::to_string(scope).expect("selectors always serialize");
-    SCAN.replace("%LISTED%", &LISTED.to_string())
-        .replace("%SKIP%", SKIP)
-        .replace("%DIRECT%", DIRECT)
+/// The scan expression. `regions` are the kept regions, each with the drops its rule wrote for it;
+/// empty searches the whole body and drops nothing.
+pub(crate) fn expression(regions: &[Part]) -> String {
+    let scope: Vec<serde_json::Value> = regions
+        .iter()
+        .map(|part| serde_json::json!({"selector": part.selector(), "drop": part.drops()}))
+        .collect();
+    let scope = serde_json::to_string(&scope).expect("a rule's regions always serialize");
+    let skip = serde_json::to_string(SKIP).expect("a selector list always serializes");
+    let direct = serde_json::to_string(DIRECT).expect("a selector list always serializes");
+    SCAN
+        .replace("%SKIP%", &skip)
+        .replace("%DIRECT%", &direct)
         .replace("%SCOPE%", &scope)
 }
 
@@ -198,7 +227,6 @@ pub(crate) fn scan(answered: &str) -> anyhow::Result<Operable> {
         .unwrap_or_default();
     Ok(Operable {
         text: number("text"),
-        total: number("total"),
         controls,
     })
 }

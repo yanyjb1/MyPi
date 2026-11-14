@@ -1,0 +1,8 @@
+[
+  {
+    "match": "^www\\.huxiu\\.com/article/\\d+\\.html$",
+    "keep": [
+      { "selector": "#js-article-read-wrap", "drop": [".article__quickbrief-entry"] }
+    ]
+  }
+]

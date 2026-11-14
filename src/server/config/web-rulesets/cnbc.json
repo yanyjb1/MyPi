@@ -1,0 +1,12 @@
+[
+  {
+    "match": "^www\\.cnbc\\.com/\\d{4}/\\d{2}/\\d{2}/",
+    "keep": [
+      { "selector": ".ArticleHeader-headline", "drop": [] },
+      { "selector": ".ArticleHeader-timeHidden", "drop": [] },
+      { "selector": ".ArticleHeader-authorAndShareInline", "drop": [".WatchLive-container"] },
+      { "selector": ".RenderKeyPoints-keyPoints", "drop": [] },
+      { "selector": ".ArticleBody-articleBody", "drop": [".InlineVideo-videoEmbed", ".PlaceHolder-wrapper", ".RelatedQuotes-relatedQuotes", ".ArticleBody-googlePreferredSourceContainer", ".MobileAdhesion-container", "[data-testid=\"dropdown-btn\"]"] }
+    ]
+  }
+]

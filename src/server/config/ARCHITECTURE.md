@@ -12,6 +12,8 @@
 | `profile/` | `types` (`ResolvedProfile`), `discover` (scan, precedence, duplicate names), `resolve` (prompts, tools, compaction) |
 | `paths.rs` | `ConfigPaths`: the project's `.mypi` and the global root, the files and folders under them, and `project_dir` |
 | `notice.rs` | `ConfigNotice` and the shared warning constructor |
+| `rules.rs` | the site-rule manifest, the sets it names, their installation and flattening |
+| `web-rulesets/` | one set per site: the rules the built-in manifest names |
 | `write.rs` | textual `write_key` for `config.yaml` |
 | `prompts/` | compiled prompts: `system`, `compaction` |
 
@@ -30,6 +32,9 @@
 - `paths::ConfigPaths`
 - `KEY_*` constants from `schema.rs`; `registry::{lookup, template, model_key, provider_key}`
 - `prompts::{system, compaction}`
+- `rules::load(paths, notices)` — the site rules in force; `rules::install(root)` — the manifest and
+  the sets it names, written where the user can edit them. `rules::{Rule, Part}` carry no fields to
+  their readers: `Rules::regions`, `Part::selector` and `Part::drops` are the whole surface.
 
 ## Relationships
 

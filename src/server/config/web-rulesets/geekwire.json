@@ -1,0 +1,9 @@
+[
+  {
+    "match": "^www\\.geekwire\\.com/\\d{4}/",
+    "keep": [
+      { "selector": "h1.entry-title", "drop": [] },
+      { "selector": ".entry-content", "drop": [".callout"] }
+    ]
+  }
+]

@@ -1,0 +1,9 @@
+[
+  {
+    "match": "^www\\.yicai\\.com/(news|video|brief)/\\d+\\.html$",
+    "keep": [
+      { "selector": ".title", "drop": [".m-smallshare", ".hashot"] },
+      { "selector": ".intro", "drop": [] }
+    ]
+  }
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "match": "^www\\.tmtpost\\.com/\\d+\\.html$",
+    "keep": [
+      { "selector": ".post_part_title h2.tit", "drop": [] },
+      { "selector": ".post_author_infor", "drop": [".post_type", ".author_box img"] },
+      { "selector": ".abstract", "drop": [] },
+      { "selector": "._bottom article", "drop": [] }
+    ]
+  }
+]

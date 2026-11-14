@@ -1,0 +1,10 @@
+[
+  {
+    "match": "^cn-sec\\.com/archives/\\d+\\.html$",
+    "keep": [
+      { "selector": "h1.entry-title", "drop": [] },
+      { "selector": ".begin-single-meta", "drop": [".meta-author", ".comment"] },
+      { "selector": ".single-content", "drop": [".scrolling-img", ".spostinfo"] }
+    ]
+  }
+]

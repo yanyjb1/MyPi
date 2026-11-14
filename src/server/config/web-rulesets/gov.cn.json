@@ -1,0 +1,9 @@
+[
+  {
+    "match": "^www\\.gov\\.cn/\\S+/content_\\d+\\.html$",
+    "keep": [
+      { "selector": "h1", "drop": [] },
+      { "selector": ".pages_content", "drop": [] }
+    ]
+  }
+]

@@ -1,0 +1,13 @@
+[
+  {
+    "match": "^www\\.thepaper\\.cn/newsDetail_forward_\\d+$",
+    "keep": [
+      { "selector": "h1", "drop": [] },
+      { "selector": "[class*='headerContent']", "drop": ["[class*='right']"] },
+      { "selector": "[class*='cententWrap']", "drop": [] },
+      { "selector": "[class*='copyrightBox']", "drop": [] },
+      { "selector": "[class*='bottomBox']", "drop": [] },
+      { "selector": "#commentWrapper", "drop": ["[class*='commentEditorWrapper']", "[class*='avatar']", "[class*='lodaing']"] }
+    ]
+  }
+]

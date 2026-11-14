@@ -1,0 +1,10 @@
+[
+  {
+    "match": "^www\\.stdaily\\.com/web/\\S+/content_\\d+\\.html$",
+    "keep": [
+      { "selector": ".articleHead", "drop": [] },
+      { "selector": ".pages_content", "drop": [] },
+      { "selector": ".text-right.editor", "drop": [] }
+    ]
+  }
+]
