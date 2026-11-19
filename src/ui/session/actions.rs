@@ -40,12 +40,12 @@ impl Session {
 
     // `call blocks`: closed id ranges.
     pub fn blocks(&mut self, ranges: Vec<[i64; 2]>) {
-        self.act("call", "blocks", json!({"ranges": ranges}));
+        self.read_blocks(json!({"ranges": ranges}));
     }
 
     // `call sessions`: the session list.
     pub fn sessions(&mut self, under: Option<&str>) {
-        self.act("call", "sessions", json!({"under": under}));
+        self.send("call", "sessions", json!({"under": under}), true);
     }
 
     // `call memo`: every name in both scopes.
@@ -118,6 +118,16 @@ impl Session {
         self.act("post", "mailbox", json!({}));
     }
 
+    // `post mailbox` with no sentence for a session this layer is leaving: the slot is cleared without attaching.
+    pub(super) fn clear_remote_mailbox(&mut self, session: i64) {
+        self.send("post", "mailbox", json!({"session": session}), false);
+    }
+
+    // `register bye`: the connection signs off.
+    pub(super) fn sign_off(&mut self) {
+        self.send("register", "bye", json!({}), false);
+    }
+
     // `post meta name`: the session's display name.
     pub fn rename(&mut self, name: Option<&str>) {
         self.meta_write("name", json!({"name": name}));
@@ -146,12 +156,11 @@ impl Session {
     // `subscribe compact`: one compaction turn.
     pub fn compact(&mut self, retention: Option<Retention>, focus: Option<&str>) {
         let mut content = json!({"focus": focus});
-        if let (Some(map), Some(retention)) = (content.as_object_mut(), retention) {
-            let retention = match retention {
+        if let Some(retention) = retention {
+            content["retention"] = match retention {
                 Retention::Chars(n) => json!({"chars": n}),
                 Retention::Blocks(n) => json!({"blocks": n}),
             };
-            map.insert("retention".to_string(), retention);
         }
         self.act("subscribe", "compact", content);
     }

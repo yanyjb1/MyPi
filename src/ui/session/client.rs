@@ -70,14 +70,16 @@ impl Client {
                 out.push(Incoming::Push(frame));
                 continue;
             }
-            while let Some(request) = self.waiting.pop_front() {
-                if request.kind == frame.kind && request.name == frame.name {
-                    out.push(Incoming::Answer {
-                        request,
-                        reply: frame,
-                    });
-                    break;
-                }
+            if self
+                .waiting
+                .front()
+                .is_some_and(|request| request.kind == frame.kind && request.name == frame.name)
+                && let Some(request) = self.waiting.pop_front()
+            {
+                out.push(Incoming::Answer {
+                    request,
+                    reply: frame,
+                });
             }
         }
     }

@@ -15,9 +15,6 @@ use super::structure::{Structure, Turn};
 // The configuration key that sizes the content window.
 const BUDGET_KEY: &str = "config.ui.session.preloadCache";
 
-// The configuration key that names the backend the shell tool runs.
-const SHELL_KEY: &str = "config.server.agent.tools.shell";
-
 pub struct Session {
     client: Client,
     // The session this connection follows.
@@ -33,21 +30,14 @@ pub struct Session {
 impl Session {
     // Connect and register. Who starts the server is not this layer's business.
     pub fn connect(endpoint: Endpoint) -> Result<Session> {
-        let client = Client::connect(endpoint, viewer())?;
-        let mut session = Session {
-            client,
+        Ok(Session {
+            client: Client::connect(endpoint, viewer())?,
             attached: None,
             structure: Structure::default(),
             content: ContentCache::default(),
             outbox: Vec::new(),
             shut: false,
-        };
-        for key in [BUDGET_KEY, SHELL_KEY] {
-            session
-                .client
-                .queue(Frame::new("call", "config", json!({"key": key})), true);
-        }
-        Ok(session)
+        })
     }
 
     // Hand the front end everything the connection produced since the last call.
@@ -62,20 +52,20 @@ impl Session {
         std::mem::take(&mut self.outbox)
     }
 
-    // Follow one session. The caller subscribes the watch; the windows go now.
+    // Follow one session. The caller subscribes the watch; the windows go now and the budget is asked again.
     pub fn attach(&mut self, id: i64) {
         self.attached = Some(id);
         self.client.clear();
         self.structure.clear();
         self.content.clear();
+        self.config(BUDGET_KEY);
     }
 
     // Stop following on purpose: the server slot is cleared, then the watch is dropped.
     pub fn detach(&mut self) {
         if let Some(id) = self.attached {
             self.client.clear();
-            self.client
-                .queue(Frame::new("post", "mailbox", json!({"session": id})), false);
+            self.clear_remote_mailbox(id);
             let _ = self.client.pump();
         }
         self.forget();
@@ -101,10 +91,6 @@ impl Session {
 
     // Queue one frame. `answer` says whether the server replies to it.
     pub fn send(&mut self, kind: &str, name: &str, content: Value, answer: bool) {
-        if kind == "call" && name == "blocks" {
-            self.read_blocks(content);
-            return;
-        }
         self.client.queue(Frame::new(kind, name, content), answer);
     }
 
@@ -137,13 +123,12 @@ impl Session {
 
     // Say goodbye and let the connection go: everything queued leaves, then `bye`.
     pub fn bye(&mut self) {
-        self.client
-            .queue(Frame::new("register", "bye", json!({})), false);
+        self.sign_off();
         let _ = self.client.pump();
     }
 
     // A block read: answered from the window when it covers the ranges.
-    fn read_blocks(&mut self, content: Value) {
+    pub(super) fn read_blocks(&mut self, content: Value) {
         let session = content
             .get("session")
             .and_then(Value::as_i64)
@@ -229,7 +214,7 @@ impl Session {
             ("post", "meta") => self.rewind_landed(&request, &reply),
             ("post", "delete") => {
                 let session = request.payload.get("session").and_then(Value::as_i64);
-                if reply.payload.get("error").is_none() && session == self.attached {
+                if !refused(&reply) && session == self.attached {
                     self.forget();
                 }
             }
@@ -241,7 +226,7 @@ impl Session {
 
     // A `post meta` answer may be this layer's own rewind; the spot comes from the request.
     fn rewind_landed(&mut self, request: &Frame, reply: &Frame) {
-        if reply.payload.get("error").is_some() {
+        if refused(reply) {
             return;
         }
         if request.payload.get("name").and_then(Value::as_str) != Some("rewind") {
@@ -259,6 +244,11 @@ impl Session {
         self.structure.cut_at(turn, block);
         self.content.retain(|id| self.structure.owns(id));
     }
+}
+
+// Whether the server refused a write.
+fn refused(reply: &Frame) -> bool {
+    reply.payload.get("error").is_some()
 }
 
 // A frame's ranges: `[[lo, hi], …]`.

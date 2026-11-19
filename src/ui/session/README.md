@@ -10,7 +10,7 @@ Every frame crosses this layer as three parts: `kind`, `name`, `content`. Nothin
 
 ### Outbound doors
 
-The api takes `name`, `cwd`, `switch`, `effort`, and `rewind` inside one `post meta` frame: `{name, content}`, with the attached session in `content`. Every other door keeps its own name. `actions.rs` is the only place these names are written.
+The api takes `name`, `cwd`, `switch`, `effort`, and `rewind` inside one `post meta` frame: `{name, content}`, with the attached session in `content`. Every other door keeps its own name. `actions.rs` is the only place a front-end-facing door's kind and name are written; the frames this layer originates itself — the `call config` that sizes the window, the `post mailbox` a detach clears, the `register bye` — are queued there too, through `clear_remote_mailbox` and `sign_off`.
 
 ### The two windows
 
@@ -19,7 +19,7 @@ The api takes `name`, `cwd`, `switch`, `effort`, and `rewind` inside one `post m
 | `Structure` | the rounds: turn id, closed block ranges, and whether the round is a compaction, newest first | turn id |
 | `ContentCache` | whole blocks, exactly as an answer carried them | block id |
 
-- Content budget: `config.ui.session.preloadCache`, asked once at connect through `call config`; its answer feeds the window and is not forwarded.
+- Content budget: `config.ui.session.preloadCache`, asked on every attach through `call config`; its answer feeds the window and is not forwarded.
 - Eviction: the earliest admission goes first, then the lowest id.
 - A pushed stream frame carrying `turn` and `ranges` sets that round, compaction mark included.
 - A `call init` answer replaces both windows; a `call blocks` answer merges blocks; an accepted `post delete` answer for the attached session detaches; an accepted `post meta` rewind trims both windows to the spot its own request named.
@@ -44,7 +44,7 @@ attach(id)  detach()  attached()   structure() -> Structure
 send(kind, name, content, answer)  bye()
 ```
 
-Every door has one named action in `actions.rs` (`init`, `meta`, `usage`, `pools`, `config`, `blocks`, `sessions`, `watch`, `submit`, `interrupt`, `write_mailbox`, `clear_mailbox`, `rename`, `set_cwd`, `switch_model`, `set_default_model`, `set_effort`, `compact`, `delete`, `rewind`). The door's kind and name live there; a front end asks for the action, never for the door, except `post init`, which a front end sends through `send` because the session it opens has no id yet. Each action fills the attached session in unless the caller named one, and expects a reply unless it is `watch`.
+Every door has one named action in `actions.rs` (`init`, `meta`, `usage`, `pools`, `pools_at`, `config`, `blocks`, `sessions`, `memo_list`, `memo_history`, `memo_write`, `memo_delete`, `watch`, `unwatch`, `submit`, `interrupt`, `write_mailbox`, `clear_mailbox`, `rename`, `set_cwd`, `switch_model`, `set_default_model`, `set_effort`, `compact`, `delete`, `rewind`, and the layer's own `clear_remote_mailbox` and `sign_off`). The door's kind and name live there; a front end asks for the action, never for the door, except `post init`, which a front end sends through `send` because the session it opens has no id yet. Each action fills the attached session in unless the caller named one, and expects a reply unless it is `watch`.
 
 - `call blocks` is answered from the content window when it covers the ranges; otherwise the frame goes upstream and the answer is forwarded like any other.
 - `answer = false` for frames whose answer nobody waits for (`subscribe watch`, `bye`, the mailbox a detach writes).
@@ -71,4 +71,4 @@ Every door has one named action in `actions.rs` (`init`, `meta`, `usage`, `pools
 
 | key | use |
 |---|---|
-| `config.ui.session.preloadCache` | blocks kept in the content window; asked once at connect |
+| `config.ui.session.preloadCache` | blocks kept in the content window; asked on every attach |

@@ -279,4 +279,5 @@ opens a natural line), or `Wrapped` (it is a continuation).
 | `config.ui.tui.zone.main.history.scrollHeight` | rows one wheel notch walks |
 | `config.ui.tui.zone.main.history.overscan` | blocks kept in hand past the edge the reader moves toward |
 | `config.ui.tui.zone.main.history.todoFold` | task-list folding policy |
+| `config.server.agent.tools.shell` | the shell backend whose syntax the shell cards highlight with |
 | `config.ui.lang` | the language a compaction banner's figures read in |

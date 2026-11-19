@@ -7,7 +7,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | path | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list and the re-exports | public |
-| `actions.rs` | one named action per door: the only place a door's kind and name are written | public |
+| `actions.rs` | one named action per front-end-facing door: the only place such a door's kind and name are written | `Session`'s public methods |
 | `vocabulary.rs` | `ModelId`, `Retention`, `Effort`: the words a front end and the api both use | public |
 | `packet.rs` | `Packet { kind, name, content }`, the normalized unit | public |
 | `client.rs` | `Client`, `Incoming`: the queue, the matching, the send | private |
@@ -35,7 +35,7 @@ Session
 
 - `Client::pump` sends what is queued and says what came back: `Push` or `Answer { request, reply }`.
 - `Session::take` is the only place a frame reaches the windows: a push updates the structure, an answer updates both windows and the budget, then every frame goes to the outbox.
-- `Session::send` is the only outbound path; `call blocks` is the one door it answers itself.
+- `Session::send` is the only outbound path; `Session::blocks` answers a covered range from the content window and sends the rest upstream.
 - An accepted `post meta` rewind cuts the structure at the spot its own request named; the reply is forwarded without being decoded.
 
 ## Must stay in sync
