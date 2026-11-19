@@ -71,4 +71,4 @@ Every door has one named action in `actions.rs` (`init`, `meta`, `usage`, `pools
 
 | key | use |
 |---|---|
-| `config.ui.session.preloadCache` | blocks kept in the content window; asked once at connect |
+| `config.ui.session.preloadCache` | blocks kept in the content window; asked on every attach |

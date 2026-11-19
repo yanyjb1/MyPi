@@ -134,6 +134,7 @@ pub(super) const CONFIG_KEYS: &[&str] = &[
     "config.ui.tui.zone.main.history.scrollHeight",
     "config.ui.tui.zone.main.history.overscan",
     "config.ui.tui.zone.main.history.todoFold",
+    "config.server.agent.tools.shell",
 ];
 
 /// Every block id these ranges name, in order.
