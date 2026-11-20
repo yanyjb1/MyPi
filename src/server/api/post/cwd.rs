@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::ipc::contract::Text;
 use crate::server::agent::r#loop::Change;
 use crate::server::api::route::{i64_of, str_of};
 use crate::server::api::{Api, Refuse};
@@ -21,11 +20,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
         .change(session, Change::Cwd(PathBuf::from(path)))
     {
         Ok(landed) => landed,
-        Err(_) => {
-            let text = Text::error("cwd_unusable").args(json!({"path": path}));
-            api.relay().notice(session, text.clone());
-            return Err(Refuse(text));
-        }
+        Err(_) => return Err(Refuse::new("cwd_unusable").args(json!({"path": path}))),
     };
     let cwd = landed
         .map(|real| real.to_string_lossy().into_owned())

@@ -1,5 +1,6 @@
 // `init` — the session row, its request archive, and the loop's booking.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -15,10 +16,27 @@ use crate::server::storage::{Ref, RequestMeta, Row, Submit};
 use super::emit;
 
 pub(crate) fn apply(api: &Api, ask: &Value) -> Result<Value, Refuse> {
-    // The launch directory exists; only where it may stand is asked, and a barred one lands in the temp dir.
-    let cwd = crate::server::agent::tools::workspace::launch_dir(str_of(ask, "cwd")?);
+    // A user-picked directory only has to exist; a carried-over one may land in the temp dir.
+    let raw = str_of(ask, "cwd")?;
+    let fallback = ask
+        .get("fallback")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let cwd = match fallback {
+        true => crate::server::agent::tools::workspace::launch_dir(raw),
+        false => crate::server::agent::tools::workspace::resolve_dir(Path::new(""), raw)
+            .map_err(|_| Refuse::new("cwd_unusable").args(json!({"path": raw})))?,
+    };
+    let asked = PathBuf::from(raw.trim());
+    let moved: Option<String> = (cwd != asked).then(|| cwd.to_string_lossy().into_owned());
     let name = opt_str_of(ask, "name")?.map(str::to_string);
     let profile = opt_str_of(ask, "profile")?.map(str::to_string);
+    // A rung the front end picked before this row existed: the row opens with it.
+    let effort = match ask.get("effort").and_then(Value::as_str) {
+        Some(raw) => crate::server::agent::request::Effort::parse(raw)
+            .ok_or_else(|| Refuse::new("effort_unknown").args(json!({"effort": raw})))?,
+        None => crate::server::agent::request::Effort::Auto,
+    };
     let stated = match ask.get("model") {
         Some(value) if !value.is_null() => Some(emit::model_of(value)?),
         _ => None,
@@ -86,10 +104,14 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<Value, Refuse> {
         tools,
         manuals,
         compact: resolved.compact_instruction,
-        effort: crate::server::agent::request::Effort::Auto,
+        effort,
         vision,
         meta: Some(archive),
         cwd,
     })?;
-    Ok(json!({"session": session}))
+    let mut reply = json!({"session": session});
+    if let Some(relanded) = moved {
+        reply["cwd"] = Value::String(relanded);
+    }
+    Ok(reply)
 }

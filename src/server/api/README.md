@@ -42,10 +42,13 @@ Write: `meta` (`name`, `cwd`, `switch`, `effort`, `rewind`), `init`, `delete`, `
 `default_model`, `interrupt`, `mailbox`.
 Subscribe: `watch`, `submit`, `compact`.
 
-- `init` (post) writes the `sessions` row and its `request_meta` archive in one submission, then
-  books the session. The archive is written exactly once per session; the model may change later,
-  the archive may not. A child's archive is written by the loop, in the same submission as the
   child's session row.
+- `init` lands the directory it was handed. `fallback` says the front end only carried it over from
+  where it was started: a directory a session may not stand in then becomes the temp directory, and
+  the answer names the landed path. Without `fallback` the path must exist and is taken as given, so
+  a user-picked directory is never moved behind their back.
+- `init` also takes `effort`: the rung a draft picked before its row existed. Without it the session
+  opens on `auto`, the one rung every model shares.
 - `init` (call), `blocks`, `meta`, `memo`, `children`, `sessions` read through `storage::Reader`
   only. The api holds no SQL and decodes no column.
 - `todo` answers the whole list `Loop::todo` replayed from the session's own `todo` calls.
@@ -89,7 +92,8 @@ Subscribe: `watch`, `submit`, `compact`.
   the session and every child under it — into the memo folder before the rows go.
 - A refusal the user can actually cause is said in the session's own stream — one `stream notice`
   frame — instead of only in the answer the front end may drop. Today that is `delete` on a busy
-  session and `cwd` on a path that does not exist or is not a workspace.
+  session. A refused `cwd` answers in its reply alone: it is the one write whose reader is waiting
+  on that very answer.
 - `profile` is an argument of the write `init` and never a name of its own: a session's profile is
   fixed when it is created.
 - A child session takes no messages: `submit` and `compact` answer `child_message` for one.
@@ -114,7 +118,7 @@ Subscribe: `watch`, `submit`, `compact`.
 | `call` | `pools` | — | `models`, `profiles` |
 | `call` | `sessions` | `under` (optional directory) | `rows`: main sessions, newest first, each carrying `first_user`, `bytes`, `last_ts`, `memos` |
 | `post` | `meta` | `name`, `content` | `{}`; the result is a `stream signal` |
-| `post` | `init` | `cwd`, `name`, `model`, `profile` | `{"session"}` |
+| `post` | `init` | `cwd`, `name`, `model`, `profile`, `effort`, `fallback` (optional) | `{"session"}`, plus `cwd` when `fallback` moved the directory |
 | `post` | `delete` | `session` | `{}`; the session's stream closes |
 | `post` | `memo` | `session` (current only), `op`, `scope`, `name`, `content` | `{}` |
 | `post` | `default_model` | `model` | `{}` |
