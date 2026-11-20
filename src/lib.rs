@@ -4,6 +4,7 @@
 pub mod ansi;
 pub mod cli;
 pub mod git;
+pub mod i18n;
 pub mod ipc;
 pub mod server;
 pub mod ui;
@@ -63,6 +64,11 @@ mod architecture {
         // Backstop: no file under `server` may name a front end or the IPC edges. The contract and
         // transport are the only ipc pieces a backend may name.
         ("server", &["ui", "ipc::client", "ipc::server"]),
+        // Text: compiled-in language data; it names no layer above it.
+        (
+            "i18n",
+            &["server", "ui", "ipc", "cli", "web", "git", "ansi"],
+        ),
         // The protocol layer stands between the halves: it carries api's shapes, knows no UI.
         ("ipc", &["cli", "ui", "web", "git", "ansi"]),
         // The front end's half never reaches into the backend.
