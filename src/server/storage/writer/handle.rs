@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Sender};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::super::delete::rewind::{Cut, Target};
+use super::super::delete::rewind::Target;
 use super::super::schema;
 use super::super::shape::{Landed, Submit, Table};
 use super::job::{Answer, Job, What};
@@ -60,9 +60,9 @@ impl Writer {
     }
 
     /// Cut a session's list back to the picked block, then sweep what nothing references.
-    pub fn rewind(&self, target: Target) -> Result<Cut> {
+    pub fn rewind(&self, target: Target) -> Result<()> {
         match self.call(What::Rewind(target))? {
-            Answer::Cut(cut) => Ok(cut),
+            Answer::Done => Ok(()),
             other => anyhow::bail!("the writer answered `{}` to a rewind", other.name()),
         }
     }

@@ -4,17 +4,20 @@ use std::sync::mpsc::Sender;
 
 use anyhow::Result;
 
-use super::super::delete::rewind::{Cut, Target};
+use super::super::delete::rewind::Target;
 use super::super::shape::{Landed, Submit, Table};
 
 /// What the writer is asked to do.
 pub(crate) enum What {
     /// Land something: now, or at the batch's end.
     Submit(Submit),
+
     /// Cut a session's list back to the picked block.
     Rewind(Target),
+
     /// Delete rows of one table, then sweep.
     DeleteRows(Table, Vec<i64>),
+
     /// Write this session's memos into the folder the caller resolved.
     Export {
         session: i64,
@@ -26,10 +29,13 @@ pub(crate) enum What {
 pub(crate) enum Answer {
     /// What one submission landed.
     Landed(Landed),
-    /// What survived a cut.
-    Cut(Cut),
+
+    /// The job left nothing to hand back.
+    Done,
+
     /// How many rows the delete removed.
     Rows(usize),
+
     /// Where the export landed (`None` = nothing to export).
     Export(Option<std::path::PathBuf>),
 }
@@ -39,7 +45,7 @@ impl Answer {
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Answer::Landed(_) => "landed",
-            Answer::Cut(_) => "cut",
+            Answer::Done => "done",
             Answer::Rows(_) => "rows",
             Answer::Export(_) => "export",
         }

@@ -136,7 +136,7 @@ impl Api {
                     return match route::post(self, conn.id, &viewer, &frame) {
                         Ok(reply) => {
                             if let Some(signal) = reply.signal {
-                                self.relay.signal(signal, &viewer);
+                                self.relay.signal(signal);
                             }
                             for session in &reply.closed {
                                 subscribe::close::apply(self, *session);

@@ -9,7 +9,12 @@ use crate::server::config::{
 };
 use crate::server::platform::time;
 
+// A keyed answer: the caller never has to remember what it asked for.
 pub(crate) fn answer(api: &Api, key: &str) -> Result<Value, Refuse> {
+    Ok(json!({"key": key, "value": value(api, key)?}))
+}
+
+fn value(api: &Api, key: &str) -> Result<Value, Refuse> {
     let cfg = api.cfg();
     // The offset is answered normalized: the machine's own when the key is unset or a name.
     if key == KEY_CONFIG_SERVER_PLATFORM_TIMEZONE {

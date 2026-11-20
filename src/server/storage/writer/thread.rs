@@ -12,7 +12,7 @@ pub(crate) fn run(work: Receiver<Job>, mut store: Store) {
     while let Ok(job) = work.recv() {
         let answer = match job.what {
             What::Submit(submit) => apply(&mut store.conn, submit).map(Answer::Landed),
-            What::Rewind(target) => store.rewind(target).map(Answer::Cut),
+            What::Rewind(target) => store.rewind(target).map(|()| Answer::Done),
             What::DeleteRows(table, ids) => store.delete_rows(table, &ids).map(Answer::Rows),
             What::Export { session, dir } => store.export_memos(session, &dir).map(Answer::Export),
         };

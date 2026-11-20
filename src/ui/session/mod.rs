@@ -1,14 +1,9 @@
-// session — the front end's half of the wire: one connection, two windows, one outbox.
+// The front end's half of the wire: one session, one structural window, one outbox.
 
-mod actions;
-mod client;
-mod content;
-mod packet;
+mod down;
 mod session;
 mod structure;
-mod vocabulary;
+mod up;
 
-pub use packet::Packet;
 pub use session::Session;
 pub use structure::{Structure, Turn};
-pub use vocabulary::{Effort, ModelId, Retention};

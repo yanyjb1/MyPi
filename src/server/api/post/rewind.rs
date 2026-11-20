@@ -3,7 +3,6 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::server::api::convert;
 use crate::server::api::route::i64_of;
 use crate::server::api::{Api, Refuse};
 use crate::server::storage::Target;
@@ -18,11 +17,11 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
     if api.relay().busy(session) {
         return Err(Refuse::new("busy"));
     }
-    let cut = convert::cut(api.writer().rewind(Target {
+    api.writer().rewind(Target {
         session,
         turn,
         block,
-    })?);
+    })?;
     api.ledger().forget(session);
-    Ok(json!({"turn": turn, "block": block, "cut": cut}))
+    Ok(json!({"turn": turn, "block": block}))
 }

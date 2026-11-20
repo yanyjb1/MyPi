@@ -11,7 +11,7 @@ pub mod shape;
 pub(crate) mod write;
 pub(crate) mod writer;
 
-pub use delete::rewind::{Cut, Target};
+pub use delete::rewind::Target;
 pub use path::{DB_FILE, default_path};
 pub use reader::Reader;
 pub use schema::SCHEMA_VERSION;

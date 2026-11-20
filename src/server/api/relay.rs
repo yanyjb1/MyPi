@@ -219,8 +219,8 @@ impl Relay {
         }
     }
 
-    // One write's result: everybody but the issuer hears the field it changed.
-    pub(crate) fn signal(&self, signal: Signal, issuer: &str) {
+    // One write's result: every front end watching the session hears the field it changed.
+    pub(crate) fn signal(&self, signal: Signal) {
         let Signal {
             session,
             name,
@@ -231,11 +231,7 @@ impl Relay {
         } else {
             content = json!({"signal": name, "content": content});
         }
-        self.deliver(
-            session,
-            Frame::new("stream", "signal", content),
-            Some(issuer),
-        );
+        self.deliver(session, Frame::new("stream", "signal", content), None);
     }
 
     // One line the api has to say, into the session's stream.
