@@ -11,8 +11,8 @@ use super::local::slot::{Level, Life};
 use super::product::Task;
 use super::zone::HistoryZone;
 
-use crate::ui::lang::Lang;
 use crate::ui::tui::TodoFold;
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::zone::{Frame, Shout, Structure, name};
 
 /// One frame, decided by its class and name.
@@ -76,7 +76,7 @@ fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
             } else {
                 Life::Short
             };
-            let text = crate::ui::lang::sentence(zone.lang, &said);
+            let text = crate::ui::tui::lang::sentence(zone.lang, &said);
             zone.notice(text, level, life);
         }
         "signal" => {

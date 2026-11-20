@@ -1,6 +1,6 @@
 // What painting needs besides the block itself.
 
-use crate::ui::lang::Lang;
+use crate::ui::tui::lang::Lang;
 
 pub struct Opts<'a> {
     pub thinking: bool,

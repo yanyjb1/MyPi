@@ -1,7 +1,6 @@
 //! `/switch` — this session's model.
 
 use super::meta::{Arg, CommandMeta};
-use crate::ui::lang::Text;
 use crate::ui::tui::zone::Frame;
 use serde_json::json;
 
@@ -13,10 +12,7 @@ pub const META: CommandMeta = CommandMeta {
     name: "/switch",
     aliases: &[],
     args: &[Arg::Model],
-    detail: Text {
-        en: "switch this session's model (stored on the session)",
-        zh: "切换本会话的模型（落会话状态）",
-    },
+    detail: "cmd_switch",
     run,
 };
 

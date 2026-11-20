@@ -1,7 +1,6 @@
 //! `/q` — leave.
 
 use super::meta::CommandMeta;
-use crate::ui::lang::Text;
 use crate::ui::tui::zone::main::input::ExitRequest;
 
 use super::{Call, Done};
@@ -10,10 +9,7 @@ pub const META: CommandMeta = CommandMeta {
     name: "/q",
     aliases: &["/quit", "/exit"],
     args: &[],
-    detail: Text {
-        en: "quit",
-        zh: "退出",
-    },
+    detail: "cmd_quit",
     run,
 };
 

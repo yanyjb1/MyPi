@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 use super::meta::{Arg, CommandMeta};
-use crate::ui::lang::Text;
 
 use super::{Call, Done};
 
@@ -11,10 +10,7 @@ pub const META: CommandMeta = CommandMeta {
     name: "/prepare",
     aliases: &[],
     args: &[Arg::Text],
-    detail: Text {
-        en: "prepend the terms and manifest of the workspace to this message; `/prepare <text>` keeps the text as the message",
-        zh: "把工作区的条款和清单前置到这条消息；`/prepare 正文` 会保留正文",
-    },
+    detail: "cmd_prepare",
     run,
 };
 

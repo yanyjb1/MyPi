@@ -12,7 +12,7 @@ use super::local::slot::{Level, Life};
 use super::prefetch::{Range, Run, Start};
 use super::product::{Opts, Task, TodoPanel};
 use super::{display, keys, wire};
-use crate::ui::lang::Lang;
+use crate::ui::tui::lang::Lang;
 
 use super::super::pane::Pane;
 use crate::ui::tui::TodoFold;

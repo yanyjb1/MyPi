@@ -1,6 +1,6 @@
 //! Number and money formats owned by the Main zone.
 
-use crate::ui::lang::Lang;
+use crate::ui::tui::lang::Lang;
 
 mod compact;
 mod exact;

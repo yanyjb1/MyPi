@@ -1,6 +1,7 @@
-//! What the input zone says after a command: one sentence, both languages.
+//! What the input zone says after a command: one sentence, keyed for i18n.
 
-use crate::ui::lang::Lang;
+use crate::ui::tui::lang::Lang;
+use serde_json::{Value, json};
 
 /// One line the input zone puts on the bus: what a command asked for, or why it refused.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,15 +59,19 @@ pub enum Notice {
     MemoUsage,
 }
 
-const NO_EFFORT_ZH: &str = "此模型不支持思考强度控制";
-
 impl Notice {
     /// The sentence this language reads.
     pub fn text(&self, lang: Lang) -> String {
-        match lang {
-            Lang::En => self.en(),
-            Lang::Zh => self.zh(),
+        if let Self::Compacted {
+            chars,
+            blocks,
+            focus,
+        } = self
+        {
+            return compacted(lang, chars, blocks, focus);
         }
+        let (key, args) = self.keyed();
+        crate::i18n::render(lang.code(), key, &args)
     }
 
     /// `info`, or `warn` for a refusal.
@@ -84,81 +89,56 @@ impl Notice {
         }
     }
 
-    fn en(&self) -> String {
+    /// The i18n key and its holes; `Compacted` is composed in `compacted` instead.
+    fn keyed(&self) -> (&'static str, Value) {
         match self {
-            Self::Cwd(path) => format!("working directory: {path}"),
-            Self::NoDir(path) => format!("no such directory: {path}"),
-            Self::Named(Some(name)) => format!("session named {name}"),
-            Self::Named(None) => "session name cleared".to_string(),
-            Self::Switched(address) => format!("model switched to {address}"),
-            Self::Default(address) => format!("default model: {address}"),
-            Self::Effort(effort) => format!("thinking effort: {effort}"),
-            Self::NoEffort => "this model takes no thinking effort".to_string(),
-            Self::NotDeclared(effort) => {
-                format!("this model takes no `{effort}` effort")
-            }
-            Self::Refused(text) => text.clone(),
-            Self::CwdFallback => {
-                "this directory cannot be a workspace; using the temp directory".to_string()
-            }
-            Self::Compacted {
-                chars,
-                blocks,
-                focus,
-            } => {
-                let base = match (chars, blocks) {
-                    (Some(n), _) => format!("compacting, keeping about {n} characters"),
-                    (_, Some(n)) => format!("compacting, keeping the last {n} blocks"),
-                    _ => "compacting the whole history".to_string(),
-                };
-                match focus {
-                    Some(focus) => format!("{base}; focus: {focus}"),
-                    None => base,
-                }
-            }
-            Self::Profile(Some(name)) => format!("profile: {name}"),
-            Self::Profile(None) => "profile cleared".to_string(),
-            Self::ProfileAfterStart => "the profile is fixed once a session starts".to_string(),
-            Self::NoSession => "no session yet".to_string(),
-            Self::NothingToCompact => "no session yet: nothing to compact".to_string(),
-            Self::MemoUsage => "/memo list|history|add|mod|del".to_string(),
+            Self::Cwd(path) => ("notice_cwd", json!({ "path": path })),
+            Self::NoDir(path) => ("notice_no_dir", json!({ "path": path })),
+            Self::Named(Some(name)) => ("notice_named", json!({ "name": name })),
+            Self::Named(None) => ("notice_named_cleared", json!({})),
+            Self::Switched(address) => ("notice_switched", json!({ "address": address })),
+            Self::Default(address) => ("notice_default_model", json!({ "address": address })),
+            Self::Effort(effort) => ("notice_effort", json!({ "effort": effort })),
+            Self::NoEffort => ("effort_unsupported", json!({})),
+            Self::NotDeclared(effort) => ("notice_not_declared", json!({ "effort": effort })),
+            Self::Refused(text) => ("notice_refused", json!({ "text": text })),
+            Self::CwdFallback => ("notice_cwd_fallback", json!({})),
+            Self::Compacted { .. } => ("notice_compact_all", json!({})),
+            Self::Profile(Some(name)) => ("notice_profile", json!({ "name": name })),
+            Self::Profile(None) => ("notice_profile_cleared", json!({})),
+            Self::ProfileAfterStart => ("notice_profile_after_start", json!({})),
+            Self::NoSession => ("notice_no_session", json!({})),
+            Self::NothingToCompact => ("notice_nothing_to_compact", json!({})),
+            Self::MemoUsage => ("notice_memo_usage", json!({})),
         }
     }
+}
 
-    fn zh(&self) -> String {
-        match self {
-            Self::Cwd(path) => format!("工作目录：{path}"),
-            Self::NoDir(path) => format!("目录不存在：{path}"),
-            Self::Named(Some(name)) => format!("会话命名为 {name}"),
-            Self::Named(None) => "会话名已清除".to_string(),
-            Self::Switched(address) => format!("已切换到 {address}"),
-            Self::Default(address) => format!("默认模型：{address}"),
-            Self::Effort(effort) => format!("思考强度：{effort}"),
-            Self::NoEffort => NO_EFFORT_ZH.to_string(),
-            Self::NotDeclared(effort) => format!("此模型不支持 `{effort}` 强度"),
-            Self::Refused(text) => text.clone(),
-            Self::CwdFallback => "该目录不能作为工作区，已改用临时目录".to_string(),
-            Self::Compacted {
-                chars,
-                blocks,
-                focus,
-            } => {
-                let base = match (chars, blocks) {
-                    (Some(n), _) => format!("正在压缩，保留约 {n} 字符"),
-                    (_, Some(n)) => format!("正在压缩，保留最近 {n} 个块"),
-                    _ => "正在压缩全部历史".to_string(),
-                };
-                match focus {
-                    Some(focus) => format!("{base}；焦点：{focus}"),
-                    None => base,
-                }
-            }
-            Self::Profile(Some(name)) => format!("profile：{name}"),
-            Self::Profile(None) => "profile 已清除".to_string(),
-            Self::ProfileAfterStart => "会话开始后不能再换 profile".to_string(),
-            Self::NoSession => "还没有会话".to_string(),
-            Self::NothingToCompact => "还没有会话，无从压缩".to_string(),
-            Self::MemoUsage => "/memo list|history|add|mod|del".to_string(),
+/// The compaction line: a base by retention, then the focus suffix when there is one.
+fn compacted(
+    lang: Lang,
+    chars: &Option<u64>,
+    blocks: &Option<u64>,
+    focus: &Option<String>,
+) -> String {
+    let base = match (chars, blocks) {
+        (Some(n), _) => {
+            crate::i18n::render(lang.code(), "notice_compact_chars", &json!({ "n": n }))
         }
+        (_, Some(n)) => {
+            crate::i18n::render(lang.code(), "notice_compact_blocks", &json!({ "n": n }))
+        }
+        _ => crate::i18n::render(lang.code(), "notice_compact_all", &json!({})),
+    };
+    match focus {
+        Some(focus) => {
+            let suffix = crate::i18n::render(
+                lang.code(),
+                "notice_compact_focus",
+                &json!({ "focus": focus }),
+            );
+            format!("{base}{suffix}")
+        }
+        None => base,
     }
 }

@@ -84,7 +84,7 @@ pub struct MemoHand {
     pub(super) note: Option<String>,
     out: Vec<Out>,
     /// The language the notes are said in; `en` until the desk says otherwise.
-    lang: crate::ui::lang::Lang,
+    lang: crate::ui::tui::lang::Lang,
 }
 
 impl Default for MemoHand {
@@ -97,7 +97,7 @@ impl Default for MemoHand {
             face: Face::List,
             note: None,
             out: Vec::new(),
-            lang: crate::ui::lang::Lang::default(),
+            lang: crate::ui::tui::lang::Lang::default(),
         }
     }
 }
@@ -164,12 +164,12 @@ impl MemoHand {
             .unwrap_or_default();
         self.note = Some(
             match (self.lang, answer.get("removed").and_then(Value::as_u64)) {
-                (crate::ui::lang::Lang::En, Some(0)) => format!("no {scope}/{name}"),
-                (crate::ui::lang::Lang::En, Some(_)) => format!("removed {scope}/{name}"),
-                (crate::ui::lang::Lang::En, None) => format!("written {scope}/{name}"),
-                (crate::ui::lang::Lang::Zh, Some(0)) => format!("没有 {scope}/{name}"),
-                (crate::ui::lang::Lang::Zh, Some(_)) => format!("已删除 {scope}/{name}"),
-                (crate::ui::lang::Lang::Zh, None) => format!("已写入 {scope}/{name}"),
+                (crate::ui::tui::lang::Lang::En, Some(0)) => format!("no {scope}/{name}"),
+                (crate::ui::tui::lang::Lang::En, Some(_)) => format!("removed {scope}/{name}"),
+                (crate::ui::tui::lang::Lang::En, None) => format!("written {scope}/{name}"),
+                (crate::ui::tui::lang::Lang::Zh, Some(0)) => format!("没有 {scope}/{name}"),
+                (crate::ui::tui::lang::Lang::Zh, Some(_)) => format!("已删除 {scope}/{name}"),
+                (crate::ui::tui::lang::Lang::Zh, None) => format!("已写入 {scope}/{name}"),
             },
         );
         self.out.push(Out::Ask(MemoAsk::List));
@@ -180,13 +180,13 @@ impl MemoHand {
     }
 
     /// The language the notes are said in.
-    pub fn set_lang(&mut self, lang: crate::ui::lang::Lang) {
+    pub fn set_lang(&mut self, lang: crate::ui::tui::lang::Lang) {
         self.lang = lang;
     }
 
     /// The error a refused memo answer carries.
     fn error_of(&self, answer: &Value) -> Option<String> {
-        crate::ui::lang::refused(self.lang, answer)
+        crate::ui::tui::lang::refused(self.lang, answer)
     }
 
     /// The list row under the cursor.

@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use super::desk::{Hire, MemoAsk, Reply};
 use super::pane::Pane;
-use crate::ui::lang::Lang;
 use crate::ui::tui::action::Action;
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::{Claim, Frame, Kind, Local, Shared, SubZone, TermSize, name};
 

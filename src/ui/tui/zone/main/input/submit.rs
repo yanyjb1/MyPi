@@ -214,7 +214,7 @@ impl InputZone {
 
     /// The reply to a submit that opened nothing: the sentence comes back, and says why.
     pub(super) fn refused(&mut self, content: &Value) {
-        let reason = crate::ui::lang::refused(self.data.lang, content)
+        let reason = crate::ui::tui::lang::refused(self.data.lang, content)
             .unwrap_or_else(|| "the session is still in a turn".to_string());
         self.shouts
             .push(Shout::new(name::RETRACT, json!({"reason": reason})));
@@ -225,7 +225,7 @@ impl InputZone {
 
     /// A write the server refused: one line, and nothing to retract.
     pub(super) fn say_refused(&mut self, content: &Value) {
-        let reason = crate::ui::lang::refused(self.data.lang, content)
+        let reason = crate::ui::tui::lang::refused(self.data.lang, content)
             .unwrap_or_else(|| "the write was refused".to_string());
         self.say(&Notice::Refused(reason));
     }

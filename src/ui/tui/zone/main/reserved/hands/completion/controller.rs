@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use super::engine::{self, Completion, CompletionPopup, Look, Scan};
-use crate::ui::lang::Lang;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::Claim;
 use crate::ui::tui::zone::main::desk::Reply;

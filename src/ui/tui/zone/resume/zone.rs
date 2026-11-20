@@ -11,7 +11,7 @@ use super::render;
 const TZ_KEY: &str = "config.server.platform.timezone";
 
 // The display language a refused answer is read in.
-const LANG_KEY: &str = crate::ui::lang::Lang::KEY;
+const LANG_KEY: &str = crate::ui::tui::lang::Lang::KEY;
 
 /// No modifiers held.
 const PLAIN: Mods = Mods {
@@ -124,7 +124,7 @@ pub struct ResumeZone {
     opening: Option<String>,
 
     /// The language a refusal is said in; `en` until the config answers.
-    lang: crate::ui::lang::Lang,
+    lang: crate::ui::tui::lang::Lang,
 
     /// Bumped whenever this zone's rows would differ.
     rev: u64,
@@ -148,7 +148,7 @@ impl Default for ResumeZone {
             failed: false,
             error: None,
             opening: None,
-            lang: crate::ui::lang::Lang::default(),
+            lang: crate::ui::tui::lang::Lang::default(),
             rev: 0,
         }
     }
@@ -292,7 +292,7 @@ impl ResumeZone {
                 let value = frame.payload.get("value").and_then(Value::as_str);
                 match frame.payload.get("key").and_then(Value::as_str) {
                     Some(LANG_KEY) => {
-                        if let Some(lang) = value.and_then(crate::ui::lang::Lang::parse) {
+                        if let Some(lang) = value.and_then(crate::ui::tui::lang::Lang::parse) {
                             self.lang = lang;
                         }
                     }
@@ -392,7 +392,7 @@ impl ResumeZone {
 // The error a refused answer carries, in the language this zone reads.
 impl ResumeZone {
     fn error_of(&self, answer: &Value) -> Option<String> {
-        crate::ui::lang::refused(self.lang, answer)
+        crate::ui::tui::lang::refused(self.lang, answer)
     }
 }
 

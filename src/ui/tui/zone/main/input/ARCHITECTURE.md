@@ -15,7 +15,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `esc.rs` | Esc and its double-tap window | private |
 | `frame.rs` | the frames this zone decodes | private |
 | `boot.rs` | startup questions, session enter/leave, the draft reset, the config keys | private |
-| `notice.rs` | the sentences a command earns, both languages | private |
+| `notice.rs` | the sentences a command earns, as i18n keys | private |
 | `ctx.rs` | `Data`, `Ctx`, `Money` (with the subagents' pool), `Context`, `Currency` — what the parts read | private |
 | `editor/` | the text, undo, paste store, separators and script classes, submission ring | private |
 | `semantics.rs` | key → intent, one context-free table | private |
@@ -39,7 +39,7 @@ The module root re-exports `InputZone`, `ExitRequest`, `Notice`, `Ctx`, `Context
 
 - `ui::tui::zone::{Frame, Local, Shared, TermSize, Claim, Kind, name}` and `text` for wrapping.
 - `ui::tui::action`, `ui::tui::theme::Accent`.
-- `ui::lang` for the language and the en/zh pair.
+- `ui::tui::lang` for the display language; command details and notices render through `crate::i18n`.
 - `serde_yaml` and `std::fs` for the preparation's declared paths, terms and manifest.
 - `super::desk::{Hire, Reply}` for what it asks the desk and what the desk hands back.
 

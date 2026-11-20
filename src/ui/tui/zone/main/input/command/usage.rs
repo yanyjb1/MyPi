@@ -1,7 +1,6 @@
 //! `/usage` — the session's bill, as a panel the desk draws.
 
 use super::meta::CommandMeta;
-use crate::ui::lang::Text;
 use crate::ui::tui::zone::main::desk::Hire;
 
 use super::super::Notice;
@@ -11,10 +10,7 @@ pub const META: CommandMeta = CommandMeta {
     name: "/usage",
     aliases: &[],
     args: &[],
-    detail: Text {
-        en: "this session's usage and bill, per model",
-        zh: "看本会话的用量与账单（分模型）",
-    },
+    detail: "cmd_usage",
     run,
 };
 

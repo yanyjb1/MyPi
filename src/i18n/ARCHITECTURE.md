@@ -27,6 +27,6 @@
 
 ## Not wired
 
-1. The front end reaches this module through `ui::lang`; `text`, `resolve` and `languages` have no
+1. The front end reaches this module through `ui::tui::lang`; nothing calls it outside the TUI yet.
    caller outside it yet.
-2. `ui::lang::Text` and the local `Notice` table are still en/zh inline.
+2. Command details and notices are keyed; the rest of the front end's static text is not.

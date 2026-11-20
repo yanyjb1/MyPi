@@ -1,6 +1,6 @@
 //! A compaction round: a banner at each end, the summary folded behind Ctrl + O.
 
-use crate::ui::lang::Lang;
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::text::{display_width, take_width};
 use crate::ui::tui::theme::fixed;
 use crate::ui::tui::zone::main::history::local::content::Block;

@@ -10,6 +10,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | `run.rs` | `run`: the terminal, the loop, the exit path | public |
 | `signal.rs` | `Stop`: the four stop signals, polled once a frame | public |
 | `config.rs` | `ThemeConfig`, `TodoFold` | public |
+| `lang/` | the display language and the server's own words | public |
 | `action.rs` | `Action`, `Key`, `KeyCode`, `Mods`, crossterm projections | public |
 | `term.rs` | `Term`, `Input`: alternate screen, flags, size, one frame, drain and wait | public |
 | `app/` | `App`: registry, display ledger, delivery, landing, lifecycle, memo | public |
@@ -19,8 +20,8 @@ What is here, what each file holds, who calls whom. Current state only.
 
 ## What it talks to
 
-- **Calls**: `ui::session` for the connection and the structural window; `commands` for the
-  command table; `crate::git` for the statusline.
+- **Calls**: `ui::session` for the connection and the structural window; `crate::i18n` for
+  display text; `crate::git` for the statusline.
 - **Is called by**: `ui::tui::run`, from `main::front_end_with`.
 - **Does not know**: the server process, the database, the socket, the agent loop, or the model.
 

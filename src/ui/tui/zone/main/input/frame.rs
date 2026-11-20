@@ -6,7 +6,7 @@ use super::boot::{AUTO_PREPARE_KEY, DEFAULT_MODEL_KEY, FX_CURRENCY_KEY, GIT_SCAN
 use super::ctx::{Context, Currency};
 use super::notice::Notice;
 use super::zone::InputZone;
-use crate::ui::lang::Lang;
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::zone::{Frame, Shout, name};
 
 impl InputZone {

@@ -16,7 +16,7 @@ pub(super) const FX_CURRENCY_KEY: &str = "config.ui.tui.fx.currency";
 pub(super) const DEFAULT_MODEL_KEY: &str = "config.server.api.defaultModel";
 
 /// The display language the panel and number formats follow.
-pub(super) const LANG_KEY: &str = crate::ui::lang::Lang::KEY;
+pub(super) const LANG_KEY: &str = crate::ui::tui::lang::Lang::KEY;
 
 impl InputZone {
     /// First frame: the process-wide facts a draft can ask for on its own.

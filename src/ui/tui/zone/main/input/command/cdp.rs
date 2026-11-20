@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 use super::meta::{Arg, CommandMeta};
-use crate::ui::lang::Text;
 use crate::ui::tui::zone::Frame;
 use serde_json::json;
 
@@ -14,10 +13,7 @@ pub const META: CommandMeta = CommandMeta {
     name: "/cdp",
     aliases: &[],
     args: &[Arg::Path],
-    detail: Text {
-        en: "switch the working directory; later relative paths resolve from it",
-        zh: "切换工作目录（持久化，后续相对路径以它为准）",
-    },
+    detail: "cmd_cdp",
     run,
 };
 

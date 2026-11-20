@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use super::super::num;
-use crate::ui::lang::Lang;
+use crate::ui::tui::lang::Lang;
 
 /// The currency the cost pill counts in; the config answers, `CNY` until it does.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

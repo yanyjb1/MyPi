@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::super::super::pools::Pools;
 use super::candidate::Candidate;
-use crate::ui::lang::Lang;
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::zone::main::input::command::{self, Arg, path_shaped, word, word_index};
 
 /// How many candidates the popup shows at most.
@@ -218,7 +218,7 @@ fn command_items(word: &str, lang: Lang) -> Vec<Completion> {
                     kind: CandidateKind::Command,
                     name: name.to_string(),
                     hits,
-                    detail: meta.detail.get(lang).to_string(),
+                    detail: crate::i18n::render(lang.code(), meta.detail, &serde_json::Value::Null),
                     is_dir: false,
                     insert,
                 },

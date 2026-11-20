@@ -2,7 +2,6 @@
 //! Each command declares its own `META`; this file names no command.
 
 use super::call::{Call, Done};
-use crate::ui::lang::Text;
 
 /// Where the candidates for one argument position come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +37,8 @@ pub struct CommandMeta {
     /// The argument positions, in order.
     pub args: &'static [Arg],
 
-    /// One line for help and completion, in both languages.
-    pub detail: Text,
-
+    // The i18n key of the one line help and completion read.
+    pub detail: &'static str,
     /// This command's own dispatch: the one entry the table keeps.
     pub run: fn(&Call<'_>) -> Done,
 }
@@ -123,7 +121,7 @@ pub const fn valid(table: &[CommandMeta]) -> bool {
         if c.name.is_empty() || c.name.as_bytes()[0] != b'/' {
             return false;
         }
-        if c.detail.en.is_empty() || c.detail.zh.is_empty() {
+        if c.detail.is_empty() {
             return false;
         }
         let mut k = 0;

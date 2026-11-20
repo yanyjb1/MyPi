@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use crate::ui::lang::Lang;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::text::display_width;
 use crate::ui::tui::theme::{Accent, fixed};
 use crate::ui::tui::zone::Claim;
