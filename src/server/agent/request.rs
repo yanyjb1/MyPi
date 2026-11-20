@@ -18,7 +18,7 @@ pub use contract::{
     LapInput, LapReply, Piece, Reference, ResultsInput, Retention, Spill, Stop, ToolCall,
     ToolResult, Transport, TurnView,
 };
-pub use live::{Element, Event, Notice, NoticeLevel, Stream, ToolEvent};
+pub use live::{Element, Event, Notice, Stream, ToolEvent};
 pub use message::{AssistantMessage, Message, Usage, WireMessage};
 pub use protocol::ProtocolId;
 pub use retry::RetryPolicy;

@@ -1,7 +1,8 @@
 use anyhow::{Context as _, bail};
+use serde_json::json;
 use serde_yaml::{Mapping, Value as Yaml};
 
-use super::super::notice::{ConfigNotice, warn};
+use super::super::notice::{ConfigNotice, warn, warn_args};
 use super::super::registry;
 use super::types::{ModelEntry, ModelsConfig, Provider};
 
@@ -27,18 +28,18 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
             notices.push(warn(
                 "models.providers",
                 file,
-                "provider names must be text",
+                "config_provider_name_not_text",
                 "skipped",
             ));
             continue;
         };
         let key = format!("models.provider.{name}");
         if !valid_name(name) {
-            notices.push(warn(&key, file, "empty or contains `.`/`:`", "skipped"));
+            notices.push(warn(&key, file, "config_provider_name_bad", "skipped"));
             continue;
         }
         let Some(map) = raw.as_mapping() else {
-            notices.push(warn(&key, file, "provider must be a mapping", "skipped"));
+            notices.push(warn(&key, file, "config_provider_not_mapping", "skipped"));
             continue;
         };
         let allowed: Vec<&str> = registry::provider_fields().collect();
@@ -46,39 +47,40 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
         let base_url = match text_field(map, "baseUrl") {
             Some(v) if v.starts_with("http://") || v.starts_with("https://") => v.to_string(),
             Some(_) => {
-                notices.push(warn(
-                    &key,
-                    file,
-                    "baseUrl must be http(s)",
-                    "provider skipped",
-                ));
+                notices.push(warn(&key, file, "config_base_url_bad", "provider skipped"));
                 continue;
             }
             None => {
-                notices.push(warn(&key, file, "baseUrl is required", "provider skipped"));
+                notices.push(warn(
+                    &key,
+                    file,
+                    "config_base_url_missing",
+                    "provider skipped",
+                ));
                 continue;
             }
         };
         let api = match map.get("api") {
             None => {
-                notices.push(warn(&key, file, "api is required", "provider skipped"));
+                notices.push(warn(&key, file, "config_api_missing", "provider skipped"));
                 continue;
             }
             Some(value) => match value.as_str() {
                 Some(raw) => match crate::server::agent::request::ProtocolId::parse(raw) {
                     Ok(id) => id.as_str().to_string(),
                     Err(_) => {
-                        notices.push(warn(
+                        notices.push(warn_args(
                             &key,
                             file,
-                            &format!("unknown api `{raw}`"),
+                            "config_api_unknown",
                             "provider skipped",
+                            json!({"api": raw}),
                         ));
                         continue;
                     }
                 },
                 None => {
-                    notices.push(warn(&key, file, "api must be text", "provider skipped"));
+                    notices.push(warn(&key, file, "config_api_not_text", "provider skipped"));
                     continue;
                 }
             },
@@ -88,7 +90,7 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
             Some(value) => match value.as_str() {
                 Some(text) => text.to_string(),
                 None => {
-                    notices.push(warn(&key, file, "apiKey must be text", "empty"));
+                    notices.push(warn(&key, file, "config_api_key_not_text", "empty"));
                     String::new()
                 }
             },
@@ -98,7 +100,7 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
             Some(v) => match v.as_bool() {
                 Some(b) => b,
                 None => {
-                    notices.push(warn(&key, file, "authHeader must be true or false", "true"));
+                    notices.push(warn(&key, file, "config_auth_header_bad", "true"));
                     true
                 }
             },
@@ -107,18 +109,13 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
             notices.push(warn(
                 &key,
                 file,
-                "models is required and must be a list",
+                "config_models_not_list",
                 "provider skipped",
             ));
             continue;
         };
         if list.is_empty() {
-            notices.push(warn(
-                &key,
-                file,
-                "models must not be empty",
-                "provider skipped",
-            ));
+            notices.push(warn(&key, file, "config_models_empty", "provider skipped"));
             continue;
         }
         let mut models: Vec<ModelEntry> = Vec::new();
@@ -127,7 +124,7 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
                 notices.push(warn(
                     &key,
                     file,
-                    "model entry must be a mapping",
+                    "config_model_not_mapping",
                     "entry skipped",
                 ));
                 continue;
@@ -138,7 +135,7 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
                         notices.push(warn(
                             &format!("{key}.models.{}", model.id),
                             file,
-                            "duplicate model id in this provider",
+                            "config_model_duplicate",
                             "entry skipped",
                         ));
                     } else {
@@ -149,7 +146,7 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
             }
         }
         if models.is_empty() {
-            notices.push(warn(&key, file, "no usable model", "provider skipped"));
+            notices.push(warn(&key, file, "config_model_none", "provider skipped"));
             continue;
         }
         providers.push(Provider {
@@ -192,7 +189,7 @@ pub(super) fn unknown_keys(
             notices.push(warn(
                 &format!("{base}.{name}"),
                 file,
-                "unknown key",
+                "config_unknown_key",
                 "ignored",
             ));
         }

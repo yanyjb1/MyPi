@@ -64,9 +64,6 @@
 
 ## Not wired yet
 
-1. `src/server/api/call/config.rs` still answers `Refuse::Internal`; it needs `Call::Config` to carry
-   an optional session so the profile layer can be resolved.
-2. Warnings are collected but not forwarded through the notice channel.
-3. External call sites still use the old typed `cfg.app.*`, `McpConfig` and no-argument
+1. External call sites still use the old typed `cfg.app.*`, `McpConfig` and no-argument
    `default_model`; they move when their own domains are refactored.
-4. Skills are not read here yet.
+2. Skills are not read here yet.

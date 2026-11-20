@@ -46,8 +46,8 @@ pub(super) fn collect(
                 notices.push(warn(
                     &format!("profile.{name}"),
                     &root.display().to_string(),
-                    "duplicate profile name in one root",
-                    "name unusable",
+                    "config_profile_duplicate",
+                    "unusable",
                 ));
             } else {
                 local.insert(name, dir);
@@ -61,8 +61,8 @@ pub(super) fn collect(
                 notices.push(warn(
                     &format!("profile.{name}"),
                     &dir.display().to_string(),
-                    "the same profile name exists in a lower root",
-                    "higher-priority copy",
+                    "config_profile_shadowed",
+                    "higher_priority",
                 ));
             } else {
                 found.insert(name, dir);

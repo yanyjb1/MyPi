@@ -1,7 +1,7 @@
 // `memo` — user notes: add and mod append a version, del removes every version.
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::server::api::route::{i64_of, opt_str_of, str_of};
 use crate::server::api::{Api, Refuse};
@@ -37,7 +37,7 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<(), Refuse> {
             delete(api, scope, ask, &name)?;
             Ok(())
         }
-        other => Err(Refuse::Bad(format!("no such memo op: {other}"))),
+        other => Err(Refuse::new("memo_op_unknown").args(json!({"op": other}))),
     }
 }
 
@@ -46,7 +46,7 @@ fn scope(ask: &Value) -> Result<Scope, Refuse> {
     match opt_str_of(ask, "scope")?.unwrap_or("global") {
         "global" => Ok(Scope::Global),
         "current" => Ok(Scope::Current),
-        other => Err(Refuse::Bad(format!("no such scope: {other}"))),
+        other => Err(Refuse::new("memo_scope_unknown").args(json!({"scope": other}))),
     }
 }
 
@@ -54,9 +54,7 @@ fn scope(ask: &Value) -> Result<Scope, Refuse> {
 fn name(raw: &str) -> Result<String, Refuse> {
     let name = raw.trim();
     if name.is_empty() || name.chars().any(char::is_whitespace) {
-        return Err(Refuse::Bad(
-            "a memo name is non-empty and has no spaces".into(),
-        ));
+        return Err(Refuse::new("memo_name_bad"));
     }
     Ok(name.to_string())
 }
@@ -69,7 +67,7 @@ fn anchor(api: &Api, scope: Scope, ask: &Value) -> Result<Option<i64>, Refuse> {
     let reader = Reader::open(api.db())?;
     let ranges = reader.ranges(i64_of(ask, "session")?)?;
     let Some([_, hi]) = ranges.last() else {
-        return Err(Refuse::Bad("this session holds no blocks yet".into()));
+        return Err(Refuse::new("memo_empty"));
     };
     Ok(Some(*hi))
 }

@@ -1,9 +1,9 @@
 // `delete` — a child is refused; a parent takes its children with it.
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::server::agent::r#loop::NoticeLevel;
+use crate::ipc::contract::Text;
 use crate::server::api::route::i64_of;
 use crate::server::api::{Api, Refuse};
 use crate::server::storage::Reader;
@@ -17,19 +17,16 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Vec<i64>, Re
     let session = i64_of(ask, "session")?;
     emit::require_writer(api, viewer, session)?;
     if api.relay().busy(session) {
-        api.relay()
-            .notice(session, NoticeLevel::Warn, "会话正在跑一轮，先打断再删");
-        return Err(Refuse::Busy("the session is busy".into()));
+        api.relay().notice(session, Text::warning("delete_busy"));
+        return Err(Refuse::new("delete_busy"));
     }
 
     let reader = Reader::open(api.db())?;
     let row = reader
         .session(session)?
-        .ok_or_else(|| Refuse::Bad(format!("no session {session}")))?;
+        .ok_or_else(|| Refuse::new("no_session").args(json!({"session": session})))?;
     if row["anchor"].is_i64() {
-        return Err(Refuse::Permission(
-            "a child session cannot be deleted on its own".into(),
-        ));
+        return Err(Refuse::new("child_delete"));
     }
     let children = reader.query(
         &Query::new(Sheet::Sessions)
@@ -53,7 +50,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Vec<i64>, Re
         for id in &ids {
             api.writer()
                 .export_memos(*id, &folder)
-                .map_err(|e| Refuse::Internal(format!("{e:#}")))?;
+                .map_err(|_| Refuse::new("internal"))?;
         }
     }
     api.writer().delete_rows(Table::Sessions, &ids)?;

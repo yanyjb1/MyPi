@@ -7,7 +7,7 @@
 | `request.rs` | module declarations and re-exports; no logic |
 | `ask.rs` | `Request`: the three actions, the options it is built with, the forwarder that routes pieces and blocks |
 | `contract.rs` | every shape the loop fills or reads: `Ask`, `LapInput`, `LapReply`, `ResultsInput`, `CompactInput`, `CompactReply`, `Borrow`, `Stop`, `Retention`, `Transport`, `ToolCall`, `ToolResult`, `Spill`, `Block`, `Kind`, `Effort`, `Artifact`, `BlockSink`, `History`, `TurnView`, `Piece`, `Reference`, `ResultsInput` |
-| `live.rs` | the live line: `Event`, `Live`, `Stream`, `Notice`, `NoticeLevel`, `ToolEvent`, `Line` |
+| `live.rs` | the live line: `Event`, `Live`, `Stream`, `Notice`, `ToolEvent`, `Line` |
 | `message.rs` | the stored `Message`, the wire `WireMessage`, `WireCall`, `ToolDef`, `Usage`, `AssistantMessage`, and the two fixed reply texts |
 | `transcript.rs` | stored messages to wire messages: the only translation |
 | `assembly.rs` | one request's body: system prompt, history, tool manuals, thinking effort |

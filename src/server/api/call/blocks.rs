@@ -12,12 +12,12 @@ pub(crate) fn answer(api: &Api, session: i64, ranges: Vec<[i64; 2]>) -> Result<V
     let mut found = Vec::new();
     for [lo, hi] in ranges {
         if lo > hi {
-            return Err(Refuse::Bad(format!("reversed range: [{lo}, {hi}]")));
+            return Err(Refuse::new("range_reversed").args(json!({"lo": lo, "hi": hi})));
         }
         if !owned.iter().any(|[start, end]| *start <= lo && hi <= *end) {
-            return Err(Refuse::Bad(format!(
-                "blocks [{lo}, {hi}] are not one range of session {session}"
-            )));
+            return Err(
+                Refuse::new("range_outside").args(json!({"lo": lo, "hi": hi, "session": session}))
+            );
         }
         found.extend(reader.blocks(&[[lo, hi]])?);
     }

@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use anyhow::Context as _;
+use serde_json::json;
 use serde_yaml::{Mapping, Value as Yaml};
 
-use super::super::notice::{ConfigNotice, warn};
+use super::super::notice::{ConfigNotice, warn, warn_args};
 use super::super::paths::{self, ConfigPaths};
 use super::super::profile;
 use super::super::registry;
@@ -25,7 +26,13 @@ impl Layers {
                         paths::Origin::Global => global = Some((path.clone(), map)),
                     }
                 }
-                Err(problem) => notices.push(warn("config", &file, &problem, "next layer")),
+                Err(problem) => notices.push(warn_args(
+                    "config",
+                    &file,
+                    "config_unreadable",
+                    "next_layer",
+                    json!({"detail": problem}),
+                )),
             }
         }
         Layers { project, global }
@@ -62,7 +69,7 @@ pub(super) fn unknown_top(path: &Path, notices: &mut Vec<ConfigNotice>) {
             notices.push(warn(
                 name,
                 &path.display().to_string(),
-                "unknown top-level key",
+                "config_unknown_top_key",
                 "ignored",
             ));
         }
@@ -113,11 +120,12 @@ fn seed(
     }
     let dir = root.join(paths::PROFILES_SUBDIR).join(builtin.name);
     if let Err(error) = std::fs::create_dir_all(&dir) {
-        notices.push(warn(
+        notices.push(warn_args(
             &format!("profile.{}", builtin.name),
             &dir.display().to_string(),
-            &error.to_string(),
-            "built-in copy",
+            "config_profile_unwritable",
+            "builtin",
+            json!({"detail": error.to_string()}),
         ));
         return;
     }
@@ -131,11 +139,12 @@ fn seed(
         }
         match std::fs::write(&path, body) {
             Ok(()) => println!("mypi: wrote {}", path.display()),
-            Err(error) => notices.push(warn(
+            Err(error) => notices.push(warn_args(
                 &format!("profile.{}", builtin.name),
                 &path.display().to_string(),
-                &error.to_string(),
-                "built-in copy",
+                "config_profile_unwritable",
+                "builtin",
+                json!({"detail": error.to_string()}),
             )),
         }
     }

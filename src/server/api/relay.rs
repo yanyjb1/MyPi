@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use crate::ipc::contract::Frame;
-use crate::server::agent::r#loop::{Element, Event, NoticeLevel, Stream, ToolEvent};
+use crate::ipc::contract::{Frame, Text};
+use crate::server::agent::r#loop::{Element, Event, Stream, ToolEvent};
 use crate::server::agent::request::message::Usage;
 
 // One write's result, ready to be said on the session stream.
@@ -239,13 +239,8 @@ impl Relay {
     }
 
     // One line the api has to say, into the session's stream.
-    pub(crate) fn notice(&self, session: i64, level: NoticeLevel, text: impl Into<String>) {
-        let level = match level {
-            NoticeLevel::Info => "info",
-            NoticeLevel::Warn => "warn",
-            NoticeLevel::Error => "error",
-        };
-        let payload = json!({"session": session, "level": level, "content": text.into()});
+    pub(crate) fn notice(&self, session: i64, text: Text) {
+        let payload = json!({"session": session, "text": text});
         self.deliver(session, Frame::new("stream", "notice", payload), None);
     }
 
@@ -353,7 +348,7 @@ impl Relay {
                 };
                 self.stream(session, turn, opened_by, kind, extra);
             }
-            Element::Notice(notice) => self.notice(session, notice.level, notice.text),
+            Element::Notice(notice) => self.notice(session, notice.text),
             // Handled above: the slot opening names the turn instead of pushing a frame.
             Element::Mailbox { .. } => {}
             Element::Structure {

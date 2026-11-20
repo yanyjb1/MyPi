@@ -1,10 +1,11 @@
 //! One model entry, parsed with warnings.
 
+use serde_json::json;
 use serde_yaml::{Mapping, Value as Yaml};
 
 use crate::server::agent::request::Effort;
 
-use super::super::notice::{ConfigNotice, warn};
+use super::super::notice::{ConfigNotice, warn, warn_args};
 use super::super::registry;
 use super::parse::unknown_keys;
 use super::types::{Cost, Currency, ModelEntry};
@@ -21,17 +22,17 @@ pub(super) fn parse_model(
     unknown_keys(map, &allowed, &key, file, notices);
     let id = match map.get("id") {
         None => {
-            notices.push(warn(&key, file, "id is required", "entry skipped"));
+            notices.push(warn(&key, file, "config_id_missing", "entry skipped"));
             return None;
         }
         Some(value) => match value.as_str() {
             Some(id) if !id.is_empty() => id.to_string(),
             Some(_) => {
-                notices.push(warn(&key, file, "id must not be empty", "entry skipped"));
+                notices.push(warn(&key, file, "config_id_empty", "entry skipped"));
                 return None;
             }
             None => {
-                notices.push(warn(&key, file, "id must be text", "entry skipped"));
+                notices.push(warn(&key, file, "config_id_not_text", "entry skipped"));
                 return None;
             }
         },
@@ -41,7 +42,7 @@ pub(super) fn parse_model(
         Some(value) => match value.as_str() {
             Some(name) => name.to_string(),
             None => {
-                notices.push(warn(&key, file, "name must be text", "id"));
+                notices.push(warn(&key, file, "config_name_not_text", "id"));
                 String::new()
             }
         },
@@ -53,11 +54,12 @@ pub(super) fn parse_model(
         Some(raw) => match Currency::parse(raw) {
             Some(currency) => currency,
             None => {
-                notices.push(warn(
+                notices.push(warn_args(
                     &key,
                     file,
-                    &format!("unknown currency `{raw}`"),
+                    "config_currency_unknown",
                     "CNY",
+                    json!({"currency": raw}),
                 ));
                 Currency::CNY
             }
@@ -68,7 +70,7 @@ pub(super) fn parse_model(
         Some(value) => match value.as_bool() {
             Some(flag) => flag,
             None => {
-                notices.push(warn(&key, file, "vision must be a boolean", "false"));
+                notices.push(warn(&key, file, "config_vision_bad", "false"));
                 false
             }
         },
@@ -78,7 +80,7 @@ pub(super) fn parse_model(
         Some(value) => match value.as_bool() {
             Some(flag) => flag,
             None => {
-                notices.push(warn(&key, file, "subagent must be a boolean", "false"));
+                notices.push(warn(&key, file, "config_subagent_bad", "false"));
                 false
             }
         },
@@ -89,35 +91,28 @@ pub(super) fn parse_model(
             let mut out: Vec<Effort> = Vec::new();
             for item in list {
                 let Some(raw) = item.as_str() else {
-                    notices.push(warn(
-                        &key,
-                        file,
-                        "reasoningEfforts must hold text",
-                        "dropped",
-                    ));
+                    notices.push(warn(&key, file, "config_efforts_not_text", "dropped"));
                     continue;
                 };
                 match Effort::parse(raw) {
-                    Some(Effort::Auto) => notices.push(warn(
-                        &key,
-                        file,
-                        "auto is no rung a model declares",
-                        "dropped",
-                    )),
+                    Some(Effort::Auto) => {
+                        notices.push(warn(&key, file, "config_effort_auto", "dropped"))
+                    }
                     Some(rung) if out.contains(&rung) => {}
                     Some(rung) => out.push(rung),
-                    None => notices.push(warn(
+                    None => notices.push(warn_args(
                         &key,
                         file,
-                        &format!("unknown effort `{raw}`"),
+                        "config_effort_unknown",
                         "dropped",
+                        json!({"effort": raw}),
                     )),
                 }
             }
             out
         }
         Some(_) => {
-            notices.push(warn(&key, file, "reasoningEfforts must be a list", "none"));
+            notices.push(warn(&key, file, "config_efforts_not_list", "none"));
             Vec::new()
         }
     };
@@ -140,7 +135,7 @@ pub(super) fn parse_model(
 
 fn parse_cost(raw: &Yaml, base: &str, file: &str, notices: &mut Vec<ConfigNotice>) -> Cost {
     let Some(map) = raw.as_mapping() else {
-        notices.push(warn(base, file, "cost must be a mapping", "zero prices"));
+        notices.push(warn(base, file, "config_cost_not_mapping", "zero prices"));
         return Cost::default();
     };
     let allowed: Vec<&str> = registry::cost_fields().collect();
@@ -158,15 +153,22 @@ fn parse_cost(raw: &Yaml, base: &str, file: &str, notices: &mut Vec<ConfigNotice
         match value.as_f64() {
             Some(number) if number >= 0.0 => *slot = number,
             Some(_) => {
-                notices.push(warn(
+                notices.push(warn_args(
                     base,
                     file,
-                    &format!("{field} must not be negative"),
+                    "config_cost_negative",
                     "0",
+                    json!({"field": field}),
                 ));
             }
             None => {
-                notices.push(warn(base, file, &format!("{field} must be a number"), "0"));
+                notices.push(warn_args(
+                    base,
+                    file,
+                    "config_cost_not_number",
+                    "0",
+                    json!({"field": field}),
+                ));
             }
         }
     }
@@ -185,11 +187,12 @@ fn optional_u64(
         Some(value) => match value.as_u64() {
             Some(number) => Some(number),
             None => {
-                notices.push(warn(
+                notices.push(warn_args(
                     key,
                     file,
-                    &format!("{field} must be a non-negative integer"),
+                    "config_uint_bad",
                     "absent",
+                    json!({"field": field}),
                 ));
                 None
             }

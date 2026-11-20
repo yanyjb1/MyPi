@@ -26,7 +26,7 @@ fn retention_of(ask: &Value) -> Result<Option<Retention>, Refuse> {
     };
     let object = match value.as_object() {
         Some(object) => object,
-        None => return Err(Refuse::Bad("bad `retention`".into())),
+        None => return Err(Refuse::new("retention_bad")),
     };
     if let Some(chars) = object.get("chars").and_then(Value::as_u64) {
         return Ok(Some(Retention::Chars(chars as usize)));
@@ -34,5 +34,5 @@ fn retention_of(ask: &Value) -> Result<Option<Retention>, Refuse> {
     if let Some(blocks) = object.get("blocks").and_then(Value::as_u64) {
         return Ok(Some(Retention::Blocks(blocks as usize)));
     }
-    Err(Refuse::Bad("bad `retention`".into()))
+    Err(Refuse::new("retention_bad"))
 }

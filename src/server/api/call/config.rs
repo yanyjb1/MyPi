@@ -30,7 +30,8 @@ pub(crate) fn answer(api: &Api, key: &str) -> Result<Value, Refuse> {
     {
         return Ok(entry(&model));
     }
-    cfg.get_json(key, None).map_err(Refuse::Bad)
+    cfg.get_json(key, None)
+        .map_err(|_| Refuse::new("config_key_unknown").args(json!({"key": key})))
 }
 
 // Everything a front end draws for one model.

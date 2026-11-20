@@ -28,17 +28,15 @@ pub(crate) fn open(
     opened_by: &'static str,
 ) -> Result<Value, Refuse> {
     if api.relay().busy(session) {
-        return Err(Refuse::Busy("the session is already in a turn".into()));
+        return Err(Refuse::new("busy"));
     }
     let reader = Reader::open(api.db())?;
     let row = reader
         .session(session)?
-        .ok_or_else(|| Refuse::Bad(format!("no session {session}")))?;
+        .ok_or_else(|| Refuse::new("no_session").args(serde_json::json!({"session": session})))?;
     drop(reader);
     if row["anchor"].is_i64() {
-        return Err(Refuse::Permission(
-            "a child session takes no messages".into(),
-        ));
+        return Err(Refuse::new("child_message"));
     }
     // A compaction opens with no words of the user's: nobody else has a block to draw for it.
     let opening = match &message {

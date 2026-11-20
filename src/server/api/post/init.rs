@@ -31,7 +31,7 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<Value, Refuse> {
         None => {
             let default = cfg
                 .default_model(profile.as_deref(), &cwd)
-                .ok_or_else(|| Refuse::Internal("no default model is configured".into()))?;
+                .ok_or_else(|| Refuse::new("no_default_model"))?;
             (default.provider_name, default.entry.id)
         }
     };
@@ -43,8 +43,7 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<Value, Refuse> {
         .filter(|name| name != FINAL.name)
         .collect();
     let manuals = Arc::new(registry::roster(&tools));
-    let tools_json =
-        serde_json::to_string(&*manuals).map_err(|e| Refuse::Internal(e.to_string()))?;
+    let tools_json = serde_json::to_string(&*manuals).map_err(|_| Refuse::new("internal"))?;
 
     let system = resolved.system;
     let landed = api.writer().push(Submit {
@@ -71,7 +70,7 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<Value, Refuse> {
     let archive = landed.ids.first().copied().unwrap_or(0);
     let session = landed.ids.get(1).copied().unwrap_or(0);
     if session == 0 {
-        return Err(Refuse::Internal("the writer created no session row".into()));
+        return Err(Refuse::new("no_session_row"));
     }
 
     let vision = api

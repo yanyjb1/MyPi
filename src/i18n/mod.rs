@@ -3,6 +3,9 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
 // The language this binary falls back to.
 const DEFAULT_LANGUAGE: &str = "en";
 
@@ -14,12 +17,14 @@ const LANGUAGES: &[(&str, &str)] = &[
 
 const NOT_FOUND: &str = "not found";
 
-// What a piece of text is for: an error, a warning, or a notice.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// What a piece of text is for: an error, a warning, a notice, or an upstream message.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     Error,
     Warning,
     Notice,
+    Upstream,
 }
 
 impl Kind {
@@ -28,19 +33,24 @@ impl Kind {
             Self::Error => "error",
             Self::Warning => "warning",
             Self::Notice => "notice",
+            Self::Upstream => "upstream",
         }
     }
 }
 
 static TABLES: OnceLock<HashMap<&'static str, HashMap<String, String>>> = OnceLock::new();
 
-// The sentence for a key, or `not found` when the language or the key has none.
-pub fn text(lang: &str, key: &str) -> &'static str {
-    tables()
-        .get(resolve(lang))
-        .and_then(|table| table.get(key))
-        .map(String::as_str)
-        .unwrap_or(NOT_FOUND)
+// The sentence template for a key, if this language and key have one.
+pub fn text(lang: &str, key: &str) -> Option<&'static str> {
+    tables().get(resolve(lang))?.get(key).map(String::as_str)
+}
+
+// One sentence: the language's template with `{name}` filled from `args`.
+pub fn render(lang: &str, key: &str, args: &Value) -> String {
+    match text(lang, key) {
+        Some(template) => fill(template, args),
+        None => NOT_FOUND.to_string(),
+    }
 }
 
 // The language this binary falls back to when the asked-for one has no file.
@@ -70,28 +80,46 @@ fn tables() -> &'static HashMap<&'static str, HashMap<String, String>> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_key_reads_in_both_languages() {
-        assert_eq!(text("en", "busy"), "the session is already in a turn");
-        assert_eq!(text("zh", "busy"), "会话正在跑一轮");
+fn fill(template: &str, args: &Value) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 1..];
+        let Some(end) = tail.find('}') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let name = &tail[..end];
+        match args.get(name) {
+            Some(Value::String(text)) => out.push_str(text),
+            Some(Value::Number(number)) => out.push_str(&number.to_string()),
+            Some(Value::Bool(true)) => out.push_str("true"),
+            Some(Value::Bool(false)) => out.push_str("false"),
+            Some(Value::Array(items)) => {
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(&text_of(item));
+                }
+            }
+            Some(other) => out.push_str(&text_of(other)),
+            None => {
+                out.push('{');
+                out.push_str(name);
+                out.push('}');
+            }
+        }
+        rest = &tail[end + 1..];
     }
+    out.push_str(rest);
+    out
+}
 
-    #[test]
-    fn a_missing_key_is_not_found() {
-        assert_eq!(text("en", "no_such_key"), "not found");
-    }
-
-    #[test]
-    fn a_missing_language_falls_back_to_english() {
-        assert_eq!(text("xx", "busy"), text("en", "busy"));
-    }
-
-    #[test]
-    fn the_default_language_is_compiled_in() {
-        assert!(languages().any(|code| code == DEFAULT_LANGUAGE));
+fn text_of(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
     }
 }

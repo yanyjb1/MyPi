@@ -79,8 +79,9 @@ Subscribe: `watch`, `submit`, `compact`.
   for every watcher but the writer.
 - `effort` sets how hard the session's next laps ask the model to think. It is the one write
   that changes no row: the rung lives on the session's request config and dies with the booking. A
-  model that declares no rung answers `bad_payload` rather than accepting a value it could never
-  send, and a rung the model does not declare is refused the same way, with the declared ones named.
+  model that declares no rung answers `effort_unsupported` rather than accepting a value it could
+  never send, and a rung the model does not declare answers `effort_not_declared`, with the
+  declared ones named.
   A model switch drops the rung back to `auto`, because the rung belonged to the model that declared
   it.
   `interrupt` is silent: it stops what runs, and an idle session hears nothing. A rewind tells the
@@ -91,7 +92,7 @@ Subscribe: `watch`, `submit`, `compact`.
   session and `cwd` on a path that does not exist or is not a workspace.
 - `profile` is an argument of the write `init` and never a name of its own: a session's profile is
   fixed when it is created.
-- A child session takes no messages: `submit` and `compact` answer `permission_denied` for one.
+- A child session takes no messages: `submit` and `compact` answer `child_message` for one.
 - The configuration is a startup snapshot. `call.config` answers the same values the process runs
   on; there is no name that re-reads the files, because the loop, the tool layer and the limits are
   built once.
@@ -161,7 +162,7 @@ turn's first frame, always — not usually.
 |---|---|---|---|
 | write signal | `stream` | `signal` | the write's fields plus `signal` |
 | live output | `stream` | the name that opened the turn | `session`, `turn`, `kind`, the piece |
-| notice | `stream` | `notice` | `session`, `level`, `content` |
+| notice | `stream` | `notice` | `session`, `text` |
 | slot taken | `stream` | `signal` | `signal: mailbox`, and `text` for every watcher but the writer |
 | turn opened | `stream` | `signal` | `signal: user`, `text` |
 
@@ -192,14 +193,14 @@ turn's first frame, always — not usually.
 
 A session is idle or busy. Idle: whoever submits first opens the turn and becomes the writer.
 Busy: the writer is fixed to the viewer that opened the turn; any other viewer's write answers
-`permission_denied`. The slot is cleared when the round structure arrives, not when the connection
+`writer_required`. The slot is cleared when the round structure arrives, not when the connection
 goes away.
 
 ### Errors
 
-`unknown_name`, `bad_payload`, `busy`, `permission_denied`, `internal`, all from
-`ipc::contract::ErrorCode`. A `call`, `post` or `subscribe` frame before `hello` answers
-`permission_denied`.
+An error frame carries `ipc::contract::Text`: a `kind` plus a machine `key` and optional `args`;
+an upstream body carries `text` instead. A `call`, `post` or `subscribe` frame before `hello`
+answers the key `hello_required`.
 
 ## 2. Design intent
 

@@ -6,13 +6,14 @@ use anyhow::{Result, anyhow};
 
 use super::ask::{CompactInput, LapInput, ResultsInput, Stop};
 use super::fence::Fence;
+use crate::ipc::contract::Text;
 use crate::server::agent::r#loop::pen::{self, Pen};
 use crate::server::agent::r#loop::session::agent::AgentRunner;
 use crate::server::agent::r#loop::session::book::{Birth, Inner, Retention};
 use crate::server::agent::r#loop::session::child::State as ChildState;
 use crate::server::agent::r#loop::session::handle::Handle;
 use crate::server::agent::request::contract::{History, ToolResult as Reported};
-use crate::server::agent::request::live::{Element, Event, Notice, NoticeLevel, Stream};
+use crate::server::agent::request::live::{Element, Event, Notice, Stream};
 use crate::server::agent::request::message::Message as Stored;
 use crate::server::agent::tools::contract::job::{JobRunner, JobSpec, Schedule};
 use crate::server::agent::tools::contract::output::Effect;
@@ -22,9 +23,6 @@ use crate::server::agent::tools::registry::roster;
 use crate::server::agent::tools::subagent::{FINAL, TASK};
 use crate::server::platform::time::now_stamp;
 use crate::server::storage::{Ref, RequestMeta, Row};
-
-/// The label a compaction's failure carries; the round itself is not the conversation's.
-const COMPACTION_FAILED: &str = "COMPACTION FAILED";
 
 /// Which machine a turn runs.
 #[derive(Clone)]
@@ -72,7 +70,7 @@ pub(crate) fn run(
                     settle(inner, handle, turn, Stop::User, None)?;
                     return Ok(Stop::User);
                 }
-                failed(inner, handle, turn, None, &e, COMPACTION_FAILED);
+                failed(inner, handle, turn, None, &e, "compaction_failed");
                 return Err(e);
             }
         };
@@ -476,7 +474,7 @@ fn broken(
     baseline: Option<u64>,
     why: &anyhow::Error,
 ) {
-    failed(inner, handle, turn, baseline, why, "the turn broke");
+    failed(inner, handle, turn, baseline, why, "turn_broke");
 }
 
 /// One round died: the watcher reads one line naming what kind of round it was, then the reason.
@@ -486,14 +484,12 @@ fn failed(
     turn: i64,
     baseline: Option<u64>,
     why: &anyhow::Error,
-    label: &str,
+    key: &str,
 ) {
+    let text = Text::error(key).args(serde_json::json!({"why": format!("{why:#}")}));
     let _ = inner.out.send(Event {
         session: handle.id,
-        element: Element::Notice(Notice {
-            level: NoticeLevel::Error,
-            text: format!("{label}: {why:#}"),
-        }),
+        element: Element::Notice(Notice { text }),
     });
     let _ = settle(inner, handle, turn, Stop::Broken, baseline);
 }

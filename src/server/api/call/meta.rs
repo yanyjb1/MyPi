@@ -10,5 +10,5 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     let reader = Reader::open(api.db())?;
     reader
         .session(session)?
-        .ok_or_else(|| Refuse::Bad(format!("no session {session}")))
+        .ok_or_else(|| Refuse::new("no_session").args(serde_json::json!({"session": session})))
 }

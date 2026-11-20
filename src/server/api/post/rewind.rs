@@ -16,7 +16,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Value, Refus
     let block = i64_of(ask, "block")?;
     emit::require_writer(api, viewer, session)?;
     if api.relay().busy(session) {
-        return Err(Refuse::Busy("the session is busy".into()));
+        return Err(Refuse::new("busy"));
     }
     let cut = convert::cut(api.writer().rewind(Target {
         session,

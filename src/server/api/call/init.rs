@@ -50,7 +50,7 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     let todo = if todo.is_empty() {
         Value::Null
     } else {
-        serde_json::to_value(&todo).map_err(|e| Refuse::Internal(e.to_string()))?
+        serde_json::to_value(&todo).map_err(|_| Refuse::new("internal"))?
     };
     // The effort is memory-only: the loop is the only place that knows it, and a fresh front end learns it here rather than from a row.
     let effort = api

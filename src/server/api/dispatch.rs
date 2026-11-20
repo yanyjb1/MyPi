@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::ipc::contract::ErrorCode;
 use crate::ipc::contract::Frame;
+use crate::ipc::contract::Text;
 use crate::server::agent::r#loop::{Birth, Loop, Settings};
 use crate::server::agent::request::message::ToolDef;
 use crate::server::agent::request::{Options, Request, RetryPolicy, Streaming};
@@ -20,40 +20,22 @@ use super::relay::Relay;
 use super::route;
 use super::subscribe;
 
-// Why a write refused.
-pub enum Refuse {
-    Unknown(String),
-    Bad(String),
-    Busy(String),
-    Permission(String),
-    Internal(String),
-}
+// Why a write refused: a machine key for the message, plus optional template arguments.
+pub struct Refuse(pub Text);
 
 impl Refuse {
-    pub(crate) fn code(&self) -> ErrorCode {
-        match self {
-            Refuse::Unknown(_) => ErrorCode::UnknownName,
-            Refuse::Bad(_) => ErrorCode::BadPayload,
-            Refuse::Busy(_) => ErrorCode::Busy,
-            Refuse::Permission(_) => ErrorCode::PermissionDenied,
-            Refuse::Internal(_) => ErrorCode::Internal,
-        }
+    pub fn new(key: impl Into<String>) -> Self {
+        Refuse(Text::error(key))
     }
 
-    pub(crate) fn message(&self) -> &str {
-        match self {
-            Refuse::Unknown(m)
-            | Refuse::Bad(m)
-            | Refuse::Busy(m)
-            | Refuse::Permission(m)
-            | Refuse::Internal(m) => m,
-        }
+    pub fn args(self, args: Value) -> Self {
+        Refuse(self.0.args(args))
     }
 }
 
 impl From<anyhow::Error> for Refuse {
-    fn from(value: anyhow::Error) -> Self {
-        Refuse::Internal(format!("{value:#}"))
+    fn from(_: anyhow::Error) -> Self {
+        Refuse::new("internal")
     }
 }
 
@@ -140,7 +122,7 @@ impl Api {
                 let viewer = match self.relay.viewer_of(conn.id) {
                     Some(viewer) => viewer,
                     None => {
-                        return Some(error(&frame, &Refuse::Permission("say hello first".into())));
+                        return Some(error(&frame, &Refuse::new("hello_required")));
                     }
                 };
                 if frame.kind == "subscribe" {
@@ -171,7 +153,7 @@ impl Api {
             }
             _ => Some(error(
                 &frame,
-                &Refuse::Unknown(format!("unknown kind: {}", frame.kind)),
+                &Refuse::new("unknown_kind").args(json!({"kind": frame.kind.clone()})),
             )),
         }
     }
@@ -203,7 +185,7 @@ impl Api {
         let reader = Reader::open(&self.db)?;
         let row = reader
             .session(session)?
-            .ok_or_else(|| Refuse::Bad(format!("no session {session}")))?;
+            .ok_or_else(|| Refuse::new("no_session").args(json!({"session": session})))?;
         let meta = row["meta"].as_i64();
         let archive = match meta {
             Some(id) => reader.request(id)?,
@@ -212,14 +194,12 @@ impl Api {
         let archive = match archive {
             Some(archive) => archive,
             None => {
-                return Err(Refuse::Internal(
-                    "the session has no request archive".into(),
-                ));
+                return Err(Refuse::new("no_archive"));
             }
         };
         let system = archive["system"].as_str().unwrap_or_default().to_string();
         let manuals: Vec<ToolDef> = serde_json::from_value(archive["tools"].clone())
-            .map_err(|e| Refuse::Internal(format!("the archive's tools are not manuals: {e}")))?;
+            .map_err(|_| Refuse::new("internal"))?;
         let manuals = Arc::new(manuals);
         let tools: Vec<String> = manuals
             .iter()
@@ -232,7 +212,7 @@ impl Api {
         let cwd = row["cwd"]
             .as_str()
             .map(PathBuf::from)
-            .ok_or_else(|| Refuse::Internal("the session row carries no cwd".into()))?;
+            .ok_or_else(|| Refuse::new("no_cwd"))?;
         drop(reader);
 
         let cfg = self.cfg();
@@ -242,7 +222,7 @@ impl Api {
             None => {
                 let default = cfg
                     .default_model(None, &cwd)
-                    .ok_or_else(|| Refuse::Internal("no default model is configured".into()))?;
+                    .ok_or_else(|| Refuse::new("no_default_model"))?;
                 (default.provider_name, default.entry.id)
             }
         };
@@ -300,10 +280,7 @@ impl Api {
                 let viewer = match viewer {
                     Some(viewer) => viewer,
                     None => {
-                        return Some(error(
-                            frame,
-                            &Refuse::Bad("hello carries no viewer id".into()),
-                        ));
+                        return Some(error(frame, &Refuse::new("hello_no_viewer")));
                     }
                 };
                 self.relay.hello(conn.id, viewer);
@@ -324,19 +301,21 @@ impl Api {
 
 // What the configuration said at load, as a front end reads it: one line per notice.
 fn startup_notices(cfg: &Config) -> Value {
-    let lines: Vec<Value> = cfg
+    let notices: Vec<Value> = cfg
         .notices(None)
         .iter()
         .map(|notice| {
-            json!({
-                "level": "warn",
-                "text": format!("{}：{}（本次使用 {}）", notice.file, notice.problem, notice.used),
-            })
+            let mut args = notice.args.clone().unwrap_or_else(|| json!({}));
+            if let Some(object) = args.as_object_mut() {
+                object.insert("file".to_string(), json!(notice.file.clone()));
+                object.insert("used".to_string(), json!(notice.used.clone()));
+            }
+            json!({"kind": "warning", "key": notice.problem, "args": args})
         })
         .collect();
-    Value::Array(lines)
+    Value::Array(notices)
 }
 
 fn error(request: &Frame, refuse: &Refuse) -> Frame {
-    Frame::error_to(request, refuse.code(), refuse.message())
+    Frame::error_to(request, refuse.0.clone())
 }

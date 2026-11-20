@@ -7,7 +7,8 @@
 | `mod.rs` | Module table. |
 | `line.rs` | Line codec: `encode`, `decode`, `Lines`, `MAX_LINE_BYTES`. Knows no frame contents. |
 | `contract/message.rs` | `Frame { kind: String, name: String, payload: Value }`, reply and error constructors. |
-| `contract/error.rs` | `ErrorCode`, the error payload shape. |
+| `contract/error.rs` | The error payload shape. |
+| `contract/text.rs` | `Text`: one kind plus a machine key and optional arguments, or an upstream body. |
 | `client.rs` | `Client`: connect + hello, `send`, `drain`, `alive`; a read thread feeds one channel. |
 | `server.rs` | `claim`, `bind`, `serve`, `run`; one accept loop; `handle` per connection. |
 | `stream.rs` | `write`: one connection's outbound queue until it closes, then the connection is shut. |

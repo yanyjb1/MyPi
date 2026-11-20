@@ -23,15 +23,15 @@ pub(crate) fn answer(
     match op {
         "list" => Ok(json!({"memos": list(&reader, session)?})),
         "history" => {
-            let scope = scope.ok_or_else(|| Refuse::Bad("history needs a scope".into()))?;
-            let name = name.ok_or_else(|| Refuse::Bad("history needs a name".into()))?;
+            let scope = scope.ok_or_else(|| Refuse::new("memo_scope_missing"))?;
+            let name = name.ok_or_else(|| Refuse::new("memo_name_missing"))?;
             Ok(json!({
                 "scope": scope,
                 "name": name,
                 "versions": history(&reader, session, scope, name)?,
             }))
         }
-        other => Err(Refuse::Bad(format!("no such memo op: {other}"))),
+        other => Err(Refuse::new("memo_op_unknown").args(json!({"op": other}))),
     }
 }
 
@@ -102,6 +102,6 @@ fn filter(reader: &Reader, session: Option<i64>, scope: &str) -> Result<Option<V
             }
             None => None,
         },
-        other => return Err(Refuse::Bad(format!("no such scope: {other}"))),
+        other => return Err(Refuse::new("memo_scope_unknown").args(json!({"scope": other}))),
     })
 }

@@ -34,12 +34,12 @@ pub(super) fn walk_unknown(
                 Some(sub) => walk_unknown(sub, &full, file, notices, warned),
                 None => {
                     if warned.insert(full.clone()) {
-                        notices.push(warn(&full, file, "expected a mapping", "ignored"));
+                        notices.push(warn(&full, file, "config_expected_mapping", "ignored"));
                     }
                 }
             }
         } else if warned.insert(full.clone()) {
-            notices.push(warn(&full, file, "unknown key", "ignored"));
+            notices.push(warn(&full, file, "config_unknown_key", "ignored"));
         }
     }
 }
@@ -65,7 +65,7 @@ pub(super) fn check(
         notices.push(warn(
             KEY_CONFIG_SERVER_STORAGE_BATCH_TOOLS,
             "(merged)",
-            "must be positive",
+            "config_must_be_positive",
             "default",
         ));
         values.insert(KEY_CONFIG_SERVER_STORAGE_BATCH_TOOLS, fallback);
@@ -89,7 +89,7 @@ pub(super) fn check(
         notices.push(warn(
             KEY_CONFIG_SERVER_REQUEST_STREAMING,
             "(merged)",
-            "unknown mode",
+            "config_unknown_mode",
             STREAMING[0],
         ));
         values.insert(
@@ -114,7 +114,7 @@ pub(super) fn check(
         notices.push(warn(
             KEY_CONFIG_SERVER_API_DEFAULT_MODEL,
             "(merged)",
-            "the model does not resolve",
+            "config_model_unresolved",
             fallback.as_deref().unwrap_or("none"),
         ));
         match fallback {

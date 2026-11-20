@@ -59,7 +59,7 @@ pub(crate) fn call(api: &Api, _viewer: &str, frame: &Frame) -> Result<Value, Ref
         "config" => call::config::answer(api, str_of(ask, "key")?),
         "pools" => call::pools::answer(api, ask),
         "sessions" => call::sessions::answer(api, opt_str_of(ask, "under")?),
-        other => Err(Refuse::Unknown(format!("no such name: {other}"))),
+        other => Err(Refuse::new("unknown_name").args(json!({"name": other}))),
     }
 }
 
@@ -78,7 +78,7 @@ pub(crate) fn post(api: &Api, conn: u64, viewer: &str, frame: &Frame) -> Result<
         "default_model" => post::default_model::apply(api, ask).map(|()| Reply::plain()),
         "interrupt" => post::interrupt::apply(api, viewer, ask).map(|()| Reply::plain()),
         "mailbox" => subscribe::mail::apply(api, conn, viewer, ask).map(|()| Reply::plain()),
-        other => Err(Refuse::Unknown(format!("no such name: {other}"))),
+        other => Err(Refuse::new("unknown_name").args(json!({"name": other}))),
     }
 }
 
@@ -87,7 +87,7 @@ fn meta(api: &Api, viewer: &str, ask: &Value) -> Result<Reply, Refuse> {
     let name = str_of(ask, "name")?;
     let content = ask
         .get("content")
-        .ok_or_else(|| Refuse::Bad("missing `content`".into()))?;
+        .ok_or_else(|| Refuse::new("payload_key_missing").args(json!({"key": "content"})))?;
     let session = i64_of(content, "session")?;
     let (signal, value) = match name {
         "name" => ("name", post::name::apply(api, viewer, content)?),
@@ -95,7 +95,7 @@ fn meta(api: &Api, viewer: &str, ask: &Value) -> Result<Reply, Refuse> {
         "switch" => ("model", post::switch::apply(api, viewer, content)?),
         "effort" => ("effort", post::effort::apply(api, viewer, content)?),
         "rewind" => ("rewind", post::rewind::apply(api, viewer, content)?),
-        other => return Err(Refuse::Unknown(format!("no such meta name: {other}"))),
+        other => return Err(Refuse::new("unknown_meta").args(json!({"name": other}))),
     };
     Ok(Reply::signal(Signal {
         session,
@@ -115,7 +115,7 @@ pub(crate) fn subscribe(
         "watch" => subscribe::watch::apply(api, conn, opt_i64_of(ask, "session")?).map(|()| None),
         "submit" => subscribe::submit::apply(api, conn, viewer, ask).map(Some),
         "compact" => subscribe::compact::apply(api, conn, viewer, ask).map(Some),
-        other => Err(Refuse::Unknown(format!("no such name: {other}"))),
+        other => Err(Refuse::new("unknown_name").args(json!({"name": other}))),
     }
 }
 
@@ -123,7 +123,7 @@ pub(crate) fn i64_of(value: &Value, key: &str) -> Result<i64, Refuse> {
     value
         .get(key)
         .and_then(Value::as_i64)
-        .ok_or_else(|| Refuse::Bad(format!("missing or bad `{key}`")))
+        .ok_or_else(|| Refuse::new("payload_key_missing").args(json!({"key": key})))
 }
 
 pub(crate) fn opt_i64_of(value: &Value, key: &str) -> Result<Option<i64>, Refuse> {
@@ -132,7 +132,7 @@ pub(crate) fn opt_i64_of(value: &Value, key: &str) -> Result<Option<i64>, Refuse
         Some(v) => v
             .as_i64()
             .map(Some)
-            .ok_or_else(|| Refuse::Bad(format!("bad `{key}`"))),
+            .ok_or_else(|| Refuse::new("payload_key_bad").args(json!({"key": key}))),
     }
 }
 
@@ -140,7 +140,7 @@ pub(crate) fn str_of<'a>(value: &'a Value, key: &str) -> Result<&'a str, Refuse>
     value
         .get(key)
         .and_then(Value::as_str)
-        .ok_or_else(|| Refuse::Bad(format!("missing or bad `{key}`")))
+        .ok_or_else(|| Refuse::new("payload_key_missing").args(json!({"key": key})))
 }
 
 pub(crate) fn opt_str_of<'a>(value: &'a Value, key: &str) -> Result<Option<&'a str>, Refuse> {
@@ -149,7 +149,7 @@ pub(crate) fn opt_str_of<'a>(value: &'a Value, key: &str) -> Result<Option<&'a s
         Some(v) => v
             .as_str()
             .map(Some)
-            .ok_or_else(|| Refuse::Bad(format!("bad `{key}`"))),
+            .ok_or_else(|| Refuse::new("payload_key_bad").args(json!({"key": key}))),
     }
 }
 
@@ -157,19 +157,19 @@ pub(crate) fn ranges_of(value: &Value, key: &str) -> Result<Vec<[i64; 2]>, Refus
     let items = value
         .get(key)
         .and_then(Value::as_array)
-        .ok_or_else(|| Refuse::Bad(format!("missing or bad `{key}`")))?;
+        .ok_or_else(|| Refuse::new("payload_key_missing").args(json!({"key": key})))?;
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         let pair = item
             .as_array()
             .filter(|p| p.len() == 2)
-            .ok_or_else(|| Refuse::Bad(format!("`{key}` holds a non-pair")))?;
+            .ok_or_else(|| Refuse::new("payload_key_non_pair").args(json!({"key": key})))?;
         let lo = pair[0]
             .as_i64()
-            .ok_or_else(|| Refuse::Bad(format!("`{key}` holds a non-number")))?;
+            .ok_or_else(|| Refuse::new("payload_key_non_number").args(json!({"key": key})))?;
         let hi = pair[1]
             .as_i64()
-            .ok_or_else(|| Refuse::Bad(format!("`{key}` holds a non-number")))?;
+            .ok_or_else(|| Refuse::new("payload_key_non_number").args(json!({"key": key})))?;
         out.push([lo, hi]);
     }
     Ok(out)

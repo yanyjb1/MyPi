@@ -7,8 +7,9 @@ use std::path::Path;
 
 use anyhow::Context as _;
 use serde::Deserialize;
+use serde_json::json;
 
-use super::notice::{ConfigNotice, warn};
+use super::notice::{ConfigNotice, warn_args};
 use super::paths::ConfigPaths;
 
 /// The file's name inside the config directory.
@@ -125,11 +126,12 @@ pub fn load(paths: &ConfigPaths, notices: &mut Vec<ConfigNotice>) -> Rules {
     match read(&file, notices) {
         Ok(rules) => rules,
         Err(problem) => {
-            notices.push(warn(
+            notices.push(warn_args(
                 FILE,
                 &file.display().to_string(),
-                &problem,
-                "内置规则",
+                "config_unreadable",
+                "builtin",
+                json!({"detail": problem}),
             ));
             builtin()
         }
@@ -144,7 +146,13 @@ fn read(file: &Path, notices: &mut Vec<ConfigNotice>) -> Result<Rules, String> {
     let dir = file.parent().unwrap_or(Path::new("."));
     let (rules, failed) = flatten(entries, |name| set(dir, name));
     for (name, problem) in failed {
-        notices.push(warn(FILE, &name, &format!("引用未读：{problem}"), "跳过"));
+        notices.push(warn_args(
+            FILE,
+            &name,
+            "config_set_unreadable",
+            "skipped",
+            json!({"detail": problem}),
+        ));
     }
     Ok(Rules(rules))
 }

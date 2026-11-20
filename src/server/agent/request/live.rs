@@ -2,18 +2,20 @@
 
 use std::sync::mpsc::Sender;
 
+use crate::ipc::contract::Text;
+
 use super::contract::ItemOk;
 use super::message::Usage;
 
 /// One live moment, addressed to one session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub session: i64,
     pub element: Element,
 }
 
 /// The kinds that share one channel: the stream, a notice, a tool's state, a turn opening.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Element {
     Stream(Stream),
     Notice(Notice),
@@ -86,18 +88,10 @@ impl Stream {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NoticeLevel {
-    Info,
-    Warn,
-    Error,
-}
-
 /// Something said to whoever is watching. Never stored, never part of a request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Notice {
-    pub level: NoticeLevel,
-    pub text: String,
+    pub text: Text,
 }
 
 /// One tool call's live moments. The loop fills these.
@@ -152,12 +146,5 @@ impl Line {
 
     pub fn stream(&self, piece: Stream) {
         self.send(Element::Stream(piece));
-    }
-
-    pub fn notice(&self, level: NoticeLevel, text: impl Into<String>) {
-        self.send(Element::Notice(Notice {
-            level,
-            text: text.into(),
-        }));
     }
 }

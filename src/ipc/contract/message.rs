@@ -1,6 +1,6 @@
 // One frame on the wire: kind, name, payload. Requests and replies share the shape.
 
-use super::error::ErrorCode;
+use super::text::Text;
 use serde::{Deserialize, Serialize};
 
 /// One line in either direction. `payload` is always an object.
@@ -31,7 +31,7 @@ impl Frame {
     }
 
     /// An error frame answering `request`.
-    pub fn error_to(request: &Frame, code: ErrorCode, message: &str) -> Frame {
-        Frame::reply_to(request, crate::ipc::contract::error::payload(code, message))
+    pub fn error_to(request: &Frame, text: Text) -> Frame {
+        Frame::reply_to(request, crate::ipc::contract::error::payload(text))
     }
 }

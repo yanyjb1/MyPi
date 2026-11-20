@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use anyhow::{Context as _, bail};
+use serde_json::json;
 
-use super::super::notice::{ConfigNotice, warn};
+use super::super::notice::{ConfigNotice, warn, warn_args};
 use super::super::paths::{self, ConfigPaths};
 use super::super::prompts;
 use super::discover::{available, collect};
@@ -22,11 +23,12 @@ pub fn resolve(
         match load_dir(dir, compact_file, notices) {
             Ok(profile) => return Ok(profile),
             Err(error) if builtin(name).is_some() => {
-                notices.push(warn(
+                notices.push(warn_args(
                     &format!("profile.{name}"),
                     &dir.display().to_string(),
-                    &error.to_string(),
+                    "config_profile_unreadable",
                     "compiled copy",
+                    json!({"detail": error.to_string()}),
                 ));
             }
             Err(error) => return Err(error),
@@ -84,22 +86,24 @@ fn instruction(
     if let Some(path) = profile {
         match std::fs::read_to_string(path) {
             Ok(text) => return text,
-            Err(e) => notices.push(warn(
+            Err(e) => notices.push(warn_args(
                 "profile.compactInstruction",
                 &path.display().to_string(),
-                &e.to_string(),
+                "config_instruction_unreadable",
                 "compiled copy",
+                json!({"detail": e.to_string()}),
             )),
         }
     }
     if let Some(path) = configured {
         match std::fs::read_to_string(path) {
             Ok(text) => return text,
-            Err(e) => notices.push(warn(
+            Err(e) => notices.push(warn_args(
                 "config.server.request.compact.instructionFile",
                 &path.display().to_string(),
-                &e.to_string(),
+                "config_instruction_unreadable",
                 "compiled copy",
+                json!({"detail": e.to_string()}),
             )),
         }
     }
@@ -111,11 +115,12 @@ fn load_tools(path: &Path, notices: &mut Vec<ConfigNotice>) -> Vec<String> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) => {
-            notices.push(warn(
+            notices.push(warn_args(
                 "profile.tools",
                 &file,
-                &error.to_string(),
+                "config_tools_unreadable",
                 "all tools",
+                json!({"detail": error.to_string()}),
             ));
             return Vec::new();
         }
@@ -123,11 +128,12 @@ fn load_tools(path: &Path, notices: &mut Vec<ConfigNotice>) -> Vec<String> {
     let value: serde_yaml::Value = match serde_yaml::from_str(&text) {
         Ok(value) => value,
         Err(error) => {
-            notices.push(warn(
+            notices.push(warn_args(
                 "profile.tools",
                 &file,
-                &error.to_string(),
+                "config_tools_unreadable",
                 "all tools",
+                json!({"detail": error.to_string()}),
             ));
             return Vec::new();
         }
@@ -136,7 +142,7 @@ fn load_tools(path: &Path, notices: &mut Vec<ConfigNotice>) -> Vec<String> {
         notices.push(warn(
             "profile.tools",
             &file,
-            "tools.yaml needs an `enabled:` list",
+            "config_tools_no_list",
             "all tools",
         ));
         return Vec::new();
@@ -149,7 +155,7 @@ fn load_tools(path: &Path, notices: &mut Vec<ConfigNotice>) -> Vec<String> {
         notices.push(warn(
             "profile.tools",
             &file,
-            "empty enabled list",
+            "config_tools_empty",
             "all tools",
         ));
     }
@@ -161,8 +167,8 @@ fn load_tools(path: &Path, notices: &mut Vec<ConfigNotice>) -> Vec<String> {
         notices.push(warn(
             "profile.tools",
             &file,
-            "`edit` and `splice` are exclusive; `splice` wins",
-            "`edit` dropped",
+            "config_tools_edit_splice",
+            "edit_dropped",
         ));
         return names.into_iter().filter(|name| name != "edit").collect();
     }

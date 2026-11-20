@@ -1,7 +1,7 @@
 // What every write shares: the writer gate and the model pair.
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::server::api::{Api, Refuse};
 
@@ -10,9 +10,7 @@ pub(crate) fn require_writer(api: &Api, viewer: &str, session: i64) -> Result<()
     if api.relay().writes(session, viewer) {
         Ok(())
     } else {
-        Err(Refuse::Permission(
-            "only the session's writer may write".into(),
-        ))
+        Err(Refuse::new("writer_required"))
     }
 }
 
@@ -27,10 +25,10 @@ pub(crate) fn model_of(value: &Value) -> Result<(String, String), Refuse> {
     let provider = value
         .get("provider")
         .and_then(Value::as_str)
-        .ok_or_else(|| Refuse::Bad("missing or bad `model.provider`".into()))?;
+        .ok_or_else(|| Refuse::new("payload_key_missing").args(json!({"key": "model.provider"})))?;
     let model = value
         .get("model")
         .and_then(Value::as_str)
-        .ok_or_else(|| Refuse::Bad("missing or bad `model.model`".into()))?;
+        .ok_or_else(|| Refuse::new("payload_key_missing").args(json!({"key": "model.model"})))?;
     Ok((provider.to_string(), model.to_string()))
 }

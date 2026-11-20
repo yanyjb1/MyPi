@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use super::live::{Notice, NoticeLevel};
+use super::live::Notice;
+use crate::ipc::contract::Text;
 
 /// What one request is allowed to do before giving up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,22 +70,14 @@ pub fn classify(failure: &Failure, emitted: bool, cancelled: bool) -> Class {
 
 /// The one line a watcher reads. A status error carries the host's body verbatim.
 pub fn notice(failure: &Failure, timeout: Duration) -> Notice {
-    match failure {
-        Failure::Http { status, body } => Notice {
-            level: NoticeLevel::Error,
-            text: if body.trim().is_empty() {
-                format!("HTTP {status}")
-            } else {
-                body.clone()
-            },
-        },
-        Failure::NoResponse { .. } => Notice {
-            level: NoticeLevel::Warn,
-            text: format!("request timeout: {timeout:?}"),
-        },
-        Failure::Cancelled => Notice {
-            level: NoticeLevel::Warn,
-            text: "cancelled".to_string(),
-        },
-    }
+    let text = match failure {
+        Failure::Http { status, body } if body.trim().is_empty() => {
+            Text::error("http_status").args(serde_json::json!({"status": *status}))
+        }
+        Failure::Http { body, .. } => Text::upstream(body.as_str()),
+        Failure::NoResponse { .. } => Text::warning("request_timeout")
+            .args(serde_json::json!({"timeout": format!("{timeout:?}")})),
+        Failure::Cancelled => Text::notice("interrupted"),
+    };
+    Notice { text }
 }

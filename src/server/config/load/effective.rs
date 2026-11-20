@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde_json::json;
 use serde_yaml::Mapping;
 
 use super::super::model;
-use super::super::notice::warn;
+use super::super::notice::warn_args;
 use super::super::paths;
 use super::super::paths::ConfigPaths;
 use super::super::profile;
@@ -89,11 +90,12 @@ impl Config {
                             unknown_top(&path, &mut notices);
                             overlay = Some((path, map));
                         }
-                        Err(problem) => notices.push(warn(
+                        Err(problem) => notices.push(warn_args(
                             &format!("profile.{name}"),
                             &path.display().to_string(),
-                            &problem,
+                            "config_profile_unreadable",
                             "next layer",
+                            json!({"detail": problem}),
                         )),
                     }
                 }
@@ -136,7 +138,13 @@ impl Config {
                 None => "default".to_string(),
             };
             if let Some((file, problem)) = bad {
-                notices.push(warn(key.full, &file, &problem, &used));
+                notices.push(warn_args(
+                    key.full,
+                    &file,
+                    "config_value_bad",
+                    &used,
+                    json!({"detail": problem}),
+                ));
             }
             let value = chosen
                 .map(|(_, value)| value)

@@ -5,7 +5,7 @@ pub mod pen;
 pub mod session;
 pub mod turn;
 
-pub use crate::server::agent::request::live::{Element, Event, NoticeLevel, Stream, ToolEvent};
+pub use crate::server::agent::request::live::{Element, Event, Notice, Stream, ToolEvent};
 pub use crate::server::agent::tools::contract::call::Batch;
 pub use session::{Birth, Change, Letter, Loop, Mailbox, Message, Retention, Settings, Transport};
 pub use turn::{Ask, LapInput, LapReply, Stop, ToolCall, Usage};
