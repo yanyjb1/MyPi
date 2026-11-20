@@ -11,23 +11,23 @@ caller; this module neither declares the keys nor turns them into constants.
 {"busy": "the session is already in a turn"}
 ```
 
-`en.json` is the base language. `mod.rs` lists the files with `include_str!`, so adding a language
+`en.json` is the base language. `table.rs` lists the files with `include_str!`, so adding a language
 is adding `<code>.json` and one line there.
 
 ## Lookup
 
 - `text(code, key)` returns the template, or `None` when the language or the key has none.
-- `render(code, key, args)` fills `{name}` from the JSON value; a missing key answers `not found`.
+- `render(code, key, args)` fills `{name}` from the JSON value; a key no table holds answers
+  `<key> NOT FOUND`, in every language.
 - `resolve(code)` returns the compiled language, or `en` when the code has no file.
 - `languages()` lists the codes this binary carries.
-- `Kind` says what a piece of text is for: `Error`, `Warning`, `Notice`, `Upstream`.
 
 ## Design intent
 
 - A template may carry `{name}` holes; `render` fills them from the optional `args` object.
-- The server sends a `Kind` and a key, never a sentence it made up. Text from an upstream (a
+- The server sends a kind and a key, never a sentence it made up. Text from an upstream (a
   provider error, a tool result) passes through as `text`.
-- A missing key is `not found`, not a guessed English sentence.
+- A missing key is `<key> NOT FOUND`: no guessed sentence, and no fallback to another language.
 
 ## Unresolved
 

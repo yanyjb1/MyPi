@@ -3,7 +3,26 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::i18n::Kind;
+// What a piece of text is for: an error, a warning, a notice, or an upstream message.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    Error,
+    Warning,
+    Notice,
+    Upstream,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Notice => "notice",
+            Self::Upstream => "upstream",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Text {
