@@ -7,7 +7,6 @@ pub mod command;
 mod ctx;
 mod draft;
 mod editor;
-mod esc;
 mod exit;
 mod frame;
 mod intent;

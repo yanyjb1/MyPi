@@ -12,7 +12,6 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `exit.rs` | `ExitRequest` | private |
 | `intent.rs` | one intent applied: editor, history ring, the epilogue | private |
 | `submit.rs` | Enter, the command run, writes and their notices, the mailbox accounting | private |
-| `esc.rs` | Esc and its double-tap window | private |
 | `frame.rs` | the frames this zone decodes | private |
 | `boot.rs` | startup questions, session enter/leave, the draft reset, the config keys | private |
 | `notice.rs` | the sentences a command earns, as i18n keys | private |

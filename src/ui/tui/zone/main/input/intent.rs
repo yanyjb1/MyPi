@@ -1,13 +1,21 @@
 //! One intent, applied: the editor, the history ring, and what an edit settles.
 
+use std::time::{Duration, Instant};
+
+use serde_json::json;
+
 use super::super::desk::{Hire, Reply};
 use super::command;
 use super::editor::{Editor, Effect};
+use super::exit::ExitRequest;
 use super::semantics;
 use super::zone::InputZone;
 use crate::ui::tui::text::Wrapped;
 use crate::ui::tui::zone::Frame;
 use crate::ui::tui::zone::{Shout, name};
+
+// How long a second Esc waits for its partner.
+const ESC_DOUBLE: Duration = Duration::from_millis(400);
 
 impl InputZone {
     /// Apply one intent: editor actions drive the editor, the rest the history ring.
@@ -121,6 +129,26 @@ impl InputZone {
                     }
                 }
                 Effect::Nothing
+            }
+            I::Esc => {
+                self.enter_armed = None;
+                if let Some(session) = self.session {
+                    self.shared.mail.send(Frame::new(
+                        "post",
+                        "interrupt",
+                        json!({"session": session}),
+                    ));
+                }
+                if self
+                    .esc_armed
+                    .take()
+                    .is_some_and(|at| at.elapsed() < ESC_DOUBLE)
+                {
+                    self.pending_exits.push(ExitRequest::OpenTree);
+                } else {
+                    self.esc_armed = Some(Instant::now());
+                }
+                return true;
             }
             I::None => Effect::Nothing,
         };

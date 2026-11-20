@@ -92,7 +92,7 @@ Deletion has no command: the resume picker owns it.
 - A command skips all of that: it runs at once, and the server decides whether this connection may
   write.
 - `Alt+Up` takes the newest queued sentence back into the box, above what is already there.
-- `Esc` interrupts. A second un-lent `Esc` inside 300 ms asks for the tree.
+- `Esc` interrupts. A second un-lent `Esc` inside 400 ms asks for the tree.
 - `Alt+Enter` / `Shift+Enter` insert a newline; `Ctrl+J` is the fallback.
 
 ### Notices

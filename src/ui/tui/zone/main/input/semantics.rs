@@ -48,6 +48,9 @@ pub enum Intent {
     // Take the newest queued sentence back into the box.
     TakeBack,
 
+    // Interrupt the running round; a second tap inside the window also asks for the tree.
+    Esc,
+
     // Step the thinking effort one rung up the ladder (Shift+Tab).
     CycleEffort,
     None,
@@ -67,6 +70,13 @@ pub fn translate(key: Key) -> Intent {
         return Intent::CycleEffort;
     }
     match code {
+        KeyCode::Esc => {
+            if alt || ctrl {
+                Intent::None
+            } else {
+                Intent::Esc
+            }
+        }
         KeyCode::Enter => {
             if alt || shift {
                 Intent::Newline

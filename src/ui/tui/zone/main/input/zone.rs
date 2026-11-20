@@ -19,7 +19,7 @@ use super::render;
 use super::semantics;
 use super::statusline::{StatusLine, StatusTheme};
 use super::submit::Waiting;
-use crate::ui::tui::action::{Action, KeyCode};
+use crate::ui::tui::action::Action;
 use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::Frame;
 use crate::ui::tui::zone::{Claim, Kind, Shared, Shout, SubZone, TermSize, name};
@@ -193,7 +193,8 @@ impl InputZone {
     }
 
     pub fn draft_cwd(&self) -> Option<String> {
-        Some(self.draft.cwd().to_string_lossy().into_owned())
+        let cwd = self.draft.cwd();
+        (!cwd.as_os_str().is_empty()).then(|| cwd.to_string_lossy().into_owned())
     }
 
     pub fn draft_set_model(&mut self, model: &str) {
@@ -228,7 +229,7 @@ impl InputZone {
         self.rev = self.rev.wrapping_add(1);
     }
 
-    /// Esc first (a lent-away Esc never arrives here), then the intent table.
+    /// One key press read through the intent table.
     fn act(&mut self, a: &Action) -> bool {
         let key = match a {
             Action::Key(key) => *key,
@@ -240,9 +241,6 @@ impl InputZone {
             }
             Action::ScrollUp { .. } | Action::ScrollDown { .. } => return false,
         };
-        if key.code == KeyCode::Esc && self.route_esc(&key) {
-            return true;
-        }
         let intent = semantics::translate(key);
         if matches!(intent, semantics::Intent::None) {
             return false;
@@ -322,7 +320,7 @@ impl SubZone for InputZone {
         self.bump();
     }
 
-    /// Esc first (a lent-away Esc never arrives here), then the intent table.
+    /// One key press read through the intent table.
     fn deliver_action(&mut self, a: &Action) -> bool {
         let consumed = self.act(a);
         self.bump();
