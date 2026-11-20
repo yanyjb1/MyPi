@@ -10,7 +10,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The class of one frame; `None` = nothing a zone may declare.
+    /// The kind of one frame; `None` = nothing a zone may declare.
     pub fn of(kind: &str, name: &str) -> Option<Kind> {
         Some(match kind {
             "call" => Kind::Call,

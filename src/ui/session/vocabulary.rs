@@ -20,7 +20,7 @@ pub enum Retention {
 // How hard the session asks the model to think. Memory-only: the server never stores it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Effort {
-    // Ask for nothing and take the host's default. Never sent: the field stays off the body.
+    // Ask for nothing and take the host's default; no effort field rides the model body.
     #[default]
     Auto,
     None,
@@ -71,7 +71,7 @@ impl Effort {
         let at = Self::LADDER
             .iter()
             .position(|rung| *rung == self)
-            .unwrap_or(0);
+            .expect("every rung is on the ladder");
         for step in 1..=Self::LADDER.len() {
             let rung = Self::LADDER[(at + step) % Self::LADDER.len()];
             if rung == Self::Auto || declared.contains(&rung) {

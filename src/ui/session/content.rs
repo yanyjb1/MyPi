@@ -1,4 +1,4 @@
-// The content window: whole blocks as they arrived, bounded, evicted by time then by id.
+// The content window: whole blocks as they arrived, bounded, evicted by admission time.
 
 use std::collections::BTreeMap;
 

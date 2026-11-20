@@ -227,7 +227,7 @@ impl SubZone for ReservedZone {
     }
 
     fn deliver_event(&mut self, frame: &Frame, _size: TermSize) -> Vec<Request> {
-        match (frame.class.as_str(), frame.name.as_str()) {
+        match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "pools") => {
                 let pools = Pools::of(&frame.content);
                 if let Some(who) = self.on_duty.clone() {

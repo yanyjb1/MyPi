@@ -21,7 +21,7 @@ pub trait Zone {
     /// Every input this zone consumes, declared once.
     fn keys(&self) -> Vec<Claim>;
 
-    /// The frame classes this zone handles. `local` never appears here: it is unconditional.
+    /// The frame kinds this zone handles. `local` never appears here: it is unconditional.
     fn kinds(&self) -> &'static [Kind];
 
     /// The app gives the screen to this zone: the size, and the memo the last zone left.

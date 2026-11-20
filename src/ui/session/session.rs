@@ -1,5 +1,5 @@
 // The session: one connection, two windows, one outbox.
-// Every frame crosses unchanged. The ones this layer reads are its own questions, a push's turn and ranges, a block's id, and the spot its own rewind asked for.
+// Every frame crosses unchanged; only the few that keep its windows are read.
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -61,15 +61,17 @@ impl Session {
         self.config(BUDGET_KEY);
     }
 
-    // Stop following on purpose: the server slot is cleared, then the watch is dropped.
+    // Stop following on purpose: whatever the old session still owed goes, then the slot and watch, then the windows.
     pub fn detach(&mut self) {
-        if let Some(id) = self.attached {
-            self.client.clear();
+        let id = self.attached;
+        self.client.clear();
+        if let Some(id) = id {
             self.clear_remote_mailbox(id);
-            let _ = self.client.pump();
         }
-        self.forget();
         self.unwatch();
+        // Both frames have to leave before `forget` drops what is still unsent.
+        let _ = self.client.pump();
+        self.forget();
     }
 
     // Stop following without a word: the server already closed the session.
@@ -162,10 +164,15 @@ impl Session {
         }
     }
 
-    // One unsolicited frame: keep the windows honest, forward it whole.
+    // One unsolicited frame: keep the windows honest for the attached session, forward it whole.
     fn push(&mut self, frame: Frame) {
         let content = frame.payload;
-        if let Some(turn) = content.get("turn").and_then(Value::as_i64)
+        let foreign = content
+            .get("session")
+            .and_then(Value::as_i64)
+            .is_some_and(|session| self.attached != Some(session));
+        if !foreign
+            && let Some(turn) = content.get("turn").and_then(Value::as_i64)
             && let Some(ranges) = content.get("ranges").and_then(ranges_of)
         {
             let compact = content
@@ -197,8 +204,8 @@ impl Session {
             ("call", "config") => {
                 let key = request.payload.get("key").and_then(Value::as_str);
                 if key == Some(BUDGET_KEY) {
-                    if let Some(budget) = reply.payload.as_i64() {
-                        self.content.set_budget(budget.max(1) as usize);
+                    if let Some(budget) = reply.payload.as_u64() {
+                        self.content.set_budget(budget as usize);
                     }
                     return;
                 }

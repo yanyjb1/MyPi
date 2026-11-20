@@ -13,7 +13,7 @@ impl InputZone {
     /// One frame answer the zone reads for itself.
     pub(super) fn read_frame(&mut self, frame: &Frame) -> Vec<Request> {
         let mut out = Vec::new();
-        match (frame.class.as_str(), frame.name.as_str()) {
+        match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "init") => {
                 self.read_init(&frame.content);
             }

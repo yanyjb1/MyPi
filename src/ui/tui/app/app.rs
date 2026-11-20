@@ -131,10 +131,10 @@ impl App {
     pub fn pump(&mut self) {
         for packet in self.session.forward() {
             let frame = Frame::new(packet.kind, packet.name, packet.content);
-            if frame.class == "post" && frame.name == "init" {
+            if frame.kind == "post" && frame.name == "init" {
                 self.created(&frame);
             }
-            if frame.class == "post" && frame.name == "name" {
+            if frame.kind == "post" && frame.name == "name" {
                 self.accent = self.accent.pick_other();
                 self.announce_accent();
             }
@@ -219,7 +219,7 @@ impl App {
         };
         let index = owner.index();
         let declared = frame.is_local()
-            || Kind::of(&frame.class, &frame.name)
+            || Kind::of(&frame.kind, &frame.name)
                 .is_some_and(|kind| self.zones[index].kinds().contains(&kind));
         if !declared {
             return;

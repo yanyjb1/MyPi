@@ -30,7 +30,7 @@ What each file holds and who names it. Current state only.
 
 ## Must stay in sync
 
-1. `Kind` and the upstream frame classes.
+1. `Kind` and the upstream frame kinds.
 2. `Claim` and `Action`: a new action kind is a new claim.
 3. `Zone` and its three implementations.
 4. `Outcome` and `App::settle`.

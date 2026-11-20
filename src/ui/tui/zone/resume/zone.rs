@@ -253,7 +253,7 @@ impl ResumeZone {
     }
 
     fn read(&mut self, frame: &Frame) -> Vec<Request> {
-        match (frame.class.as_str(), frame.name.as_str()) {
+        match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "sessions") => match error_of(&frame.content) {
                 Some(message) => self.refused(message),
                 None => self.load(&frame.content),

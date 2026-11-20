@@ -145,7 +145,7 @@ impl Session {
 
     // `post default_model`: the model a new session opens with; the file is the record.
     pub fn set_default_model(&mut self, id: &ModelId) {
-        self.act("post", "default_model", model_of(id));
+        self.send("post", "default_model", model_of(id), true);
     }
 
     // `post meta effort`: how hard this session thinks; the server keeps it in memory only.

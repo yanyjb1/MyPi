@@ -20,7 +20,7 @@ The api takes `name`, `cwd`, `switch`, `effort`, and `rewind` inside one `post m
 | `ContentCache` | whole blocks, exactly as an answer carried them | block id |
 
 - Content budget: `config.ui.session.preloadCache`, asked on every attach through `call config`; its answer feeds the window and is not forwarded.
-- Eviction: the earliest admission goes first, then the lowest id.
+- Eviction: the earliest admission goes first.
 - A pushed stream frame carrying `turn` and `ranges` sets that round, compaction mark included.
 - A `call init` answer replaces both windows; a `call blocks` answer merges blocks; an accepted `post delete` answer for the attached session detaches; an accepted `post meta` rewind trims both windows to the spot its own request named.
 
@@ -34,7 +34,7 @@ A `call config` answer is forwarded with the key it answers: `{key, value}`. Thi
 
 ### The outbox
 
-`forward()` returns everything since the last call, in arrival order: pushes, answers, and the session's own `local` frames. `local` is the session's own voice: `disconnected` (the read half closed, once). A `local` frame from the wire, such as the server's `opened`, is forwarded untouched.
+`forward()` returns everything since the last call, in arrival order: pushes, answers, and the session's own `local` frames. A frame nobody waits for is forwarded whole as a push, not dropped. `local` is the session's own voice: `disconnected` (the read half closed, once). A `local` frame from the wire, such as the server's `opened`, is forwarded untouched.
 
 ### Entry points
 
@@ -44,7 +44,7 @@ attach(id)  detach()  attached()   structure() -> Structure
 send(kind, name, content, answer)  bye()
 ```
 
-Every door has one named action in `actions.rs` (`init`, `meta`, `usage`, `pools`, `pools_at`, `config`, `blocks`, `sessions`, `memo_list`, `memo_history`, `memo_write`, `memo_delete`, `watch`, `unwatch`, `submit`, `interrupt`, `write_mailbox`, `clear_mailbox`, `rename`, `set_cwd`, `switch_model`, `set_default_model`, `set_effort`, `compact`, `delete`, `rewind`, and the layer's own `clear_remote_mailbox` and `sign_off`). The door's kind and name live there; a front end asks for the action, never for the door, except `post init`, which a front end sends through `send` because the session it opens has no id yet. Each action fills the attached session in unless the caller named one, and expects a reply unless it is `watch`.
+Every door has one named action in `actions.rs` (`init`, `meta`, `usage`, `pools`, `pools_at`, `config`, `blocks`, `sessions`, `memo_list`, `memo_history`, `memo_write`, `memo_delete`, `watch`, `unwatch`, `submit`, `interrupt`, `write_mailbox`, `clear_mailbox`, `rename`, `set_cwd`, `switch_model`, `set_default_model`, `set_effort`, `compact`, `delete`, `rewind`, and the layer's own `clear_remote_mailbox` and `sign_off`). The door's kind and name live there; a front end asks for the action, never for the door, except `post init`, which a front end sends through `send` because the session it opens has no id yet. Each session-bound action fills the attached session in unless the caller named one.
 
 - `call blocks` is answered from the content window when it covers the ranges; otherwise the frame goes upstream and the answer is forwarded like any other.
 - `answer = false` for frames whose answer nobody waits for (`subscribe watch`, `bye`, the mailbox a detach writes).
@@ -52,7 +52,7 @@ Every door has one named action in `actions.rs` (`init`, `meta`, `usage`, `pools
 ### Invariants
 
 1. A frame is forwarded whole; the windows only read what they cannot be kept without.
-2. A reply is matched to the oldest queued frame with the same `kind` and `name`; a mismatch is dropped.
+2. A reply is matched to the oldest queued frame with the same `kind` and `name`; a frame that matches nothing is forwarded whole, not dropped.
 3. Both windows live exactly as long as one attachment.
 4. The rewind spot is read from the request, never from the reply.
 

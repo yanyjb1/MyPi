@@ -16,7 +16,7 @@ use crate::ui::tui::zone::{Frame, Request, Round, Shout, Turns, name};
 
 /// One frame, decided by its class and name.
 pub(super) fn read_frame(zone: &mut HistoryZone, frame: &Frame) {
-    match (frame.class.as_str(), frame.name.as_str()) {
+    match (frame.kind.as_str(), frame.name.as_str()) {
         ("stream", _) => read_stream(zone, frame),
         ("call", "init") => {
             // The wire orders rounds oldest first; a position is laid newest first.

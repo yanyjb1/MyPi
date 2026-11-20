@@ -1,4 +1,4 @@
-// The wire: one connection, one queue of frames, one table of frames still owed an answer.
+// The wire: one connection, its queue, its unanswered frames, and the opening word a clear keeps.
 
 use std::collections::VecDeque;
 
@@ -21,6 +21,8 @@ pub struct Client {
     socket: Socket,
     queue: VecDeque<(Frame, bool)>,
     waiting: VecDeque<Frame>,
+    // The server's opening word, read before the first attach; a clear keeps it.
+    kept: Vec<Frame>,
 }
 
 impl Client {
@@ -32,6 +34,7 @@ impl Client {
             socket,
             queue: VecDeque::new(),
             waiting: VecDeque::new(),
+            kept: Vec::new(),
         })
     }
 
@@ -40,10 +43,16 @@ impl Client {
         self.queue.push_back((frame, answer));
     }
 
-    // Drop everything not yet sent or not yet answered.
+    // Drop everything not yet sent, not yet answered, and already read; the connection's opening word survives.
     pub fn clear(&mut self) {
         self.queue.clear();
         self.waiting.clear();
+        self.kept = self
+            .socket
+            .drain()
+            .into_iter()
+            .filter(|frame| frame.kind == "local" && frame.name == "opened")
+            .collect();
     }
 
     // Still connected.
@@ -65,7 +74,8 @@ impl Client {
     }
 
     fn receive(&mut self, out: &mut Vec<Incoming>) {
-        for frame in self.socket.drain() {
+        let kept = std::mem::take(&mut self.kept);
+        for frame in kept.into_iter().chain(self.socket.drain()) {
             if frame.kind == "stream" || frame.kind == "local" {
                 out.push(Incoming::Push(frame));
                 continue;
@@ -80,6 +90,8 @@ impl Client {
                     request,
                     reply: frame,
                 });
+            } else {
+                out.push(Incoming::Push(frame));
             }
         }
     }

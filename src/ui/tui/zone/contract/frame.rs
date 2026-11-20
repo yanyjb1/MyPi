@@ -1,19 +1,19 @@
-//! One frame as a zone sees it: class, name, content. The app fills it in.
+//! One frame as a zone sees it: kind, name, content. The app fills it in.
 
 use serde_json::Value;
 
-/// One frame crossing the zone boundary. The class is the wire's kind, unchanged.
+/// One frame crossing the zone boundary: the wire's kind, unchanged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
-    pub class: String,
+    pub kind: String,
     pub name: String,
     pub content: Value,
 }
 
 impl Frame {
-    pub fn new(class: impl Into<String>, name: impl Into<String>, content: Value) -> Frame {
+    pub fn new(kind: impl Into<String>, name: impl Into<String>, content: Value) -> Frame {
         Frame {
-            class: class.into(),
+            kind: kind.into(),
             name: name.into(),
             content,
         }
@@ -21,6 +21,6 @@ impl Frame {
 
     /// A fact the front end itself produced.
     pub fn is_local(&self) -> bool {
-        self.class == "local"
+        self.kind == "local"
     }
 }

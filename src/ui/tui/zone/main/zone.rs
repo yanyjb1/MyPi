@@ -92,7 +92,7 @@ impl MainZone {
 
     /// The conversation's directory, out of the row and the signals that carry it.
     fn read_cwd(&mut self, frame: &Frame) {
-        let path = match (frame.class.as_str(), frame.name.as_str()) {
+        let path = match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "meta") => frame.content.get("cwd").and_then(Value::as_str),
             ("stream", "signal") => frame.content.get("cwd").and_then(Value::as_str),
             _ => return,
@@ -227,7 +227,7 @@ impl Zone for MainZone {
         {
             self.shout(name::ECHO, json!({"text": text}));
         }
-        let kind = Kind::of(&frame.class, &frame.name);
+        let kind = Kind::of(&frame.kind, &frame.name);
         let size = self.term();
         let mut requests = Vec::new();
         let local = frame.is_local();

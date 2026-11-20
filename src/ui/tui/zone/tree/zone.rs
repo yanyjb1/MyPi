@@ -298,7 +298,7 @@ impl TreeZone {
     }
 
     fn read(&mut self, frame: &Frame) -> Vec<Request> {
-        match (frame.class.as_str(), frame.name.as_str()) {
+        match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "init") | ("call", "blocks") => {
                 if let Some(rows) = frame.content.get("blocks") {
                     self.merge(rows);

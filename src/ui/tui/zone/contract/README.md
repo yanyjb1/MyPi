@@ -8,7 +8,7 @@ The only vocabulary the app and the three major zones share.
 |---|---|
 | `Zone` | what the app knows of a major zone |
 | `SubZone` | what `Main` knows of history, input and reserved |
-| `Kind` | a frame class a zone may declare |
+| `Kind` | a frame kind a zone may declare |
 | `Claim` | one action a zone may declare |
 | `Request` | one intent: reads, writes, and the app's own asks; the door name lives app-side |
 | `Outcome` | what a delivery made the screen do |
@@ -16,7 +16,7 @@ The only vocabulary the app and the three major zones share.
 | `TermSize` | columns and rows |
 | `Memo` | string-to-string, owned by the app, open to the zone it starts |
 | `Shout` | one `(name, content)` event on the chat zone's bus |
-| `Frame` | one inbound frame: class, name, content; the app builds it |
+| `Frame` | one inbound frame: kind, name, content; the app builds it |
 | `Turns`, `Round` | the structural window a zone reads; the app builds it |
 
 ### `Zone`
@@ -24,7 +24,7 @@ The only vocabulary the app and the three major zones share.
 | method | meaning |
 |---|---|
 | `keys` | the actions it consumes |
-| `kinds` | the frame classes it handles; `local` is never listed |
+| `kinds` | the frame kinds it handles; `local` is never listed |
 | `start` | the app gives it the screen: size and the memo |
 | `session` | the conversation was entered (`Some`) or left (`None`) |
 | `event` | one frame it declared, or any `local` one |
@@ -44,7 +44,7 @@ host. Rows are `Main`'s own business: `main::pane::Pane` takes the ask, the gran
 
 ### `Kind`
 
-`Call`, `Post`, `Subscribe`, `Stream`, `Notice`. `Kind::of(kind, name)` classifies one frame and
+`Call`, `Post`, `Subscribe`, `Stream`, `Notice`. `Kind::of(kind, name)` names the kind of one frame and
 lifts `stream / notice` out of `Stream`. `local` returns `None`: it is delivered unconditionally.
 
 ### `Claim`

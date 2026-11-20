@@ -25,10 +25,10 @@ one of them.
 A major zone declares:
 
 - `keys()` — every action it consumes, as `Claim` values. One action goes to exactly one zone.
-- `kinds()` — the frame classes it handles: `Call`, `Post`, `Subscribe`, `Stream`, `Notice`.
+- `kinds()` — the frame kinds it handles: `Call`, `Post`, `Subscribe`, `Stream`, `Notice`.
   `local` is never declared.
 
-`notice` is the one class the app lifts out of `stream` by name, so a zone can hear notices
+`notice` is the one kind the app lifts out of `stream` by name, so a zone can hear notices
 without hearing every text delta.
 
 ### Size
