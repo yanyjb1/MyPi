@@ -16,7 +16,7 @@ pub enum Incoming {
     Answer { request: Frame, reply: Frame },
 }
 
-// The connection, the queue, and every frame already sent.
+// The connection, what waits to go out, and what went out still owed an answer.
 pub struct Client {
     socket: Socket,
     queue: VecDeque<(Frame, bool)>,
@@ -27,8 +27,8 @@ pub struct Client {
 
 impl Client {
     // Connect and register. Who starts the server is not this layer's business.
-    pub fn connect(endpoint: Endpoint, viewer: Value) -> Result<Client> {
-        let socket = Socket::connect(&endpoint, &viewer)
+    pub fn connect(endpoint: Endpoint) -> Result<Client> {
+        let socket = Socket::connect(&endpoint, &viewer())
             .with_context(|| format!("cannot reach the server at {endpoint:?}"))?;
         Ok(Client {
             socket,
@@ -95,4 +95,13 @@ impl Client {
             }
         }
     }
+}
+
+// One identity for this front end instance.
+fn viewer() -> Value {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after the epoch")
+        .as_nanos();
+    Value::String(format!("{}-{now}", std::process::id()))
 }

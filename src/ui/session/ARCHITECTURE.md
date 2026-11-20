@@ -7,17 +7,17 @@ What is here, what each file holds, who calls whom. Current state only.
 | path | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list and the re-exports | public |
-| `actions.rs` | one named action per front-end-facing door: the only place such a door's kind and name are written | `Session`'s public methods |
+| `actions.rs` | one named action per door this layer writes | `Session`'s public methods |
 | `vocabulary.rs` | `ModelId`, `Retention`, `Effort`: the words a front end and the api both use | public |
 | `packet.rs` | `Packet { kind, name, content }`, the normalized unit | public |
-| `client.rs` | `Client`, `Incoming`: the queue, the matching, the send, the clear | private |
+| `client.rs` | `Client`, `Incoming`, the viewer: the queue, the matching, the send, the clear | private |
 | `session.rs` | `Session`: connect, forward, attach, send, the ingest of each frame | public |
 | `content.rs` | `ContentCache`: whole blocks by id, the budget, the eviction | private |
-| `structure.rs` | `Turn`, `Structure`: the rounds, their ranges, the cut at one spot | public |
+| `structure.rs` | `Turn`, `Structure`, `ranges_of`, `turns_of`: the rounds, their ranges, the cut at one spot | public |
 
 ## What it talks to
 
-- **`ipc::client`**: one connection; `send`, `drain`, `alive`.
+- **`ipc::client`**: one connection; `connect`, `send`, `drain`, `alive`.
 - **`ipc::contract`**: `Frame` only.
 - **`ipc::endpoint`**: where the server listens; the session does not start it.
 - **Knows nothing about**: terminals, tables, cards, rounds beyond their ranges, block fields beyond an id, doors' payloads beyond the blocks it answers and the rewind it trims.
@@ -34,7 +34,7 @@ Session
 ```
 
 - `Client::pump` sends what is queued and says what came back: `Push` or `Answer { request, reply }`.
-- `Session::take` is the only place a frame reaches the windows: a push updates the structure for the attached session only, an answer updates both windows and the budget, then every frame goes to the outbox.
+- `Session::ingest` is the only place a frame reaches the windows: a push updates the structure for the attached session only, an answer updates both windows and the budget, then every frame goes to the outbox.
 - `Session::send` is the only outbound path; `Session::blocks` answers a covered range from the content window and sends the rest upstream.
 - An accepted `post meta` rewind cuts the structure at the spot its own request named; the reply is forwarded without being decoded.
 

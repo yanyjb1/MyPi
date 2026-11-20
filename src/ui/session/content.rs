@@ -7,7 +7,7 @@ use serde_json::Value;
 // The default number of blocks kept.
 const DEFAULT_BUDGET: usize = 128;
 
-// The blocks, each whole, exactly as the answer carried it. One entry is one block: the key is its id, and the value is the whole block plus the admission stamp that orders it. A value without an id is not a block and never enters.
+// The blocks, each whole, exactly as the answer carried it, by id, with the admission stamp that orders eviction.
 #[derive(Debug)]
 pub struct ContentCache {
     budget: usize,
@@ -24,7 +24,7 @@ impl Default for ContentCache {
 impl ContentCache {
     pub fn new(budget: usize) -> ContentCache {
         ContentCache {
-            budget: budget.max(1),
+            budget,
             clock: 0,
             blocks: BTreeMap::new(),
         }
@@ -32,7 +32,7 @@ impl ContentCache {
 
     // Set the budget; anything past it goes now.
     pub fn set_budget(&mut self, budget: usize) {
-        self.budget = budget.max(1);
+        self.budget = budget;
         self.evict();
     }
 
@@ -86,9 +86,10 @@ impl ContentCache {
     }
 
     fn insert(&mut self, block: Value) {
-        let Some(id) = block.get("id").and_then(Value::as_i64) else {
-            return;
-        };
+        let id = block
+            .get("id")
+            .and_then(Value::as_i64)
+            .expect("a block carries its id");
         self.clock += 1;
         self.blocks.insert(id, (self.clock, block));
     }
@@ -104,7 +105,7 @@ impl ContentCache {
             .iter()
             .map(|(id, (stamp, _))| (*stamp, *id))
             .collect();
-        order.sort_unstable();
+        order.sort_unstable_by_key(|(stamp, _)| *stamp);
         for (_, id) in order.into_iter().take(over) {
             self.blocks.remove(&id);
         }

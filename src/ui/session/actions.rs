@@ -40,7 +40,7 @@ impl Session {
 
     // `call blocks`: closed id ranges.
     pub fn blocks(&mut self, ranges: Vec<[i64; 2]>) {
-        self.read_blocks(json!({"ranges": ranges}));
+        self.read_blocks(ranges);
     }
 
     // `call sessions`: the session list.

@@ -10,7 +10,7 @@ Every frame crosses this layer as three parts: `kind`, `name`, `content`. Nothin
 
 ### Outbound doors
 
-The api takes `name`, `cwd`, `switch`, `effort`, and `rewind` inside one `post meta` frame: `{name, content}`, with the attached session in `content`. Every other door keeps its own name. `actions.rs` is the only place a front-end-facing door's kind and name are written; the frames this layer originates itself — the `call config` that sizes the window, the `post mailbox` a detach clears, the `register bye` — are queued there too, through `clear_remote_mailbox` and `sign_off`.
+The api takes `name`, `cwd`, `switch`, `effort`, and `rewind` inside one `post meta` frame: `{name, content}`, with the attached session in `content`. Every other door keeps its own name. `actions.rs` is where this layer's doors are named; the frames it originates itself — the `call config` that sizes the window, the `post mailbox` a detach clears, the `register bye` — are queued there too, through `clear_remote_mailbox` and `sign_off`.
 
 ### The two windows
 
@@ -30,7 +30,7 @@ A `post meta` rewind names its spot in the request. When the answer carries no e
 
 ### Config answers
 
-A `call config` answer is forwarded with the key it answers: `{key, value}`. This layer's own `preloadCache` question is swallowed. An answer whose request carries no key is forwarded as it came.
+A `call config` answer is forwarded with the key it answers: `{key, value}`. This layer's own `preloadCache` question is swallowed.
 
 ### The outbox
 
@@ -60,7 +60,7 @@ Every door has one named action in `actions.rs` (`init`, `meta`, `usage`, `pools
 
 - **The postman does not open the mail.** What the front end draws is decoded by whoever draws it; this layer only keeps the two indexes every reader would otherwise have to rebuild.
 - **Answer from the window.** A block read the window already covers costs no round trip.
-- **Time before sequence.** The block admitted longest ago is the one the reader moved away from; ids only break ties.
+- **Time before sequence.** The block admitted longest ago is the one the reader moved away from; admission stamps are unique, so id order never decides.
 
 ## 3. Unresolved
 

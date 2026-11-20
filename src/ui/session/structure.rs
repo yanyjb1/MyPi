@@ -1,4 +1,6 @@
-// The structural window: which rounds exist and the closed block ranges each owns.
+// The structural window: the rounds, their closed block ranges, and the wire shape they arrive in.
+
+use serde_json::Value;
 
 // One round: its id, the closed block id ranges it owns, and whether it is a compaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,13 +47,16 @@ impl Structure {
 
     // Cut the index back to one block. The request names the spot: everything newer than the round goes, and the round itself keeps the blocks up to the named one.
     pub fn cut_at(&mut self, turn: i64, block: i64) {
-        let Some(at) = self.turns.iter().position(|held| held.id == turn) else {
-            return;
-        };
+        let at = self
+            .turns
+            .iter()
+            .position(|held| held.id == turn)
+            .expect("rewind names a round the window holds");
         self.turns.drain(..at);
-        let Some(head) = self.turns.first_mut() else {
-            return;
-        };
+        let head = self
+            .turns
+            .first_mut()
+            .expect("the named round is still here");
         head.ranges = kept(&head.ranges, block);
         if head.ranges.is_empty() {
             self.turns.remove(0);
@@ -82,5 +87,46 @@ fn kept(ranges: &[[i64; 2]], upto: i64) -> Vec<[i64; 2]> {
         }
         out.push([*lo, (*hi).min(upto)]);
     }
+    out
+}
+
+// A frame's ranges: `[[lo, hi], …]`.
+pub(super) fn ranges_of(value: &Value) -> Vec<[i64; 2]> {
+    value
+        .as_array()
+        .expect("a range list is an array")
+        .iter()
+        .map(|item| {
+            let pair = item.as_array().expect("a range is a pair");
+            assert_eq!(pair.len(), 2, "a range is a pair");
+            [
+                pair[0].as_i64().expect("a range bound is an integer"),
+                pair[1].as_i64().expect("a range bound is an integer"),
+            ]
+        })
+        .collect()
+}
+
+// An `init` answer's `structure`: one `{turn, ranges, compact}` per round.
+pub(super) fn turns_of(value: &Value) -> Vec<Turn> {
+    let mut out: Vec<Turn> = value
+        .as_array()
+        .expect("a structure is an array")
+        .iter()
+        .map(|entry| {
+            Turn::new(
+                entry
+                    .get("turn")
+                    .and_then(Value::as_i64)
+                    .expect("a round names its id"),
+                ranges_of(entry.get("ranges").expect("a round carries its ranges")),
+                entry
+                    .get("compact")
+                    .and_then(Value::as_bool)
+                    .expect("a round marks its compaction"),
+            )
+        })
+        .collect();
+    out.reverse();
     out
 }
