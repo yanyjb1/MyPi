@@ -20,7 +20,7 @@ What each file holds and who calls it. Current state only.
 
 ## What it calls
 
-- `zone::contract` for `Zone`, `Kind`, `Claim`, `Outcome`, `Request`, `Turns`, `TermSize`.
+- `zone::contract` for `Zone`, `Kind`, `Claim`, `Outcome`, `Request`, `Structure`, `TermSize`.
 - `action::{Action, Key, KeyCode, Mods}`.
 - `theme::fixed` and `text::take_width` while drawing; the user node takes the accent.
 - `unicode_width` for display columns.

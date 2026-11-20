@@ -18,14 +18,14 @@ What each file holds, who calls it, and what it depends on. Current state only.
 Through `SubZone`: `claims`, `kinds`, `borrowed`, `deliver_event`, `deliver_action`, `attach`,
 `detach`, `hear`, plus `super::pane::Pane`'s `request_height` and `assign`.
 
-To `Main`: `hire`, `text`, `col`, `take_reply`, `take_requests`, `render_rows`. The outbox carries
-`Request::Memo` and `Request::Copy` besides the session's own asks.
+To `Main`: `hire`, `text`, `col`, `take_reply`, `take_locals`, `render_rows`. The list it carries holds
+`Local::Copy` alone: every memo ask the desk writes is posted straight into the box.
 
 To `Input`: nothing directly; the main zone carries `Reply` across.
 
 ## What it calls
 
-- `ui::tui::zone::{Frame, Request, TermSize, Claim, Kind, MemoAsk, name}` and
+- `ui::tui::zone::{Frame, TermSize, Claim, Kind, Local, Shared, name}` and
   `super::desk::{Hire, Reply}`.
 - `ui::tui::action` for keys, `ui::tui::theme::Accent` for the accent.
 - `ui::command` for `Candidate`; the command table itself belongs to the input zone.

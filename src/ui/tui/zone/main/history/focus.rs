@@ -83,8 +83,7 @@ impl HistoryZone {
     fn settle_round(&mut self, turn: i64) -> bool {
         let head = self
             .structure
-            .rounds()
-            .iter()
+            .turns()
             .find(|round| round.id == turn)
             .and_then(|round| round.ranges.first())
             .map(|[lo, _]| *lo);
@@ -144,11 +143,13 @@ impl HistoryZone {
                 true
             }
             Idx::Fixed(num) => {
-                let which = match self.local.slot(idx).map(|slot| &slot.kind) {
-                    Some(SlotKind::Next) => Which::Next,
-                    Some(SlotKind::Notice { .. }) => Which::Notice,
-                    Some(SlotKind::Block { id, .. }) => Which::Block(*id),
-                    None => return true,
+                let which = self.local.slot(idx).map(|slot| match &slot.kind {
+                    SlotKind::Next => Which::Next,
+                    SlotKind::Notice { .. } => Which::Notice,
+                    SlotKind::Block { id, .. } => Which::Block(*id),
+                });
+                let Some(which) = which else {
+                    return true;
                 };
                 match which {
                     Which::Next => match self.block_near(num, false) {
@@ -225,8 +226,7 @@ impl HistoryZone {
 
     fn round_ids(&self, turn: i64) -> Vec<i64> {
         self.structure
-            .rounds()
-            .iter()
+            .turns()
             .find(|round| round.id == turn)
             .map(|round| round.ranges.iter().flat_map(|[lo, hi]| *lo..=*hi).collect())
             .unwrap_or_default()
@@ -252,8 +252,8 @@ impl HistoryZone {
     pub(super) fn block_near(&self, num: i64, older: bool) -> Option<i64> {
         let mut cursor = Some(Idx::Fixed(num));
         while let Some(Idx::Fixed(at)) = cursor {
-            if let Some(SlotKind::Block { id, .. }) =
-                self.local.slot(Idx::Fixed(at)).map(|slot| &slot.kind)
+            if let Some(slot) = self.local.slot(Idx::Fixed(at))
+                && let SlotKind::Block { id, .. } = &slot.kind
                 && *id > 0
             {
                 return Some(*id);

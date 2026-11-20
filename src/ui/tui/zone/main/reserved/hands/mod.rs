@@ -3,3 +3,6 @@
 pub(in crate::ui::tui::zone::main::reserved) mod completion;
 pub(in crate::ui::tui::zone::main::reserved) mod memo;
 pub(in crate::ui::tui::zone::main::reserved) mod usage;
+
+pub(super) mod grid;
+pub(super) mod text;

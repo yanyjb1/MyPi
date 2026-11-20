@@ -4,7 +4,8 @@
 
 use std::collections::VecDeque;
 
-use crate::ui::tui::zone::Request;
+use crate::ui::tui::zone::Frame;
+use serde_json::json;
 
 /// One sentence the user sent while a round was running.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,13 +24,18 @@ impl Outgoing {
         }
     }
 
-    /// The door's frame; the app fills in the session.
-    fn frame(&self) -> Request {
-        Request::Mailbox {
-            prefix: self.prefix.clone(),
-            text: self.text.clone(),
-            suffix: self.suffix.clone(),
-        }
+    /// The letter that writes this sentence into the slot.
+    fn letter(&self, session: i64) -> Frame {
+        Frame::new(
+            "post",
+            "mailbox",
+            json!({
+                "session": session,
+                "prefix": self.prefix,
+                "text": self.text,
+                "suffix": self.suffix,
+            }),
+        )
     }
 }
 
@@ -46,25 +52,25 @@ impl Queue {
     }
 
     /// A sentence sent while busy: appended, and written if it is the new head.
-    pub fn push(&mut self, msg: Outgoing) -> Option<Request> {
+    pub fn push(&mut self, msg: Outgoing, session: i64) -> Option<Frame> {
         self.items.push_back(msg);
-        self.sync()
+        self.sync(session)
     }
 
     /// The loop took the head: drop it, and mirror whatever is next.
-    pub fn took(&mut self) -> (Option<Outgoing>, Option<Request>) {
+    pub fn took(&mut self, session: i64) -> (Option<Outgoing>, Option<Frame>) {
         let taken = self.items.pop_front();
         // The slot is empty now, whatever the queue still holds: the next head goes in.
         self.in_slot = false;
-        let request = self.sync();
-        (taken, request)
+        let letter = self.sync(session);
+        (taken, letter)
     }
 
     /// `Alt+Up`: the newest sentence comes back to the editor; the head stays put.
-    pub fn pop(&mut self) -> (Option<Outgoing>, Option<Request>) {
+    pub fn pop(&mut self, session: i64) -> (Option<Outgoing>, Option<Frame>) {
         let taken = self.items.pop_back();
-        let request = self.sync();
-        (taken, request)
+        let letter = self.sync(session);
+        (taken, letter)
     }
 
     /// Nothing is queued: the slot is not ours to hold.
@@ -74,16 +80,16 @@ impl Queue {
     }
 
     /// Make the slot hold the head, or hold nothing.
-    fn sync(&mut self) -> Option<Request> {
+    fn sync(&mut self, session: i64) -> Option<Frame> {
         match self.items.front() {
             Some(head) if !self.in_slot => {
                 self.in_slot = true;
-                Some(head.frame())
+                Some(head.letter(session))
             }
             Some(_) => None,
             None if self.in_slot => {
                 self.in_slot = false;
-                Some(Request::ClearMailbox)
+                Some(Frame::new("post", "mailbox", json!({"session": session})))
             }
             None => None,
         }

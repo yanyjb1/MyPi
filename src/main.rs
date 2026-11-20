@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
     let file = Endpoint::file_path(&db);
     // A leftover endpoint file whose server is gone is no reason to refuse to start.
     if let Ok(running) = endpoint::read(&file)
-        && let Ok(session) = mypi::ui::session::Session::connect(running)
+        && let Ok(session) = mypi::ui::session::Session::open(running, None)
     {
         return run(session, &cli);
     }
@@ -53,7 +53,7 @@ fn spawn_server(file: &Path) -> anyhow::Result<mypi::ui::session::Session> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Ok(endpoint) = endpoint::read(file)
-            && let Ok(session) = mypi::ui::session::Session::connect(endpoint)
+            && let Ok(session) = mypi::ui::session::Session::open(endpoint, None)
         {
             return Ok(session);
         }
@@ -127,7 +127,7 @@ fn init_time(cfg: &Config) {
 // The front end on an open connection: read the launch directory, pick the first zone, go.
 fn run(session: mypi::ui::session::Session, cli: &Cli) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().context("cannot read the current directory")?;
-    let model = cli.model.as_deref().and_then(model_id);
+    let model = cli.model.clone();
     let startup = if let Some(id) = cli.attach {
         tui::app::Startup::attach(cwd, id, model)
     } else if cli.resume {
@@ -138,12 +138,4 @@ fn run(session: mypi::ui::session::Session, cli: &Cli) -> anyhow::Result<()> {
         tui::app::Startup::main(cwd, model)
     };
     tui::run(session, startup)
-}
-
-fn model_id(spec: &str) -> Option<mypi::ui::tui::zone::ModelId> {
-    let (provider, model) = spec.split_once(':')?;
-    Some(mypi::ui::tui::zone::ModelId {
-        provider: provider.to_string(),
-        model: model.to_string(),
-    })
 }

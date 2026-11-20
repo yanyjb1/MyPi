@@ -5,6 +5,7 @@ mod boot;
 mod claim;
 pub mod command;
 mod ctx;
+mod draft;
 mod editor;
 mod esc;
 mod exit;
@@ -20,6 +21,7 @@ mod submit;
 mod zone;
 
 pub use ctx::{Ctx, Currency, Data};
+pub use draft::Draft;
 pub use exit::ExitRequest;
 pub use notice::Notice;
 pub use zone::InputZone;

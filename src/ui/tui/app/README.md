@@ -1,6 +1,6 @@
 # app
 
-The front end's centre: the registry, the display ledger, and the only exit to the session.
+The front end's centre: the registry, the display ledger, and the one post box between the zones and the session.
 
 ## 1. Design / Schema
 
@@ -15,20 +15,16 @@ The front end's centre: the registry, the display ledger, and the only exit to t
 | `size: TermSize` | the last size handed down |
 | `attached: Option<i64>` | the session the zones were last told about |
 | `told: Vec<Option<Option<i64>>>` | per zone: `None` = never told, `Some(id or None)` = told |
-| `cwd`, `model` | what a new session is created with |
-| `profile`, `name` | the draft's picks; they travel with the row |
-| `opening` | a message sent before the session row existed |
+| `shared: Shared` | the post box, the one color, and the draft |
 | `copy: Vec<String>` | text the loop still owes the terminal's clipboard |
+| `asking: VecDeque<Option<ZoneId>>` | who wrote each letter still owed an answer, in the order they left; `None` = this file |
 | `finished: bool` | nobody shows |
 
 ### Boot
 
-1. If the startup names a session, attach it: `session.attach`, `subscribe watch`, broadcast
-   `session(Some(id))` to the zone that shows, land what it asks for.
-2. Start the first zone: `start(size, &memo)`, land its requests.
-
-The memo carries the launch directory (`cwd`) for the picker; `attach` and `detach` reset the
-memo but always write it back.
+1. Build the shared surface from the startup parameters, and hand each zone its own handle, stamped with that zone's id.
+2. If the startup names a session, attach it: `session.attach`, watch, broadcast `session(Some(id))` to the zone that shows.
+3. Start the first zone: `start(size, &memo)`, land its asks.
 
 ### Delivery
 
@@ -38,55 +34,35 @@ memo but always write it back.
 | `local` | the showing zone, always |
 | action | the showing zone, and only if its `keys()` contains the claim |
 
-Every delivery returns requests; they are landed at once, in order.
+`Local` is the only ask a zone makes of the app itself: `Attach`, `Detach`, `Quit`, `Copy`.
 
-`Request::Copy` is the one ask the app keeps for somebody else: it joins `copy`, and the frame loop
-takes it with `take_copy` and writes the terminal's clipboard between two draws.
+### Mailing
 
-### Landing
+A zone posts a letter into the box it was handed; the box stamps the poster. After every delivery the app drains the box in posting order, hands each letter to the session, and remembers the poster for the answer that follows.
 
-A `Request` is an intent: the app names the door. `wire::land` carries every session action; the
-app keeps the ones that are its own — `Submit`, `SetCwd`, `Rename`, `SwitchModel` in a draft,
-`Copy`, `Attach`, `Detach`, `Structure`, `Quit`, `PickProfile`.
-A `Submit` with no session attached first creates the row (`post init` with `cwd`, `name`, `model`
-and the picked profile), parks the text with the prefix it carries, and sends both after the id
-lands. A draft's `SetCwd`, `Rename` and `SwitchModel` land here and answer with a `local` frame
-named after the same door, so the input zone can speak its receipt; a session's land on the server
-instead.
-`Structure` asks the session for the structural window and hands one `Turns` snapshot to the zone
-that shows; a nested `Structure` request is dropped.
+`pump` takes what the connection produced. A reply goes to the zone that wrote that letter, and the poster is forgotten with it; a push (`stream`) or a `local` frame goes to the zone that shows, if it declared that kind. The order is exact because the server answers one request at a time: one letter out, one answer back.
 
-### Lifecycle
+Two frames leave without entering the queue, because the server does not answer them: the watch sent on attach and detach, and the sign-off. The one letter the app writes that *is* answered — the `post mailbox` clear on detach — takes a place in the queue and its answer is dropped.
 
-- `attach(id)`: follow, watch, clear the memo and the draft's picks, tell the zone that shows, land.
-- `detach()`: stop following, clear the memo and the draft's picks, tell the zone that shows, land.
-- `tell()` compares one zone's last told value with `attached`; `None` means never told, so a detach
-  reaches the zones exactly as an attach does.
-- `pump()` reconciles: if the session attached somewhere else (a delete landed upstream), the app
-  detaches; a session the app attached itself is already consistent.
+A `post init` opens a row; its answer is what `created` reads, and what binds the session.
 
 ### Handover
 
-`settle(Outcome::Show)` writes the memo the old zone left, makes the new zone the owner, and
-starts it. `Outcome::Quit` empties the owner and marks the app finished.
+`settle(Outcome::Show)` writes the memo the old zone left, makes the new zone the owner, and starts it. `Outcome::Quit` empties the owner and marks the app finished.
 
 ## 2. Design intent
 
-- **One handle.** The session lives here and nowhere else; zones produce requests, the app lands
-  them.
-- **No payload knowledge.** `kind` picks the route; `content` is read only for the terminal size,
-  a create's reply, and the rename that re-picks the accent.
+- **One handle.** The session lives here and nowhere else.
+- **One box.** A zone never names a door to the app; it writes the letter itself, and the app only moves it.
+- **The poster is known.** The box stamps every letter, so a reply needs no number and no second table.
 - **Declaration, not inspection.** What a zone hears is what it declared.
-- **The memo is a transaction.** It exists between one handover and the next, and attach/detach
-  clears it.
-- **A draft answers like the server.** What a draft lands itself is answered with a `local` frame
-  named after the same door, so a zone has one receipt rule.
+- **The memo is a transaction.** It exists between one handover and the next, and attach/detach clears it.
+- **The draft is a memo too.** What a session will open with is one shared structure, written by whoever the user asked, read when the row is created.
 
 ## 3. Unresolved
 
-1. One waiting message at a time: a second submit before the row lands replaces the first.
+None.
 
 ## 4. Config fields
 
-None. The palette is fixed; the accent is picked at startup (`Accent::pick()`) and re-picked on a
-rename.
+None. The palette is picked at startup and re-picked on a session's rename; the accent it holds is shared by every zone.

@@ -1,111 +1,24 @@
-//! The history zone: what it claims, what it holds, and the contract it answers.
+//! The history zone: what it holds, and the contract it answers.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::focus::{Focus, Target};
+use super::focus::Target;
+use super::live::{Ask, Pin};
 use super::local::section::{Idx, Local};
-use super::local::slot::{Level, Life, SlotKind};
-use super::prefetch::{Range, Run, Start, walk};
-use super::product::{Opts, Task, TodoPanel, compact, esc_row, pin_rows};
-use super::row::Row;
-use super::{display, wire};
+use super::local::slot::{Level, Life};
+use super::prefetch::{Range, Run, Start};
+use super::product::{Opts, Task, TodoPanel};
+use super::{display, keys, wire};
 use crate::ui::lang::Lang;
-use crate::ui::tui::text::glyphs as g;
 
 use super::super::pane::Pane;
 use crate::ui::tui::TodoFold;
-use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
+use crate::ui::tui::action::Action;
 use crate::ui::tui::theme::Accent;
-use crate::ui::tui::zone::{Claim, Frame, Kind, Request, Shout, SubZone, TermSize, Turns, name};
-
-/// The keys history consumes. The input zone yields Ctrl+arrows to it.
-pub const CLAIMS: &[Claim] = &[
-    Claim::Key(Key {
-        code: KeyCode::Char('t'),
-        mods: Mods {
-            ctrl: true,
-            alt: false,
-            shift: false,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::Char('o'),
-        mods: Mods {
-            ctrl: true,
-            alt: false,
-            shift: false,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::Up,
-        mods: Mods {
-            ctrl: true,
-            alt: false,
-            shift: false,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::Down,
-        mods: Mods {
-            ctrl: true,
-            alt: false,
-            shift: false,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::PageUp,
-        mods: Mods {
-            ctrl: false,
-            alt: false,
-            shift: false,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::PageDown,
-        mods: Mods {
-            ctrl: false,
-            alt: false,
-            shift: false,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::Home,
-        mods: Mods {
-            ctrl: true,
-            alt: false,
-            shift: true,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::End,
-        mods: Mods {
-            ctrl: true,
-            alt: false,
-            shift: true,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::PageUp,
-        mods: Mods {
-            ctrl: true,
-            alt: false,
-            shift: false,
-        },
-    }),
-    Claim::Key(Key {
-        code: KeyCode::PageDown,
-        mods: Mods {
-            ctrl: true,
-            alt: false,
-            shift: false,
-        },
-    }),
-    Claim::Wheel,
-    Claim::WheelShift,
-];
+use crate::ui::tui::zone::{Claim, Frame, Kind, Shared, Shout, Structure, SubZone, TermSize, name};
 
 /// The classes the zone reads.
 const KINDS: &[Kind] = &[Kind::Call, Kind::Stream, Kind::Notice];
@@ -127,7 +40,7 @@ const DEFAULT_OVERSCAN: usize = 12;
 
 /// The config keys this zone asks for once per attachment.
 pub(super) const CONFIG_KEYS: &[&str] = &[
-    "config.ui.lang",
+    Lang::KEY,
     "config.ui.tui.zone.main.history.focusLine",
     "config.ui.tui.zone.main.history.cardFoldBudget",
     "config.ui.tui.zone.main.history.cacheMargin",
@@ -136,33 +49,6 @@ pub(super) const CONFIG_KEYS: &[&str] = &[
     "config.ui.tui.zone.main.history.todoFold",
     "config.server.agent.tools.shell",
 ];
-
-/// Every block id these ranges name, in order.
-fn blocks_of(ranges: &[[i64; 2]]) -> Vec<i64> {
-    ranges.iter().flat_map(|[lo, hi]| *lo..=*hi).collect()
-}
-
-/// One running label: a call or a thought, and when it started.
-pub(super) struct Pin {
-    /// What the ESC row prints after the elapsed time.
-    pub label: String,
-    pub since: Instant,
-    /// The call this label belongs to; `None` for a thought.
-    pub call: Option<String>,
-    /// The compaction's own row: no call owns it, and a thought ending leaves it alone.
-    pub compact: bool,
-}
-
-/// What the last context figure was asked for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Ask {
-    /// The gauge as it stood before a compaction started.
-    Before,
-    /// The gauge the compaction left behind.
-    After,
-    /// A fresh attachment: what the gauge reads now is the newest compaction's aftermath.
-    Attach,
-}
 
 /// The chat history: what the reader sees of the conversation.
 pub struct HistoryZone {
@@ -204,7 +90,7 @@ pub struct HistoryZone {
     // The highlight language the shell backend speaks; `None` until the config answers.
     pub(super) shell: Option<&'static str>,
     /// The structural window as it last stood.
-    pub(super) structure: Turns,
+    pub(super) structure: Structure,
     /// The language the banners and the numbers read in.
     pub(super) lang: Lang,
     /// The compaction the server took: its clock, while it runs.
@@ -227,8 +113,11 @@ pub struct HistoryZone {
     pub(super) busy: bool,
     /// The place the window is waiting to point at, once its content is here.
     pub(super) pending_focus: Option<Target>,
-    /// What this frame owes the session.
-    pub(super) outbox: Vec<Request>,
+    /// The post box, the palette and the draft every zone shares.
+    pub(super) shared: Shared,
+
+    /// The conversation this zone follows; `None` = a draft.
+    pub(super) session: Option<i64>,
     /// What this frame owes the other zones.
     pub(super) shouts: Vec<Shout>,
     /// Bumped whenever this zone's rows would differ.
@@ -261,7 +150,7 @@ impl Default for HistoryZone {
             placeholder: "thinking…".to_string(),
             cwd: String::new(),
             shell: None,
-            structure: Turns::default(),
+            structure: Structure::default(),
             lang: Lang::default(),
             compacting: None,
             before: None,
@@ -273,7 +162,8 @@ impl Default for HistoryZone {
             needs_layout: false,
             busy: false,
             pending_focus: None,
-            outbox: Vec::new(),
+            shared: Shared::default(),
+            session: None,
             shouts: Vec::new(),
             rev: 0,
         }
@@ -396,129 +286,6 @@ impl HistoryZone {
         }
     }
 
-    /// The rows under the last segment: the checklist, then what is still running.
-    fn pin_rows(&mut self, width: usize) -> Vec<Row> {
-        let HistoryZone {
-            todo_panel,
-            todo,
-            todo_fold,
-            pin,
-            tick,
-            ..
-        } = self;
-        let checklist = todo_panel.rows(todo, *todo_fold, width).to_vec();
-        let esc = pin.first().map(|running| {
-            esc_row(
-                g::STAR[*tick % g::STAR.len()],
-                running.since.elapsed(),
-                &running.label,
-                running.call.is_none() || running.compact,
-            )
-        });
-        pin_rows(checklist, esc)
-    }
-
-    /// A thought started: its label leads until the thought ends.
-    pub(super) fn thinking_started(&mut self) {
-        if self.pin.iter().any(|pin| pin.call.is_none()) {
-            return;
-        }
-        self.pin.push(Pin {
-            label: "thinking".to_string(),
-            since: Instant::now(),
-            call: None,
-            compact: false,
-        });
-    }
-
-    /// The thought is over; the compaction's own row is not a thought and stays.
-    pub(super) fn thinking_ended(&mut self) {
-        self.pin.retain(|pin| pin.call.is_some() || pin.compact);
-    }
-
-    /// The server took a `/compact`: its row leads the pin, and its summary draws as one.
-    pub(super) fn compact_started(&mut self) {
-        if self.compacting.is_some() {
-            return;
-        }
-        let now = Instant::now();
-        self.compacting = Some(now);
-        self.before = None;
-        self.after = None;
-        self.awaiting.clear();
-        self.pin.retain(|pin| !pin.compact);
-        self.pin.push(Pin {
-            label: compact::LABEL.to_string(),
-            since: now,
-            call: None,
-            compact: true,
-        });
-        // The summary has not arrived yet: the round needs a position for its banners.
-        let at = self.local.running_mut().text("");
-        self.local.set_compacting(true);
-        self.mark(Idx::Turn(at as u32));
-        self.ask = Some(Ask::Before);
-        self.outbox.push(Request::Usage);
-    }
-
-    /// The compaction round is over. Its banner keeps the figures this process measured; a round
-    /// this front end never watched start keeps only what the snapshot says.
-    pub(super) fn compact_closed(&mut self, compact: bool, ranges: &[[i64; 2]]) {
-        let opened = self.compacting.take();
-        self.local.set_compacting(false);
-        if !compact {
-            return;
-        }
-        let blocks = blocks_of(ranges);
-        let mark = compact::Mark {
-            opened: opened.is_some(),
-            before: self.before.take(),
-            after: self.after,
-        };
-        self.local.mark_compact(&blocks, mark);
-        self.local.drop_products();
-        self.run.clear();
-        if opened.is_some() {
-            self.awaiting = blocks;
-            self.ask = Some(Ask::After);
-            self.outbox.push(Request::Usage);
-        }
-    }
-
-    /// A snapshot names the compaction rounds it holds: give their blocks the banner.
-    pub(super) fn stamp_structure(&mut self) {
-        let blocks = self.structure.compact_blocks();
-        if blocks.is_empty() {
-            return;
-        }
-        self.local.mark_compact(
-            &blocks,
-            compact::Mark {
-                opened: false,
-                before: None,
-                after: self.after,
-            },
-        );
-        self.local.set_after(&blocks, self.after);
-    }
-
-    /// One call started; a running thought ends with it.
-    pub(super) fn call_started(&mut self, call: &str, intent: Option<&str>) {
-        self.thinking_ended();
-        self.pin.retain(|pin| pin.call.as_deref() != Some(call));
-        self.pin.push(Pin {
-            label: intent.unwrap_or_default().to_string(),
-            since: Instant::now(),
-            call: Some(call.to_string()),
-            compact: false,
-        });
-    }
-
-    /// One call ended: the next unfinished one leads.
-    pub(super) fn call_ended(&mut self, call: &str) {
-        self.pin.retain(|pin| pin.call.as_deref() != Some(call));
-    }
-
     /// One position's text grew in place: the run lays its tail again, the product stays.
     pub(super) fn grow(&mut self, idx: Idx, from: usize) {
         self.grown
@@ -579,157 +346,62 @@ impl HistoryZone {
         self.awaiting.clear();
     }
 
-    /// Frames this zone asked for, taken by the host.
-    pub(in crate::ui::tui::zone::main) fn take_requests(&mut self) -> Vec<Request> {
-        std::mem::take(&mut self.outbox)
+    /// The three shared handles arrive once, at boot.
+    pub(in crate::ui::tui::zone::main) fn bind(&mut self, shared: Shared) {
+        self.shared = shared;
     }
 
-    /// One whole slot older or newer: its head under the sight line.
-    pub(super) fn step_slot(&mut self, older: bool) {
-        let Some(from) = self.anchor_slot() else {
-            return;
-        };
-        let mut cursor = if older {
-            walk::older(&self.local, from)
-        } else {
-            walk::newer(&self.local, from)
-        };
-        while let Some(idx) = cursor {
-            if self.local.holds_block(idx) {
-                self.focus_at(idx, older);
-                return;
-            }
-            cursor = if older {
-                walk::older(&self.local, idx)
-            } else {
-                walk::newer(&self.local, idx)
-            };
-        }
-        if !older {
-            self.range.follow();
+    /// The session's own row.
+    pub(in crate::ui::tui::zone::main) fn ask_meta(&self) {
+        if let Some(session) = self.session {
+            self.shared.mail.send(Frame::new(
+                "call",
+                "meta",
+                serde_json::json!({"session": session}),
+            ));
         }
     }
 
-    /// Point at the newest finished round's head.
-    fn focus_newest_round(&mut self) {
-        if let Some(turn) = self.structure.rounds().first().map(|round| round.id) {
-            self.focus(Focus::Round(turn));
+    /// One configuration key.
+    pub(in crate::ui::tui::zone::main) fn want(&self, key: &str) {
+        self.shared.mail.send(Frame::new(
+            "call",
+            "config",
+            serde_json::json!({"key": key}),
+        ));
+    }
+
+    /// The session's bill, after a round moved it.
+    pub(in crate::ui::tui::zone::main) fn bill(&self) {
+        if let Some(session) = self.session {
+            self.shared.mail.send(Frame::new(
+                "call",
+                "usage",
+                serde_json::json!({"session": session}),
+            ));
         }
     }
 
-    /// One whole round older or newer: its head under the sight line.
-    pub(super) fn turn_step(&mut self, older: bool) {
-        if matches!(self.range.start(), Start::Latest) {
-            if !older {
-                self.range.follow();
-                return;
-            }
-            if self.running_head().is_some() {
-                self.focus(Focus::Running);
-            } else {
-                self.focus_newest_round();
-            }
-            return;
-        }
-        let Some(slot) = self.anchor_slot() else {
-            return;
-        };
-        if let Idx::Turn(at) = slot {
-            if !older {
-                self.range.follow();
-                return;
-            }
-            match self.running_head() {
-                Some(head) if head != at => self.focus(Focus::Running),
-                _ => self.focus_newest_round(),
-            }
-            return;
-        }
-        let Idx::Fixed(num) = slot else {
-            return;
-        };
-        let direct = matches!(
-            self.local.slot(slot).map(|slot| &slot.kind),
-            Some(SlotKind::Block { .. })
-        );
-        let Some(block) = self.block_near(num, older) else {
-            return;
-        };
-        let Some(turn) = self.turn_of(block) else {
-            return;
-        };
-        let next = {
-            let rounds = self.structure.rounds();
-            let Some(at) = rounds.iter().position(|round| round.id == turn) else {
-                return;
-            };
-            if direct {
-                if older {
-                    rounds.get(at + 1).map(|round| round.id)
-                } else {
-                    at.checked_sub(1)
-                        .and_then(|index| rounds.get(index))
-                        .map(|round| round.id)
-                }
-            } else {
-                Some(turn)
-            }
-        };
-        match next {
-            Some(turn) => self.focus(Focus::Round(turn)),
-            None if !older => self.range.follow(),
-            None => {}
+    /// The conversation as it stands: every round, the newest blocks and the checklist.
+    pub(in crate::ui::tui::zone::main) fn ask_init(&self) {
+        if let Some(session) = self.session {
+            self.shared.mail.send(Frame::new(
+                "call",
+                "init",
+                serde_json::json!({"session": session}),
+            ));
         }
     }
 
-    /// Put the sight line on the first or last block of the anchor's round.
-    pub(super) fn align(&mut self, last: bool) {
-        let Some(slot) = self.anchor_slot() else {
-            return;
-        };
-        let Idx::Fixed(num) = slot else {
-            return;
-        };
-        let Some(block) = self.block_near(num, true) else {
-            return;
-        };
-        let Some(turn) = self.turn_of(block) else {
-            return;
-        };
-        if !last {
-            self.focus(Focus::Round(turn));
-            return;
+    /// One receipt's rows.
+    pub(in crate::ui::tui::zone::main) fn want_blocks(&self, ranges: &[[i64; 2]]) {
+        if let Some(session) = self.session {
+            self.shared.mail.send(Frame::new(
+                "call",
+                "blocks",
+                serde_json::json!({"session": session, "ranges": ranges}),
+            ));
         }
-        let id = {
-            let rounds = self.structure.rounds();
-            let Some(round) = rounds.iter().find(|round| round.id == turn) else {
-                return;
-            };
-            round.ranges.iter().flat_map(|[lo, hi]| *lo..=*hi).max()
-        };
-        if let Some(id) = id {
-            self.focus_block(id, false);
-        }
-    }
-
-    /// The oldest round's head.
-    pub(super) fn first(&mut self) {
-        if let Some(turn) = self.structure.rounds().last().map(|round| round.id) {
-            self.focus(Focus::Round(turn));
-        }
-    }
-
-    /// One scroll by rows: the screen moves, and the direction it moved stays stocked.
-    pub(super) fn scroll(&mut self, older: bool, rows: usize) {
-        let height = usize::from(self.height).max(1);
-        let missing = self.with_draw(|local, run, range, opts| {
-            let missing = range.scroll(run, local, opts, height, older, rows);
-            // The run's reach moved with the screen; the walk reads it now, not next draw.
-            let reach = run.reach();
-            local.set_reach(reach);
-            missing
-        });
-        self.look_ahead(older, missing);
     }
 }
 
@@ -746,7 +418,7 @@ impl HistoryZone {
 
 impl SubZone for HistoryZone {
     fn claims(&self) -> &'static [Claim] {
-        CLAIMS
+        keys::CLAIMS
     }
 
     fn kinds(&self) -> &'static [Kind] {
@@ -757,11 +429,9 @@ impl SubZone for HistoryZone {
         self.rev
     }
 
-    fn deliver_event(&mut self, frame: &Frame, _size: TermSize) -> Vec<Request> {
+    fn deliver_event(&mut self, frame: &Frame, _size: TermSize) {
         wire::read_frame(self, frame);
-        let out = self.take_requests();
         self.bump();
-        out
     }
 
     fn deliver_action(&mut self, action: &Action) -> bool {
@@ -785,55 +455,7 @@ impl SubZone for HistoryZone {
                 true
             }
             Action::Paste(_) => false,
-            Action::Key(key) => match key.code {
-                KeyCode::Char('t') if key.mods.ctrl => {
-                    self.thinking = !self.thinking;
-                    self.local.drop_products();
-                    self.run.clear();
-                    true
-                }
-                KeyCode::Char('o') if key.mods.ctrl => {
-                    self.tool = !self.tool;
-                    self.local.drop_products();
-                    self.run.clear();
-                    true
-                }
-                KeyCode::Up if key.mods.ctrl => {
-                    self.step_slot(true);
-                    true
-                }
-                KeyCode::Down if key.mods.ctrl => {
-                    self.step_slot(false);
-                    true
-                }
-                KeyCode::PageUp if key.mods.ctrl => {
-                    self.first();
-                    true
-                }
-                KeyCode::PageDown if key.mods.ctrl => {
-                    self.range.follow();
-                    true
-                }
-                KeyCode::PageUp => {
-                    let rows = usize::from(self.height);
-                    self.scroll(true, rows);
-                    true
-                }
-                KeyCode::PageDown => {
-                    let rows = usize::from(self.height);
-                    self.scroll(false, rows);
-                    true
-                }
-                KeyCode::Home if key.mods.ctrl && key.mods.shift => {
-                    self.align(false);
-                    true
-                }
-                KeyCode::End if key.mods.ctrl && key.mods.shift => {
-                    self.align(true);
-                    true
-                }
-                _ => false,
-            },
+            Action::Key(key) => keys::press(self, *key),
         };
         if handled {
             self.ensure_around();
@@ -842,29 +464,26 @@ impl SubZone for HistoryZone {
         handled
     }
 
-    fn attach(&mut self, _session: i64, _size: TermSize) {
+    fn attach(&mut self, session: i64, _size: TermSize) {
+        self.session = Some(session);
         self.destroy();
         self.needs_layout = true;
         self.range.follow();
         for key in CONFIG_KEYS {
-            self.outbox.push(Request::Config {
-                key: (*key).to_string(),
-            });
+            self.want(key);
         }
         // A restored session shows the newest compaction's aftermath, if that is still where
         // the gauge stands.
         self.ask = Some(Ask::Attach);
-        self.outbox.push(Request::Usage);
+        self.ask_init();
+        self.ask_meta();
+        self.bill();
         self.bump();
     }
 
     fn detach(&mut self) {
+        self.session = None;
         self.destroy();
-        self.bump();
-    }
-
-    fn structure(&mut self, snapshot: &Turns) {
-        wire::apply_structure(self, snapshot);
         self.bump();
     }
 

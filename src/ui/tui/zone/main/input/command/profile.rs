@@ -24,5 +24,6 @@ pub fn run(call: &Call<'_>) -> Done {
         "" => None,
         text => Some(text.to_string()),
     };
-    Done::Profile(name)
+    call.draft.set_profile(name.clone());
+    Done::Notice(Notice::Profile(name))
 }

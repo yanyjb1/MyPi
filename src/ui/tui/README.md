@@ -9,7 +9,7 @@ The terminal front end: ratatui + crossterm on top of `ui::session`.
 | line | carries | goes to |
 |---|---|---|
 | action | a key, a paste, a wheel notch | the zone that claimed it |
-| frame | `kind`, `name`, `content` | the showing zone, if it declared the kind |
+| frame | `kind`, `name`, `payload` | the showing zone, if it declared the kind |
 | local | the app's own facts (resize, focus, session loss) | the showing zone, unconditional |
 | shout | `name`, `content` | every other zone of the chat area |
 
@@ -77,7 +77,7 @@ is painted, so a color change costs one repaint and nothing else.
 
 ```text
 resize?  -> local / resized
-pump     -> session.forward() -> deliver
+pump     -> session.receive() -> a reply to its writer, a push to the showing zone
 draw     -> the showing zone's rows and cursor
 poll     -> one action or one focus change
 ```

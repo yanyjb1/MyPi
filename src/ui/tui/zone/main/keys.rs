@@ -1,90 +1,48 @@
-//! The chat zone's key table: which seat consumes which input.
-//!
-//! Rows come from the sub-zones: each hands over its own claims, so nobody else names
-//! another seat's keys. Borrowed rows (the reserved zone's hand) sit in front of the static
-//! ones and are checked first.
+//! The keys each seat claims: the two static tables, and the rows a hand holds right now.
 
 use crate::ui::tui::action::Action;
 use crate::ui::tui::zone::{Claim, matches};
 
-/// Which sub-zone consumes an input. `Main` owns this: no other level needs it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Seat {
-    History,
-    Input,
-    Reserved,
+/// The reserved seat sits after the two static ones.
+const RESERVED: usize = 2;
+
+/// History and input, in seat order, plus the keys a hand has borrowed.
+pub struct Keys {
+    lent: &'static [Claim],
+    seats: [&'static [Claim]; 2],
 }
 
-/// The static table: each sub-zone's own claims, in seat order.
-const TABLE: &[(Seat, &[Claim])] = &[
-    (Seat::History, super::history::zone::CLAIMS),
-    (Seat::Input, super::input::InputZone::CLAIMS),
-    (Seat::Reserved, super::reserved::ReservedZone::CLAIMS),
-];
-
-/// Panics when two seats claim the same input: the three sub-zones are one zone.
-pub fn check() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        for (i, (seat, claims)) in TABLE.iter().enumerate() {
-            for (other, theirs) in TABLE.iter().skip(i + 1) {
-                for claim in claims.iter() {
-                    assert!(
-                        !theirs.iter().any(|held| held == claim),
-                        "{seat:?} and {other:?} claim the same input"
-                    );
-                }
-            }
+impl Default for Keys {
+    fn default() -> Self {
+        Self {
+            lent: &[],
+            seats: [&[], &[]],
         }
-    });
+    }
 }
 
-/// Who claims this action: borrowed rows first, then the static table.
-pub fn resolve(a: &Action, borrowed: &Borrowed) -> Option<Seat> {
-    borrowed.resolve(a).or_else(|| {
-        TABLE
-            .iter()
-            .find(|(_, claims)| claims.iter().any(|claim| matches(claim, a)))
-            .map(|(seat, _)| *seat)
-    })
-}
-
-/// Rows handed over at run time, checked before the static table.
-#[derive(Debug, Default)]
-pub struct Borrowed {
-    rows: Vec<(Claim, Seat)>,
-}
-
-impl Borrowed {
-    /// Who holds this action among the borrowed rows.
-    pub fn resolve(&self, a: &Action) -> Option<Seat> {
-        self.rows
-            .iter()
-            .find(|(claim, _)| matches(claim, a))
-            .map(|(_, seat)| *seat)
+impl Keys {
+    pub fn new(seats: [&'static [Claim]; 2]) -> Self {
+        Self { lent: &[], seats }
     }
 
-    /// Record a loan. Same seat, same claims: nothing moves.
-    pub fn lend(&mut self, claims: &[Claim], seat: Seat) {
-        if self.rows.iter().filter(|(_, held)| *held == seat).count() == claims.len()
-            && claims
-                .iter()
-                .zip(self.rows.iter().filter(|(_, held)| *held == seat))
-                .all(|(want, (have, _))| want == have)
-        {
-            return;
+    /// A hand takes the desk: its keys go to it and to nobody else.
+    pub fn lend(&mut self, claims: &'static [Claim]) {
+        self.lent = claims;
+    }
+
+    /// The desk is empty: every borrowed key goes back.
+    pub fn release(&mut self) {
+        self.lent = &[];
+    }
+
+    /// The one seat this action belongs to, by declaration.
+    pub fn seat(&self, a: &Action) -> Option<usize> {
+        if self.lent.iter().any(|claim| matches(claim, a)) {
+            return Some(RESERVED);
         }
-        self.release(seat);
-        self.rows.extend(claims.iter().map(|c| (*c, seat)));
-    }
-
-    /// Return every key this seat borrowed.
-    pub fn release(&mut self, seat: Seat) {
-        self.rows.retain(|(_, held)| *held != seat);
-    }
-
-    /// Drop every loan.
-    pub fn clear(&mut self) {
-        self.rows.clear();
+        self.seats
+            .iter()
+            .position(|claims| claims.iter().any(|claim| matches(claim, a)))
     }
 }

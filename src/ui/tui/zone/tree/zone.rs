@@ -2,15 +2,14 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::ui::tui::zone::{
-    Claim, Frame, Kind, Memo, Outcome, Request, TermSize, Turns, Zone, ZoneId,
+    Claim, Frame, Kind, Local, Memo, Outcome, Shared, Structure, TermSize, Zone, ZoneId,
 };
 
 use super::rows::Row;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
-use crate::ui::tui::theme::Accent;
 
 /// No modifiers held.
 const PLAIN: Mods = Mods {
@@ -34,6 +33,7 @@ const CHERISH_KEY: &str = "config.ui.tui.zone.tree.cherishYourWords";
 pub struct Node {
     pub kind: String,
     pub text: String,
+
     /// The block's own text when it is a user message.
     pub body: Option<String>,
 }
@@ -86,23 +86,28 @@ fn short_kind(kind: &str) -> &str {
 }
 
 pub struct TreeZone {
+    shared: Shared,
     size: Option<TermSize>,
-    structure: Turns,
+    session: Option<i64>,
+    structure: Structure,
     blocks: BTreeMap<i64, Node>,
     rows: Vec<Row>,
     selected: usize,
     scroll: usize,
     only_user: bool,
+
     /// Shift+Enter rewinds instead of looking: `config.ui.tui.zone.tree.cherishYourWords`.
     cherish: bool,
+
     /// The cursor has found the newest block once; after that it stays where the reader put it.
     landed: bool,
-    /// The live accent, broadcast as a local frame.
-    accent: Accent,
+
     /// The id ranges asked for and not yet answered.
     asking: HashSet<[i64; 2]>,
+
     /// The rows are stale and must be rebuilt before the next draw.
     stale: bool,
+
     /// Bumped whenever this zone's rows would differ.
     rev: u64,
 }
@@ -110,8 +115,10 @@ pub struct TreeZone {
 impl Default for TreeZone {
     fn default() -> Self {
         Self {
+            shared: Shared::default(),
             size: None,
-            structure: Turns::default(),
+            session: None,
+            structure: Structure::default(),
             blocks: BTreeMap::new(),
             rows: Vec::new(),
             selected: 0,
@@ -119,7 +126,6 @@ impl Default for TreeZone {
             only_user: false,
             cherish: false,
             landed: false,
-            accent: Accent::default(),
             asking: HashSet::new(),
             stale: true,
             rev: 0,
@@ -185,9 +191,9 @@ impl TreeZone {
     }
 
     /// Ask for the blocks the window shows and does not hold yet.
-    fn wanted(&mut self) -> Vec<Request> {
+    fn wanted(&mut self) {
         if self.rows.is_empty() {
-            return Vec::new();
+            return;
         }
         let body = self.body().max(1);
         self.settle_scroll(body);
@@ -215,18 +221,23 @@ impl TreeZone {
             .into_iter()
             .filter(|range| self.asking.insert(*range))
             .collect();
+        let Some(session) = self.session else {
+            return;
+        };
         if fresh.is_empty() {
-            Vec::new()
-        } else {
-            vec![Request::Blocks { ranges: fresh }]
+            return;
         }
+        self.shared.mail.send(Frame::new(
+            "call",
+            "blocks",
+            json!({"session": session, "ranges": fresh}),
+        ));
     }
 
     /// The structural range this block belongs to.
     fn span_of(&self, id: i64) -> Option<(i64, i64)> {
         self.structure
-            .rounds()
-            .iter()
+            .turns()
             .flat_map(|round| round.ranges.iter())
             .find(|[lo, hi]| *lo <= id && id <= *hi)
             .map(|[lo, hi]| (*lo, *hi))
@@ -269,22 +280,25 @@ impl TreeZone {
     }
 
     /// The page is entered: the rows are rebuilt from scratch.
-    fn enter(&mut self, size: TermSize, _memo: &Memo) -> Vec<Request> {
+    fn enter(&mut self, size: TermSize, _memo: &Memo) {
         self.size = Some(size);
         self.stale = true;
         self.landed = false;
         self.asking.clear();
         self.sync();
-        vec![
-            Request::Structure,
-            Request::Init,
-            Request::Config {
-                key: CHERISH_KEY.to_string(),
-            },
-        ]
+        let Some(session) = self.session else {
+            return;
+        };
+        for letter in [
+            Frame::new("call", "init", json!({"session": session})),
+            Frame::new("call", "config", json!({"key": CHERISH_KEY})),
+        ] {
+            self.shared.mail.send(letter);
+        }
     }
 
-    fn follow(&mut self, id: Option<i64>) -> Vec<Request> {
+    fn follow(&mut self, id: Option<i64>) {
+        self.session = id;
         if id.is_none() {
             self.structure.clear();
             self.blocks.clear();
@@ -294,48 +308,48 @@ impl TreeZone {
             self.only_user = false;
             self.stale = true;
         }
-        Vec::new()
     }
 
-    fn read(&mut self, frame: &Frame) -> Vec<Request> {
+    fn read(&mut self, frame: &Frame) {
         match (frame.kind.as_str(), frame.name.as_str()) {
-            ("call", "init") | ("call", "blocks") => {
-                if let Some(rows) = frame.content.get("blocks") {
+            ("call", "init") => {
+                if let Some(snapshot) = frame.payload.get("structure") {
+                    self.structure = Structure::of(snapshot);
+                    self.asking.clear();
+                    self.stale = true;
+                }
+                if let Some(rows) = frame.payload.get("blocks") {
                     self.merge(rows);
                 }
                 self.sync();
-                return self.wanted();
+                self.wanted();
+            }
+            ("call", "blocks") => {
+                if let Some(rows) = frame.payload.get("blocks") {
+                    self.merge(rows);
+                }
+                self.sync();
+                self.wanted();
             }
             ("call", "config") => {
-                if frame.content.get("key").and_then(Value::as_str) == Some(CHERISH_KEY) {
+                if frame.payload.get("key").and_then(Value::as_str) == Some(CHERISH_KEY) {
                     self.cherish = frame
-                        .content
+                        .payload
                         .get("value")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                 }
             }
             ("local", "resized") => {
-                if let Some(size) = TermSize::of(&frame.content) {
+                if let Some(size) = TermSize::of(&frame.payload) {
                     self.size = Some(size);
-                }
-            }
-            ("local", "accent") => {
-                if let Some(accent) = frame
-                    .content
-                    .get("color")
-                    .and_then(Value::as_str)
-                    .and_then(Accent::parse)
-                {
-                    self.accent = accent;
                 }
             }
             _ => {}
         }
-        Vec::new()
     }
 
-    fn act(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
+    fn act(&mut self, action: &Action) -> (Outcome, Vec<Local>) {
         self.sync();
         match action {
             Action::ScrollUp { shift } => self.move_by(if *shift { -10 } else { -1 }),
@@ -356,12 +370,19 @@ impl TreeZone {
                 KeyCode::Enter => {
                     let rewind = key.mods.shift == self.cherish;
                     if rewind {
-                        if let Some(row) = self.rows.get(self.selected) {
-                            let request = Request::Rewind {
-                                turn: row.turn,
-                                block: row.block_id,
-                            };
-                            return (self.handover(), vec![request]);
+                        if let Some(row) = self.rows.get(self.selected)
+                            && let Some(session) = self.session
+                        {
+                            let content = json!({
+                                "name": "rewind",
+                                "content": {
+                                    "session": session,
+                                    "turn": row.turn,
+                                    "block": row.block_id,
+                                },
+                            });
+                            self.shared.mail.send(Frame::new("post", "meta", content));
+                            return (self.handover(), Vec::new());
                         }
                     } else {
                         return (self.handover_focusing(), Vec::new());
@@ -371,19 +392,16 @@ impl TreeZone {
                 _ => {}
             },
         }
-        (Outcome::Stay, self.wanted())
-    }
-
-    fn take_structure(&mut self, snapshot: &Turns) -> Vec<Request> {
-        self.structure = snapshot.clone();
-        self.stale = true;
-        self.asking.clear();
-        self.sync();
-        self.wanted()
+        self.wanted();
+        (Outcome::Stay, Vec::new())
     }
 }
 
 impl Zone for TreeZone {
+    fn bind(&mut self, shared: Shared) {
+        self.shared = shared;
+    }
+
     fn keys(&self) -> Vec<Claim> {
         let key = |mods, code| Claim::Key(Key { code, mods });
         vec![
@@ -407,19 +425,19 @@ impl Zone for TreeZone {
         &[Kind::Call]
     }
 
-    fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request> {
-        let out = self.enter(size, memo);
+    fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Local> {
+        self.enter(size, memo);
         self.bump();
-        out
+        Vec::new()
     }
 
-    fn session(&mut self, id: Option<i64>) -> Vec<Request> {
-        let out = self.follow(id);
+    fn session(&mut self, id: Option<i64>) -> Vec<Local> {
+        self.follow(id);
         self.bump();
-        out
+        Vec::new()
     }
 
-    fn tick(&mut self) -> Vec<Request> {
+    fn tick(&mut self) -> Vec<Local> {
         let before = (self.selected, self.scroll);
         self.sync();
         let body = self.body();
@@ -434,20 +452,14 @@ impl Zone for TreeZone {
         self.rev
     }
 
-    fn event(&mut self, frame: &Frame) -> Vec<Request> {
-        let out = self.read(frame);
+    fn event(&mut self, frame: &Frame) -> Vec<Local> {
+        self.read(frame);
         self.bump();
-        out
+        Vec::new()
     }
 
-    fn action(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
+    fn action(&mut self, action: &Action) -> (Outcome, Vec<Local>) {
         let out = self.act(action);
-        self.bump();
-        out
-    }
-
-    fn structure(&mut self, snapshot: &Turns) -> Vec<Request> {
-        let out = self.take_structure(snapshot);
         self.bump();
         out
     }
@@ -458,7 +470,7 @@ impl Zone for TreeZone {
             self.selected,
             self.size,
             &mut self.scroll,
-            &self.accent,
+            &self.shared.palette.get(),
         )
     }
 }

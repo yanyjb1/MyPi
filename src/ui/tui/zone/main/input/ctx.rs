@@ -66,7 +66,7 @@ pub struct Context {
 }
 
 /// Everything the editor, the statusline and the desk's hands read.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Data {
     /// The model's display name; `None` while the config has not answered.
     pub model: Option<String>,
@@ -77,9 +77,9 @@ pub struct Data {
     /// The model's address, `<provider>:<model>`.
     pub address: Option<String>,
     /// How hard this session asks the model to think; memory-only, `Auto` by default.
-    pub effort: crate::ui::session::Effort,
+    pub effort: String,
     /// The rungs the model declares; empty means it takes no effort.
-    pub efforts: Vec<crate::ui::session::Effort>,
+    pub efforts: Vec<String>,
     /// The conversation's name; a draft session shows its directory instead.
     pub name: Option<String>,
     /// Where the conversation runs.
@@ -100,6 +100,29 @@ pub struct Data {
     pub auto_prepare: bool,
     /// A round is running.
     pub busy: bool,
+}
+
+impl Default for Data {
+    fn default() -> Self {
+        Data {
+            model: None,
+            provider: None,
+            lang: Lang::default(),
+            address: None,
+            effort: "auto".to_string(),
+            efforts: Vec::new(),
+            name: None,
+            cwd: String::new(),
+            temporary: false,
+            context: Context::default(),
+            baseline: None,
+            limit: 0,
+            money: Money::default(),
+            git_scan: None,
+            auto_prepare: false,
+            busy: false,
+        }
+    }
 }
 
 impl Data {

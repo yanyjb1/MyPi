@@ -5,13 +5,13 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::command::{self, Call, Done};
-use super::exit::ExitRequest;
 use super::notice::Notice;
 use super::queue::Outgoing;
 use super::route::{self, Route};
 use super::zone::InputZone;
 use crate::ui::command::CommandMeta;
-use crate::ui::tui::zone::{Request, Shout, name};
+use crate::ui::tui::zone::Frame;
+use crate::ui::tui::zone::{Shout, name};
 
 /// Two Enter presses this close together: the second one interrupts the round.
 const ENTER_WINDOW: Duration = Duration::from_millis(600);
@@ -33,8 +33,11 @@ impl InputZone {
                     .enter_armed
                     .take()
                     .is_some_and(|at| at.elapsed() < ENTER_WINDOW)
+                && let Some(session) = self.session
             {
-                self.pending_exits.push(ExitRequest::Interrupt);
+                self.shared
+                    .mail
+                    .send(Frame::new("post", "interrupt", json!({"session": session})));
                 return true;
             }
             return false;
@@ -64,16 +67,16 @@ impl InputZone {
             session: self.session,
             cwd: &self.data.cwd,
             efforts: &self.data.efforts,
+            draft: &self.draft,
         };
         match command::run(meta, &call) {
-            Done::Write { request, notice } => self.wrote(request, notice),
+            Done::Write(write) => self.wrote(write),
             Done::Submit { prefix, text } => {
                 self.leave(prefix, text);
                 return;
             }
             Done::Exit(exit) => self.pending_exits.push(exit),
             Done::Hire(who) => self.pending_hire = Some(who),
-            Done::Profile(profile) => self.outbox.push(Request::PickProfile(profile)),
             Done::Notice(notice) => self.say(&notice),
             Done::Hold => return,
         }
@@ -87,16 +90,31 @@ impl InputZone {
         self.finished = true;
     }
 
-    /// One write leaves: its notice waits for the receipt of that door.
-    fn wrote(&mut self, request: Request, notice: Notice) {
-        if let Request::Rename(name) = &request {
-            self.pending_name = Some(name.clone());
+    /// One write leaves: what settles here settles now; the two doors the server must settle wait for their receipt.
+    fn wrote(&mut self, write: command::Write) {
+        match &write.effect {
+            Some(super::super::desk::Effect::Rename(name)) => {
+                self.data.name = name.clone();
+                // A session's own name repaints the whole front end; a draft has none to repaint.
+                if self.session.is_some() {
+                    self.shared.palette.shift();
+                }
+            }
+            Some(super::super::desk::Effect::Switch(address)) => {
+                self.model(address);
+            }
+            Some(super::super::desk::Effect::Effort(effort)) => self.data.effort = effort.clone(),
+            None => {}
         }
-        match door_of(&request) {
-            Some(door) => self.pending_notice.push_back(Waiting { door, notice }),
-            None => self.say(&notice),
+        self.shared.mail.send(write.letter.clone());
+        match door_of(&write.letter.name) {
+            Some(door) => self.pending_notice.push_back(Waiting {
+                door,
+                notice: write.notice,
+            }),
+            None => self.say(&write.notice),
         }
-        self.outbox.push(request);
+        self.bump();
     }
 
     /// One line for the history zone.
@@ -110,7 +128,7 @@ impl InputZone {
 
     /// One write answered: the notice speaks only if the write landed. A draft's default
     /// model is the one it just wrote, so the pill follows the notice.
-    pub(super) fn receipt(&mut self, door: &str, content: &Value, out: &mut Vec<Request>) {
+    pub(super) fn receipt(&mut self, door: &str, content: &Value) {
         let Some(at) = self
             .pending_notice
             .iter()
@@ -122,6 +140,8 @@ impl InputZone {
             return;
         };
         if content.get("error").is_some() {
+            // The write did not land, and the user is owed the reason: a refusal spoken nowhere is a silence.
+            self.say_refused(content);
             return;
         }
         if door == "compact" {
@@ -130,8 +150,7 @@ impl InputZone {
         if let Notice::Default(id) = &wait.notice
             && self.session.is_none()
         {
-            let address = format!("{}:{}", id.provider, id.model);
-            self.model(&address, out);
+            self.model(id);
         }
         self.say(&wait.notice);
     }
@@ -139,8 +158,11 @@ impl InputZone {
     /// A sentence sent while a round runs: the slot takes it, the round is untouched.
     fn enqueue(&mut self, prefix: Option<String>, text: String) {
         self.take_line();
-        if let Some(request) = self.queue.push(Outgoing::new(prefix, text)) {
-            self.outbox.push(request);
+        let Some(session) = self.session else {
+            return;
+        };
+        if let Some(letter) = self.queue.push(Outgoing::new(prefix, text), session) {
+            self.shared.mail.send(letter);
         }
         self.shouts
             .push(Shout::new(name::QUEUE, json!({"count": self.queue.len()})));
@@ -149,16 +171,24 @@ impl InputZone {
 
     /// A sentence sent while nothing runs: it opens a turn.
     fn send(&mut self, prefix: Option<String>, text: String) {
-        if self.session.is_none() {
-            // This line opens the session: the structure that answers `init` is not a second primer.
-            self.opening_sent = true;
-        }
-        self.pending_exits.push(ExitRequest::Submit {
-            prefix,
-            text: text.clone(),
-        });
-        self.in_flight = Some(text);
         self.take_line();
+        self.in_flight = Some(text.clone());
+        // The server never echoes a writer's own letter: history draws it from here, at once.
+        self.shouts
+            .push(Shout::new(name::ECHO, json!({"text": text})));
+        let Some(session) = self.session else {
+            // The row does not exist yet: it is opened with this text, which follows it.
+            self.pending_open = Some((prefix, text));
+            self.opening_sent = true;
+            let letter = self.draft.opening();
+            self.shared.mail.send(letter);
+            return;
+        };
+        self.shared.mail.send(Frame::new(
+            "subscribe",
+            "submit",
+            json!({"session": session, "prefix": prefix, "text": text}),
+        ));
         self.data.busy = true;
         self.shouts
             .push(Shout::new(name::BUSY, json!({"on": true})));
@@ -184,12 +214,8 @@ impl InputZone {
 
     /// The reply to a submit that opened nothing: the sentence comes back, and says why.
     pub(super) fn refused(&mut self, content: &Value) {
-        let reason = content
-            .get("error")
-            .and_then(|error| error.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("the session is still in a turn")
-            .to_string();
+        let reason = crate::ui::lang::refused(self.data.lang, content)
+            .unwrap_or_else(|| "the session is still in a turn".to_string());
         self.shouts
             .push(Shout::new(name::RETRACT, json!({"reason": reason})));
         if let Some(text) = self.in_flight.take() {
@@ -197,14 +223,26 @@ impl InputZone {
         }
     }
 
+    /// A write the server refused: one line, and nothing to retract.
+    pub(super) fn say_refused(&mut self, content: &Value) {
+        let reason = crate::ui::lang::refused(self.data.lang, content)
+            .unwrap_or_else(|| "the write was refused".to_string());
+        self.say(&Notice::Refused(reason));
+    }
+
     /// The server took the slot: the head left the queue, and the next one takes the slot.
-    pub(super) fn opened(&mut self) -> Vec<Request> {
+    pub(super) fn opened(&mut self) {
         // A turn just opened: the box is busy before its first piece arrives.
         self.data.busy = true;
         self.shouts
             .push(Shout::new(name::BUSY, json!({"on": true})));
-        let (taken, request) = self.queue.took();
-        let out: Vec<Request> = request.into_iter().collect();
+        let Some(session) = self.session else {
+            return;
+        };
+        let (taken, letter) = self.queue.took(session);
+        if let Some(letter) = letter {
+            self.shared.mail.send(letter);
+        }
         self.shouts
             .push(Shout::new(name::QUEUE, json!({"count": self.queue.len()})));
         if let Some(msg) = taken {
@@ -213,19 +251,14 @@ impl InputZone {
                 json!({"text": msg.text, "prefix": msg.prefix, "suffix": msg.suffix}),
             ));
         }
-        out
     }
 }
 
 /// The door whose receipt a write waits for.
-fn door_of(request: &Request) -> Option<&'static str> {
-    match request {
-        Request::SetCwd(_) => Some("cwd"),
-        Request::Rename(_) => Some("name"),
-        Request::SwitchModel(_) => Some("switch"),
-        Request::SetDefaultModel(_) => Some("default_model"),
-        Request::SetEffort(_) => Some("effort"),
-        Request::Compact { .. } => Some("compact"),
+fn door_of(name: &str) -> Option<&'static str> {
+    match name {
+        "default_model" => Some("default_model"),
+        "compact" => Some("compact"),
         _ => None,
     }
 }

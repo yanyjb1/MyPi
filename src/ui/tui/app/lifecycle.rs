@@ -1,6 +1,9 @@
-//! Session attachment: the data first, then the zone that shows.
+//! Session attachment: the connection first, then the zone that shows.
+
+use serde_json::json;
 
 use super::App;
+use crate::ui::tui::zone::{Frame, ZoneId};
 
 impl App {
     /// Enter a conversation: follow it, watch it, then tell the zone that shows.
@@ -9,23 +12,27 @@ impl App {
             return;
         }
         self.session.attach(id);
-        // A resumed conversation stands where it was started, whatever row it carried.
-        let cwd = self.cwd.to_string_lossy().to_string();
-        self.session.set_cwd(&cwd);
-        self.session.watch(id);
+        self.session
+            .send(Frame::new("subscribe", "watch", json!({"session": id})));
+        self.flush();
         self.attached = Some(id);
-        self.profile = None;
-        self.name = None;
+        self.zones[ZoneId::Main.index()].draft_cleared();
         self.reset_memo();
         self.tell();
     }
 
-    /// Leave the conversation. The zone that shows hears it.
+    /// Leave the conversation: the queued message goes, then the watch.
     pub fn detach(&mut self) {
+        self.flush();
+        if let Some(id) = self.attached {
+            self.session
+                .send(Frame::new("post", "mailbox", json!({"session": id})));
+            self.asking.push_back(None);
+        }
         self.session.detach();
+        self.session
+            .send(Frame::new("subscribe", "watch", json!({"session": null})));
         self.attached = None;
-        self.profile = None;
-        self.name = None;
         self.reset_memo();
         self.tell();
     }
@@ -40,7 +47,7 @@ impl App {
             return;
         }
         self.told[index] = Some(self.attached);
-        let requests = self.zones[index].session(self.attached);
-        self.land_all(requests);
+        let locals = self.zones[index].session(self.attached);
+        self.land_all(locals);
     }
 }

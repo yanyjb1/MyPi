@@ -7,11 +7,12 @@ use crate::ipc::contract::Frame;
 use crate::ipc::endpoint::Endpoint;
 
 use super::down::Down;
-use super::structure::Structure;
+use super::structure::{Structure, ranges_of};
 use super::up::Up;
 
 pub struct Session {
-    id: i64,
+    // The conversation this connection follows; `None` until a row exists.
+    attached: Option<i64>,
     up: Up,
     down: Down,
     // Set once the read half dies, so the front end hears it once.
@@ -19,22 +20,29 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn open(endpoint: Endpoint, id: i64) -> Result<Session> {
+    pub fn open(endpoint: Endpoint, id: Option<i64>) -> Result<Session> {
         Ok(Session {
-            id,
+            attached: id,
             up: Up::connect(endpoint)?,
             down: Down::default(),
             shut: false,
         })
     }
 
-    pub fn id(&self) -> i64 {
-        self.id
+    // Follow one conversation; the window the last one showed goes with it.
+    pub fn attach(&mut self, id: i64) {
+        self.attached = Some(id);
+        self.down.structure_mut().clear();
+    }
+
+    pub fn detach(&mut self) {
+        self.attached = None;
+        self.down.structure_mut().clear();
     }
 
     pub fn send(&self, mut frame: Frame) {
-        if let Some(object) = frame.payload.as_object_mut() {
-            object.insert("session".to_string(), json!(self.id));
+        if let (Some(id), Some(object)) = (self.attached, frame.payload.as_object_mut()) {
+            object.insert("session".to_string(), json!(id));
         }
         self.up.send(frame);
     }
@@ -71,10 +79,8 @@ impl Session {
             }
             return;
         }
-        if let Some(rounds) = content.get("structure").and_then(Value::as_array) {
-            for round in rounds {
-                self.round(round);
-            }
+        if let Some(snapshot) = content.get("structure").filter(|value| value.is_array()) {
+            *self.down.structure_mut() = Structure::of(snapshot);
             return;
         }
         self.round(content);
@@ -95,17 +101,4 @@ impl Session {
             .structure_mut()
             .update(Some(turn), &ranges, compact);
     }
-}
-
-// A round's ranges: `[[lo, hi], …]`.
-fn ranges_of(value: &Value) -> Option<Vec<[i64; 2]>> {
-    let mut out = Vec::new();
-    for item in value.as_array()? {
-        let pair = item.as_array()?;
-        if pair.len() != 2 {
-            return None;
-        }
-        out.push([pair[0].as_i64()?, pair[1].as_i64()?]);
-    }
-    Some(out)
 }

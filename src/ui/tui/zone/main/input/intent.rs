@@ -6,7 +6,8 @@ use super::editor::{Editor, Effect};
 use super::semantics;
 use super::zone::InputZone;
 use crate::ui::tui::text::Wrapped;
-use crate::ui::tui::zone::{Request, Shout, name};
+use crate::ui::tui::zone::Frame;
+use crate::ui::tui::zone::{Shout, name};
 
 impl InputZone {
     /// Apply one intent: editor actions drive the editor, the rest the history ring.
@@ -70,9 +71,13 @@ impl InputZone {
             }
             I::TakeBack => {
                 // The newest queued sentence comes back above whatever is already in the box.
-                let (taken, request) = self.queue.pop();
-                if let Some(request) = request {
-                    self.outbox.push(request);
+                let session = match self.session {
+                    Some(session) => session,
+                    None => return false,
+                };
+                let (taken, letter) = self.queue.pop(session);
+                if let Some(letter) = letter {
+                    self.shared.mail.send(letter);
                 }
                 self.shouts.push(Shout::new(
                     name::QUEUE,
@@ -96,11 +101,24 @@ impl InputZone {
                 Effect::Content
             }
             I::CycleEffort => {
-                // A draft has no session to hold the rung, and a wire that names none cannot take it.
-                if self.session.is_some() && self.data.takes_effort() {
-                    self.outbox.push(Request::SetEffort(
-                        self.data.effort.next(&self.data.efforts),
-                    ));
+                // The rung lands here and now, like every meta write; a model that names none takes nothing.
+                if self.data.takes_effort() {
+                    let rungs: Vec<&str> = std::iter::once("auto")
+                        .chain(self.data.efforts.iter().map(String::as_str))
+                        .collect();
+                    let at = rungs
+                        .iter()
+                        .position(|r| *r == self.data.effort.as_str())
+                        .unwrap_or(0);
+                    let next = rungs[(at + 1) % rungs.len()].to_string();
+                    self.data.effort = next.clone();
+                    if let Some(session) = self.session {
+                        let content = serde_json::json!({
+                            "name": "effort",
+                            "content": {"session": session, "effort": next},
+                        });
+                        self.shared.mail.send(Frame::new("post", "meta", content));
+                    }
                 }
                 Effect::Nothing
             }

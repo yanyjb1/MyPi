@@ -17,7 +17,7 @@ mod table;
 mod usage;
 mod wants;
 
-pub use call::{Call, Done};
+pub use call::{Call, Done, Write};
 pub(crate) use prepare::payload;
 pub use table::{TABLE, lookup, pair, run, split};
 pub use wants::{slot, wants};

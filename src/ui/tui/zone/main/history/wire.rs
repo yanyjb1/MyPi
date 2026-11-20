@@ -3,16 +3,17 @@
 use serde_json::{Value, json};
 
 use super::focus::Target;
+use super::live::Ask;
 use super::local::content::{Block, Kind as BlockKind, Truncation, items_of};
 use super::local::mutable::Entry;
 use super::local::section::Idx;
 use super::local::slot::{Level, Life};
 use super::product::Task;
-use super::zone::{Ask, HistoryZone};
+use super::zone::HistoryZone;
 
 use crate::ui::lang::Lang;
 use crate::ui::tui::TodoFold;
-use crate::ui::tui::zone::{Frame, Request, Round, Shout, Turns, name};
+use crate::ui::tui::zone::{Frame, Shout, Structure, name};
 
 /// One frame, decided by its class and name.
 pub(super) fn read_frame(zone: &mut HistoryZone, frame: &Frame) {
@@ -20,24 +21,24 @@ pub(super) fn read_frame(zone: &mut HistoryZone, frame: &Frame) {
         ("stream", _) => read_stream(zone, frame),
         ("call", "init") => {
             // The wire orders rounds oldest first; a position is laid newest first.
-            if let Some(snapshot) = frame.content.get("structure").and_then(turns_of) {
-                apply_structure(zone, &snapshot);
+            if let Some(snapshot) = frame.payload.get("structure") {
+                apply_structure(zone, &Structure::of(snapshot));
             }
-            if let Some(rows) = frame.content.get("blocks") {
+            if let Some(rows) = frame.payload.get("blocks") {
                 take_blocks(zone, rows);
             }
-            if let Some(todo) = frame.content.get("todo") {
+            if let Some(todo) = frame.payload.get("todo") {
                 take_todo(zone, todo);
             }
         }
         ("call", "blocks") => {
-            if let Some(rows) = frame.content.get("blocks") {
+            if let Some(rows) = frame.payload.get("blocks") {
                 take_blocks(zone, rows);
             }
         }
-        ("call", "config") => read_config(zone, &frame.content),
-        ("call", "usage") => read_usage(zone, &frame.content),
-        ("local", "opened") => read_opened(zone, &frame.content),
+        ("call", "config") => read_config(zone, &frame.payload),
+        ("call", "usage") => read_usage(zone, &frame.payload),
+        ("local", "opened") => read_opened(zone, &frame.payload),
         _ => {}
     }
 }
@@ -61,24 +62,21 @@ fn read_opened(zone: &mut HistoryZone, content: &Value) {
 }
 
 fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
-    let content = &frame.content;
+    let content = &frame.payload;
     match frame.name.as_str() {
         "notice" => {
-            let level = match content.get("level").and_then(Value::as_str) {
+            let said = content.get("text").cloned().unwrap_or(Value::Null);
+            let level = match said.get("kind").and_then(Value::as_str) {
                 Some("error") => Level::Error,
-                Some("warn") => Level::Warn,
+                Some("warning") => Level::Warn,
                 _ => Level::Info,
             };
-            let text = content
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
             let life = if level == Level::Error {
                 Life::Long
             } else {
                 Life::Short
             };
+            let text = crate::ui::lang::sentence(zone.lang, &said);
             zone.notice(text, level, life);
         }
         "signal" => {
@@ -90,7 +88,7 @@ fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
                 // session no longer has, and nothing may stay exempt from the budget for them.
                 zone.pending = None;
                 zone.asking.clear();
-                zone.outbox.push(Request::Structure);
+                zone.ask_init();
             }
             if matches!(field, Some("user") | Some("mailbox")) {
                 match content.get("text").and_then(Value::as_str) {
@@ -272,10 +270,18 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
         .get("ranges")
         .and_then(ranges_of)
         .unwrap_or_default();
+    // The receipt is the whole round: its own structure, read here and nowhere else.
+    if let Some(turn) = content.get("turn").and_then(Value::as_i64) {
+        let marked = content
+            .get("compact")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        zone.structure.update(Some(turn), &ranges, marked);
+    }
     if ranges.is_empty() {
         zone.local.drop_turn();
         zone.run.clear();
-        zone.outbox.push(Request::Structure);
+        zone.ask_init();
     } else {
         // A call that did not finish cleanly states why in the row the turn kept, not in the stream.
         let failed = has_failure(zone);
@@ -284,7 +290,7 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
             if failed {
                 ask_blocks(zone, &ranges);
             }
-            zone.outbox.push(Request::Structure);
+            zone.ask_init();
         } else {
             // The running turn does not line up with the receipt: the receipt is the truth, so
             // its rows are fetched and handed over once they are all in hand.
@@ -342,9 +348,7 @@ fn ask_blocks(zone: &mut HistoryZone, ranges: &[[i64; 2]]) {
     for range in ranges {
         zone.asking.insert(*range);
     }
-    zone.outbox.push(Request::Blocks {
-        ranges: ranges.to_vec(),
-    });
+    zone.want_blocks(ranges);
 }
 
 /// Finish a waiting close once the receipt's rows are all in hand.
@@ -366,7 +370,7 @@ fn settle_pending(zone: &mut HistoryZone) {
     zone.busy = false;
     zone.shouts
         .push(Shout::new(name::BUSY, json!({"on": false})));
-    zone.outbox.push(Request::Structure);
+    zone.ask_init();
 }
 
 /// Decode a `blocks` array: every row carries its id and takes the slot that id owns.
@@ -459,7 +463,7 @@ fn read_config(zone: &mut HistoryZone, content: &Value) {
     };
     let number = content.get("value").and_then(Value::as_u64);
     match key {
-        "config.ui.lang" => {
+        Lang::KEY => {
             if let Some(lang) = content
                 .get("value")
                 .and_then(Value::as_str)
@@ -523,10 +527,10 @@ fn read_config(zone: &mut HistoryZone, content: &Value) {
 }
 
 /// The structural window arrived.
-pub(super) fn apply_structure(zone: &mut HistoryZone, snapshot: &Turns) {
+pub(super) fn apply_structure(zone: &mut HistoryZone, snapshot: &Structure) {
     zone.settle_dirty();
     zone.structure = snapshot.clone();
-    let empty = zone.structure.rounds().is_empty();
+    let empty = zone.structure.turns().next().is_none();
     if zone.needs_layout && !empty {
         zone.needs_layout = false;
         // A section that already holds this session's own blocks was laid out by its receipts.
@@ -546,7 +550,7 @@ pub(super) fn apply_structure(zone: &mut HistoryZone, snapshot: &Turns) {
 fn drop_stale_focus(zone: &mut HistoryZone) {
     let stale = match zone.pending_focus {
         Some(Target::Block { id, .. }) => !zone.structure.owns(id),
-        Some(Target::Round(turn)) => !zone.structure.rounds().iter().any(|round| round.id == turn),
+        Some(Target::Round(turn)) => !zone.structure.turns().any(|round| round.id == turn),
         Some(Target::Position { idx, .. }) => match idx {
             Idx::Fixed(_) => zone.local.slot(idx).is_none(),
             Idx::Turn(at) => at as usize >= zone.local.running().len(),
@@ -560,12 +564,11 @@ fn drop_stale_focus(zone: &mut HistoryZone) {
 
 /// Lay the whole structure out as the past, newest block at -1.
 fn lay_out(zone: &mut HistoryZone) {
-    let turns = zone.structure.rounds();
-    if turns.is_empty() {
+    if zone.structure.turns().next().is_none() {
         return;
     }
     let mut ids: Vec<i64> = Vec::new();
-    for turn in turns.iter().rev() {
+    for turn in zone.structure.turns().rev() {
         for [lo, hi] in &turn.ranges {
             ids.extend(*lo..=*hi);
         }
@@ -593,22 +596,6 @@ fn drop_unowned(zone: &mut HistoryZone) {
         zone.shouts
             .push(Shout::new(name::PREFILL, json!({"text": text})));
     }
-}
-
-/// An `init` answer's `structure`: one `{turn, ranges, compact}` per round, oldest first on the wire.
-fn turns_of(value: &Value) -> Option<Turns> {
-    let mut rounds = Vec::new();
-    for item in value.as_array()? {
-        let id = item.get("turn").and_then(Value::as_i64)?;
-        let ranges = item.get("ranges").and_then(ranges_of)?;
-        let compact = item
-            .get("compact")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        rounds.push(Round::new(id, ranges, compact));
-    }
-    rounds.reverse();
-    Some(Turns::of(rounds))
 }
 
 /// A frame's ranges: `[[lo, hi], …]`.

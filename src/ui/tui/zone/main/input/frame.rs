@@ -4,90 +4,75 @@ use serde_json::Value;
 
 use super::boot::{AUTO_PREPARE_KEY, DEFAULT_MODEL_KEY, FX_CURRENCY_KEY, GIT_SCAN_KEY, LANG_KEY};
 use super::ctx::{Context, Currency};
-use super::notice::{NO_EFFORT_EN, Notice};
+use super::notice::Notice;
 use super::zone::InputZone;
 use crate::ui::lang::Lang;
-use crate::ui::tui::zone::{Frame, Request, Shout, SubZone, name};
+use crate::ui::tui::zone::{Frame, Shout, name};
 
 impl InputZone {
     /// One frame answer the zone reads for itself.
-    pub(super) fn read_frame(&mut self, frame: &Frame) -> Vec<Request> {
-        let mut out = Vec::new();
+    pub(super) fn read_frame(&mut self, frame: &Frame) {
         match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "init") => {
-                self.read_init(&frame.content);
+                self.read_init(&frame.payload);
             }
             ("call", "meta") => {
-                self.read_meta(&frame.content, &mut out);
+                self.read_meta(&frame.payload);
             }
             ("call", "config") => {
-                self.read_config(&frame.content);
+                self.read_config(&frame.payload);
             }
             ("call", "usage") => {
-                self.read_usage(&frame.content);
+                self.read_usage(&frame.payload);
             }
-            ("post", "cwd") => {
-                self.receipt("cwd", &frame.content, &mut out);
-                self.read_cwd(&frame.content);
-            }
-            ("local", "cwd") => {
-                self.receipt("cwd", &frame.content, &mut out);
-                match frame
-                    .content
-                    .get("error")
-                    .and_then(|error| error.get("path"))
-                {
-                    // A draft's own refusal: the path stayed where it was, so say why.
-                    Some(path) => self.say(&Notice::NoDir(
-                        path.as_str().unwrap_or_default().to_string(),
-                    )),
-                    None => self.read_cwd(&frame.content),
+            ("post", "meta") => {
+                // A meta write's own answer: only a refusal has anything to say.
+                if frame.payload.get("error").is_some() {
+                    self.say_refused(&frame.payload);
                 }
             }
-            ("post", "name") | ("local", "name") => {
-                self.receipt("name", &frame.content, &mut out);
-                self.read_name(&frame.content);
+            ("local", "cwd") => {
+                // A draft's own refusal: the path stayed where it was, so say why.
+                if let Some(path) = frame
+                    .payload
+                    .get("error")
+                    .and_then(|error| error.get("path"))
+                    .and_then(Value::as_str)
+                {
+                    self.say(&Notice::NoDir(path.to_string()));
+                }
             }
-            ("post", "switch") | ("local", "switch") => {
-                self.receipt("switch", &frame.content, &mut out);
-                self.read_switch(&frame.content, &mut out);
-            }
-            ("post", "effort") => {
-                self.receipt("effort", &frame.content, &mut out);
-                self.read_effort(&frame.content);
+            ("local", "refused") => {
+                // The row never opened: the sentence that opened it comes back.
+                self.refused(&frame.payload);
             }
             ("post", "default_model") => {
-                self.receipt("default_model", &frame.content, &mut out);
+                self.receipt("default_model", &frame.payload);
             }
             ("subscribe", "compact") => {
-                self.receipt("compact", &frame.content, &mut out);
+                self.receipt("compact", &frame.payload);
             }
             ("subscribe", "submit") => {
-                if frame.content.get("error").is_some() {
-                    self.refused(&frame.content);
+                if frame.payload.get("error").is_some() {
+                    self.refused(&frame.payload);
                 } else {
                     self.in_flight = None;
                 }
             }
             _ => {}
         }
-        out
     }
 
     /// The session's opening word: the effort is memory-only, so this is the one place a
     /// fresh front end learns it.
     fn read_init(&mut self, content: &Value) {
-        if let Some(effort) = content
-            .get("effort")
-            .and_then(Value::as_str)
-            .and_then(crate::ui::session::Effort::parse)
-        {
-            self.data.effort = effort;
+        if let Some(effort) = content.get("effort").and_then(Value::as_str) {
+            self.data.effort = effort.to_ascii_lowercase();
         }
     }
 
     /// The session row: name, and the model its widgets follow.
-    fn read_meta(&mut self, row: &Value, out: &mut Vec<Request>) {
+    fn read_meta(&mut self, row: &Value) {
         if let Some(name) = row.get("name").and_then(Value::as_str) {
             self.data.name = Some(name.to_string());
         }
@@ -101,45 +86,21 @@ impl InputZone {
         if self.data.address.as_deref() == Some(address.as_str()) {
             return;
         }
-        self.model(&address, out);
-    }
-
-    /// One `/name` receipt: the name it asked for lands when the write did.
-    fn read_name(&mut self, content: &Value) {
-        let name = self.pending_name.take();
-        if content.get("error").is_none()
-            && let Some(name) = name
-        {
-            self.data.name = name;
-        }
-    }
-
-    /// One model switch: the server answers with the row's new facts, a draft with the
-    /// address itself.
-    fn read_switch(&mut self, content: &Value, out: &mut Vec<Request>) {
-        if content.get("error").is_some() {
-            return;
-        }
-        match content.get("address").and_then(Value::as_str) {
-            Some(address) => self.model(address, out),
-            None => out.push(Request::Meta),
-        }
+        self.model(&address);
     }
 
     /// The model whose facts the widgets follow: the entry, and the wire behind it.
-    pub(super) fn model(&mut self, address: &str, out: &mut Vec<Request>) {
+    pub(super) fn model(&mut self, address: &str) {
         // A model change drops the rung: the new model declares its own, and `Auto` is the one
         // state every model shares.
         if self.data.address.is_some() {
-            self.data.effort = crate::ui::session::Effort::Auto;
+            self.data.effort = "auto".to_string();
         }
         self.data.address = Some(address.to_string());
         self.data.model = None;
         self.data.limit = 0;
         self.data.efforts.clear();
-        out.push(Request::Config {
-            key: format!("models.model.{address}"),
-        });
+        self.want(&format!("models.model.{address}"));
     }
 
     /// One config answer: the statusline's own keys, and the running model's facts.
@@ -156,9 +117,7 @@ impl InputZone {
                     .and_then(Value::as_str)
                     .filter(|address| !address.is_empty())
             {
-                let mut out = Vec::new();
-                self.model(address, &mut out);
-                self.outbox.extend(out);
+                self.model(address);
             }
             return;
         }
@@ -207,28 +166,6 @@ impl InputZone {
         }
     }
 
-    /// One `/effort` receipt: the rung lands when the write did. A refusal speaks first, in
-    /// `receipt`, so the pill only follows a write that landed.
-    fn read_effort(&mut self, content: &Value) {
-        // The one refusal this door has is a host whose wire names no effort; anything else is
-        // the server's own words, which it repeats rather than guessing at.
-        if let Some(error) = content.get("error") {
-            match error.get("message").and_then(Value::as_str) {
-                Some(NO_EFFORT_EN) => self.say(&Notice::NoEffort),
-                Some(message) => self.say(&Notice::Refused(message.to_string())),
-                None => self.say(&Notice::NoEffort),
-            }
-            return;
-        }
-        if let Some(effort) = content
-            .get("effort")
-            .and_then(Value::as_str)
-            .and_then(crate::ui::session::Effort::parse)
-        {
-            self.data.effort = effort;
-        }
-    }
-
     /// The model's entry: the pill's text and the gauge's denominator.
     fn read_model(&mut self, address: &str, value: Option<&Value>) {
         if self.data.address.as_deref() != Some(address) {
@@ -255,8 +192,8 @@ impl InputZone {
             .map(|list| {
                 list.iter()
                     .filter_map(Value::as_str)
-                    .filter_map(crate::ui::session::Effort::parse)
-                    .filter(|rung| *rung != crate::ui::session::Effort::Auto)
+                    .map(|rung| rung.trim().to_ascii_lowercase())
+                    .filter(|rung| rung != "auto")
                     .collect()
             })
             .unwrap_or_default();
@@ -283,15 +220,5 @@ impl InputZone {
                 .unwrap_or(false),
         };
         self.data.baseline = content.get("baseline_prompt").and_then(Value::as_u64);
-    }
-
-    /// The write landed: the workspace is the one the server resolved, and everyone hears it.
-    fn read_cwd(&mut self, content: &Value) {
-        let Some(path) = content.get("cwd").and_then(Value::as_str) else {
-            return;
-        };
-        let content = serde_json::json!({ "path": path, "temporary": false });
-        self.hear(name::CWD, &content);
-        self.shouts.push(Shout::new(name::CWD, content));
     }
 }

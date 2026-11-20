@@ -3,15 +3,17 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::super::desk::Hire;
 use super::super::geometry;
 use super::super::pane::Pane;
 use super::boot::DEFAULT_MODEL_KEY;
 use super::ctx::{Ctx, Data};
+use super::draft::Draft;
 use super::editor::{Editor, History};
 use super::exit::ExitRequest;
+use super::notice::Notice;
 use super::queue::Queue;
 use super::render;
 use super::semantics;
@@ -19,72 +21,106 @@ use super::statusline::{StatusLine, StatusTheme};
 use super::submit::Waiting;
 use crate::ui::tui::action::{Action, KeyCode};
 use crate::ui::tui::theme::Accent;
-use crate::ui::tui::zone::{Claim, Frame, Kind, Request, Shout, SubZone, TermSize, Turns, name};
+use crate::ui::tui::zone::Frame;
+use crate::ui::tui::zone::{Claim, Kind, Shared, Shout, SubZone, TermSize, name};
 
 /// The input sub-zone. Its height comes from its own content.
 pub struct InputZone {
+    /// The post box and the palette every zone shares.
+    pub(super) shared: Shared,
+
+    /// The draft a session opens with; only this zone keeps one.
+    pub(super) draft: Draft,
+
     /// Input viewport start (wrapped row). Independent of the cursor.
     pub scroll: usize,
+
     /// The height it declares: editor rows + statusline + border.
     pub rows: u16,
+
     /// The editor itself: text, cursor, undo.
     pub editor: Editor,
+
     /// Input history: an in-memory ring, 20 entries, never stored.
     pub history: History,
+
     /// Idle and rewinding: the box is empty, so ↑↓ walks the history.
     pub finished: bool,
+
     /// The cursor sits in a trigger word: the condition for lending keys.
     pub hang: bool,
+
     /// The hand to hire, produced here and taken by the zone.
     pub(super) pending_hire: Option<Hire>,
+
     /// The last ↑↓ goal column, carried for `Editor::up` / `down`.
     pub goal_col: Option<usize>,
+
     /// Exit requests, in order: taken by the main zone.
     pub(super) pending_exits: Vec<ExitRequest>,
+
     /// Sentences sent while a round was running, head first.
     pub(super) queue: Queue,
+
     /// The sentence a submit put out, kept only until its reply says it opened nothing.
     pub(super) in_flight: Option<String>,
+
+    /// The message whose opening `post init` is out; it leaves as soon as the row answers.
+    pub(super) pending_open: Option<(Option<String>, String)>,
     /// A preparation waits for this session's first message, or the first after a compaction.
     pub(super) prepare_pending: bool,
+
     /// The structure snapshot of this attachment has been read.
-    struct_seen: bool,
+    pub(super) struct_seen: bool,
+
     /// The newest compaction round this attachment has seen.
-    last_compact: Option<i64>,
+    pub(super) last_compact: Option<i64>,
+
     /// The line that opens a draft is out: the structure that answers `init` is not a second primer.
     pub(super) opening_sent: bool,
+
     /// When the last un-lent Esc fired: another one inside the window opens the tree.
     pub(super) esc_armed: Option<Instant>,
+
     /// When a sentence last entered the mailbox: the next Enter interrupts.
     pub(super) enter_armed: Option<Instant>,
+
     /// Notices waiting for the receipt that says their write landed.
     pub(super) pending_notice: VecDeque<Waiting>,
+
     /// The cursor's absolute terminal column, border included.
     pub cursor_col: u16,
+
     /// The cursor's row inside the container (0 = the statusline row).
     pub cursor_row: u16,
+
     /// The statusline: the top edge of the container and its own deco table.
     pub statusline: StatusLine,
+
     /// The session this zone follows; `None` = a draft.
     pub(super) session: Option<i64>,
+
     /// The startup questions were asked; one answer per run is enough.
     pub(super) booted: bool,
+
     /// The terminal size from this round's arbitration.
     pub(super) term: TermSize,
+
     /// What the parts read.
     pub(super) data: Data,
-    /// The name a `/name` asked for, kept until its receipt comes back.
-    pub(super) pending_name: Option<Option<String>>,
+
     /// Events this zone puts out.
     pub(super) shouts: Vec<Shout>,
-    /// Frames this zone owes the session.
-    pub(super) outbox: Vec<Request>,
+
     /// Bumped whenever this zone's rows would differ.
     rev: u64,
+
     /// The editor text wrapped at the width it was last laid at.
     view: crate::ui::tui::text::Wrapped,
+
     /// The `(columns, edit generation)` `view` was wrapped from.
     view_key: (usize, u64),
+
     /// Bumped on every edit: the wrap follows it.
     pub(super) wrap_gen: u64,
 }
@@ -92,6 +128,8 @@ pub struct InputZone {
 impl Default for InputZone {
     fn default() -> Self {
         Self {
+            shared: Shared::default(),
+            draft: Draft::default(),
             scroll: 0,
             rows: 0,
             editor: Editor::new(),
@@ -103,6 +141,7 @@ impl Default for InputZone {
             pending_exits: Vec::new(),
             queue: Queue::default(),
             in_flight: None,
+            pending_open: None,
             prepare_pending: true,
             struct_seen: false,
             last_compact: None,
@@ -117,9 +156,7 @@ impl Default for InputZone {
             booted: false,
             term: TermSize { cols: 80, rows: 24 },
             data: Data::default(),
-            pending_name: None,
             shouts: Vec::new(),
-            outbox: Vec::new(),
             rev: 0,
             view: crate::ui::tui::text::Wrapped::default(),
             view_key: (0, 0),
@@ -137,14 +174,46 @@ impl InputZone {
         self.pending_hire.take()
     }
 
-    /// Frames this zone asked the session for.
-    pub fn take_requests(&mut self) -> Vec<Request> {
-        std::mem::take(&mut self.outbox)
-    }
-
-    /// The exits waiting to be turned into requests.
+    /// The exits waiting to be turned into asks.
     pub fn take_exits(&mut self) -> Vec<ExitRequest> {
         std::mem::take(&mut self.pending_exits)
+    }
+
+    /// The shared handles arrive once, at boot.
+    pub(in crate::ui::tui::zone::main) fn bind(&mut self, shared: Shared) {
+        self.shared = shared;
+    }
+
+    pub fn draft_moved(&mut self, cwd: &str) {
+        self.draft.moved(cwd.into());
+    }
+
+    pub fn draft_cleared(&mut self) {
+        self.draft.clear();
+    }
+
+    pub fn draft_cwd(&self) -> Option<String> {
+        Some(self.draft.cwd().to_string_lossy().into_owned())
+    }
+
+    pub fn draft_set_model(&mut self, model: &str) {
+        self.draft.set_model(model.to_string());
+    }
+
+    /// One configuration key.
+    pub(super) fn want(&self, key: &str) {
+        self.shared
+            .mail
+            .send(Frame::new("call", "config", json!({"key": key})));
+    }
+
+    /// The session's bill: the server is the only party that knows it.
+    pub(super) fn bill(&self) {
+        if let Some(session) = self.session {
+            self.shared
+                .mail
+                .send(Frame::new("call", "usage", json!({"session": session})));
+        }
     }
 
     /// One frame for the statusline: a deco with work of its own runs it here.
@@ -224,9 +293,9 @@ impl InputZone {
     }
 
     /// One signal: a field this zone follows changed.
-    fn signal(&mut self, content: &Value, out: &mut Vec<Request>) {
+    fn signal(&mut self, content: &Value) {
         if let Some(address) = content.get("model").and_then(Value::as_str) {
-            self.model(address, out);
+            self.model(address);
         }
         if let Some(name) = content.get("name") {
             self.data.name = name.as_str().map(str::to_string);
@@ -247,11 +316,10 @@ impl SubZone for InputZone {
         self.rev
     }
 
-    fn deliver_event(&mut self, frame: &Frame, size: TermSize) -> Vec<Request> {
+    fn deliver_event(&mut self, frame: &Frame, size: TermSize) {
         self.term = size;
-        let out = self.read_frame(frame);
+        self.read_frame(frame);
         self.bump();
-        out
     }
 
     /// Esc first (a lent-away Esc never arrives here), then the intent table.
@@ -259,29 +327,6 @@ impl SubZone for InputZone {
         let consumed = self.act(a);
         self.bump();
         consumed
-    }
-
-    /// The structural window: a session with no rounds is new, and a newer compaction round
-    /// means the terms left the history and go back in front of the next message.
-    fn structure(&mut self, snapshot: &Turns) {
-        let latest = snapshot
-            .rounds()
-            .iter()
-            .filter(|round| round.compact)
-            .map(|round| round.id)
-            .max();
-        if !self.struct_seen {
-            self.struct_seen = true;
-            let newest = snapshot.rounds().first().is_some_and(|round| round.compact);
-            self.prepare_pending = !self.opening_sent && (snapshot.is_empty() || newest);
-            self.opening_sent = false;
-            self.last_compact = latest;
-            return;
-        }
-        if latest > self.last_compact {
-            self.prepare_pending = true;
-        }
-        self.last_compact = latest;
     }
 
     fn attach(&mut self, session: i64, _size: TermSize) {
@@ -295,11 +340,25 @@ impl SubZone for InputZone {
         self.prepare_pending = false;
         self.struct_seen = false;
         self.last_compact = None;
-        self.pending_name = None;
         self.queue.clear();
         self.in_flight = None;
         self.pending_notice.clear();
-        self.outbox.push(Request::Usage);
+        // The line that opened this row was waiting for its id.
+        if let Some((prefix, text)) = self.pending_open.take() {
+            self.in_flight = Some(text.clone());
+            // `history.attach` wiped the rows: the line that opened this one is drawn again here.
+            self.shouts
+                .push(Shout::new(name::ECHO, json!({"text": text.clone()})));
+            self.shared.mail.send(Frame::new(
+                "subscribe",
+                "submit",
+                json!({"session": session, "prefix": prefix, "text": text}),
+            ));
+            self.data.busy = true;
+            self.shouts
+                .push(Shout::new(name::BUSY, json!({"on": true})));
+        }
+        self.bill();
         self.bump();
     }
 
@@ -314,7 +373,6 @@ impl SubZone for InputZone {
         self.hang = false;
         self.esc_armed = None;
         self.enter_armed = None;
-        self.pending_name = None;
         self.editor.clear();
         self.wrap_gen = self.wrap_gen.wrapping_add(1);
         self.history.exit();
@@ -324,9 +382,7 @@ impl SubZone for InputZone {
         self.queue.clear();
         self.in_flight = None;
         self.pending_notice.clear();
-        self.outbox.push(Request::Config {
-            key: DEFAULT_MODEL_KEY.to_string(),
-        });
+        self.want(DEFAULT_MODEL_KEY);
         self.bump();
     }
 
@@ -343,12 +399,15 @@ impl SubZone for InputZone {
                     if let Some(temporary) = content.get("temporary").and_then(Value::as_bool) {
                         self.data.temporary = temporary;
                     }
+                    if content.get("fallback").and_then(Value::as_bool) == Some(true) {
+                        self.say(&Notice::CwdFallback);
+                    }
                     self.notify(event, content);
                 }
             }
             name::USAGE => {
                 // A request landed: the answer is the server's to give, live figures and all.
-                self.outbox.push(Request::Usage);
+                self.bill();
             }
             name::TICK => {
                 self.notify(event, content);
@@ -362,18 +421,15 @@ impl SubZone for InputZone {
                 self.data.busy = content.get("on").and_then(Value::as_bool).unwrap_or(false);
                 if !self.data.busy {
                     self.enter_armed = None;
-                    self.outbox.push(Request::Usage);
+                    self.bill();
                 }
                 self.notify(event, content);
             }
             name::MAILBOX => {
-                let out = self.opened();
-                self.outbox.extend(out);
+                self.opened();
             }
             name::SIGNAL => {
-                let mut out = Vec::new();
-                self.signal(content, &mut out);
-                self.outbox.extend(out);
+                self.signal(content);
             }
             _ => {}
         }

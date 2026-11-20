@@ -5,16 +5,15 @@ mod hands;
 mod pools;
 
 use ratatui::text::{Line, Span};
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use super::desk::{Hire, Reply};
+use super::desk::{Hire, MemoAsk, Reply};
 use super::pane::Pane;
+use crate::ui::lang::Lang;
 use crate::ui::tui::action::Action;
 use crate::ui::tui::theme::Accent;
-use crate::ui::tui::zone::SubZone;
-use crate::ui::tui::zone::{Claim, Frame, Kind, MemoAsk, Request, TermSize, name};
+use crate::ui::tui::zone::{Claim, Frame, Kind, Local, Shared, SubZone, TermSize, name};
 
-use crate::ui::lang::Lang;
 use crate::ui::tui::zone::main::input::Currency;
 
 use hand::{Hand, IDLE_ROWS, MAX_ROWS, Report};
@@ -29,20 +28,34 @@ pub struct ReservedZone {
     completion: hands::completion::CompletionService,
     usage: hands::usage::UsagePanel,
     memo: hands::memo::MemoHand,
+
+    /// The post box, the palette and the draft every zone shares.
+    shared: Shared,
+
+    /// The conversation this zone follows; `None` = a draft.
+    session: Option<i64>,
+
     /// Who is on duty now.
     on_duty: Option<Hire>,
+
     /// The report taken the first frame after arrival: height and keys frozen here.
     report: Option<Report>,
+
     /// Rows the desk allocated this frame.
     want: u16,
+
     /// A reply for the editor, waiting for the zone to take it.
     reply: Option<Reply>,
+
     /// The workspace: the launch directory until a conversation reports its own.
     cwd: String,
+
     /// Sentences waiting in the slot, as the input zone counts them.
     queued: usize,
-    /// Frames this zone owes the session.
-    outbox: Vec<Request>,
+
+    /// What the desk wants the app itself to do.
+    locals: Vec<Local>,
+
     /// Bumped whenever this zone's rows would differ.
     rev: u64,
 }
@@ -53,6 +66,38 @@ impl ReservedZone {
 
     fn bump(&mut self) {
         self.rev = self.rev.wrapping_add(1);
+    }
+
+    /// One memo ask, as the two doors spell it.
+    fn memo_ask(&self, ask: &MemoAsk) {
+        let scope = ask.scope().as_str();
+        match ask {
+            MemoAsk::List => {
+                self.shared.mail.send(Frame::new(
+                    "call",
+                    "memo",
+                    json!({"session": self.session, "op": "list"}),
+                ));
+            }
+            MemoAsk::History { name, .. } => {
+                let content =
+                    json!({"session": self.session, "op": "history", "scope": scope, "name": name});
+                self.shared.mail.send(Frame::new("call", "memo", content));
+            }
+            MemoAsk::Add { name, content, .. } => {
+                let body = json!({"session": self.session, "op": "add", "scope": scope, "name": name, "content": content});
+                self.shared.mail.send(Frame::new("post", "memo", body));
+            }
+            MemoAsk::Mod { name, content, .. } => {
+                let body = json!({"session": self.session, "op": "mod", "scope": scope, "name": name, "content": content});
+                self.shared.mail.send(Frame::new("post", "memo", body));
+            }
+            MemoAsk::Del { name, .. } => {
+                let body =
+                    json!({"session": self.session, "op": "del", "scope": scope, "name": name});
+                self.shared.mail.send(Frame::new("post", "memo", body));
+            }
+        }
     }
 
     /// One key, when a hand is on duty. A hand that answers hands its reply to the editor.
@@ -85,9 +130,9 @@ impl ReservedZone {
         if let (Some(Hire::Memo(_)), Hire::Memo(ask)) = (self.on_duty.clone(), &who) {
             self.memo.ask(ask);
             if !matches!(ask, MemoAsk::List) {
-                self.outbox.push(Request::Memo(MemoAsk::List));
+                self.memo_ask(&MemoAsk::List);
             }
-            self.outbox.push(Request::Memo(ask.clone()));
+            self.memo_ask(ask);
             return;
         }
         if self.on_duty == Some(who.clone()) {
@@ -99,20 +144,32 @@ impl ReservedZone {
         self.on_duty = Some(who.clone());
         self.report = None;
         match &who {
-            Hire::Completion => self.outbox.push(Request::Pools),
+            Hire::Completion => {
+                self.shared.mail.send(Frame::new(
+                    "call",
+                    "pools",
+                    json!({"session": self.session, "cwd": self.cwd}),
+                ));
+            }
             Hire::Usage => {
-                self.outbox.push(Request::Usage);
-                self.outbox.push(Request::Config {
-                    key: hands::usage::ALIGN_KEY.to_string(),
-                });
+                if let Some(session) = self.session {
+                    self.shared
+                        .mail
+                        .send(Frame::new("call", "usage", json!({"session": session})));
+                }
+                self.shared.mail.send(Frame::new(
+                    "call",
+                    "config",
+                    json!({"key": hands::usage::ALIGN_KEY}),
+                ));
             }
             // The list comes first: the height is read off it, the ask lands after.
             Hire::Memo(ask) => {
                 self.memo.ask(ask);
                 if !matches!(ask, MemoAsk::List) {
-                    self.outbox.push(Request::Memo(MemoAsk::List));
+                    self.memo_ask(&MemoAsk::List);
                 }
-                self.outbox.push(Request::Memo(ask.clone()));
+                self.memo_ask(ask);
             }
         }
         self.hand(&who).arrived();
@@ -157,17 +214,17 @@ impl ReservedZone {
         self.reply.take()
     }
 
-    /// Frames this zone asked the session for.
-    pub fn take_requests(&mut self) -> Vec<Request> {
-        std::mem::take(&mut self.outbox)
+    /// The asks this zone owes the front end itself.
+    pub fn take_locals(&mut self) -> Vec<Local> {
+        std::mem::take(&mut self.locals)
     }
 
-    /// What the memo hand asked for, as requests.
+    /// What the memo hand asked for.
     fn drain_memo(&mut self) {
         for out in self.memo.drain() {
             match out {
-                hands::memo::Out::Ask(ask) => self.outbox.push(Request::Memo(ask)),
-                hands::memo::Out::Copy(text) => self.outbox.push(Request::Copy(text)),
+                hands::memo::Out::Ask(ask) => self.memo_ask(&ask),
+                hands::memo::Out::Copy(text) => self.locals.push(Local::Copy(text)),
             }
         }
     }
@@ -226,29 +283,32 @@ impl SubZone for ReservedZone {
         self.report.map(|r| r.keys).unwrap_or(&[])
     }
 
-    fn deliver_event(&mut self, frame: &Frame, _size: TermSize) -> Vec<Request> {
+    fn deliver_event(&mut self, frame: &Frame, _size: TermSize) {
         match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "pools") => {
-                let pools = Pools::of(&frame.content);
+                let pools = Pools::of(&frame.payload);
                 if let Some(who) = self.on_duty.clone() {
                     self.hand(&who).pools(&pools);
                 }
             }
             ("call", "usage") => {
-                let asks = self.usage.take(&frame.content);
-                self.outbox.extend(asks);
+                for key in self.usage.take(&frame.payload) {
+                    self.shared
+                        .mail
+                        .send(Frame::new("call", "config", json!({"key": key})));
+                }
             }
             ("call", "memo") => {
-                self.memo.read(&frame.content);
+                self.memo.read(&frame.payload);
                 self.drain_memo();
             }
             ("post", "memo") => {
-                self.memo.wrote(&frame.content);
+                self.memo.wrote(&frame.payload);
                 self.drain_memo();
             }
             ("call", "config") => {
-                if frame.content.get("key").and_then(Value::as_str) == Some(hands::usage::ALIGN_KEY)
-                    && let Some(name) = frame.content.get("value").and_then(Value::as_str)
+                if frame.payload.get("key").and_then(Value::as_str) == Some(hands::usage::ALIGN_KEY)
+                    && let Some(name) = frame.payload.get("value").and_then(Value::as_str)
                     && let Some(align) = hands::usage::Align::parse(name)
                 {
                     self.usage.set_align(align);
@@ -256,14 +316,12 @@ impl SubZone for ReservedZone {
             }
             ("stream", _) | ("local", _) => {
                 if let Some(who) = self.on_duty.clone() {
-                    self.hand(&who).on_event("stream", &frame.content);
+                    self.hand(&who).on_event("stream", &frame.payload);
                 }
             }
             _ => {}
         }
-        let out = self.take_requests();
         self.bump();
-        out
     }
 
     fn deliver_action(&mut self, a: &Action) -> bool {
@@ -273,7 +331,8 @@ impl SubZone for ReservedZone {
         consumed
     }
 
-    fn attach(&mut self, _session: i64, _size: TermSize) {
+    fn attach(&mut self, session: i64, _size: TermSize) {
+        self.session = Some(session);
         self.on_duty = None;
         self.report = None;
         self.reply = None;
@@ -285,6 +344,7 @@ impl SubZone for ReservedZone {
     }
 
     fn detach(&mut self) {
+        self.session = None;
         if let Some(who) = self.on_duty.clone() {
             self.hand(&who).left();
         }
@@ -321,6 +381,7 @@ impl SubZone for ReservedZone {
                 {
                     self.usage.set_lang(lang);
                     self.completion.set_lang(lang);
+                    self.memo.set_lang(lang);
                 }
             }
             name::CURRENCY => {
@@ -341,6 +402,13 @@ impl SubZone for ReservedZone {
             }
         }
         self.bump();
+    }
+}
+
+impl ReservedZone {
+    /// The three shared handles arrive once, at boot.
+    pub(super) fn bind(&mut self, shared: Shared) {
+        self.shared = shared;
     }
 }
 

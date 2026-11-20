@@ -2,8 +2,6 @@
 
 use super::super::zone::HistoryZone;
 
-use crate::ui::tui::zone::Request;
-
 impl HistoryZone {
     /// Stock the direction the reader just moved: the blocks past the screen's edge that hold no
     /// content go out as one ask, together with what the move itself landed on. A direction that
@@ -36,17 +34,12 @@ impl HistoryZone {
         for range in &ranges {
             self.asking.insert(*range);
         }
-        self.outbox.push(Request::Blocks { ranges });
+        self.want_blocks(&ranges);
     }
 
     /// Ask for one round's blocks, unless they are here or already asked for.
     pub(crate) fn ask_turn(&mut self, turn: i64) {
-        let ranges: Vec<[i64; 2]> = match self
-            .structure
-            .rounds()
-            .iter()
-            .find(|round| round.id == turn)
-        {
+        let ranges: Vec<[i64; 2]> = match self.structure.turns().find(|round| round.id == turn) {
             Some(round) => round.ranges.clone(),
             None => return,
         };
@@ -58,17 +51,14 @@ impl HistoryZone {
                 continue;
             }
             self.asking.insert([lo, hi]);
-            self.outbox.push(Request::Blocks {
-                ranges: vec![[lo, hi]],
-            });
+            self.want_blocks(&[[lo, hi]]);
         }
     }
 
     /// The round a block belongs to.
     pub(crate) fn turn_of(&self, block: i64) -> Option<i64> {
         self.structure
-            .rounds()
-            .iter()
+            .turns()
             .find(|round| round.owns(block))
             .map(|round| round.id)
     }
@@ -76,8 +66,7 @@ impl HistoryZone {
     /// One round's block ranges, as the structure names them.
     fn round_ranges(&self, turn: i64) -> Vec<[i64; 2]> {
         self.structure
-            .rounds()
-            .iter()
+            .turns()
             .find(|round| round.id == turn)
             .map(|round| round.ranges.clone())
             .unwrap_or_default()
@@ -92,7 +81,7 @@ impl HistoryZone {
             return;
         };
         let wanted: Vec<i64> = {
-            let rounds = self.structure.rounds();
+            let rounds: Vec<_> = self.structure.turns().collect();
             let Some(at) = rounds.iter().position(|round| round.id == turn) else {
                 return;
             };

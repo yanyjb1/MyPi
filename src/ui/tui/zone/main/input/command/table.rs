@@ -1,7 +1,6 @@
 //! The table: every command file's declaration, the dispatch, and the two lookups.
 
 use crate::ui::command::{self, CommandMeta};
-use crate::ui::session::ModelId;
 
 use super::{
     Call, Done, cdp, compact, effort, memo, model, name, new, prepare, profile, quit, resume,
@@ -56,15 +55,12 @@ pub fn run(meta: &CommandMeta, call: &Call<'_>) -> Done {
     }
 }
 
-/// `provider:model`.
-pub fn pair(args: &str) -> Option<ModelId> {
+/// `provider:model`, both halves non-empty.
+pub fn pair(args: &str) -> Option<(String, String)> {
     let (provider, model) = args.split_once(':')?;
     let (provider, model) = (provider.trim(), model.trim());
     if provider.is_empty() || model.is_empty() {
         return None;
     }
-    Some(ModelId {
-        provider: provider.to_string(),
-        model: model.to_string(),
-    })
+    Some((provider.to_string(), model.to_string()))
 }

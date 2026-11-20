@@ -8,12 +8,15 @@ use std::collections::BTreeMap;
 
 use crate::ui::lang::Lang;
 use crate::ui::tui::action::{Key, KeyCode, Mods};
-use crate::ui::tui::text::{display_width, take_width};
+use crate::ui::tui::text::display_width;
 use crate::ui::tui::theme::{Accent, fixed};
 use crate::ui::tui::zone::Claim;
 use crate::ui::tui::zone::main::input::Currency;
 use crate::ui::tui::zone::main::num;
 use crate::ui::tui::zone::main::reserved::hand::{Hand, Report, window_start};
+
+use super::grid::Grid;
+use super::text;
 
 /// No modifiers held.
 const PLAIN: Mods = Mods {
@@ -178,7 +181,7 @@ pub struct UsagePanel {
 impl UsagePanel {
     /// The view's usage arrived; remember the rows, and ask for the entries
     /// whose display facts the session has not named yet.
-    pub fn take(&mut self, answer: &Value) -> Vec<crate::ui::tui::zone::Request> {
+    pub fn take(&mut self, answer: &Value) -> Vec<String> {
         let Some(groups) = answer.get("groups").and_then(Value::as_array) else {
             return Vec::new();
         };
@@ -200,9 +203,7 @@ impl UsagePanel {
             .iter()
             .chain(self.subs.iter())
             .filter(|row| !self.displays.contains_key(&row.address) && !row.address.is_empty())
-            .map(|row| crate::ui::tui::zone::Request::Config {
-                key: format!("models.model.{}", row.address),
-            })
+            .map(|row| format!("models.model.{}", row.address))
             .collect()
     }
 
@@ -513,39 +514,69 @@ impl UsagePanel {
             false => short,
         };
         vec![
-            clip(&format!("{token_word}: {figure}"), avail),
-            clip(&second, avail),
+            text::clip(&format!("{token_word}: {figure}"), avail),
+            text::clip(&second, avail),
         ]
     }
 
-    /// The head row.
-    fn head(&self, plan: &Plan) -> String {
-        let mut out = left(self.label_head(plan.short), plan.label);
+    /// The numeric columns: width and cell, in the plan's own order.
+    fn columns(&self, plan: &Plan, row: Option<&Row>) -> (Vec<usize>, Vec<String>) {
+        let mut widths = Vec::new();
+        let mut cells = Vec::new();
         for (i, width) in plan.widths.iter().enumerate() {
             let Some(width) = width else {
                 continue;
             };
-            out.push_str(&" ".repeat(GAP));
-            out.push_str(&right(plan.headers[i], *width));
+            widths.push(*width);
+            cells.push(match row {
+                Some(row) => self.cell(row, i, plan.percent),
+                None => plan.headers[i].to_string(),
+            });
         }
-        out
+        (widths, cells)
     }
 
-    /// One model row.
-    fn line(&self, row: &Row, plan: &Plan) -> String {
+    /// The head row.
+    fn head(&self, plan: &Plan, pad: &str) -> Line<'static> {
+        let (mut widths, mut cells) = self.columns(plan, None);
+        widths.insert(0, plan.label);
+        cells.insert(0, self.label_head(plan.short).to_string());
+        let mut right = vec![false];
+        right.resize(cells.len(), true);
+        Grid {
+            widths: &widths,
+            right: &right,
+            gap: GAP,
+            lead: pad.len(),
+        }
+        .head(&cells)
+    }
+
+    /// One model row, accented while the cursor sits on it.
+    fn model_line(
+        &self,
+        row: &Row,
+        plan: &Plan,
+        pad: &str,
+        accent: &Accent,
+        selected: bool,
+    ) -> Line<'static> {
+        let (mut widths, mut cells) = self.columns(plan, Some(row));
         let label = match plan.named {
             true => row.named(),
             false => row.address.clone(),
         };
-        let mut out = left(&label, plan.label);
-        for (i, width) in plan.widths.iter().enumerate() {
-            let Some(width) = width else {
-                continue;
-            };
-            out.push_str(&" ".repeat(GAP));
-            out.push_str(&right(&self.cell(row, i, plan.percent), *width));
+        widths.insert(0, plan.label);
+        cells.insert(0, label);
+        let mut right = vec![false];
+        right.resize(cells.len(), true);
+        Grid {
+            widths: &widths,
+            right: &right,
+            gap: GAP,
+            lead: pad.len(),
         }
-        out
+        .row(&cells, selected, accent)
     }
 
     /// The row's total in the panel's currency.
@@ -599,29 +630,13 @@ impl UsagePanel {
                 Span::styled(word, Style::new().fg(fixed::MUTED)),
             ]));
         } else {
-            out.push(Line::from(format!("{pad}{}", self.head(plan))));
+            out.push(self.head(plan, pad));
             for (i, row) in self.rows.iter().enumerate() {
                 out.push(self.model_line(row, plan, pad, accent, i == self.selected));
             }
         }
         self.section(plan, pad, accent, &mut out);
         out
-    }
-
-    /// One model row, accented while the cursor sits on it.
-    fn model_line(
-        &self,
-        row: &Row,
-        plan: &Plan,
-        pad: &str,
-        accent: &Accent,
-        selected: bool,
-    ) -> Line<'static> {
-        let text = format!("{pad}{}", self.line(row, plan));
-        match selected {
-            true => Line::from(accent.span(text)),
-            false => Line::from(Span::raw(text)),
-        }
     }
 
     /// The subagents' section: the rule, then one row per model under the main table's own
@@ -710,34 +725,6 @@ fn dash(n: usize) -> String {
 /// `-` and spaces, a space first and a dash last.
 fn gap(n: usize) -> String {
     (0..n).map(|i| if i % 2 == 0 { ' ' } else { '-' }).collect()
-}
-
-/// A cell cut to `w` cells, the cut marked.
-fn clip(text: &str, w: usize) -> String {
-    if display_width(text) <= w {
-        return text.to_string();
-    }
-    if w == 0 {
-        return String::new();
-    }
-    let (mut cut, _) = take_width(text, w.saturating_sub(1));
-    cut.push('…');
-    cut
-}
-
-/// A cell left-aligned in `w` cells.
-fn left(text: &str, w: usize) -> String {
-    let mut out = clip(text, w);
-    let pad = w.saturating_sub(display_width(&out));
-    out.push_str(&" ".repeat(pad));
-    out
-}
-
-/// A cell right-aligned in `w` cells.
-fn right(text: &str, w: usize) -> String {
-    let out = clip(text, w);
-    let pad = w.saturating_sub(display_width(&out));
-    format!("{}{out}", " ".repeat(pad))
 }
 
 /// One `groups` row, decoded.

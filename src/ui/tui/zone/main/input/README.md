@@ -19,13 +19,12 @@ finish itself.
 | `hang: bool` | the cursor is in a completion trigger word |
 | `pending_hire` | the hand this zone wants this frame |
 | `pending_exits` | submit, interrupt, tree, resume, quit, new |
-| `pending_notice` | one notice per write, waiting for that write's receipt |
+| `pending_notice` | one notice per `/model` or `/compact`, waiting for its receipt |
 | `esc_armed` / `enter_armed` | the two double-tap windows |
 | `cursor_col`, `cursor_row` | the cursor inside the container, recomputed on render |
 | `statusline: StatusLine` | the deco table and the row engine |
 | `session: Option<i64>` | the conversation this zone follows; `None` = a draft |
 | `data: Data` | model, the rungs it declares, thinking effort, name, directory, context size and window, money, busy |
-| `pending_name` | the name a `/name` asked for, until its receipt |
 | `queue: Queue` | sentences sent while a round was running, head first |
 | `in_flight` | the sentence a submit put out, until the door answers |
 | `prepare_pending` | this session's first message, or the first after a compaction, still owes the preparation |
@@ -36,10 +35,10 @@ finish itself.
 ### Claims
 
 Every key the editor acts on is named: `AnyChar`, `Paste`, `Enter` (plain, alt, shift), `Esc`, `Tab`
-(plain and ctrl), `Backspace` (plain, ctrl, alt), `Delete`, the four arrow keys (plain), `Up` with
+(plain and shift), `Backspace` (plain, ctrl, alt), `Delete`, the four arrow keys (plain), `Up` with
 alt, `Left`/`Right`/`Home`/`End` with ctrl. The history zone is checked first, so `Ctrl+T`, `Ctrl+O`
 and `Ctrl+↑↓` never reach this table. A plain `Tab` belongs to the completion hand while a popup is
-open; `Ctrl+Tab` is the editor's own and steps the thinking effort.
+open; `Shift+Tab` is the editor's own and steps the thinking effort.
 
 ### Editor
 
@@ -63,7 +62,7 @@ Every command is one module under `command/`, and every file declares its `META`
 one `Done`: a write plus the notice it owes, an exit (`/q`, `/resume`, `/new`), a hire (`/usage`),
 the picked profile (`/profile`), a message with the context it built (`/prepare`), a refusal
 notice, or `Hold` when an argument is missing — `Hold` leaves the line in the box and sends
-nothing. A plain message leaves as `ExitRequest::Submit`.
+nothing. A plain message is written into a `subscribe submit` letter where it is typed.
 
 `/prepare` builds the workspace preparation: the directory, one terms file (`AGENTS.md`, else
 `CLAUDE.md`, else `AI.md`), the files an `AI.md` lists under a `prepare` fence, the manifest's four
@@ -72,16 +71,15 @@ only the user's own words. `config.ui.tui.zone.main.input.autoPrepare` (default 
 preparation on a session's first message and on the first message after a compaction; the
 structural window decides both.
 
-`/profile` is refused here once a session id exists. `/name`, `/cdp` and `/switch` work in a draft:
-the app keeps them until the row opens. A draft's `/cdp` lands only on a directory that exists — `~`
+`/effort` work in a draft: each writes the shared draft, and the draft rides the `post init` that
+opens the row. A draft's `/cdp` lands only on a directory that exists — `~`
 expanded, a relative path read from where the draft stands — because the name travels into `init`,
 and a directory that is not there cannot be entered. Anything else is refused and said.
 `/compact` needs a session and is refused in a draft.
-`/effort` sets how hard the session asks the model to think: `auto`, or one of the rungs the model
-declares for itself, this session only. It needs a session too, a model that declares no rung is
-refused here, and a rung the model never declared is refused before the request leaves. `Ctrl+Tab`
-walks those same rungs without a command, and the key is inert in a draft and on a model that
-declares none.
+declares for itself, this session only. In a draft the rung stays in the front end and rides the row
+that opens; a model that declares no rung is refused here, and a rung the model never declared is
+refused before the request leaves. `Shift+Tab` walks those same rungs without a command, and the key
+is inert on a model that declares none.
 Deletion has no command: the resume picker owns it.
 
 ### Submit, interrupt, Esc
@@ -99,16 +97,20 @@ Deletion has no command: the resume picker owns it.
 
 ### Notices
 
-A write (`/switch`, `/effort`, `/model`, `/cdp`, `/name`, `/compact`) owes one line. The text is
-built from what this zone sent, in the display language, and spoken only when the receipt for that
-door arrives: `cwd`, `name`, `switch`, `effort`, `default_model`, `compact`. A receipt carrying an
-error speaks nothing — except the app's own answer for a draft's `/cdp`, which names the directory it
-could not land on (`noDir`, a warn).
-Draft writes are answered by the app with the same door names, prefixed `local`.
+A write of the session's own metadata (`/switch`, `/effort`, `/cdp`, `/name`) lands the moment it
+leaves: this zone already knows what it asked for, so only a refusal comes back to be said. Its
+notice speaks at once, in the display language.
 
-A refusal decided here (no session for `/usage`, `/effort` or `/compact`, `/effort` on a model that
-declares no rung, a profile asked for after the session started, `/memo` without a usable
+`/model` and `/compact` wait for their receipt (`default_model`, `compact`), and speak only when the
+answer carries no error. A refused `post meta` speaks the server's own line, rendered from its key
+in the display language.
+
+A refusal decided here (no session for `/usage` or `/compact`, `/effort` on a model that declares
+no rung, a profile asked for after the session started, `/memo` without a usable
 operation) speaks at once. The line leaves the box either way.
+
+A draft's `/cdp` refusal names the directory it could not land on (`noDir`, a warn). A session that
+had to stand in the temp directory instead of the directory its draft carried says so as it opens.
 
 Notices travel as a shout; the history zone draws them as short rows. A `/compact` receipt also
 puts `compact start` on the bus: a compaction round is running, and any zone may draw it.
@@ -190,10 +192,9 @@ once more when a round starts or ends.
 
 ## 3. Unresolved
 
-1. A server refusal (an error receipt) speaks nothing: the server's own notice is the only trace.
-2. `Ctrl+C` clears the draft; its final meaning is undecided.
-3. The usage gauge is hidden until the model's window is known.
-4. Terminal-too-small behaviour is a clamped container.
+1. `Ctrl+C` clears the draft; its final meaning is undecided.
+2. The usage gauge is hidden until the model's window is known.
+3. Terminal-too-small behaviour is a clamped container.
 
 ## 4. Config fields
 

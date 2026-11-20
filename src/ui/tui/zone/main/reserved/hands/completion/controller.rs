@@ -21,7 +21,7 @@ pub struct InputCtx<'a> {
     pub home: &'a std::path::Path,
     pub pools: Option<&'a Pools>,
     /// The rungs the current model declares.
-    pub efforts: &'a [crate::ui::session::Effort],
+    pub efforts: &'a [String],
     pub lang: Lang,
 }
 
@@ -172,7 +172,7 @@ pub struct CompletionService {
     /// The language the command details read in.
     lang: Lang,
     /// The rungs the current model declares; empty means the popup offers `auto` alone.
-    efforts: Vec<crate::ui::session::Effort>,
+    efforts: Vec<String>,
 }
 
 impl CompletionService {
@@ -209,8 +209,8 @@ impl CompletionService {
             .map(|list| {
                 list.iter()
                     .filter_map(Value::as_str)
-                    .filter_map(crate::ui::session::Effort::parse)
-                    .filter(|rung| *rung != crate::ui::session::Effort::Auto)
+                    .map(|rung| rung.trim().to_ascii_lowercase())
+                    .filter(|rung| rung.as_str() != "auto")
                     .collect()
             })
             .unwrap_or_default();

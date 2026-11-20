@@ -2,7 +2,6 @@
 
 use super::Data;
 use super::zone::InputZone;
-use crate::ui::tui::zone::Request;
 
 /// The git segment's scan interval, in seconds.
 pub(super) const GIT_SCAN_KEY: &str = "config.ui.tui.zone.main.input.deco.gitScanInterval";
@@ -17,7 +16,7 @@ pub(super) const FX_CURRENCY_KEY: &str = "config.ui.tui.fx.currency";
 pub(super) const DEFAULT_MODEL_KEY: &str = "config.server.api.defaultModel";
 
 /// The display language the panel and number formats follow.
-pub(super) const LANG_KEY: &str = "config.ui.lang";
+pub(super) const LANG_KEY: &str = crate::ui::lang::Lang::KEY;
 
 impl InputZone {
     /// First frame: the process-wide facts a draft can ask for on its own.
@@ -33,9 +32,7 @@ impl InputZone {
             DEFAULT_MODEL_KEY,
             LANG_KEY,
         ] {
-            self.outbox.push(Request::Config {
-                key: key.to_string(),
-            });
+            self.want(key);
         }
     }
 
@@ -69,6 +66,5 @@ impl InputZone {
         self.queue.clear();
         self.in_flight = None;
         self.pending_notice.clear();
-        self.pending_name = None;
     }
 }

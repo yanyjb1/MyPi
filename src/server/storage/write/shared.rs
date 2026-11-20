@@ -85,33 +85,6 @@ pub(crate) fn mark_compaction(
     Ok(())
 }
 
-/// Point a list place at another round.
-pub(crate) fn set_list_turn(
-    tx: &rusqlite::Transaction<'_>,
-    session: i64,
-    idx: i64,
-    turn: i64,
-) -> Result<()> {
-    tx.execute(
-        "UPDATE session_turns SET turn_id = ?1, is_compaction = 0
-          WHERE session_id = ?2 AND idx = ?3",
-        rusqlite::params![turn, session, idx],
-    )?;
-    Ok(())
-}
-
-/// Drop the list places from `idx` on.
-pub(crate) fn delete_list_from(
-    tx: &rusqlite::Transaction<'_>,
-    session: i64,
-    idx: i64,
-) -> Result<usize> {
-    Ok(tx.execute(
-        "DELETE FROM session_turns WHERE session_id = ?1 AND idx >= ?2",
-        rusqlite::params![session, idx],
-    )?)
-}
-
 /// Drop the list places after `idx`.
 pub(crate) fn delete_list_after(
     tx: &rusqlite::Transaction<'_>,

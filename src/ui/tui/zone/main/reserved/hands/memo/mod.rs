@@ -3,6 +3,7 @@
 mod history;
 mod keys;
 mod list;
+mod read;
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -11,7 +12,7 @@ use serde_json::Value;
 use crate::ui::tui::action::{Key, KeyCode};
 use crate::ui::tui::theme::{Accent, fixed};
 use crate::ui::tui::zone::main::desk::Reply;
-use crate::ui::tui::zone::{MemoAsk, MemoScope};
+use crate::ui::tui::zone::main::desk::{MemoAsk, MemoScope};
 
 use super::super::hand::{Hand, Report};
 
@@ -26,6 +27,7 @@ pub(super) struct Item {
 /// One saved version, newest last.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Version {
+    pub(super) ts: Option<String>,
     pub(super) content: String,
 }
 
@@ -47,7 +49,26 @@ pub(super) enum Face {
         selected: usize,
         loaded: bool,
     },
+    Read {
+        scope: MemoScope,
+        name: String,
+        versions: Vec<Version>,
+        selected: usize,
+        row: usize,
+    },
 }
+
+/// The list keeps a narrow block; the version views take two thirds of the terminal.
+const NARROW_LIST: usize = 64;
+const NARROW_WIDE: usize = 84;
+
+/// The block width and its left margin: two thirds, a floor, never past the terminal.
+fn layout(width: usize, narrow: usize) -> (usize, usize) {
+    let block = (width * 2 / 3).max(narrow).min(width);
+    (block, width.saturating_sub(block) / 2)
+}
+
+pub(super) use super::text::{clip, wrap};
 
 /// The panel's state.
 #[derive(Debug)]
@@ -62,6 +83,8 @@ pub struct MemoHand {
     pub(super) face: Face,
     pub(super) note: Option<String>,
     out: Vec<Out>,
+    /// The language the notes are said in; `en` until the desk says otherwise.
+    lang: crate::ui::lang::Lang,
 }
 
 impl Default for MemoHand {
@@ -74,6 +97,7 @@ impl Default for MemoHand {
             face: Face::List,
             note: None,
             out: Vec::new(),
+            lang: crate::ui::lang::Lang::default(),
         }
     }
 }
@@ -99,7 +123,7 @@ impl MemoHand {
 
     /// One `call memo` answer: the list, or one name's versions.
     pub fn read(&mut self, answer: &Value) {
-        if let Some(error) = error_of(answer) {
+        if let Some(error) = self.error_of(answer) {
             self.note = Some(error);
             self.known = true;
             return;
@@ -126,7 +150,7 @@ impl MemoHand {
 
     /// One `post memo` answer: the note, and a fresh list.
     pub fn wrote(&mut self, answer: &Value) {
-        if let Some(error) = error_of(answer) {
+        if let Some(error) = self.error_of(answer) {
             self.note = Some(error);
             return;
         }
@@ -138,17 +162,31 @@ impl MemoHand {
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        self.note = Some(match answer.get("removed").and_then(Value::as_u64) {
-            Some(0) => format!("没有 {scope}/{name}"),
-            Some(_) => format!("已删除 {scope}/{name}"),
-            None => format!("已写入 {scope}/{name}"),
-        });
+        self.note = Some(
+            match (self.lang, answer.get("removed").and_then(Value::as_u64)) {
+                (crate::ui::lang::Lang::En, Some(0)) => format!("no {scope}/{name}"),
+                (crate::ui::lang::Lang::En, Some(_)) => format!("removed {scope}/{name}"),
+                (crate::ui::lang::Lang::En, None) => format!("written {scope}/{name}"),
+                (crate::ui::lang::Lang::Zh, Some(0)) => format!("没有 {scope}/{name}"),
+                (crate::ui::lang::Lang::Zh, Some(_)) => format!("已删除 {scope}/{name}"),
+                (crate::ui::lang::Lang::Zh, None) => format!("已写入 {scope}/{name}"),
+            },
+        );
         self.out.push(Out::Ask(MemoAsk::List));
     }
 
-    /// Take what the hand asked for.
     pub fn drain(&mut self) -> Vec<Out> {
         std::mem::take(&mut self.out)
+    }
+
+    /// The language the notes are said in.
+    pub fn set_lang(&mut self, lang: crate::ui::lang::Lang) {
+        self.lang = lang;
+    }
+
+    /// The error a refused memo answer carries.
+    fn error_of(&self, answer: &Value) -> Option<String> {
+        crate::ui::lang::refused(self.lang, answer)
     }
 
     /// The list row under the cursor.
@@ -175,37 +213,85 @@ impl MemoHand {
                 let len = versions.len() as isize;
                 *selected = (*selected as isize + delta).rem_euclid(len) as usize;
             }
+            Face::Read {
+                versions,
+                selected,
+                row,
+                ..
+            } => {
+                let Some(version) = versions.iter().rev().nth(*selected) else {
+                    return;
+                };
+                let len = version.content.lines().count();
+                if len == 0 {
+                    return;
+                }
+                *row = (*row as isize + delta).clamp(0, len as isize - 1) as usize;
+            }
         }
     }
 
-    /// Open the selected name's versions.
+    /// Open the selected name's versions, or the selected version in full.
     fn enter(&mut self) {
-        if !matches!(self.face, Face::List) {
-            return;
+        match self.face.clone() {
+            Face::List => {
+                let Some(item) = self.current() else {
+                    return;
+                };
+                let (scope, name) = (item.scope, item.name.clone());
+                self.face = Face::History {
+                    scope,
+                    name: name.clone(),
+                    versions: Vec::new(),
+                    selected: 0,
+                    loaded: false,
+                };
+                self.out.push(Out::Ask(MemoAsk::History { scope, name }));
+            }
+            Face::History {
+                scope,
+                name,
+                versions,
+                selected,
+                ..
+            } => {
+                self.face = Face::Read {
+                    scope,
+                    name,
+                    versions,
+                    selected,
+                    row: 0,
+                };
+            }
+            Face::Read { .. } => {}
         }
-        let Some(item) = self.current() else {
-            return;
-        };
-        let (scope, name) = (item.scope, item.name.clone());
-        self.face = Face::History {
-            scope,
-            name: name.clone(),
-            versions: Vec::new(),
-            selected: 0,
-            loaded: false,
-        };
-        self.out.push(Out::Ask(MemoAsk::History { scope, name }));
     }
 
-    /// Back to the list.
+    /// Back one face: the version list, or the list of names.
     fn back(&mut self) {
-        if matches!(self.face, Face::History { .. }) {
-            self.face = Face::List;
+        match self.face.clone() {
+            Face::Read {
+                scope,
+                name,
+                versions,
+                selected,
+                ..
+            } => {
+                self.face = Face::History {
+                    scope,
+                    name,
+                    versions,
+                    selected,
+                    loaded: true,
+                };
+            }
+            Face::History { .. } => self.face = Face::List,
+            Face::List => {}
         }
     }
 
-    /// The selected version goes to the clipboard.
-    fn copy(&mut self) {
+    /// The selected version goes to the clipboard, whole.
+    fn copy_version(&mut self) {
         let Face::History {
             scope,
             name,
@@ -226,6 +312,27 @@ impl MemoHand {
             *selected + 1
         ));
         self.out.push(Out::Copy(version.content.clone()));
+    }
+
+    /// The selected line goes to the clipboard, on its own.
+    fn copy_line(&mut self) {
+        let Face::Read {
+            versions,
+            selected,
+            row,
+            ..
+        } = &self.face
+        else {
+            return;
+        };
+        let Some(version) = versions.iter().rev().nth(*selected) else {
+            return;
+        };
+        let Some(line) = version.content.lines().nth(*row) else {
+            return;
+        };
+        self.note = Some(format!("已复制第 {} 行", *row + 1));
+        self.out.push(Out::Copy(line.to_string()));
     }
 
     /// The selected name goes, every version with it.
@@ -249,8 +356,23 @@ impl Hand for MemoHand {
     }
 
     fn report(&self) -> Report {
+        let rows = match &self.face {
+            Face::List => 1 + self.items.len() + 2,
+            Face::History { versions, .. } => 1 + versions.len() + 2,
+            Face::Read {
+                versions, selected, ..
+            } => {
+                let lines = versions
+                    .iter()
+                    .rev()
+                    .nth(*selected)
+                    .map(|version| version.content.lines().count())
+                    .unwrap_or(0);
+                1 + lines
+            }
+        };
         Report {
-            rows: 1 + self.items.len() as u16 + 2,
+            rows: rows as u16,
             keys: keys::PANEL,
         }
     }
@@ -264,21 +386,25 @@ impl Hand for MemoHand {
     }
 
     fn on_key(&mut self, key: &Key) -> Option<Reply> {
-        if key.code == KeyCode::Esc {
-            self.open = false;
-            return None;
-        }
-        if key.code == KeyCode::Enter {
-            match key.mods.shift {
-                true => self.delete(),
-                false => match matches!(self.face, Face::List) {
-                    true => self.enter(),
-                    false => self.copy(),
-                },
-            }
-            return None;
-        }
         match key.code {
+            KeyCode::Esc => {
+                if matches!(self.face, Face::List) {
+                    self.open = false;
+                } else {
+                    self.back();
+                }
+            }
+            KeyCode::Enter => {
+                if !key.mods.shift {
+                    self.enter();
+                } else if matches!(self.face, Face::List) {
+                    self.delete();
+                } else if matches!(self.face, Face::History { .. }) {
+                    self.copy_version();
+                } else {
+                    self.copy_line();
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => self.step(-1),
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('s') => self.step(1),
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('d') => self.enter(),
@@ -302,6 +428,7 @@ impl Hand for MemoHand {
         out.extend(match self.face {
             Face::List => list::body(self, width, body, accent),
             Face::History { .. } => history::body(self, width, body, accent),
+            Face::Read { .. } => read::body(self, width, body, accent),
         });
         out.resize(1 + body, Line::default());
         out.push(match &self.note {
@@ -315,16 +442,6 @@ impl Hand for MemoHand {
         self.open = false;
         self.out.clear();
     }
-}
-
-/// The error a refused door carries.
-fn error_of(answer: &Value) -> Option<String> {
-    let error = answer.get("error")?;
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("memo 操作失败");
-    Some(message.to_string())
 }
 
 fn item_of(row: &Value) -> Option<Item> {
@@ -341,6 +458,7 @@ fn item_of(row: &Value) -> Option<Item> {
 
 fn version_of(row: &Value) -> Option<Version> {
     Some(Version {
+        ts: row.get("ts").and_then(Value::as_str).map(str::to_string),
         content: row
             .get("content")
             .and_then(Value::as_str)

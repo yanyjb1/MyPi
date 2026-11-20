@@ -131,13 +131,13 @@ pub const CLAIMS: &[Claim] = &[
             shift: false,
         },
     }),
-    // Ctrl+Tab steps the thinking effort; no other seat names this key.
+    // Shift+Tab steps the thinking effort; no other seat names this key.
     Claim::Key(Key {
         code: KeyCode::Tab,
         mods: Mods {
-            ctrl: true,
+            ctrl: false,
             alt: false,
-            shift: false,
+            shift: true,
         },
     }),
 ];

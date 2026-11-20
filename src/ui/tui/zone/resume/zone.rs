@@ -1,14 +1,17 @@
 //! The session picker: a full-screen list of stored sessions.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
-use crate::ui::tui::zone::{Claim, Frame, Kind, Outcome, Request, TermSize, Turns, Zone, ZoneId};
+use crate::ui::tui::zone::{Claim, Frame, Kind, Local, Outcome, Shared, TermSize, Zone, ZoneId};
 
 use super::render;
 
 // The one configuration key this zone reads: a fixed offset like `UTC+8`.
 const TZ_KEY: &str = "config.server.platform.timezone";
+
+// The display language a refused answer is read in.
+const LANG_KEY: &str = crate::ui::lang::Lang::KEY;
 
 /// No modifiers held.
 const PLAIN: Mods = Mods {
@@ -22,6 +25,7 @@ const PLAIN: Mods = Mods {
 pub enum Scope {
     /// Only sessions that ran under the current directory.
     Current,
+
     /// Every session on this machine.
     All,
 }
@@ -49,12 +53,16 @@ pub struct Row {
     pub name: Option<String>,
     pub started_at: String,
     pub cwd: Option<String>,
+
     /// The first user message, when the answer carries it.
     pub preview: Option<String>,
+
     /// The session's size, when the answer carries it.
     pub bytes: Option<i64>,
+
     /// The time of the session's last block; the age counts from it.
     pub last_ts: Option<String>,
+
     /// How many memos the session holds.
     pub memos: i64,
 }
@@ -81,29 +89,43 @@ impl Row {
 }
 
 pub struct ResumeZone {
+    shared: Shared,
     size: Option<TermSize>,
     rows: Vec<Row>,
+
     /// Indices that passed the filter: filtering keeps indices, not rows.
     visible: Vec<usize>,
+
     /// Row count at the last load: the visible set is recomputed only when it moves.
     seen: usize,
     filter: String,
+
     /// Position inside `visible`.
     selected: usize,
+
     /// First visible row (written back by the render).
     scroll: usize,
     scope: Scope,
     cwd: std::path::PathBuf,
+
     /// Whether a list ever arrived: tells "empty" from "not yet".
     loaded: bool,
+
     /// The row a Delete armed; Enter confirms, anything else cancels.
     pending_delete: Option<i64>,
+
     /// The last answer refused something; the render shows it.
     failed: bool,
+
     /// The list itself was refused: the render says why instead of "no sessions".
     error: Option<String>,
+
     /// The server's opening word: what the configuration had to say, drawn above the list.
     opening: Option<String>,
+
+    /// The language a refusal is said in; `en` until the config answers.
+    lang: crate::ui::lang::Lang,
+
     /// Bumped whenever this zone's rows would differ.
     rev: u64,
 }
@@ -111,6 +133,7 @@ pub struct ResumeZone {
 impl Default for ResumeZone {
     fn default() -> Self {
         Self {
+            shared: Shared::default(),
             size: None,
             rows: Vec::new(),
             visible: Vec::new(),
@@ -125,6 +148,7 @@ impl Default for ResumeZone {
             failed: false,
             error: None,
             opening: None,
+            lang: crate::ui::lang::Lang::default(),
             rev: 0,
         }
     }
@@ -132,21 +156,22 @@ impl Default for ResumeZone {
 
 impl ResumeZone {
     /// Enter the page: reset, then ask for the list.
-    fn begin(&mut self) -> Request {
+    fn begin(&mut self) {
         self.loaded = false;
         self.scroll = 0;
         self.pending_delete = None;
         self.failed = false;
         self.error = None;
         self.filter.clear();
-        self.list()
+        self.list();
     }
 
     /// The list is refetched every time: it is a fact about the outside.
-    fn list(&self) -> Request {
-        Request::Sessions {
-            under: self.under(),
-        }
+    fn list(&self) {
+        let under = self.under();
+        self.shared
+            .mail
+            .send(Frame::new("call", "sessions", json!({"under": under})));
     }
 
     fn under(&self) -> Option<String> {
@@ -230,15 +255,20 @@ impl ResumeZone {
         self.rev = self.rev.wrapping_add(1);
     }
 
-    fn enter(&mut self, size: TermSize, memo: &crate::ui::tui::zone::Memo) -> Vec<Request> {
+    fn enter(&mut self, size: TermSize, memo: &crate::ui::tui::zone::Memo) {
         self.size = Some(size);
         if let Some(cwd) = memo.read("cwd") {
             self.cwd = cwd.into();
         }
-        vec![self.begin()]
+        self.begin();
+        for key in [TZ_KEY, LANG_KEY] {
+            self.shared
+                .mail
+                .send(Frame::new("call", "config", json!({"key": key})));
+        }
     }
 
-    fn follow(&mut self, id: Option<i64>) -> Vec<Request> {
+    fn follow(&mut self, id: Option<i64>) {
         if id.is_none() {
             self.rows.clear();
             self.visible.clear();
@@ -249,28 +279,36 @@ impl ResumeZone {
             self.loaded = false;
             self.pending_delete = None;
         }
-        Vec::new()
     }
 
-    fn read(&mut self, frame: &Frame) -> Vec<Request> {
+    fn read(&mut self, frame: &Frame) {
         match (frame.kind.as_str(), frame.name.as_str()) {
-            ("call", "sessions") => match error_of(&frame.content) {
+            ("call", "sessions") => match self.error_of(&frame.payload) {
                 Some(message) => self.refused(message),
-                None => self.load(&frame.content),
+                None => self.load(&frame.payload),
             },
-            ("call", "delete") => self.failed = frame.content.get("error").is_some(),
+            ("post", "delete") => self.failed = frame.payload.get("error").is_some(),
             ("call", "config") => {
-                if let Some(value) = frame.content.get("value").and_then(Value::as_str) {
-                    render::set_local_offset(value);
+                let value = frame.payload.get("value").and_then(Value::as_str);
+                match frame.payload.get("key").and_then(Value::as_str) {
+                    Some(LANG_KEY) => {
+                        if let Some(lang) = value.and_then(crate::ui::lang::Lang::parse) {
+                            self.lang = lang;
+                        }
+                    }
+                    _ => {
+                        if let Some(value) = value {
+                            render::set_local_offset(value);
+                        }
+                    }
                 }
             }
-            ("local", "opened") => self.arrived(&frame.content),
+            ("local", "opened") => self.arrived(&frame.payload),
             _ => {}
         }
-        Vec::new()
     }
 
-    fn act(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
+    fn act(&mut self, action: &Action) -> (Outcome, Vec<Local>) {
         let stay = (Outcome::Stay, Vec::new());
         let back = (
             Outcome::Show {
@@ -304,15 +342,20 @@ impl ResumeZone {
                         };
                         if self.pending_delete == Some(id) {
                             self.failed = false;
-                            let requests = vec![Request::Delete(id), self.list()];
-                            return (Outcome::Stay, requests);
+                            self.shared.mail.send(Frame::new(
+                                "post",
+                                "delete",
+                                json!({"session": id}),
+                            ));
+                            self.list();
+                            return stay;
                         }
                         return (
                             Outcome::Show {
                                 to: ZoneId::Main,
                                 memo: Vec::new(),
                             },
-                            vec![Request::Attach(id)],
+                            vec![Local::Attach(id)],
                         );
                     }
                     KeyCode::Up => self.move_by(-1),
@@ -323,7 +366,8 @@ impl ResumeZone {
                     KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
                     KeyCode::Tab => {
                         self.scope = self.scope.toggled();
-                        return (Outcome::Stay, vec![self.list()]);
+                        self.list();
+                        return stay;
                     }
                     KeyCode::Backspace => {
                         self.filter.pop();
@@ -345,16 +389,11 @@ impl ResumeZone {
     }
 }
 
-/// The error a refused answer carries.
-fn error_of(answer: &Value) -> Option<String> {
-    let error = answer.get("error")?;
-    Some(
-        error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("会话列表读取失败")
-            .to_string(),
-    )
+// The error a refused answer carries, in the language this zone reads.
+impl ResumeZone {
+    fn error_of(&self, answer: &Value) -> Option<String> {
+        crate::ui::lang::refused(self.lang, answer)
+    }
 }
 
 /// Everything about one session the filter can match on.
@@ -420,6 +459,10 @@ fn display_name(row: &Row) -> String {
 const PAGE: i64 = 8;
 
 impl Zone for ResumeZone {
+    fn bind(&mut self, shared: Shared) {
+        self.shared = shared;
+    }
+
     fn keys(&self) -> Vec<Claim> {
         let key = |code| Claim::Key(Key { code, mods: PLAIN });
         vec![
@@ -449,35 +492,28 @@ impl Zone for ResumeZone {
         self.rev
     }
 
-    fn start(&mut self, size: TermSize, memo: &crate::ui::tui::zone::Memo) -> Vec<Request> {
-        let mut out = self.enter(size, memo);
-        out.push(Request::Config {
-            key: TZ_KEY.to_string(),
-        });
+    fn start(&mut self, size: TermSize, memo: &crate::ui::tui::zone::Memo) -> Vec<Local> {
+        self.enter(size, memo);
         self.bump();
-        out
+        Vec::new()
     }
 
-    fn session(&mut self, id: Option<i64>) -> Vec<Request> {
-        let out = self.follow(id);
+    fn session(&mut self, id: Option<i64>) -> Vec<Local> {
+        self.follow(id);
         self.bump();
-        out
+        Vec::new()
     }
 
-    fn event(&mut self, frame: &Frame) -> Vec<Request> {
-        let out = self.read(frame);
+    fn event(&mut self, frame: &Frame) -> Vec<Local> {
+        self.read(frame);
         self.bump();
-        out
+        Vec::new()
     }
 
-    fn action(&mut self, action: &Action) -> (Outcome, Vec<Request>) {
+    fn action(&mut self, action: &Action) -> (Outcome, Vec<Local>) {
         let out = self.act(action);
         self.bump();
         out
-    }
-
-    fn structure(&mut self, _snapshot: &Turns) -> Vec<Request> {
-        Vec::new()
     }
 
     fn render(&mut self) -> Vec<ratatui::text::Line<'static>> {

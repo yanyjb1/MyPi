@@ -19,7 +19,8 @@ arrival, and it leaves before another sits down.
 | `reply: Option<Reply>` | a replacement waiting for the input zone |
 | `cwd: String` | the workspace paths complete against |
 | `queued: usize` | sentences waiting in the slot, as the input zone counts them |
-| `outbox: Vec<Request>` | frames the desk owes the session |
+| `shared: Shared` | the post box, the one color and the draft |
+| `locals: Vec<Local>` | asks the desk owes the app itself |
 
 `Hire` is `Completion`, `Usage`, or `Memo(MemoAsk)`. `ReservedZone::CLAIMS` is empty: the desk only
 borrows keys through a hand's report.
@@ -120,8 +121,8 @@ sends `del` for it. In the history `Enter` copies the selected version and left 
   list argument.
 - **Writes.** `add` and `mod` append a version, `del` removes every version of that name. The write's
   answer sets the note and asks for a fresh list; nothing lands in the transcript.
-- **Copy.** The hand puts `Request::Copy` in the desk's outbox; the app hands it to the loop, which
-  writes an OSC 52 sequence to the terminal.
+- **Copy.** The hand puts `Local::Copy` in the desk's own list; the main zone carries it up, and the
+  loop writes an OSC 52 sequence to the terminal.
 - **The note.** The last row of the strip: the result of a write, a delete or a copy, and the wording
   of any refusal. It is cleared when the next ask arrives.
 

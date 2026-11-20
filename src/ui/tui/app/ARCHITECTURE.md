@@ -7,22 +7,22 @@ What is here, what each file holds, who calls whom. Current state only.
 | file | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list and the re-exports | public |
-| `app.rs` | `App`, `Input`, `Accent`, boot, delivery, landing, handover | public |
+| `app.rs` | `App`, `Input`, boot, delivery, mailing, handover | public |
 | `lifecycle.rs` | `attach`, `detach` | public |
 | `startup.rs` | `Startup` and its three constructors | public |
 
 ## What it exposes
 
 - `App::boot(session, size, startup, zones)`.
-- `finished`, `size`, `pump`, `tick`, `frame`, `input`, `cursor`, `bye`, `take_copy`.
+- `finished`, `pump`, `tick`, `frame`, `input`, `cursor`, `bye`, `take_copy`.
 - `attach`, `detach`.
 - `Startup::main`, `Startup::resume`, `Startup::attach`.
 
 ## What it calls
 
-- `ui::session::Session`, and `zone::{Frame, Turns}` for what it hands down.
-- `zone::{Kind, Claim, Memo, Outcome, Request, TermSize, Zone, ZoneId}`.
-- `theme::Accent` for the one live color.
+- `ui::session::Session`, and `zone::{Frame, Structure}` for what it hands down.
+- `zone::{Kind, Claim, Local, Mail, Memo, Outcome, Shared, TermSize, Zone, ZoneId}`.
+- `theme::Palette` for the one shared color.
 
 ## What calls it
 
@@ -30,18 +30,17 @@ What is here, what each file holds, who calls whom. Current state only.
 
 ## What it does not know
 
-The terminal, crossterm, the socket, the database, the agent loop, and the zones' internal
-fields.
+The terminal, crossterm, the socket, the database, the agent loop, the doors' payloads, and the zones' internal fields.
 
 ## Must stay in sync
 
 1. `Kind::of` and the upstream frame names it classifies.
-2. `App::boot` order and the zone that shows: attach first, start second.
-3. `wire::land` and the session's actions (`ui/session/actions.rs`): one line per intent.
+2. `App::boot` order and the zone that shows: bind first, attach second, start third.
+3. `Mail::at` and `registry::zones`: the i-th slot of the registry is the i-th `ZoneId`.
 4. `create`'s payload and api's `post init` arguments.
 5. `Startup` and the CLI's launch parameters.
-6. `wire::memo` and `MemoAsk`'s five shapes: the arguments each door expects.
+6. The `post init` answer and `created`: the app's one letter it reads itself.
 
 ## Not wired
 
-1. A refused `post init` drops the waiting message; the reader has to type it again.
+1. The queue holds one place per answered letter; a letter the server never answers would shift every later answer by one. Only the watch and the sign-off are silent, and neither enters the queue.

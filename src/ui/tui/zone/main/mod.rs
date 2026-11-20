@@ -2,7 +2,6 @@
 
 mod arbitrate;
 mod desk;
-mod dispatch;
 mod geometry;
 mod history;
 mod input;
@@ -12,4 +11,5 @@ mod pane;
 mod reserved;
 mod zone;
 
+pub use input::Draft;
 pub use zone::MainZone;

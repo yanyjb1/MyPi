@@ -2,7 +2,10 @@
 
 pub(crate) mod display;
 pub(crate) mod focus;
+pub(crate) mod keys;
+pub(crate) mod live;
 pub(crate) mod local;
+pub(crate) mod look;
 pub(crate) mod markdown;
 pub(crate) mod prefetch;
 pub(crate) mod product;

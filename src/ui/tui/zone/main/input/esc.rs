@@ -1,30 +1,26 @@
-//! Esc: interrupt, and a second tap inside the window asks for the tree.
+//! Esc: the one key that means two things, one after the other.
 
 use std::time::{Duration, Instant};
 
-use super::exit::ExitRequest;
-use super::zone::InputZone;
 use crate::ui::tui::action::Key;
+use crate::ui::tui::zone::main::input::InputZone;
+use crate::ui::tui::zone::main::input::exit::ExitRequest;
 
-/// Two un-lent Esc this close together ask for the node tree.
-const ESC_WINDOW: Duration = Duration::from_millis(300);
+// How long the second Esc waits for its partner.
+const DOUBLE: Duration = Duration::from_millis(400);
 
 impl InputZone {
-    /// Esc, when nothing borrowed it: it interrupts, and a second tap within the
-    /// window also asks for the node tree.
-    pub(super) fn route_esc(&mut self, key: &Key) -> bool {
-        if key.mods.alt || key.mods.ctrl {
-            return false;
+    // `true` = consumed.
+    pub(super) fn route_esc(&mut self, _key: &Key) -> bool {
+        if self
+            .esc_armed
+            .take()
+            .is_some_and(|at| at.elapsed() < DOUBLE)
+        {
+            self.pending_exits.push(ExitRequest::OpenTree);
+            return true;
         }
-        self.enter_armed = None;
-        self.pending_exits.push(ExitRequest::Interrupt);
-        let now = Instant::now();
-        match self.esc_armed.take() {
-            Some(at) if now.duration_since(at) < ESC_WINDOW => {
-                self.pending_exits.push(ExitRequest::OpenTree);
-            }
-            _ => self.esc_armed = Some(now),
-        }
-        true
+        self.esc_armed = Some(Instant::now());
+        false
     }
 }

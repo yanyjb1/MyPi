@@ -3,7 +3,7 @@
 use crate::ui::command::{Arg, CommandMeta};
 use crate::ui::lang::Text;
 use crate::ui::tui::zone::main::desk::Hire;
-use crate::ui::tui::zone::{MemoAsk, MemoScope};
+use crate::ui::tui::zone::main::desk::{MemoAsk, MemoScope};
 
 use super::super::Notice;
 use super::{Call, Done};

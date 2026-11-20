@@ -5,14 +5,14 @@ use std::collections::BTreeMap;
 use super::layout::{self, ForkRef, NodeRef};
 use super::rows::Row;
 use super::zone::Node;
-use crate::ui::tui::zone::Turns;
+use crate::ui::tui::zone::Structure;
 
 /// Rows in tree order. `only_user` keeps user messages.
-pub fn rows(structure: &Turns, blocks: &BTreeMap<i64, Node>, only_user: bool) -> Vec<Row> {
+pub fn rows(structure: &Structure, blocks: &BTreeMap<i64, Node>, only_user: bool) -> Vec<Row> {
     // Every shaped block id, with the round that owns it; a block the window did not carry
     // still gets a row, only without a summary.
     let mut held: BTreeMap<i64, (i64, bool, Option<&Node>)> = BTreeMap::new();
-    for turn in structure.rounds() {
+    for turn in structure.turns() {
         let first = turn.ranges.first().map(|[lo, _]| *lo);
         for [lo, hi] in &turn.ranges {
             for id in *lo..=*hi {

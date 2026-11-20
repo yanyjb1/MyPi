@@ -48,7 +48,7 @@ pub enum Intent {
     // Take the newest queued sentence back into the box.
     TakeBack,
 
-    // Step the thinking effort one rung up the ladder (Ctrl+Tab).
+    // Step the thinking effort one rung up the ladder (Shift+Tab).
     CycleEffort,
     None,
 }
@@ -63,7 +63,7 @@ pub fn translate(key: Key) -> Intent {
     if ctrl && matches!(code, KeyCode::Char('z')) {
         return if shift { Intent::Redo } else { Intent::Undo };
     }
-    if ctrl && matches!(code, KeyCode::Tab) {
+    if shift && matches!(code, KeyCode::Tab) {
         return Intent::CycleEffort;
     }
     match code {

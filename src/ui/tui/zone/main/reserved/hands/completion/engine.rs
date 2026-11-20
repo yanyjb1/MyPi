@@ -52,7 +52,7 @@ pub struct Look<'a> {
     /// Model and profile names, asked for once at startup.
     pub pools: Option<&'a Pools>,
     /// The rungs the current model declares.
-    pub efforts: &'a [crate::ui::session::Effort],
+    pub efforts: &'a [String],
     /// The language the command details read in.
     pub lang: Lang,
 }
@@ -231,9 +231,9 @@ fn command_items(word: &str, lang: Lang) -> Vec<Completion> {
 }
 
 /// The rungs this model declares, `auto` first: the popup offers nothing the command would refuse.
-fn effort_items(word: &str, efforts: &[crate::ui::session::Effort]) -> Vec<Completion> {
+fn effort_items(word: &str, efforts: &[String]) -> Vec<Completion> {
     let mut out: Vec<(Rank, Completion)> = Vec::new();
-    let rungs = std::iter::once(crate::ui::session::Effort::Auto).chain(efforts.iter().copied());
+    let rungs = std::iter::once("auto".to_string()).chain(efforts.iter().cloned());
     for effort in rungs {
         let name = effort.as_str();
         let Some((rank, hits)) = matches(word, name, false) else {

@@ -63,29 +63,30 @@ pub fn from_key(key: KeyEvent) -> Option<Action> {
     if key.kind == KeyEventKind::Release {
         return None;
     }
-    let code = match key.code {
-        CtCode::Char(c) => KeyCode::Char(c),
-        CtCode::Enter => KeyCode::Enter,
-        CtCode::Esc => KeyCode::Esc,
-        CtCode::Tab => KeyCode::Tab,
-        CtCode::Backspace => KeyCode::Backspace,
-        CtCode::Delete => KeyCode::Delete,
-        CtCode::Insert => KeyCode::Insert,
-        CtCode::Up => KeyCode::Up,
-        CtCode::Down => KeyCode::Down,
-        CtCode::Left => KeyCode::Left,
-        CtCode::Right => KeyCode::Right,
-        CtCode::Home => KeyCode::Home,
-        CtCode::End => KeyCode::End,
-        CtCode::PageUp => KeyCode::PageUp,
-        CtCode::PageDown => KeyCode::PageDown,
-        CtCode::F(n) => KeyCode::F(n),
-        _ => KeyCode::Other,
+    let (code, back) = match key.code {
+        CtCode::Char(c) => (KeyCode::Char(c), false),
+        CtCode::Enter => (KeyCode::Enter, false),
+        CtCode::Esc => (KeyCode::Esc, false),
+        CtCode::Tab => (KeyCode::Tab, false),
+        CtCode::BackTab => (KeyCode::Tab, true),
+        CtCode::Backspace => (KeyCode::Backspace, false),
+        CtCode::Delete => (KeyCode::Delete, false),
+        CtCode::Insert => (KeyCode::Insert, false),
+        CtCode::Up => (KeyCode::Up, false),
+        CtCode::Down => (KeyCode::Down, false),
+        CtCode::Left => (KeyCode::Left, false),
+        CtCode::Right => (KeyCode::Right, false),
+        CtCode::Home => (KeyCode::Home, false),
+        CtCode::End => (KeyCode::End, false),
+        CtCode::PageUp => (KeyCode::PageUp, false),
+        CtCode::PageDown => (KeyCode::PageDown, false),
+        CtCode::F(n) => (KeyCode::F(n), false),
+        _ => (KeyCode::Other, false),
     };
     let mods = Mods {
         ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
         alt: key.modifiers.contains(KeyModifiers::ALT),
-        shift: key.modifiers.contains(KeyModifiers::SHIFT),
+        shift: key.modifiers.contains(KeyModifiers::SHIFT) || back,
     };
     Some(Action::Key(Key { code, mods }))
 }

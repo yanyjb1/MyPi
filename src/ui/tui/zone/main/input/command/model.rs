@@ -2,10 +2,11 @@
 
 use crate::ui::command::{Arg, CommandMeta};
 use crate::ui::lang::Text;
-use crate::ui::tui::zone::Request;
+use crate::ui::tui::zone::Frame;
+use serde_json::json;
 
 use super::super::Notice;
-use super::{Call, Done, pair};
+use super::{Call, Done, Write, pair};
 
 pub const META: CommandMeta = CommandMeta {
     name: "/model",
@@ -18,11 +19,15 @@ pub const META: CommandMeta = CommandMeta {
 };
 
 pub fn run(call: &Call<'_>) -> Done {
-    match pair(call.args) {
-        Some(id) => Done::Write {
-            request: Request::SetDefaultModel(id.clone()),
-            notice: Notice::Default(id),
-        },
-        None => Done::Hold,
-    }
+    let Some((provider, model)) = pair(call.args) else {
+        return Done::Hold;
+    };
+    let address = format!("{provider}:{model}");
+    call.draft.set_model(address.clone());
+    let letter = Frame::new(
+        "post",
+        "default_model",
+        json!({"model": {"provider": provider, "model": model}}),
+    );
+    Done::Write(Write::new(letter, Notice::Default(address)))
 }

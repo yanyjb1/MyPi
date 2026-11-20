@@ -26,10 +26,10 @@ What each file holds, who calls it, and what it depends on. Current state only.
 
 ## What it exposes
 
-Through `SubZone`: `claims`, `kinds`, `deliver_event`, `deliver_action`, `structure`, `attach`,
+Through `SubZone`: `claims`, `kinds`, `deliver_event`, `deliver_action`, `attach`,
 `detach`, `take_shouts`, `hear`, plus `super::pane::Pane`'s `request_height` and `assign`.
 
-To `Main`: `take_hire`, `take_exits`, `draft`, `apply_reply`, `clear`, `boot`, `render_rows`,
+To `Main`: `take_hire`, `take_exits`, `draft`, `apply_reply`, `clear`, `boot`, `bind`, `render_rows`,
 `cursor_row`, `cursor_col`, `editor`, `statusline`.
 
 The module root re-exports `InputZone`, `ExitRequest`, `Notice`, `Ctx`, `Context`, `Currency` and
@@ -37,7 +37,7 @@ The module root re-exports `InputZone`, `ExitRequest`, `Notice`, `Ctx`, `Context
 
 ## What it calls
 
-- `ui::tui::zone::{Frame, Request, TermSize, Claim, Kind, name}` and `text` for wrapping.
+- `ui::tui::zone::{Frame, Local, Shared, TermSize, Claim, Kind, name}` and `text` for wrapping.
 - `ui::tui::action`, `ui::tui::theme::Accent`.
 - `ui::command` for the declaration shapes; the table and every command live under `command/`.
 - `ui::lang` for the language and the en/zh pair.
@@ -70,12 +70,12 @@ InputZone
   refusal notice, or `Hold`.
 - `hang` is `command::wants(before, word)`: the same pure rule the completion engine lists by, so
   the hire and the candidates never disagree.
-- A write's notice waits in `pending_notice` under its door name; `frame.rs` pops it when that door
-  answers, and speaks only when the answer carries no error.
+- A metadata write lands the moment it leaves; only `/model` and `/compact` wait in `pending_notice`
+  for their door's answer, and speak only when it carries no error.
 - `deliver_event` decodes only the frames it named: `call init`, `call meta`, `call config`,
-  `call usage`, `post cwd`, `post name`, `post switch`, `post effort`, `post default_model`,
-  `subscribe compact`, `subscribe submit`, and the app's `local` answers to a draft's writes. It declares no `stream`
-  and no `notice`: the conversation's live frames are not its business.
+  `call usage`, `post meta`, `post default_model`, `subscribe compact`, `subscribe submit`, and the
+  app's `local` answers to a draft's writes. It declares no `stream` and no `notice`: the
+  conversation's live frames are not its business.
 - `hear` takes `cwd`, `usage`, `tick`, `busy`, `prefill`, and `signal` — the slot taken and the
   fields another front end changed — and the statusline hears the rest.
 
@@ -86,7 +86,7 @@ InputZone
 3. Every command file's `META` and the dispatch arm in `command/table.rs`.
 4. `ExitRequest` and `Main`'s exit conversion.
 5. `Hire` and `Reply` with the desk's hand table.
-6. `submit::door_of` and the receipt names `frame.rs` pops, including the app's local answers.
+6. The receipt names `frame.rs` pops and the `name` each command writes on its letter.
 
 ## Not wired
 

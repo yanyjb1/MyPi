@@ -3,21 +3,34 @@
 use std::time::Duration;
 
 use ratatui::text::Line;
-use serde_json::Value;
 
 use super::claim::Claim;
-use super::frame::Frame;
 use super::kind::Kind;
+use super::local::Local;
 use super::memo::Memo;
 use super::outcome::Outcome;
-use super::request::Request;
+use super::shared::Shared;
 use super::shout::Shout;
 use super::size::TermSize;
-use super::turns::Turns;
+use crate::ipc::contract::Frame;
 use crate::ui::tui::action::Action;
 
 /// A major zone. The app only ever sees this.
 pub trait Zone {
+    /// The post box and the palette: handed once, at boot.
+    fn bind(&mut self, shared: Shared);
+
+    /// The draft's directory moved with the conversation; only the main zone keeps one.
+    fn draft_moved(&mut self, _cwd: &str) {}
+
+    /// The draft became a row: its extra fields are spent.
+    fn draft_cleared(&mut self) {}
+
+    /// The directory a new session would open in, if this zone keeps a draft.
+    fn draft_cwd(&self) -> Option<String> {
+        None
+    }
+
     /// Every input this zone consumes, declared once.
     fn keys(&self) -> Vec<Claim>;
 
@@ -25,22 +38,19 @@ pub trait Zone {
     fn kinds(&self) -> &'static [Kind];
 
     /// The app gives the screen to this zone: the size, and the memo the last zone left.
-    fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request>;
+    fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Local>;
 
     /// The conversation was entered (`Some`) or left (`None`).
-    fn session(&mut self, id: Option<i64>) -> Vec<Request>;
+    fn session(&mut self, id: Option<i64>) -> Vec<Local>;
 
     /// One frame the zone declared (or any `local` one).
-    fn event(&mut self, frame: &Frame) -> Vec<Request>;
+    fn event(&mut self, frame: &Frame) -> Vec<Local>;
 
     /// One input, already resolved to this zone.
-    fn action(&mut self, action: &Action) -> (Outcome, Vec<Request>);
+    fn action(&mut self, action: &Action) -> (Outcome, Vec<Local>);
 
-    /// The structural window, after a `Request::Structure`.
-    fn structure(&mut self, snapshot: &Turns) -> Vec<Request>;
-
-    /// One frame's side effects, before any drawing: the requests this zone owes.
-    fn tick(&mut self) -> Vec<Request> {
+    /// One frame's side effects, before any drawing: the asks this zone owes.
+    fn tick(&mut self) -> Vec<Local> {
         Vec::new()
     }
 
@@ -62,13 +72,16 @@ pub trait Zone {
 }
 
 /// A sub-zone of the chat zone. Only `Main` implements the host side.
+///
+/// A sub-zone never asks the screen for anything: what it wants the server to do it posts
+/// itself, and the one ask the desk keeps for the screen is taken by its host.
 pub trait SubZone {
     fn claims(&self) -> &'static [Claim];
 
     fn kinds(&self) -> &'static [Kind];
 
     /// One frame this sub-zone declared.
-    fn deliver_event(&mut self, frame: &Frame, size: TermSize) -> Vec<Request>;
+    fn deliver_event(&mut self, frame: &Frame, size: TermSize);
 
     /// An action claimed by this sub-zone. `true` = consumed.
     fn deliver_action(&mut self, action: &Action) -> bool;
@@ -76,9 +89,6 @@ pub trait SubZone {
     fn attach(&mut self, session: i64, size: TermSize);
 
     fn detach(&mut self);
-
-    /// The structural window, after a `Request::Structure`.
-    fn structure(&mut self, _snapshot: &Turns) {}
 
     /// The keys this sub-zone borrows right now.
     fn borrowed(&self) -> &'static [Claim] {
@@ -94,5 +104,5 @@ pub trait SubZone {
     }
 
     /// One event another party put out.
-    fn hear(&mut self, _name: &str, _content: &Value) {}
+    fn hear(&mut self, _name: &str, _content: &serde_json::Value) {}
 }

@@ -1,60 +1,25 @@
-// The app: the registry, the display ledger, and the only exit to the session.
+// The app: the registry, the display ledger, and the one post box between the zones and the session.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
 
 use ratatui::text::Line;
-use serde_json::{Value, json};
 
 use super::startup::Startup;
-use super::wire;
 use crate::ui::session::Session;
 use crate::ui::tui::action::Action;
-use crate::ui::tui::theme::Accent;
+use crate::ui::tui::theme::Palette;
 use crate::ui::tui::zone::{
-    Frame, Kind, Memo, ModelId, Outcome, Request, Round, TermSize, Turns, Zone, ZoneId, matches,
+    Frame, Kind, Local, Mail, Memo, Outcome, Shared, TermSize, Zone, ZoneId, matches,
 };
-
-// The barring `init` applies: no root, no top-level directory, nowhere directly under the home tree; the temp dir excepted. Barred lands in the temp dir, so a draft never claims more.
-fn workspace(dir: PathBuf) -> PathBuf {
-    let temp = std::env::temp_dir();
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let shallow = home
-        .as_ref()
-        .and_then(|home| home.parent())
-        .is_some_and(|tree| {
-            dir.starts_with(tree) && dir.components().count() <= tree.components().count() + 1
-        });
-    let barred = !dir.starts_with(&temp) && (dir.components().count() < 3 || shallow);
-    if barred { temp } else { dir }
-}
-
-// The directory a draft's `/cdp` lands on: `~` expanded, a relative path read from where the draft stands, and the answer MUST be a directory that exists. `None` = it is not there.
-fn draft_dir(cwd: &std::path::Path, raw: &str) -> Option<PathBuf> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    let given = match raw.strip_prefix('~') {
-        Some(rest) => std::env::var_os("HOME")
-            .map(PathBuf::from)?
-            .join(rest.trim_start_matches('/')),
-        None => PathBuf::from(raw),
-    };
-    let given = if given.is_absolute() {
-        given
-    } else {
-        cwd.join(given)
-    };
-    let real = given.canonicalize().ok()?;
-    real.is_dir().then(|| workspace(real))
-}
 
 // One thing the loop hands the app.
 pub enum Input {
     // The user did something.
     Action(Action),
-    // The terminal or the session said something.
+
+    // The terminal said something.
     Local(Frame),
 }
 
@@ -66,35 +31,42 @@ pub struct App {
     pub(super) memo: Memo,
     size: TermSize,
     pub(super) attached: Option<i64>,
-    // The one color the input zone and the running cards wear.
-    accent: Accent,
-    // The directory a new session is created in.
-    pub(super) cwd: PathBuf,
-    // `--model`: the model a new session is created with; `None` = the configured default.
-    model: Option<ModelId>,
-    // `/profile` before any session: the name travels with the row that opens.
-    pub(super) profile: Option<String>,
-    // `/name` before any session: the name travels with the row that opens.
-    pub(super) name: Option<String>,
-    // The message whose opening `init` is in flight; it goes out as soon as the row answers.
-    opening: Option<(Option<String>, String)>,
+
+    // The post box, the one color and the draft the zones share with this file.
+    pub(super) shared: Shared,
+
     // The session each zone has last been told about; `None` = never told.
     pub(super) told: Vec<Option<Option<i64>>>,
+
     // Text waiting for the loop to write it to the clipboard.
     copy: Vec<String>,
+
+    // Who wrote every letter still owed an answer, in the order they left; `None` = this file.
+    pub(super) asking: VecDeque<Option<ZoneId>>,
+
     // What the last draw showed: the owner's revision, and when it was drawn.
     drawn: Option<(u64, Instant)>,
     finished: bool,
+
+    // The directory a draft starts in when no zone has one yet.
+    start_cwd: PathBuf,
 }
 
 impl App {
-    // Assemble the front end: ask the palette, enter the session, start the first zone.
+    // Assemble the front end: the shared surface, the zones, then the first screen.
     pub fn boot(
         session: Session,
         size: TermSize,
         startup: Startup,
-        zones: Vec<Box<dyn Zone>>,
+        mut zones: Vec<Box<dyn Zone>>,
     ) -> App {
+        let shared = Shared {
+            mail: Mail::default(),
+            palette: Palette::default(),
+        };
+        for (at, zone) in zones.iter_mut().enumerate() {
+            zone.bind(shared.at(ZoneId::of_index(at)));
+        }
         let told = vec![None; zones.len()];
         let mut app = App {
             session,
@@ -103,22 +75,23 @@ impl App {
             memo: Memo::default(),
             size,
             attached: None,
-            accent: Accent::pick(),
-            cwd: workspace(startup.cwd),
-            model: startup.model,
-            profile: None,
-            name: None,
-            opening: None,
+            shared,
             told,
             copy: Vec::new(),
+            asking: VecDeque::new(),
             drawn: None,
             finished: false,
+            start_cwd: startup.cwd.clone(),
         };
         app.reset_memo();
         if let Some(id) = startup.session {
             app.attach(id);
         }
+        if let Some(model) = &startup.model {
+            app.memo.write("model", model);
+        }
         app.show();
+        app.flush();
         app
     }
 
@@ -127,26 +100,13 @@ impl App {
         self.finished
     }
 
-    // Take everything the connection produced and hand it to the zone that declared it.
+    // Take what the connection produced: an answer to whoever wrote it, a push to whoever shows.
     pub fn pump(&mut self) {
-        for packet in self.session.forward() {
-            let frame = Frame::new(packet.kind, packet.name, packet.content);
-            if frame.kind == "post" && frame.name == "init" {
-                self.created(&frame);
-            }
-            if frame.kind == "post" && frame.name == "name" {
-                self.accent = self.accent.pick_other();
-                self.announce_accent();
-            }
-            self.deliver(&frame);
+        for frame in self.session.receive() {
+            self.created(&frame);
+            self.route(&frame);
         }
-        let live = self.session.attached();
-        if live != self.attached {
-            match live {
-                Some(id) => self.attach(id),
-                None => self.detach(),
-            }
-        }
+        self.flush();
     }
 
     // One frame's side effects: the zone that shows settles, and what it asks leaves now.
@@ -154,8 +114,9 @@ impl App {
         let Some(owner) = self.owner else {
             return;
         };
-        let requests = self.zones[owner.index()].tick();
-        self.land_all(requests);
+        let locals = self.zones[owner.index()].tick();
+        self.land_all(locals);
+        self.flush();
     }
 
     // The rows to draw now; `None` = nothing changed and no animation is due.
@@ -163,6 +124,7 @@ impl App {
         let owner = self.owner?;
         let zone = &mut self.zones[owner.index()];
         let rev = zone.revision();
+
         let due = match self.drawn {
             None => true,
             Some((drawn, at)) => {
@@ -186,13 +148,14 @@ impl App {
             Input::Action(action) => self.action(&action),
             Input::Local(frame) => {
                 if frame.name == "resized"
-                    && let Some(size) = TermSize::of(&frame.content)
+                    && let Some(size) = TermSize::of(&frame.payload)
                 {
                     self.size = size;
                 }
                 self.deliver(&frame);
             }
         }
+        self.flush();
     }
 
     // Where the hardware cursor goes.
@@ -205,7 +168,7 @@ impl App {
 
     // Say goodbye and let the connection go.
     pub fn bye(&mut self) {
-        self.session.bye();
+        self.session.close();
     }
 
     // Take the text the loop still owes the clipboard.
@@ -213,19 +176,32 @@ impl App {
         std::mem::take(&mut self.copy)
     }
 
+    // A reply goes to the zone that wrote the letter; a push to the zone that shows.
+    fn route(&mut self, frame: &Frame) {
+        if frame.kind == "stream" || frame.kind == "local" {
+            self.deliver(frame);
+            return;
+        }
+        let Some(Some(to)) = self.asking.pop_front() else {
+            return;
+        };
+        let locals = self.zones[to.index()].event(frame);
+        self.land_all(locals);
+    }
+
     fn deliver(&mut self, frame: &Frame) {
         let Some(owner) = self.owner else {
             return;
         };
         let index = owner.index();
-        let declared = frame.is_local()
+        let declared = frame.kind == "local"
             || Kind::of(&frame.kind, &frame.name)
                 .is_some_and(|kind| self.zones[index].kinds().contains(&kind));
         if !declared {
             return;
         }
-        let requests = self.zones[index].event(frame);
-        self.land_all(requests);
+        let locals = self.zones[index].event(frame);
+        self.land_all(locals);
     }
 
     fn action(&mut self, action: &Action) {
@@ -239,8 +215,8 @@ impl App {
         {
             return;
         }
-        let (outcome, requests) = self.zones[owner.index()].action(action);
-        self.land_all(requests);
+        let (outcome, locals) = self.zones[owner.index()].action(action);
+        self.land_all(locals);
         self.settle(outcome);
     }
 
@@ -259,9 +235,8 @@ impl App {
                 self.owner = Some(to);
                 self.drawn = None;
                 self.tell();
-                let requests = self.zones[to.index()].start(self.size, &self.memo);
-                self.land_all(requests);
-                self.announce_accent();
+                let locals = self.zones[to.index()].start(self.size, &self.memo);
+                self.land_all(locals);
             }
         }
     }
@@ -271,169 +246,60 @@ impl App {
         let Some(owner) = self.owner else {
             return;
         };
-        let requests = self.zones[owner.index()].start(self.size, &self.memo);
-        self.land_all(requests);
-        self.announce_accent();
+        let locals = self.zones[owner.index()].start(self.size, &self.memo);
+        self.land_all(locals);
     }
 
-    fn structure(&mut self) {
-        let Some(owner) = self.owner else {
+    pub(super) fn land_all(&mut self, locals: Vec<Local>) {
+        for local in locals {
+            self.land(local);
+        }
+    }
+
+    // Every letter the zones posted leaves now; its writer is remembered for the answer.
+    pub(super) fn flush(&mut self) {
+        for (from, frame) in self.shared.mail.drain() {
+            self.session.send(frame);
+            self.asking.push_back(Some(from));
+        }
+    }
+
+    // The asks that never leave this process.
+    fn land(&mut self, local: Local) {
+        match local {
+            Local::Attach(id) => self.attach(id),
+            Local::Detach => self.detach(),
+            Local::Quit => self.settle(Outcome::Quit),
+            Local::Copy(text) => self.copy.push(text),
+        }
+    }
+
+    // The row a draft's opening letter created: enter it, and the draft is spent.
+    fn created(&mut self, frame: &Frame) {
+        if frame.kind != "post" || frame.name != "init" {
+            return;
+        }
+        if self.attached.is_some() {
+            return;
+        }
+        if frame.payload.get("error").is_some() {
+            return;
+        }
+        let Some(id) = frame.payload.get("session").and_then(|id| id.as_i64()) else {
             return;
         };
-        let snapshot = self.session.structure();
-        let rounds: Vec<Round> = snapshot
-            .turns()
-            .iter()
-            .map(|turn| Round::new(turn.id, turn.ranges.clone(), turn.compact))
-            .collect();
-        // One snapshot answers the ask; a nested ask would only loop.
-        let requests: Vec<Request> = self.zones[owner.index()]
-            .structure(&Turns::of(rounds))
-            .into_iter()
-            .filter(|request| !matches!(request, Request::Structure))
-            .collect();
-        self.land_all(requests);
-    }
-
-    pub(super) fn land_all(&mut self, requests: Vec<Request>) {
-        for request in requests {
-            self.land(request);
+        if let Some(landed) = frame.payload.get("cwd").and_then(|cwd| cwd.as_str()) {
+            self.zones[ZoneId::Main.index()].draft_moved(landed);
         }
-    }
-
-    // The only exit to the session.
-    fn land(&mut self, request: Request) {
-        match request {
-            Request::Attach(id) => self.attach(id),
-            Request::Detach => self.detach(),
-            Request::Structure => self.structure(),
-            Request::Quit => self.settle(Outcome::Quit),
-            Request::PickProfile(profile) => self.pick_profile(profile),
-            Request::Copy(text) => self.copy.push(text),
-            Request::Submit { prefix, text } => self.submit(prefix, text),
-            Request::SetCwd(path) => self.set_cwd(path),
-            Request::Rename(name) => self.rename(name),
-            Request::SwitchModel(id) if self.session.attached().is_none() => {
-                self.model = Some(id);
-                let address = self
-                    .model
-                    .as_ref()
-                    .map(|id| format!("{}:{}", id.provider, id.model))
-                    .unwrap_or_default();
-                let frame = Frame::new("local", "switch", json!({"address": address}));
-                self.deliver(&frame);
-            }
-            other => wire::land(&mut self.session, other),
-        }
-    }
-
-    // A move lands on the session when there is one; a draft has only its launch directory, which is what the row will be created with.
-    fn set_cwd(&mut self, path: String) {
-        if self.session.attached().is_some() {
-            self.session.set_cwd(&path);
-            // The next row opens where this session now stands, and its profiles come from there.
-            if let Some(landed) = draft_dir(&self.cwd, &path) {
-                self.cwd = landed;
-            }
-            self.session.pools();
-            return;
-        }
-        let Some(target) = draft_dir(&self.cwd, &path) else {
-            // A directory that is not there would open a session every `shell` call fails in.
-            let frame = Frame::new(
-                "local",
-                "cwd",
-                json!({"error": {"kind": "noDir", "path": path}}),
-            );
-            self.deliver(&frame);
-            return;
-        };
-        self.cwd = target;
-        self.session.pools_at(&self.cwd);
-        let frame = Frame::new("local", "cwd", json!({"cwd": self.cwd.to_string_lossy()}));
-        self.deliver(&frame);
-    }
-
-    // `/name` lands on the session when there is one; a draft keeps it for the row.
-    fn rename(&mut self, name: Option<String>) {
-        if self.session.attached().is_some() {
-            self.session.rename(name.as_deref());
-            return;
-        }
-        self.name = name;
-        let frame = Frame::new("local", "name", json!({}));
-        self.deliver(&frame);
-    }
-
-    // A message: the row comes first when there is none, then the text, then its echo.
-    fn submit(&mut self, prefix: Option<String>, text: String) {
-        if self.session.attached().is_none() {
-            self.opening = Some((prefix, text));
-            self.create();
-            return;
-        }
-        self.session.submit(prefix.as_deref(), &text);
-        self.echo(&text);
-    }
-
-    // A message just went out: the transcript draws it before the round answers.
-    fn echo(&mut self, text: &str) {
-        let frame = Frame::new("local", "echo", json!({"text": text}));
-        self.deliver(&frame);
-    }
-
-    // `/profile` before any session: the name stays in this front end until the row opens.
-    fn pick_profile(&mut self, profile: Option<String>) {
-        if self.session.attached().is_none() {
-            self.profile = profile;
-        }
+        self.attach(id);
     }
 
     // Drop what one zone left for the next; the launch directory is always kept.
     pub(super) fn reset_memo(&mut self) {
         self.memo.clear();
-        self.memo.write("cwd", &self.cwd.to_string_lossy());
-    }
-
-    // Create the row an opening message needs; a profile picked earlier travels with it.
-    fn create(&mut self) {
-        let model = self.model.as_ref().map(|id| {
-            json!({
-                "provider": id.provider,
-                "model": id.model,
-            })
-        });
-        let content = json!({
-            "cwd": self.cwd.to_string_lossy(),
-            "name": self.name.clone(),
-            "model": model,
-            "profile": self.profile.clone(),
-        });
-        self.session.send("post", "init", content, true);
-    }
-
-    // The row exists: enter it, then send the message that opened it.
-    fn created(&mut self, frame: &Frame) {
-        if self.attached.is_some() {
-            return;
-        }
-        if frame.content.get("error").is_some() {
-            self.opening = None;
-            return;
-        }
-        let Some(id) = frame.content.get("session").and_then(Value::as_i64) else {
-            return;
-        };
-        self.attach(id);
-        if let Some((prefix, text)) = self.opening.take() {
-            self.session.submit(prefix.as_deref(), &text);
-            self.echo(&text);
-        }
-    }
-
-    // Hand the current accent to whatever shows.
-    fn announce_accent(&mut self) {
-        let frame = Frame::new("local", "accent", json!({"color": self.accent.hex()}));
-        self.deliver(&frame);
+        let cwd = self.zones[ZoneId::Main.index()]
+            .draft_cwd()
+            .unwrap_or_else(|| self.start_cwd.to_string_lossy().into_owned());
+        self.memo.write("cwd", &cwd);
     }
 }

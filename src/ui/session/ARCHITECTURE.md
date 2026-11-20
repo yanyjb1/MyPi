@@ -7,46 +7,31 @@ What is here, what each file holds, who calls whom. Current state only.
 | path | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list and the re-exports | public |
-| `actions.rs` | one named action per door this layer writes | `Session`'s public methods |
-| `vocabulary.rs` | `ModelId`, `Retention`, `Effort`: the words a front end and the api both use | public |
-| `packet.rs` | `Packet { kind, name, content }`, the normalized unit | public |
-| `client.rs` | `Client`, `Incoming`, the viewer: the queue, the matching, the send, the clear | private |
-| `session.rs` | `Session`: connect, forward, attach, send, the ingest of each frame | public |
-| `content.rs` | `ContentCache`: whole blocks by id, the budget, the eviction | private |
-| `structure.rs` | `Turn`, `Structure`, `ranges_of`, `turns_of`: the rounds, their ranges, the cut at one spot | public |
+| `up.rs` | `Up`: the connection, frames out, frames in, whether it lives, this front end's name | private |
+| `down.rs` | `Down`: the outbox, and the window a front end borrows | private |
+| `session.rs` | `Session`: the identity, attach and detach, send, receive, the ingest of each payload | public |
+| `structure.rs` | `Turn`, `Structure`, `ranges_of`: the rounds, their ranges, the snapshot, the cut | public |
 
 ## What it talks to
 
 - **`ipc::client`**: one connection; `connect`, `send`, `drain`, `alive`.
 - **`ipc::contract`**: `Frame` only.
 - **`ipc::endpoint`**: where the server listens; the session does not start it.
-- **Knows nothing about**: terminals, tables, cards, rounds beyond their ranges, block fields beyond an id, doors' payloads beyond the blocks it answers and the rewind it trims.
-- **A front end** names actions, not doors: `switch_model`, `set_cwd`, `submit`. The kind and the door name stay on this side. `post init` is the exception: it opens the session the actions need.
+- **Knows nothing about**: terminals, zones, block fields beyond an id, doors' payloads beyond the round and the cut.
 
 ## Inside
 
-```text
-Session
- ├── client::Client     ── the queue, the frames still owed an answer
- ├── structure::Structure ── which rounds exist and which blocks they own
- ├── content::ContentCache── the blocks last seen, whole
- └── outbox: Vec<Packet>  ── what arrived since the last forward
-```
+`Session` holds the identity, the two halves, and whether the read half has already reported its death. `Up` writes and drains; `Down` keeps the outbox and the window.
 
-- `Client::pump` sends what is queued and says what came back: `Push` or `Answer { request, reply }`.
-- `Session::ingest` is the only place a frame reaches the windows: a push updates the structure for the attached session only, an answer updates both windows and the budget, then every frame goes to the outbox.
-- `Session::send` is the only outbound path; `Session::blocks` answers a covered range from the content window and sends the rest upstream.
-- An accepted `post meta` rewind cuts the structure at the spot its own request named; the reply is forwarded without being decoded.
+`receive` drains the connection, folds each payload into the window, then hands the frames back whole and in order. `send` fills in the session id and does nothing else.
 
 ## Must stay in sync
 
-1. `content::ContentCache` and the `preloadCache` key.
-2. `structure::Turn` and the wire's `ranges` and `compact`: pairwise, closed intervals, newest first once loaded.
-3. `Session::attach` and both windows: they live exactly as long as one attachment.
-4. `Packet` and the front end's `Kind` table: a new upstream kind is a string here and a declaration there.
-5. The names this layer matches (`call init`, `call blocks`, `call config`, `post meta`, `post delete`, `stream`, `local`) and api's door table.
-6. The rewind spot and the structure cut: read from the request, applied when the answer succeeds.
+1. `structure::Turn` and the wire's `ranges` and `compact`: pairwise, closed intervals, oldest round first.
+2. The payload shapes the window reads (`structure`, `turn` with `ranges`, `signal: rewind` with `block`) and the api frames that carry them.
+3. `Structure::of` and the snapshot a `call init` answer carries.
 
 ## Not wired
 
-1. No reconnect: a dead read half leaves one `local / disconnected` and no further frames.
+1. A frame for another conversation is not recognised: one connection follows one conversation.
+2. Nothing here asks the window anything: the borrow exists for the front end that wants it.

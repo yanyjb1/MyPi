@@ -2,10 +2,10 @@
 
 use serde_json::{Value, json};
 
-use super::keys::Seat;
-use super::{arbitrate, dispatch, history, input, keys, reserved};
+use super::input::ExitRequest;
+use super::{arbitrate, history, input, keys, reserved};
 use crate::ui::tui::zone::{
-    Claim, Frame, Kind, Memo, Outcome, Request, Shout, SubZone, TermSize, Turns, Zone, name,
+    Claim, Frame, Kind, Local, Memo, Outcome, Shared, Shout, SubZone, TermSize, Zone, ZoneId, name,
 };
 
 /// The fallback size before the first resize arrives.
@@ -25,17 +25,20 @@ pub struct MainZone {
     pub(super) history: history::zone::HistoryZone,
     pub(super) input: input::InputZone,
     pub(super) reserved: reserved::ReservedZone,
-    pub(super) keys: keys::Borrowed,
+    pub(super) keys: keys::Keys,
     pub(super) size: Option<TermSize>,
     pub(super) heights: super::arbitrate::Heights,
-    /// The color the input zone and the running cards wear.
-    pub(super) accent: crate::ui::tui::theme::Accent,
+    pub(super) shared: Shared,
+
     /// Events this zone itself put out, not yet on the bus.
     shouts: Vec<Shout>,
+
     /// The directory the conversation row last named; a temporary `cd` never touches it.
     session_cwd: Option<String>,
+
     /// Bumped whenever any sub-zone's rows would differ.
     rev: u64,
+
     /// The sub-zone revisions this `rev` was minted from.
     seen: (u64, u64, u64),
 }
@@ -93,27 +96,57 @@ impl MainZone {
     /// The conversation's directory, out of the row and the signals that carry it.
     fn read_cwd(&mut self, frame: &Frame) {
         let path = match (frame.kind.as_str(), frame.name.as_str()) {
-            ("call", "meta") => frame.content.get("cwd").and_then(Value::as_str),
-            ("stream", "signal") => frame.content.get("cwd").and_then(Value::as_str),
+            ("call", "meta") | ("local", "cwd") | ("post", "meta") => {
+                frame.payload.get("cwd").and_then(Value::as_str)
+            }
+            ("stream", "signal") => frame.payload.get("cwd").and_then(Value::as_str),
             _ => return,
         };
         let Some(path) = path else {
             return;
         };
-        if self.session_cwd.as_deref() == Some(path) {
+        let fallback = frame
+            .payload
+            .get("fallback")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if self.session_cwd.as_deref() == Some(path) && !fallback {
             return;
         }
         self.session_cwd = Some(path.to_string());
-        self.shout(name::CWD, json!({"path": path, "temporary": false}));
+        self.shout(
+            name::CWD,
+            json!({"path": path, "temporary": false, "fallback": fallback}),
+        );
     }
 }
 
 impl Zone for MainZone {
+    fn bind(&mut self, shared: Shared) {
+        self.shared = shared.clone();
+        self.keys = keys::Keys::new([history::keys::CLAIMS, input::InputZone::CLAIMS]);
+        self.reserved.bind(shared.clone());
+        self.history.bind(shared.clone());
+        self.input.bind(shared);
+    }
+
+    fn draft_moved(&mut self, cwd: &str) {
+        self.input.draft_moved(cwd);
+    }
+
+    fn draft_cleared(&mut self) {
+        self.input.draft_cleared();
+    }
+
+    fn draft_cwd(&self) -> Option<String> {
+        self.input.draft_cwd()
+    }
+
     fn keys(&self) -> Vec<Claim> {
         let mut out = Vec::new();
         out.extend_from_slice(self.history.claims());
         out.extend_from_slice(self.input.claims());
-        out.extend_from_slice(self.reserved.claims());
+        out.extend_from_slice(self.reserved.borrowed());
         out
     }
 
@@ -129,24 +162,25 @@ impl Zone for MainZone {
         self.history.anim()
     }
 
-    fn tick(&mut self) -> Vec<Request> {
+    fn tick(&mut self) -> Vec<Local> {
         self.input.tick_statusline();
         self.settle();
         self.history.tick();
-        let mut requests = self.history.take_requests();
-        requests.extend(self.reserved.take_requests());
-        requests.extend(self.input.take_requests());
+        let locals = self.reserved.take_locals();
         self.sync_revision();
-        requests
+        locals
     }
 
-    fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Request> {
-        super::keys::check();
+    fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Local> {
         self.size = Some(size);
         if let Some(cwd) = memo.read("cwd") {
+            self.input.draft_moved(&cwd);
             let content = json!({"path": cwd});
             self.input.hear(name::CWD, &content);
             self.reserved.hear(name::CWD, &content);
+        }
+        if let Some(model) = memo.read("model") {
+            self.input.draft_set_model(&model);
         }
         if let Some(focus) = memo.read("tree.focus") {
             memo.delete("tree.focus");
@@ -156,125 +190,88 @@ impl Zone for MainZone {
         }
         self.input.boot();
         self.flush();
-        let mut requests = vec![Request::Structure];
-        requests.extend(self.history.take_requests());
-        requests.extend(self.reserved.take_requests());
-        requests.extend(self.input.take_requests());
+        let locals = self.reserved.take_locals();
         self.sync_revision();
-        requests
+        locals
     }
 
-    fn session(&mut self, id: Option<i64>) -> Vec<Request> {
+    fn session(&mut self, id: Option<i64>) -> Vec<Local> {
         let size = self.term();
         self.session_cwd = None;
-        let requests = match id {
+        match id {
             Some(id) => {
                 self.history.attach(id, size);
                 self.input.attach(id, size);
                 self.reserved.attach(id, size);
-                self.flush();
-                let mut requests = vec![Request::Init, Request::Meta, Request::Structure];
-                requests.extend(self.history.take_requests());
-                requests.extend(self.reserved.take_requests());
-                requests.extend(self.input.take_requests());
-                requests
             }
             None => {
                 self.history.detach();
                 self.input.detach();
                 self.reserved.detach();
-                self.keys.clear();
-                self.flush();
-                let mut requests = self.history.take_requests();
-                requests.extend(self.reserved.take_requests());
-                requests.extend(self.input.take_requests());
-                requests
+                self.keys.release();
             }
-        };
+        }
+        self.flush();
+        let locals = self.reserved.take_locals();
         self.sync_revision();
-        requests
+        locals
     }
 
-    fn event(&mut self, frame: &Frame) -> Vec<Request> {
+    fn event(&mut self, frame: &Frame) -> Vec<Local> {
         if frame.name == "resized"
-            && let Some(size) = TermSize::of(&frame.content)
+            && let Some(size) = TermSize::of(&frame.payload)
         {
             self.size = Some(size);
         }
-        if frame.is_local() && frame.name == "disconnected" {
+        if frame.kind == "local" && frame.name == "disconnected" {
             self.sync_revision();
-            return vec![Request::Quit];
-        }
-        if frame.is_local() && frame.name == "accent" {
-            if let Some(accent) = frame
-                .content
-                .get("color")
-                .and_then(Value::as_str)
-                .and_then(crate::ui::tui::theme::Accent::parse)
-            {
-                self.accent = accent;
-                // The accent is this zone's own drawn fact: no child revision moves for it.
-                self.rev = self.rev.wrapping_add(1);
-            }
-            self.sync_revision();
-            return Vec::new();
+            return vec![Local::Quit];
         }
         self.read_cwd(frame);
         // A message the app put out: the transcript hears it on the bus.
-        if frame.is_local()
+        if frame.kind == "local"
             && frame.name == "echo"
-            && let Some(text) = frame.content.get("text").and_then(Value::as_str)
+            && let Some(text) = frame.payload.get("text").and_then(Value::as_str)
         {
             self.shout(name::ECHO, json!({"text": text}));
         }
         let kind = Kind::of(&frame.kind, &frame.name);
         let size = self.term();
-        let mut requests = Vec::new();
-        let local = frame.is_local();
+        let local = frame.kind == "local";
         if kind.is_some_and(|kind| self.history.kinds().contains(&kind)) || local {
-            requests.extend(self.history.deliver_event(frame, size));
+            self.history.deliver_event(frame, size);
         }
         if kind.is_some_and(|kind| self.input.kinds().contains(&kind)) || local {
-            requests.extend(self.input.deliver_event(frame, size));
+            self.input.deliver_event(frame, size);
         }
         if kind.is_some_and(|kind| self.reserved.kinds().contains(&kind)) || local {
-            requests.extend(self.reserved.deliver_event(frame, size));
+            self.reserved.deliver_event(frame, size);
         }
         self.deliver_hires();
         self.flush();
-        requests.extend(self.history.take_requests());
-        requests.extend(self.reserved.take_requests());
-        requests.extend(self.input.take_requests());
+        let locals = self.reserved.take_locals();
         self.sync_revision();
-        requests
+        locals
     }
 
-    fn action(&mut self, action: &crate::ui::tui::action::Action) -> (Outcome, Vec<Request>) {
-        let (outcome, mut requests) = dispatch::dispatch(self, action);
+    fn action(&mut self, action: &crate::ui::tui::action::Action) -> (Outcome, Vec<Local>) {
+        let seat = self.keys.seat(action);
+        if let Some(seat) = seat {
+            let sinks: [&mut dyn SubZone; 3] =
+                [&mut self.history, &mut self.input, &mut self.reserved];
+            sinks[seat].deliver_action(action);
+        }
+        let (outcome, mut locals) = self.exits();
         // An edit lands the hand here, not at draw time: its asks must leave with this frame.
         self.deliver_hires();
-        requests.extend(self.history.take_requests());
-        requests.extend(self.reserved.take_requests());
-        requests.extend(self.input.take_requests());
+        locals.extend(self.reserved.take_locals());
         self.flush();
         self.sync_revision();
-        (outcome, requests)
-    }
-
-    fn structure(&mut self, snapshot: &Turns) -> Vec<Request> {
-        self.history.structure(snapshot);
-        self.input.structure(snapshot);
-        self.reserved.structure(snapshot);
-        self.flush();
-        let mut requests = self.history.take_requests();
-        requests.extend(self.reserved.take_requests());
-        requests.extend(self.input.take_requests());
-        self.sync_revision();
-        requests
+        (outcome, locals)
     }
 
     fn render(&mut self) -> Vec<ratatui::text::Line<'static>> {
-        let accent = self.accent;
+        let accent = self.shared.palette.get();
         let width = self.term().cols;
         let mut out = self.history.render_rows(width, accent);
         for _ in 0..self.heights.gap {
@@ -311,13 +308,42 @@ impl MainZone {
         self.flush();
     }
 
+    /// Turn the input zone's exits into the app's own asks or one handover.
+    fn exits(&mut self) -> (Outcome, Vec<Local>) {
+        let mut locals = Vec::new();
+        let mut outcome = Outcome::Stay;
+        for exit in self.input.take_exits() {
+            match exit {
+                ExitRequest::OpenTree => {
+                    outcome = Outcome::Show {
+                        to: ZoneId::Tree,
+                        memo: Vec::new(),
+                    };
+                }
+                ExitRequest::OpenResume => {
+                    outcome = Outcome::Show {
+                        to: ZoneId::Resume,
+                        memo: Vec::new(),
+                    };
+                }
+                ExitRequest::Quit => outcome = Outcome::Quit,
+                ExitRequest::New => {
+                    self.history.reset();
+                    self.input.clear();
+                    locals.push(Local::Detach);
+                }
+            }
+        }
+        (outcome, locals)
+    }
+
     /// A hand on duty holds the keys; a desk with nobody at it returns them.
     pub(super) fn sync_borrowed(&mut self) {
         let claims = self.reserved.borrowed();
         if claims.is_empty() {
-            self.keys.release(Seat::Reserved);
+            self.keys.release();
         } else {
-            self.keys.lend(claims, Seat::Reserved);
+            self.keys.lend(claims);
         }
     }
 
@@ -342,5 +368,30 @@ impl MainZone {
             return;
         };
         self.reserved.hire(who);
+    }
+}
+
+// The host answers no sub-zone contract of its own.
+impl SubZone for MainZone {
+    fn claims(&self) -> &'static [Claim] {
+        &[]
+    }
+
+    fn kinds(&self) -> &'static [Kind] {
+        KINDS
+    }
+
+    fn deliver_event(&mut self, _frame: &Frame, _size: TermSize) {}
+
+    fn deliver_action(&mut self, _action: &crate::ui::tui::action::Action) -> bool {
+        false
+    }
+
+    fn attach(&mut self, _session: i64, _size: TermSize) {}
+
+    fn detach(&mut self) {}
+
+    fn revision(&self) -> u64 {
+        self.rev
     }
 }

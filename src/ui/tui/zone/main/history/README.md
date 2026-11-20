@@ -182,7 +182,7 @@ A move made while the start follows the newest anchors on the newest position's 
 start that answers a move with `Latest` again would leave the screen deaf to its own scroll while
 the run holds no rows.
 
-### Frame
+### Frames
 
 One round belongs to the app: it drains what the terminal said, then what the connection said, then
 runs the side effects, then draws only if the showing zone's rows changed.
@@ -258,9 +258,9 @@ opens a natural line), or `Wrapped` (it is a continuation).
 
 ## 3. Unresolved
 
-- The structural snapshot arrives through the host after `Request::Structure`; the zone lays its
+- The structural snapshot is read out of the frames this zone declared; the zone lays its
   positions from it.
-- Block content arrives through `Request::Blocks`; the zone asks per round, once per range.
+- Block content arrives through a `call blocks` letter; the zone asks per round, once per range.
 - The checklist follows `call init` and the memo of every todo result; nothing asks for it
   separately.
 - The full text of a truncated result lives in `artifacts`; the front end has no way to read it, and

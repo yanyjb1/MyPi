@@ -7,7 +7,10 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | path | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list | private |
-| `zone.rs` | `HistoryZone`, its claims, the `SubZone` implementation, the `Pane` implementation | public |
+| `zone.rs` | `HistoryZone`, its state, the `SubZone` implementation, the `Pane` implementation | public |
+| `keys.rs` | `CLAIMS` and what each claimed key does to the layout | private |
+| `live.rs` | `Pin`, `Ask`, and what is still running: thoughts, calls, compactions | private |
+| `look.rs` | where the reader stands: one slot, one round, one round's first block | private |
 | `wire.rs` | frame dispatch: content to the local section, the checklist to its product, config to each part | private |
 | `row.rs` | `Row`, `Run`, `Ink`, `Lead`, and how a color slot becomes a terminal style | private |
 | `markdown.rs` | markdown to runs: headings, lists, quotes, inline emphasis | private |
@@ -20,12 +23,12 @@ What each file holds, who calls it, and what it depends on. Current state only.
 
 ## What it talks to
 
-- **Calls**: `ui::tui::zone` for the contract (`Frame`, `Request`, `Shout`, `Turns`, `Claim`),
+- **Calls**: `ui::tui::zone` for the contract (`Frame`, `Shout`, `Shared`, `Structure`, `Claim`),
   `ui::tui::theme` for the fixed palette and the accent, `ui::tui::TodoFold`,
   `ui::tui::action` for keys and wheel, `ui::tui::text` for display width, byte counts and
   durations.
 - **Asks the session for**: `call init`, `call blocks`, `call config`, `call usage`,
-  and the structural window, all through `Request` values its host drains.
+  posted by this zone itself into the shared box.
 - **Does not know**: the app, the socket, the database, the agent loop, the picker.
 
 ## Inside
@@ -64,8 +67,8 @@ finished round holds with what its banners read.
 - `zone::tick` applies both sets once: a dirty position loses its laid rows and its product, a grown
   one loses the rows of its tail piece and every piece after it while its product stays, the content
   budget is settled against the window the last draw kept, and the blocks the last draw lacked leave
-  as `Request::Blocks`. `zone::render_rows` rebuilds the pin, spends the window, trims the run, and
-  hands the span of finished positions the run still holds to `Local::set_reach`; `zone::scroll`
+  as a `call blocks` letter. `zone::render_rows` rebuilds the pin, spends the window, trims the run, and
+  hands the span of finished positions the run still holds to `Local::set_reach`; `look::scroll`
   walks past that span in the direction it moved, and `Local::dry` is that walk.
 - `Local::prepare` builds a position's product on first use and keeps it on the block; `Local::shape`
   hands the run what that product is. The run lays only segments it does not hold. A text product's
@@ -73,7 +76,7 @@ finished round holds with what its banners read.
 - `Local::evict` drops content past `cacheMargin`, oldest admission first, skipping positions the run
   holds, the ranges asked for, and the ranges a close is waiting on. One exchange is kept or dropped
   as one, so a card never loses half its rows. A position whose content left draws `…` and asks
-  again through `Request::Blocks`.
+  again through a `call blocks` letter.
 
 ## Must stay in sync
 
@@ -83,7 +86,7 @@ finished round holds with what its banners read.
 4. `SlotKind` and `Local::shape`: a new slot kind needs a shape.
 5. A tool's memo shape and its `product/card/` file: the renderer draws what the memo carries, or
    the result text when the tool hands back no memo.
-6. `Range::scroll`, `Local::dry` and the wheel bindings in `zone::deliver_action`: whatever moves
+6. `Range::scroll`, `Local::dry` and the wheel bindings in `keys::press`: whatever moves
    the screen must stock the side it moved toward, or the edge draws `…`; and a move away from
    `Latest` must land on a place, or the screen stops answering.
 7. `Local::note_pair`, `Local::card_at` and every `product::of` that takes a pair: the card is drawn
@@ -94,7 +97,7 @@ finished round holds with what its banners read.
    and `card::frame::done` draws it.
 10. `Start::Pin` and `focus::anchor_slot`: a window top inside the pin is "latest" for every
     position-based command.
-11. `zone::pin_rows` and the `Pin` lifecycle in `wire`: a new kind of running work must start and
+11. `live::pin_rows` and the `Pin` lifecycle in `wire`: a new kind of running work must start and
     end there, or the ESC row sticks.
 12. A product's inputs and `Local::drop_products`: a new option, a new width-dependent renderer or a
     new block field means the invalidation points must know about it.

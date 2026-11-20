@@ -46,14 +46,12 @@ to change and broadcasts only when the numbers moved.
 
 | exit | becomes |
 |---|---|
-| `Submit { prefix, text }` | `Request::Submit { prefix, text }` |
-| `Interrupt` | `Request::Interrupt` |
 | `OpenTree` | `Outcome::Show { to: Tree }` |
 | `OpenResume` | `Outcome::Show { to: Resume }` |
 | `Quit` | `Outcome::Quit` |
-| `New` | history and editor cleared, `Request::ClearMailbox`, `Request::Detach` |
+| `New` | history and editor cleared, `Local::Detach` |
 
-A `local / disconnected` frame becomes `Request::Quit`: no session, no screen worth keeping.
+A `local / disconnected` frame becomes `Local::Quit`: no session, no screen worth keeping.
 
 ## 2. Design intent
 
