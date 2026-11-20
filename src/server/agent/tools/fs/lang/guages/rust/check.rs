@@ -52,9 +52,32 @@ fn run(root: &Path, _touched: &[PathBuf], stop: &Stop) -> Check {
     faults.dedup_by(|a, b| a.file == b.file && a.line == b.line && a.message == b.message);
     warns.dedup_by(|a, b| a.file == b.file && a.line == b.line && a.message == b.message);
     if faults.is_empty() && warns.is_empty() {
-        return Check::Clean;
+        // A cargo that failed before it compiled leaves no diagnostic behind: its exit code is the only evidence the crate was never checked.
+        return if ran.code == Some(0) {
+            Check::Clean
+        } else {
+            Check::Unchecked(failure(&ran))
+        };
     }
     Check::Faults { faults, warns }
+}
+
+// What a cargo that left no diagnostic behind said about itself.
+fn failure(ran: &gate::Ran) -> String {
+    let said = ran
+        .err
+        .lines()
+        .chain(ran.out.lines())
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string());
+    let code = match ran.code {
+        Some(code) => code.to_string(),
+        None => "a signal".to_string(),
+    };
+    match said {
+        Some(line) => format!("cargo exited with {code}: {line}"),
+        None => format!("cargo exited with {code} without a word"),
+    }
 }
 
 // The errors and the warnings one `cargo check` reported, whatever file they sit in.

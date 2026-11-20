@@ -99,10 +99,13 @@ pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usiz
             }
             State::Overlap => out.push("OVERLAP".to_string()),
             State::Mismatch { sent, now, why } => {
-                let word = if sent == now { "UNCHANGED" } else { "SHIFTED" };
+                let moved = if sent == now {
+                    String::new()
+                } else {
+                    "SHIFTED, these lines are now ".to_string()
+                };
                 out.push(format!(
-                    "{word}, the edit scope you requested earlier is now {}; reread or regrep to \
-                     issue another splice",
+                    "{moved}{}; REREAD OR REGREP to issue another splice",
                     span(now.0, now.1)
                 ));
                 out.push(format!("  ! {why}"));

@@ -331,9 +331,12 @@ impl Built {
                     },
                     &rows,
                 );
-                // A landed call draws no blocks, so the audit keeps its faults in the check's own list instead of hanging them under an edit that has none.
+                // A call that landed whole draws no blocks: the check's lines hang at the end of its verdict line instead of being dropped.
                 if marks.is_empty() {
-                    slots.clear();
+                    let at = text.lines().count();
+                    for slot in &mut slots {
+                        slot.insert_at = at;
+                    }
                 } else {
                     for (slot, mark) in slots.iter_mut().zip(marks) {
                         slot.insert_at = mark;
