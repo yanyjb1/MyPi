@@ -1,6 +1,6 @@
 //! `/memo` — the notes panel: list, one name's versions, writes, and a delete.
 
-use crate::ui::command::{Arg, CommandMeta};
+use super::meta::{Arg, CommandMeta};
 use crate::ui::lang::Text;
 use crate::ui::tui::zone::main::desk::Hire;
 use crate::ui::tui::zone::main::desk::{MemoAsk, MemoScope};
@@ -16,6 +16,7 @@ pub const META: CommandMeta = CommandMeta {
         en: "memos: list, history, add, mod, del; scope defaults to global",
         zh: "备忘录：list、history、add、mod、del；scope 默认 global",
     },
+    run,
 };
 
 pub fn run(call: &Call<'_>) -> Done {

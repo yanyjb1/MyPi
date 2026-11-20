@@ -1,10 +1,8 @@
 //! `/prepare` — the workspace facts in front of one message.
 
-mod basic;
-
 use std::path::{Path, PathBuf};
 
-use crate::ui::command::{Arg, CommandMeta};
+use super::meta::{Arg, CommandMeta};
 use crate::ui::lang::Text;
 
 use super::{Call, Done};
@@ -14,9 +12,10 @@ pub const META: CommandMeta = CommandMeta {
     aliases: &[],
     args: &[Arg::Text],
     detail: Text {
-        en: "prepend the terms, manifest and layout of the workspace to this message; `/prepare <text>` keeps the text as the message",
-        zh: "把工作区的条款、清单和目录布局前置到这条消息；`/prepare 正文` 会保留正文",
+        en: "prepend the terms and manifest of the workspace to this message; `/prepare <text>` keeps the text as the message",
+        zh: "把工作区的条款和清单前置到这条消息；`/prepare 正文` 会保留正文",
     },
+    run,
 };
 
 pub fn run(call: &Call<'_>) -> Done {
@@ -27,8 +26,8 @@ pub fn run(call: &Call<'_>) -> Done {
     }
 }
 
-/// The whole preparation: the directory, the terms, their related files, the manifest and the
-/// listing. `body` asks for the line that introduces the user's own text; that text follows the
+/// The whole preparation: the directory, the terms, their related files and the manifest.
+/// `body` asks for the line that introduces the user's own text; that text follows the
 /// prefix byte for byte.
 pub(crate) fn payload(cwd: &str, body: bool) -> Option<String> {
     let cwd = cwd.trim();
@@ -49,7 +48,6 @@ pub(crate) fn payload(cwd: &str, body: bool) -> Option<String> {
     if let Some(text) = manifest(cwd) {
         section(&mut out, "Cargo.toml", &text);
     }
-    section(&mut out, "basic", &basic::root(cwd));
     if body {
         out.push('\n');
         out.push_str("==> user\n");

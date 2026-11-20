@@ -170,7 +170,7 @@ impl InputZone {
         let text = self.editor.text();
         let cursor = self.editor.cursor();
         let before: String = text.chars().take(cursor).collect();
-        let (_, word) = crate::ui::command::word(&text, cursor);
+        let (_, word) = command::word(&text, cursor);
         self.hang = command::wants(&before, &word);
     }
 

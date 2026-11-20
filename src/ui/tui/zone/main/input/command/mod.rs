@@ -5,6 +5,7 @@ mod cdp;
 mod compact;
 mod effort;
 mod memo;
+mod meta;
 mod model;
 mod name;
 mod new;
@@ -18,6 +19,7 @@ mod usage;
 mod wants;
 
 pub use call::{Call, Done, Write};
+pub use meta::{Arg, CommandMeta, path_shaped, word, word_index};
 pub(crate) use prepare::payload;
-pub use table::{TABLE, lookup, pair, run, split};
+pub use table::{TABLE, lookup, pair, split};
 pub use wants::{slot, wants};

@@ -1,6 +1,7 @@
-//! The command vocabulary: a name, its argument kinds, one line of text, one candidate shape.
-//! Each front end declares its own table; this file never names a command.
+//! The command vocabulary: a name, its argument kinds, one line of text, and its own dispatch.
+//! Each command declares its own `META`; this file names no command.
 
+use super::call::{Call, Done};
 use crate::ui::lang::Text;
 
 /// Where the candidates for one argument position come from.
@@ -8,30 +9,40 @@ use crate::ui::lang::Text;
 pub enum Arg {
     /// A filesystem path.
     Path,
+
     /// A model, addressed as `<provider>:<id>`.
     Model,
+
     /// A profile name.
     Profile,
+
     /// A thinking effort: one of `auto`, `low`, `high`, `max`.
     Effort,
 
     /// A number. No candidates.
     Number,
+
     /// Free text. No candidates.
     Text,
 }
 
 /// One command's declaration. The field order is fixed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct CommandMeta {
     /// The name with its leading slash.
     pub name: &'static str,
+
     /// Alternate spellings of the same command.
     pub aliases: &'static [&'static str],
+
     /// The argument positions, in order.
     pub args: &'static [Arg],
+
     /// One line for help and completion, in both languages.
     pub detail: Text,
+
+    /// This command's own dispatch: the one entry the table keeps.
+    pub run: fn(&Call<'_>) -> Done,
 }
 
 impl CommandMeta {
@@ -39,15 +50,6 @@ impl CommandMeta {
     pub fn arg(&self, level: usize) -> Option<Arg> {
         self.args.get(level).copied()
     }
-}
-
-/// One completion candidate for one level.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Candidate {
-    /// The text this candidate inserts for this level.
-    pub value: String,
-    /// What the popup shows next to the value.
-    pub detail: String,
 }
 
 /// Look a name (with its slash) up by name or alias.

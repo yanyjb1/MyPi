@@ -1,6 +1,6 @@
 //! `/profile` — the prompt a session will run with, chosen before its first message.
 
-use crate::ui::command::{Arg, CommandMeta};
+use super::meta::{Arg, CommandMeta};
 use crate::ui::lang::Text;
 
 use super::super::Notice;
@@ -14,6 +14,7 @@ pub const META: CommandMeta = CommandMeta {
         en: "choose the system-prompt profile a session opens with",
         zh: "选择会话开场用的系统提示词 profile",
     },
+    run,
 };
 
 pub fn run(call: &Call<'_>) -> Done {

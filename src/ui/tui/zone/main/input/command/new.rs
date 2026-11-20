@@ -1,6 +1,6 @@
 //! `/new` — a fresh conversation, without attaching another.
 
-use crate::ui::command::CommandMeta;
+use super::meta::CommandMeta;
 use crate::ui::lang::Text;
 use crate::ui::tui::zone::main::input::ExitRequest;
 
@@ -14,6 +14,7 @@ pub const META: CommandMeta = CommandMeta {
         en: "open a new session",
         zh: "开一个新会话",
     },
+    run,
 };
 
 pub fn run(_call: &Call<'_>) -> Done {

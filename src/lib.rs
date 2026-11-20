@@ -22,20 +22,6 @@ mod architecture {
     const FORBIDDEN: &[(&str, &[&str])] = &[
         // Execution engine: runs tools, knows no UI and no layer above it.
         ("server::agent", &["server::api", "cli", "tui"]),
-        // Contract: the command vocabulary only, read by every front end.
-        (
-            "ui::command",
-            &[
-                "server",
-                "ipc",
-                "cli",
-                "ui::session",
-                "ui::tui",
-                "web",
-                "git",
-                "ansi",
-            ],
-        ),
         // api sits above: any of the lower layers reaching for it would close a cycle.
         ("server::storage", &["server::api"]),
         ("server::config", &["server::api"]),

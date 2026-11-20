@@ -66,7 +66,7 @@ nothing. A plain message is written into a `subscribe submit` letter where it is
 
 `/prepare` builds the workspace preparation: the directory, one terms file (`AGENTS.md`, else
 `CLAUDE.md`, else `AI.md`), the files an `AI.md` lists under a `prepare` fence, the manifest's four
-sections, and the `read(".")` listing. It travels in the message's `prefix`, so the history shows
+sections. It travels in the message's `prefix`, so the history shows
 only the user's own words. `config.ui.tui.zone.main.input.autoPrepare` (default off) puts the same
 preparation on a session's first message and on the first message after a compaction; the
 structural window decides both.

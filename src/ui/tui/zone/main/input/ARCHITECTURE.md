@@ -20,7 +20,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `editor/` | the text, undo, paste store, separators and script classes, submission ring | private |
 | `semantics.rs` | key → intent, one context-free table | private |
 | `route.rs` | one line classified as a message or a command | private |
-| `command/` | the table, the answer shapes, one module per command, the completion trigger; `prepare/` also holds the payload and the listing | private |
+| `command/` | the table, the answer shapes, one module per command, and the completion trigger; `prepare/` also holds the payload | private |
 | `render.rs` | the container: top edge, body rows, bottom edge, cursor | private |
 | `statusline/` | the row engine, `StatusTheme`, and the seven decos | private |
 
@@ -39,7 +39,6 @@ The module root re-exports `InputZone`, `ExitRequest`, `Notice`, `Ctx`, `Context
 
 - `ui::tui::zone::{Frame, Local, Shared, TermSize, Claim, Kind, name}` and `text` for wrapping.
 - `ui::tui::action`, `ui::tui::theme::Accent`.
-- `ui::command` for the declaration shapes; the table and every command live under `command/`.
 - `ui::lang` for the language and the en/zh pair.
 - `serde_yaml` and `std::fs` for the preparation's declared paths, terms and manifest.
 - `super::desk::{Hire, Reply}` for what it asks the desk and what the desk hands back.
@@ -83,7 +82,7 @@ InputZone
 
 1. `CLAIMS` and the arms of `semantics::translate`.
 2. `Data` fields and the decos that read them.
-3. Every command file's `META` and the dispatch arm in `command/table.rs`.
+3. Every command file's `META` and the `run` it points to.
 4. `ExitRequest` and `Main`'s exit conversion.
 5. `Hire` and `Reply` with the desk's hand table.
 6. The receipt names `frame.rs` pops and the `name` each command writes on its letter.

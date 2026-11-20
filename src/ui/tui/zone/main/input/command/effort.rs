@@ -1,6 +1,6 @@
 //! `/effort` — how hard this session asks the model to think.
 
-use crate::ui::command::{Arg, CommandMeta};
+use super::meta::{Arg, CommandMeta};
 use crate::ui::lang::Text;
 use crate::ui::tui::zone::Frame;
 use serde_json::json;
@@ -17,6 +17,7 @@ pub const META: CommandMeta = CommandMeta {
         en: "how hard to think: auto, or a rung the model declares (this session only, never stored)",
         zh: "思考强度：auto，或该模型声明的档位（只在本会话内，不落库）",
     },
+    run,
 };
 
 pub fn run(call: &Call<'_>) -> Done {

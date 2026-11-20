@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::ui::command::Candidate;
+use super::hands::completion::candidate::Candidate;
 
 /// Model addresses and profile names, ready for the completion engine.
 #[derive(Debug, Default, Clone, PartialEq)]

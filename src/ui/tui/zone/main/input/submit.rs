@@ -9,8 +9,8 @@ use super::notice::Notice;
 use super::queue::Outgoing;
 use super::route::{self, Route};
 use super::zone::InputZone;
-use crate::ui::command::CommandMeta;
 use crate::ui::tui::zone::Frame;
+use crate::ui::tui::zone::main::input::command::CommandMeta;
 use crate::ui::tui::zone::{Shout, name};
 
 /// Two Enter presses this close together: the second one interrupts the round.
@@ -69,7 +69,7 @@ impl InputZone {
             efforts: &self.data.efforts,
             draft: &self.draft,
         };
-        match command::run(meta, &call) {
+        match (meta.run)(&call) {
             Done::Write(write) => self.wrote(write),
             Done::Submit { prefix, text } => {
                 self.leave(prefix, text);

@@ -3,7 +3,7 @@
 //! The command table is the input zone's own; this file only reads it.
 
 use super::command;
-use crate::ui::command::CommandMeta;
+use super::command::CommandMeta;
 
 /// One input line, classified.
 pub enum Route<'a> {

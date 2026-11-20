@@ -1,10 +1,8 @@
-//! The table: every command file's declaration, the dispatch, and the two lookups.
+//! The table: every command's declaration, its own dispatch, and the two lookups.
 
-use crate::ui::command::{self, CommandMeta};
-
+use super::meta::{self, CommandMeta};
 use super::{
-    Call, Done, cdp, compact, effort, memo, model, name, new, prepare, profile, quit, resume,
-    switch, usage,
+    cdp, compact, effort, memo, model, name, new, prepare, profile, quit, resume, switch, usage,
 };
 
 pub const TABLE: &[CommandMeta] = &[
@@ -23,36 +21,16 @@ pub const TABLE: &[CommandMeta] = &[
     quit::META,
 ];
 
-const _: () = assert!(command::valid(TABLE));
+const _: () = assert!(meta::valid(TABLE));
 
 /// One line of input: the command it names, and its argument text.
 pub fn split(input: &str) -> Option<(&'static CommandMeta, &str)> {
-    command::split(TABLE, input)
+    meta::split(TABLE, input)
 }
 
 /// One name (with its slash) to its declaration.
 pub fn lookup(name: &str) -> Option<&'static CommandMeta> {
-    command::lookup(TABLE, name)
-}
-
-/// Run one command.
-pub fn run(meta: &CommandMeta, call: &Call<'_>) -> Done {
-    match meta.name {
-        "/name" => name::run(call),
-        "/cdp" => cdp::run(call),
-        "/compact" => compact::run(call),
-        "/switch" => switch::run(call),
-        "/effort" => effort::run(call),
-        "/model" => model::run(call),
-        "/profile" => profile::run(call),
-        "/usage" => usage::run(call),
-        "/memo" => memo::run(call),
-        "/prepare" => prepare::run(call),
-        "/resume" => resume::run(call),
-        "/new" => new::run(call),
-        "/q" => quit::run(call),
-        _ => Done::Hold,
-    }
+    meta::lookup(TABLE, name)
 }
 
 /// `provider:model`, both halves non-empty.

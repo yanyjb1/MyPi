@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::ui::command::{Arg, CommandMeta};
+use super::meta::{Arg, CommandMeta};
 use crate::ui::lang::Text;
 use crate::ui::tui::zone::Frame;
 use serde_json::json;
@@ -18,6 +18,7 @@ pub const META: CommandMeta = CommandMeta {
         en: "switch the working directory; later relative paths resolve from it",
         zh: "切换工作目录（持久化，后续相对路径以它为准）",
     },
+    run,
 };
 
 pub fn run(call: &Call<'_>) -> Done {

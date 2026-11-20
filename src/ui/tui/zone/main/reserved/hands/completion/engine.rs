@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::super::super::pools::Pools;
-use crate::ui::command::{Arg, Candidate, path_shaped, word, word_index};
+use super::candidate::Candidate;
 use crate::ui::lang::Lang;
-use crate::ui::tui::zone::main::input::command;
+use crate::ui::tui::zone::main::input::command::{self, Arg, path_shaped, word, word_index};
 
 /// How many candidates the popup shows at most.
 pub const MAX_VISIBLE: usize = 8;

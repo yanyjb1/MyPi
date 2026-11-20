@@ -1,6 +1,6 @@
 //! `/compact` — fold the history into a checkpoint.
 
-use crate::ui::command::{Arg, CommandMeta};
+use super::meta::{Arg, CommandMeta};
 use crate::ui::lang::Text;
 use crate::ui::tui::zone::Frame;
 use serde_json::json;
@@ -16,6 +16,7 @@ pub const META: CommandMeta = CommandMeta {
         en: "fold the history into a checkpoint: `/compact 20k` keeps ~20k characters of tail, `/compact 18` keeps the newest 18 blocks, then an optional focus",
         zh: "把历史压缩成检查点：`/compact 20k` 保留约 20k 字符的尾巴，`/compact 18` 保留最新 18 个块，后面还能跟一句焦点",
     },
+    run,
 };
 
 pub fn run(call: &Call<'_>) -> Done {

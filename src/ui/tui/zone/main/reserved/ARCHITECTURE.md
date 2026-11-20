@@ -28,7 +28,7 @@ To `Input`: nothing directly; the main zone carries `Reply` across.
 - `ui::tui::zone::{Frame, TermSize, Claim, Kind, Local, Shared, name}` and
   `super::desk::{Hire, Reply}`.
 - `ui::tui::action` for keys, `ui::tui::theme::Accent` for the accent.
-- `ui::command` for `Candidate`; the command table itself belongs to the input zone.
+- The completion hand owns `Candidate` under `hands/completion/`; the command table belongs to the input zone.
 - `crate::git` is not called here; the statusline owns that.
 
 ## Who calls it
