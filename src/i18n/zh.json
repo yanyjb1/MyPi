@@ -139,7 +139,6 @@
   "resume_scope_current": "当前目录",
   "resume_scope_all": "全部目录",
   "resume_filter_hint": "筛选会话",
-  "resume_delete_failed": "删除被拒",
   "resume_empty_loading": "正在读取…",
   "resume_empty_current": "这个目录下还没有会话（Tab 看全部）",
   "resume_empty_all": "还没有任何会话",

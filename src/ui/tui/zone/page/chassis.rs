@@ -1,18 +1,30 @@
-// The page chassis: a titled edge, a boxed filter row, the body, the key hints.
+// The page chassis: a titled edge, the caption and the filter box, the body, extra words, the keys.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use crate::ui::tui::text::card::{card_edge, card_edge_labeled, card_row, clip_spans};
+use crate::ui::tui::text::card::{card_edge, card_edge_labeled, card_row, clip_spans, dashes};
 use crate::ui::tui::theme::{Accent, fixed};
 use crate::ui::tui::zone::TermSize;
 
-// Rows the chassis always takes: the titled edge, the rule over the hints, the bottom edge.
-const FIXED: usize = 3;
+// Rows the frame itself takes: the two edges.
+const FRAME: usize = 2;
 
-// Rows the filter block takes: its caption, the rule over the box, the box's row, the rule under it.
-const BOX: usize = 4;
+// Rows the caption takes: its own line, plus a blank either side when it is granted air.
+const CAPTION: usize = 1;
+
+// Rows the filter box always takes: the rule over it, its row, the rule under it.
+const BOX: usize = 3;
+
+// Rows one grant of air costs: the blank over a block and the blank under it.
+const AIR: usize = 2;
+
+// The narrowest body worth keeping; no grant is made that would leave fewer rows than this.
+const FLOOR: usize = 8;
+
+// The rule that closes the data and opens the keys.
+const RULE: usize = 1;
 
 // The separator between two hints on one row.
 const GAP: &str = " · ";
@@ -38,7 +50,7 @@ impl Hint {
 }
 
 // The filter box: the reader's own words, or the placeholder while it is empty.
-// Its caption hangs under the box and says what the filter looks at.
+// Its caption sits over the box and says what the filter looks at.
 pub struct Filter {
     pub text: String,
     pub placeholder: String,
@@ -51,7 +63,7 @@ pub struct Panel {
     pub title: String,
     pub filter: Option<Filter>,
 
-    // Lines between the filter box and the body: refusals, the server's opening word.
+    // Lines under the body: the server's opening word, anything the page must say last.
     pub extra: Vec<Line<'static>>,
 
     // What the page says when the body has nothing; drawn centered.
@@ -90,24 +102,32 @@ impl Panel {
         let content = self.content();
         let edge = Style::new().fg(fixed::DIM);
         let clear = Style::new();
-        let room = room(self.size, self.filter.is_some(), self.extra.len());
+        let air = air(
+            self.size,
+            self.filter.is_some(),
+            self.extra.len(),
+            &self.hints,
+        );
+        let room = air.room();
+        let blank = || card_row(Line::default(), edge, clear, width);
         let mut out = Vec::with_capacity(self.size.rows as usize);
 
-        let label = centered(self.head(), width.saturating_sub(7));
-        out.push(card_edge_labeled(edge, clear, width, label));
+        out.push(card_edge_labeled(edge, clear, width, self.head()));
 
-        // The page's own word about the filter comes before the box: what it looks at, then the
-        // box to type in. The key hints wait at the bottom, under the data.
+        // The page's own word about the filter comes over the box: what it looks at, then the box
+        // to type in. The key hints wait at the bottom, under the data.
         if let Some(filter) = &self.filter {
+            if air.caption {
+                out.push(blank());
+            }
             let caption = centered(caption(&filter.caption), content);
             out.push(card_row(inset(caption, pad), edge, clear, width));
+            if air.caption {
+                out.push(blank());
+            }
             out.push(rule(edge, width));
             out.push(card_row(inset(self.query(filter), pad), edge, clear, width));
             out.push(rule(edge, width));
-        }
-
-        for line in &self.extra {
-            out.push(card_row(inset(line.clone(), pad), edge, clear, width));
         }
 
         let rows = self.body_rows();
@@ -120,19 +140,32 @@ impl Panel {
             }
         } else {
             for line in body.into_iter().take(rows) {
+                let line = fitted(line, content);
                 out.push(card_row(inset(line, pad), edge, clear, width));
                 taken += 1;
             }
         }
 
         for _ in taken..rows {
-            out.push(card_row(Line::default(), edge, clear, width));
+            out.push(blank());
+        }
+
+        for line in &self.extra {
+            let line = fitted(line.clone(), content);
+            out.push(card_row(inset(line, pad), edge, clear, width));
         }
 
         out.push(rule(edge, width));
+
+        if air.keys {
+            out.push(blank());
+        }
         for row in pack(&self.hints, content, hint_rows(room)) {
             let hint = centered(hint_line(&row, self.accent), content);
             out.push(card_row(inset(hint, pad), edge, clear, width));
+        }
+        if air.keys {
+            out.push(blank());
         }
         out.push(card_edge(edge, clear, width));
 
@@ -168,12 +201,56 @@ impl Panel {
     }
 }
 
+// How much air this size can spare, and the rows left for the hints and the body.
+// Air is granted a block at a time from the bottom up, so a growing terminal spends its new rows
+// on the keys before the caption. The filter box never takes any: it belongs against the data.
+struct Air {
+    keys: bool,
+    caption: bool,
+    room: usize,
+}
+
+impl Air {
+    fn room(&self) -> usize {
+        self.room
+    }
+}
+
 // Rows the body may take, for a caller that needs the figure before it composes a page.
 pub fn body_rows(size: TermSize, with_filter: bool, extra: usize, hints: &[Hint]) -> usize {
-    let room = room(size, with_filter, extra);
-    let hints = pack(hints, content(size), hint_rows(room)).len();
+    let room = air(size, with_filter, extra, hints).room();
     // One row is always the body's, however short the terminal is.
-    room.saturating_sub(hints).max(1).min(room)
+    room.saturating_sub(pack(hints, content(size), hint_rows(room)).len())
+        .max(1)
+        .min(room)
+}
+
+fn air(size: TermSize, with_filter: bool, extra: usize, hints: &[Hint]) -> Air {
+    let rows = size.rows as usize;
+    let cols = content(size);
+    // The caption and the box, without any air between them.
+    let top = if with_filter { CAPTION + BOX } else { 0 };
+    // Without air: the two edges, the rule over the keys, the caption, the box and the extra lines.
+    let rest = rows.saturating_sub(FRAME + RULE + top + extra);
+    let grants = if with_filter { 2 } else { 1 };
+
+    // The roomiest layout that still leaves the body its floor; each step down spends two rows.
+    for grant in (0..=grants).rev() {
+        let room = rest.saturating_sub(AIR * grant);
+        let body = room.saturating_sub(pack(hints, cols, hint_rows(room)).len());
+        if body >= FLOOR {
+            return Air {
+                keys: grant >= 1,
+                caption: with_filter && grant >= 2,
+                room,
+            };
+        }
+    }
+    Air {
+        keys: false,
+        caption: false,
+        room: rest,
+    }
 }
 
 // The frame's interior width.
@@ -191,17 +268,12 @@ fn content(size: TermSize) -> usize {
     inner(size).saturating_sub(2 * margin(size))
 }
 
-// Rows left once the edges, the head, the filter box and the `extra` lines are paid for.
-fn room(size: TermSize, with_filter: bool, extra: usize) -> usize {
-    (size.rows as usize).saturating_sub(FIXED + BOX * usize::from(with_filter) + extra)
-}
-
 // Rows the hints may take: never more than half the room, so the body always keeps the rest.
 fn hint_rows(room: usize) -> usize {
     (room / 2).max(1)
 }
 
-// The caption under the filter box: what the filter looks at, in the frame's dim ink.
+// The caption over the filter box: what the filter looks at, in the frame's dim ink.
 fn caption(text: &str) -> Line<'static> {
     if text.is_empty() {
         return Line::default();
@@ -209,16 +281,15 @@ fn caption(text: &str) -> Line<'static> {
     Line::from(Span::styled(text.to_string(), Style::new().fg(fixed::DIM)))
 }
 
-// A rule between two content rows: the frame's sides, joined into the line with a `+`.
-// A rule between two content rows: the frame's sides, joined into the line with a `+`.
+// A rule between two content blocks: the frame's sides, dashed.
 fn rule(edge: Style, width: usize) -> Line<'static> {
-    if width < 8 {
+    if width < 2 {
         return card_edge(edge, Style::new(), width);
     }
     Line::from(vec![
-        Span::styled("|+", edge),
-        Span::styled("-".repeat(width - 4), edge),
-        Span::styled("+|", edge),
+        Span::styled("|", edge),
+        Span::styled(dashes(width - 2), edge),
+        Span::styled("|", edge),
     ])
 }
 
@@ -239,6 +310,14 @@ fn centered(line: Line<'static>, inner: usize) -> Line<'static> {
     Line::from(spans)
 }
 
+// A data row cut at the content width, so it never runs over the right margin.
+fn fitted(line: Line<'static>, inner: usize) -> Line<'static> {
+    if line.width() <= inner {
+        return line;
+    }
+    Line::from(clip_spans(line.spans, inner))
+}
+
 // The frame's inner margin, put in front of one row.
 fn inset(line: Line<'static>, pad: usize) -> Line<'static> {
     if pad == 0 {
@@ -257,6 +336,7 @@ fn pack(hints: &[Hint], inner: usize, room: usize) -> Vec<Vec<&Hint>> {
     let mut out: Vec<Vec<&Hint>> = Vec::new();
     let mut row: Vec<&Hint> = Vec::new();
     let mut used = 0usize;
+
     for hint in hints {
         if out.len() >= budget {
             return out;
@@ -282,6 +362,7 @@ fn pack(hints: &[Hint], inner: usize, room: usize) -> Vec<Vec<&Hint>> {
 // One row of hints: the keys in the live color, what they do dim.
 fn hint_line(row: &[&Hint], accent: Accent) -> Line<'static> {
     let mut spans = Vec::new();
+
     for (at, hint) in row.iter().enumerate() {
         if at > 0 {
             spans.push(Span::styled(GAP, Style::new().fg(fixed::DIM)));
@@ -296,5 +377,6 @@ fn hint_line(row: &[&Hint], accent: Accent) -> Line<'static> {
             Style::new().fg(fixed::MUTED),
         ));
     }
+
     Line::from(spans)
 }

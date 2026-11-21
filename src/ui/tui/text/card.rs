@@ -1,7 +1,5 @@
-//! Card primitives shared by the transcript, the resume picker and the tree.
-//!
-//! These are the only box-drawing functions in the application. They live here, not under
-//! `zone::main::history`, because every zone draws the same frame.
+// Box-drawing primitives for the full-screen pages: a dashed edge, a dashed edge with a label
+// laid over its middle, one framed row, and the clip that keeps a row inside it.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -16,28 +14,22 @@ pub(crate) fn on_bg(spans: Vec<Span<'static>>, bg: Style) -> Vec<Span<'static>> 
         .collect()
 }
 
-pub(crate) fn card_edge(edge: Style, fill: Style, width: usize) -> Line<'static> {
-    if width < 8 {
-        let dashes = width.saturating_sub(4);
-        return Line::from(on_bg(
-            vec![
-                Span::styled("+-", edge),
-                Span::styled("-".repeat(dashes), edge),
-                Span::styled("-+", edge),
-            ],
-            fill,
-        ));
+// A dash run of exactly `n` columns: a dash, a blank, and so on, so the run reads as dashed.
+// Equal lengths look equal, which is what keeps the two sides of a labeled edge matched.
+pub(crate) fn dashes(n: usize) -> String {
+    let mut out = String::with_capacity(n);
+    for i in 0..n {
+        out.push(if i % 2 == 0 { '-' } else { ' ' });
     }
-    let mid = width - 7;
-    Line::from(on_bg(
-        vec![
-            Span::styled("+-", edge),
-            Span::styled("- ", edge),
-            Span::styled("-".repeat(mid), edge),
-            Span::styled(" -+", edge),
-        ],
-        fill,
-    ))
+    out
+}
+
+pub(crate) fn card_edge(edge: Style, fill: Style, width: usize) -> Line<'static> {
+    if width < 2 {
+        return Line::from(on_bg(vec![Span::styled("-".repeat(width), edge)], fill));
+    }
+    let line = format!("+{}+", dashes(width - 2));
+    Line::from(on_bg(vec![Span::styled(line, edge)], fill))
 }
 
 pub(crate) fn card_edge_labeled(
@@ -46,7 +38,7 @@ pub(crate) fn card_edge_labeled(
     width: usize,
     label: Line<'static>,
 ) -> Line<'static> {
-    let budget = width.saturating_sub(7);
+    let budget = width.saturating_sub(4);
     if budget == 0 {
         return card_edge(edge, fill, width);
     }
@@ -57,19 +49,25 @@ pub(crate) fn card_edge_labeled(
         .map(|sp| Span::styled(sp.content, line_style.patch(sp.style)))
         .collect();
     let used: usize = spans.iter().map(|s| s.content.as_ref().width()).sum();
+    if used == 0 {
+        return card_edge(edge, fill, width);
+    }
     let shown = if used > budget {
         clip_spans(spans, budget)
     } else {
         spans
     };
     let used: usize = shown.iter().map(|s| s.content.as_ref().width()).sum();
-    let mut out = vec![Span::styled("+- ", edge)];
-    out.extend(shown);
-    if used > 0 {
-        out.push(Span::styled(" ", edge));
+    if used == 0 {
+        return card_edge(edge, fill, width);
     }
-    out.push(Span::styled("-".repeat(budget - used), edge));
-    out.push(Span::styled(" -+", edge));
+    // The two runs split what is left, so the label sits mid-edge and the sides match.
+    let rest = width - 4 - used;
+    let lead = rest / 2;
+    let trail = rest - lead;
+    let mut out = vec![Span::styled(format!("+{} ", dashes(lead)), edge)];
+    out.extend(shown);
+    out.push(Span::styled(format!(" {}+", dashes(trail)), edge));
     Line::from(on_bg(out, fill))
 }
 

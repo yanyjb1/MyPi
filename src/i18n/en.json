@@ -139,7 +139,6 @@
   "resume_scope_current": "this directory",
   "resume_scope_all": "every directory",
   "resume_filter_hint": "filter sessions",
-  "resume_delete_failed": "the delete was refused",
   "resume_empty_loading": "reading…",
   "resume_empty_current": "no session in this directory (Tab: every directory)",
   "resume_empty_all": "no session yet",

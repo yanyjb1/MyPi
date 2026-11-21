@@ -51,12 +51,6 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
     );
 
     let mut extra = Vec::new();
-    if z.failed() {
-        extra.push(Line::from(fg(
-            text(lang, "resume_delete_failed", json!({})),
-            fixed::ERR,
-        )));
-    }
     for word in z.opening() {
         extra.push(Line::from(fg(word.clone(), fixed::WARN)));
     }
@@ -195,8 +189,9 @@ fn hints(lang: Lang) -> Vec<Hint> {
     ]
 }
 
-// List window: the start index `top` and how many blocks fit.
-// The budget is in physical rows (a block is 3 or 4 rows), so a short last block is never pushed off screen.
+// List window: the start index `top` and how many blocks to draw.
+// The budget is in physical rows; the last block may be drawn part-way, so the tail of the body is
+// never given up just because a block would not fit whole. The draw cuts the rest.
 fn window(z: &ResumeZone, budget: usize) -> (usize, usize) {
     let count = z.visible_len();
     if count == 0 || budget == 0 {
@@ -210,14 +205,13 @@ fn window(z: &ResumeZone, budget: usize) -> (usize, usize) {
         let mut used = 0usize;
         let mut seen = 0usize;
         for i in top..count {
-            let h = block_height(has_preview(z, i)) + usize::from(i + 1 < count);
-            if used + h > budget && seen > 0 {
+            used += block_height(has_preview(z, i)) + usize::from(i + 1 < count);
+            seen += 1;
+            if used >= budget {
                 break;
             }
-            used += h;
-            seen += 1;
         }
-        // Selected block is outside the window: move it down one and retry.
+        // The selected block fell outside the window: move it down one and retry.
         if z.selected() >= top + seen && seen > 0 {
             top += 1;
             continue;

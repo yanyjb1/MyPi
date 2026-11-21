@@ -25,13 +25,13 @@ body when it is a user message. `Row` adds the geometry the layout computed.
 ### Header
 
 The page's head line is `blocks · <rows> · <rounds> rounds · <scope>`, where the scope is
-`every block` or `user messages`. Under it come the filter box and its caption; the key hints wait
-at the bottom, under the rows.
+`every block` or `user messages`. Under it come the filter's caption and its box; the key hints
+wait at the bottom, under the rows.
 
 ### Filter box
 
-The filter has its own box: a rule above it, the prompt and the reader's words inside, a rule
-below it, and a caption under that saying what the filter looks at. The caption names the role and
+The filter has its own box: the caption sits over it, saying what the filter looks at, then a
+rule, the prompt and the reader's words, then a rule. The caption names the role and
 the summary, because those are the only text a row carries. The box, the body and the hints are
 inset from the frame's sides by a margin the chassis computes, so the content never sits against
 the border.

@@ -37,7 +37,8 @@ The other zones, the session, the socket, the database, the agent loop, and the 
 
 1. `Row::of` and the `call sessions` answer's fields.
 2. `Scope` and the `under` field of the list request.
-3. `pending_delete` and the render's confirming marker.
+3. `pending_delete`, `failed` and the render's confirming marker: both are said on the block's
+   own title row.
 4. `start` and `session(None)`: both reset the page.
 5. The visible index and `row_at`: the on-screen position is not the row index.
 6. `render::hints` and the keys `keys()` claims.

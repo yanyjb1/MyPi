@@ -30,13 +30,14 @@ last block, not from `started_at`; a session with memos says how many.
 ### Header, filter and hints
 
 The head line is `sessions · <count> · <scope>`, where the scope is `this directory` or
-`every directory`. Under it come the filter box and one short line saying what it matches; the key
-hints wait at the very bottom, under the list.
+`every directory`. Under it come one short line saying what the filter matches, then the filter
+box; the key hints wait at the very bottom, under the list, and the server's opening words sit
+just above the rule that closes the data.
 
 ### Filter box
 
-The filter has its own box: a rule above it, the prompt and the reader's words inside, a rule
-below it, and the caption under that. It matches a session's name, first message and directory.
+The filter has its own box: the caption sits over it, then a rule, the prompt and the reader's
+words, and a rule under it. It matches a session's name, first message and directory.
 The box, the body and the hints are inset from the frame's sides by a margin the chassis computes,
 so the content never sits against the border.
 
@@ -62,13 +63,15 @@ so the content never sits against the border.
 ### Rows
 
 One session is three or four physical rows (title, optional preview, meta, gap). The window is
-computed in physical rows, so a short list never pushes the last entry off screen.
+computed in physical rows, and the last block may be drawn part-way: the body is filled to its last
+row, and the chassis cuts what does not fit.
 
 ## 2. Design intent
 
 - **Refetch on entry.** The list is a fact about the outside; last time's snapshot may be stale.
 - **Filter keeps indices.** The visible list is a projection; the rows are never reordered.
-- **A delete is armed, then confirmed.** One keypress cannot destroy a session.
+- **A delete is armed, then confirmed.** One keypress cannot destroy a session; the marker and
+  the refusal both appear on the armed block's own title row, where the key was pressed.
 - **One frame for every page.** The edge, the head, the filter box and the key hints come from
   `zone::page`; the picker supplies its title, its placeholder, its caption, its empty word and its
   hints.
