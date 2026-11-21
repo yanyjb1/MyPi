@@ -51,6 +51,7 @@ keys! {
     KEY_CONFIG_UI_PLACEHOLDER_EMPTY_REPLY = "config", "ui.placeholder", "emptyReply", Text, DefaultValue::Text("SYSTEM: (no reply body — empty response)"), "Words for an assistant reply that arrived empty.", true;
     KEY_CONFIG_UI_PLACEHOLDER_INTERRUPTED = "config", "ui.placeholder", "interrupted", Text, DefaultValue::Text("SYSTEM: UserInterrupted."), "Words for a round the user interrupted.", true;
     KEY_CONFIG_UI_PLACEHOLDER_COPIED_TO_CLIPBOARD = "config", "ui.placeholder", "copiedToClipboard", Text, DefaultValue::Text("SYSTEM: that message is on your clipboard."), "Words for a message copied by a rewind.", true;
+    KEY_CONFIG_UI_LANG = "config", "ui", "lang", Text, DefaultValue::Text("en"), "The terminal front end's display language: en or zh; anything else keeps en.", true;
     KEY_CONFIG_UI_TUI_HISTORY_CACHE_MARGIN = "config", "ui.tui.zone.main.history", "cacheMargin", Int, DefaultValue::Int(64), "Blocks kept in the history zone's product layer.", true;
     KEY_CONFIG_UI_TUI_HISTORY_FOCUS_LINE = "config", "ui.tui.zone.main.history", "focusLine", Int, DefaultValue::Int(3), "Screen row the sight line sits on, counted from the top of the history zone.", true;
     KEY_CONFIG_UI_TUI_HISTORY_CARD_FOLD_BUDGET = "config", "ui.tui.zone.main.history", "cardFoldBudget", Int, DefaultValue::Int(10), "Rows a card head or its tail may take before it folds; the fold keeps row one, the placeholder and the last eight.", true;

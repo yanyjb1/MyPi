@@ -122,7 +122,7 @@ This domain owns the keys below; consumers ask it for values.
 | `config.server.storage` | `batchTools` |
 | `config.server.platform` | `timezone`, `stamp.*`, `ipc` |
 | `config.server` | `pruneOnRewind` |
-| `config.ui` | `session.preloadCache`, `placeholder.*` |
+| `config.ui` | `lang`, `session.preloadCache`, `placeholder.*` |
 | `config.ui.tui` | `fx.usdCny` |
 | `config.ui.tui.zone.main.history` | `cacheMargin`, `focusLine`, `cardFoldBudget`, `scrollHeight`, `todoFold` |
 | `models.provider.<name>` | `baseUrl`, `api`, `apiKey`, `authHeader`, `models` |
