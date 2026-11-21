@@ -1,4 +1,4 @@
-//! The session picker: a full-screen list of stored sessions.
+// The session picker: a full-screen list of stored sessions.
 
 use serde_json::{Value, json};
 
@@ -13,20 +13,20 @@ const TZ_KEY: &str = "config.server.platform.timezone";
 // The display language a refused answer is read in.
 const LANG_KEY: &str = crate::ui::tui::lang::Lang::KEY;
 
-/// No modifiers held.
+// No modifiers held.
 const PLAIN: Mods = Mods {
     ctrl: false,
     alt: false,
     shift: false,
 };
 
-/// Which sessions the list shows.
+// Which sessions the list shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
-    /// Only sessions that ran under the current directory.
+    // Only sessions that ran under the current directory.
     Current,
 
-    /// Every session on this machine.
+    // Every session on this machine.
     All,
 }
 
@@ -37,16 +37,9 @@ impl Scope {
             Scope::All => Scope::Current,
         }
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            Scope::Current => "当前目录",
-            Scope::All => "全部目录",
-        }
-    }
 }
 
-/// One stored session, as the answer carried it.
+// One stored session, as the answer carried it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub id: i64,
@@ -54,16 +47,16 @@ pub struct Row {
     pub started_at: String,
     pub cwd: Option<String>,
 
-    /// The first user message, when the answer carries it.
+    // The first user message, when the answer carries it.
     pub preview: Option<String>,
 
-    /// The session's size, when the answer carries it.
+    // The session's size, when the answer carries it.
     pub bytes: Option<i64>,
 
-    /// The time of the session's last block; the age counts from it.
+    // The time of the session's last block; the age counts from it.
     pub last_ts: Option<String>,
 
-    /// How many memos the session holds.
+    // How many memos the session holds.
     pub memos: i64,
 }
 
@@ -93,40 +86,40 @@ pub struct ResumeZone {
     size: Option<TermSize>,
     rows: Vec<Row>,
 
-    /// Indices that passed the filter: filtering keeps indices, not rows.
+    // Indices that passed the filter: filtering keeps indices, not rows.
     visible: Vec<usize>,
 
-    /// Row count at the last load: the visible set is recomputed only when it moves.
+    // Row count at the last load: the visible set is recomputed only when it moves.
     seen: usize,
     filter: String,
 
-    /// Position inside `visible`.
+    // Position inside `visible`.
     selected: usize,
 
-    /// First visible row (written back by the render).
+    // First visible row (written back by the render).
     scroll: usize,
     scope: Scope,
     cwd: std::path::PathBuf,
 
-    /// Whether a list ever arrived: tells "empty" from "not yet".
+    // Whether a list ever arrived: tells "empty" from "not yet".
     loaded: bool,
 
-    /// The row a Delete armed; Enter confirms, anything else cancels.
+    // The row a Delete armed; Enter confirms, anything else cancels.
     pending_delete: Option<i64>,
 
-    /// The last answer refused something; the render shows it.
+    // The last answer refused something; the render shows it.
     failed: bool,
 
-    /// The list itself was refused: the render says why instead of "no sessions".
+    // The list itself was refused: the render says why instead of "no sessions".
     error: Option<String>,
 
-    /// The server's opening word: what the configuration had to say, drawn above the list.
-    opening: Option<String>,
+    // The server's opening word: what the configuration had to say, drawn above the list.
+    opening: Vec<String>,
 
-    /// The language a refusal is said in; `en` until the config answers.
+    // The language a refusal is said in; `en` until the config answers.
     lang: crate::ui::tui::lang::Lang,
 
-    /// Bumped whenever this zone's rows would differ.
+    // Bumped whenever this zone's rows would differ.
     rev: u64,
 }
 
@@ -147,7 +140,7 @@ impl Default for ResumeZone {
             pending_delete: None,
             failed: false,
             error: None,
-            opening: None,
+            opening: Vec::new(),
             lang: crate::ui::tui::lang::Lang::default(),
             rev: 0,
         }
@@ -155,7 +148,7 @@ impl Default for ResumeZone {
 }
 
 impl ResumeZone {
-    /// Enter the page: reset, then ask for the list.
+    // Enter the page: reset, then ask for the list.
     fn begin(&mut self) {
         self.loaded = false;
         self.scroll = 0;
@@ -166,7 +159,7 @@ impl ResumeZone {
         self.list();
     }
 
-    /// The list is refetched every time: it is a fact about the outside.
+    // The list is refetched every time: it is a fact about the outside.
     fn list(&self) {
         let under = self.under();
         self.shared
@@ -194,9 +187,9 @@ impl ResumeZone {
         self.refilter();
     }
 
-    /// The list did not arrive: say so rather than draw the failure as an empty directory.
+    // The list did not arrive: the render says why rather than draw the failure as an empty directory.
     fn refused(&mut self, message: String) {
-        self.error = Some(format!("会话列表读取失败：{message}"));
+        self.error = Some(message);
         self.rows.clear();
         self.visible.clear();
         self.seen = 0;
@@ -205,19 +198,16 @@ impl ResumeZone {
         self.loaded = true;
     }
 
-    /// The server's opening word: the configuration's warnings, kept until the page is left.
+    // The server's opening word: the configuration's warnings, kept until the page is left.
     fn arrived(&mut self, content: &Value) {
         let Some(notices) = content.get("notices").and_then(Value::as_array) else {
             return;
         };
-        let lines: Vec<String> = notices
+        self.opening = notices
             .iter()
             .filter_map(|notice| notice.get("text").and_then(Value::as_str))
             .map(str::to_string)
             .collect();
-        if !lines.is_empty() {
-            self.opening = Some(lines.join("；"));
-        }
     }
 
     fn row(&self) -> Option<&Row> {
@@ -228,7 +218,7 @@ impl ResumeZone {
         self.row().map(|row| row.id)
     }
 
-    /// Recompute the visible set. The filter matches what the answer carries.
+    // Recompute the visible set. The filter matches what the answer carries.
     fn refilter(&mut self) {
         let needle = self.filter.to_lowercase();
         self.visible = self
@@ -396,7 +386,7 @@ impl ResumeZone {
     }
 }
 
-/// Everything about one session the filter can match on.
+// Everything about one session the filter can match on.
 pub(crate) fn haystack(row: &Row) -> String {
     format!(
         "{} {} {} {}",
@@ -408,7 +398,7 @@ pub(crate) fn haystack(row: &Row) -> String {
     .to_lowercase()
 }
 
-/// The first line: an explicit name, else the first user message, else a synthesized label.
+// The first line: an explicit name, else the first user message, else a synthesized label.
 pub(crate) fn title(row: &Row) -> String {
     if let Some(name) = &row.name {
         return name.clone();
@@ -419,7 +409,7 @@ pub(crate) fn title(row: &Row) -> String {
     display_name(row)
 }
 
-/// The preview line: only named sessions draw their first message (it is the title otherwise).
+// The preview line: only named sessions draw their first message (it is the title otherwise).
 pub(crate) fn preview(row: &Row) -> Option<String> {
     row.name.as_ref()?;
     preview_text(row)
@@ -431,7 +421,7 @@ fn preview_text(row: &Row) -> Option<String> {
     (!first.is_empty()).then(|| first.to_string())
 }
 
-/// `MM-DD:HH-MMSS+first 7 chars`, the name an unnamed session is shown under.
+// `MM-DD:HH-MMSS+first 7 chars`, the name an unnamed session is shown under.
 fn display_name(row: &Row) -> String {
     let prefix: String = row
         .preview
@@ -455,7 +445,7 @@ fn display_name(row: &Row) -> String {
     }
 }
 
-/// Rows per page.
+// Rows per page.
 const PAGE: i64 = 8;
 
 impl Zone for ResumeZone {
@@ -526,8 +516,14 @@ impl ResumeZone {
         self.scope
     }
 
-    pub(crate) fn scope_label(&self) -> &'static str {
-        self.scope.label()
+    // Every string the page shows: the header's three parts, the filter's placeholder and empty states.
+    pub(crate) fn lang(&self) -> crate::ui::tui::lang::Lang {
+        self.lang
+    }
+
+    // The live theme color the page paints its title, its prompt and its keys with.
+    pub(crate) fn accent(&self) -> crate::ui::tui::theme::Accent {
+        self.shared.palette.get()
     }
 
     pub(crate) fn filter(&self) -> &str {
@@ -550,8 +546,8 @@ impl ResumeZone {
         self.error.as_deref()
     }
 
-    pub(crate) fn opening(&self) -> Option<&str> {
-        self.opening.as_deref()
+    pub(crate) fn opening(&self) -> &[String] {
+        &self.opening
     }
 
     pub(crate) fn visible_len(&self) -> usize {
@@ -574,7 +570,7 @@ impl ResumeZone {
         self.size
     }
 
-    /// Row `i` of the visible list.
+    // Row `i` of the visible list.
     pub(crate) fn row_at(&self, i: usize) -> Option<&Row> {
         let k = *self.visible.get(i)?;
         self.rows.get(k)

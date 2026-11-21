@@ -2,6 +2,7 @@
 
 pub mod contract;
 pub mod main;
+mod page;
 mod registry;
 pub mod resume;
 pub mod tree;

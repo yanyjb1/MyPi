@@ -8,7 +8,7 @@ What each file holds and who calls it. Current state only.
 |---|---|---|
 | `mod.rs` | the module list and the re-exports | public |
 | `zone.rs` | `ResumeZone`, `Row`, `Scope`, the `Zone` implementation, the row helpers | public |
-| `render.rs` | the page: frame, header, search, list, footer | private |
+| `render.rs` | the page: head, filter, one block per session, hints, ages | private |
 
 ## What it exposes
 
@@ -19,7 +19,11 @@ What each file holds and who calls it. Current state only.
 
 - `zone::contract` for `Kind`, `Claim`, `Outcome`, `Request`, `TermSize`, `Zone`, `ZoneId`.
 - `action::{Action, Key, KeyCode, Mods}`.
-- `text::card` for the card frame, `theme::fixed` for the colors.
+- `zone::page` for the chassis: the edge, the head, the filter box, the key hints, the margins and
+  the body's row budget.
+- `text::card` for the rows inside the body, `theme::fixed` for the colors.
+- `theme::Accent` for the title, the filter's prompt and every key, read off the shared palette.
+- `lang` for the display language and the server's own words; `i18n` through `lang`'s table.
 
 ## Who calls it
 
@@ -36,8 +40,9 @@ The other zones, the session, the socket, the database, the agent loop, and the 
 3. `pending_delete` and the render's confirming marker.
 4. `start` and `session(None)`: both reset the page.
 5. The visible index and `row_at`: the on-screen position is not the row index.
+6. `render::hints` and the keys `keys()` claims.
+7. `accent` and the panel: the renderer reads the live color off the palette on every draw.
 
 ## Not wired
 
-1. The preview, the size and the age have no source yet; see the README.
-2. A refused delete is drawn as one fixed word.
+1. The memo column is a count: the list request carries no memo names.

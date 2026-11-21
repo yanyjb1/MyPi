@@ -1,0 +1,300 @@
+// The page chassis: a titled edge, a boxed filter row, the body, the key hints.
+
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
+
+use crate::ui::tui::text::card::{card_edge, card_edge_labeled, card_row, clip_spans};
+use crate::ui::tui::theme::{Accent, fixed};
+use crate::ui::tui::zone::TermSize;
+
+// Rows the chassis always takes: the titled edge, the rule over the hints, the bottom edge.
+const FIXED: usize = 3;
+
+// Rows the filter block takes: its caption, the rule over the box, the box's row, the rule under it.
+const BOX: usize = 4;
+
+// The separator between two hints on one row.
+const GAP: &str = " · ";
+
+// Columns `GAP` takes.
+const GAP_COLS: usize = 3;
+
+// One key hint: the keys to press, and what they do.
+pub struct Hint {
+    pub keys: &'static str,
+    pub what: String,
+}
+
+impl Hint {
+    pub fn new(keys: &'static str, what: String) -> Hint {
+        Hint { keys, what }
+    }
+
+    // Columns this hint takes; the separator before it is the row's, not its own.
+    fn width(&self) -> usize {
+        self.keys.width() + 1 + self.what.width()
+    }
+}
+
+// The filter box: the reader's own words, or the placeholder while it is empty.
+// Its caption hangs under the box and says what the filter looks at.
+pub struct Filter {
+    pub text: String,
+    pub placeholder: String,
+    pub caption: String,
+}
+
+// Everything a full-screen page hands the chassis. Only the content differs between pages.
+pub struct Panel {
+    pub size: TermSize,
+    pub title: String,
+    pub filter: Option<Filter>,
+
+    // Lines between the filter box and the body: refusals, the server's opening word.
+    pub extra: Vec<Line<'static>>,
+
+    // What the page says when the body has nothing; drawn centered.
+    pub empty: Option<Line<'static>>,
+    pub hints: Vec<Hint>,
+
+    // The live theme color: the title, the filter's prompt and every key are painted with it.
+    pub accent: Accent,
+}
+
+impl Panel {
+    // Blank columns on either side of the content, so the frame is not cramped against it.
+    pub fn margin(&self) -> usize {
+        margin(self.size)
+    }
+
+    // The width a page composes its data rows at: the interior less the two margins.
+    pub fn content(&self) -> usize {
+        content(self.size)
+    }
+
+    // The rows the body may take, everything else deducted.
+    pub fn body_rows(&self) -> usize {
+        body_rows(
+            self.size,
+            self.filter.is_some(),
+            self.extra.len(),
+            &self.hints,
+        )
+    }
+
+    // The whole page, the body drawn where the caller put it.
+    pub fn draw(&self, body: Vec<Line<'static>>) -> Vec<Line<'static>> {
+        let width = self.size.cols as usize;
+        let pad = self.margin();
+        let content = self.content();
+        let edge = Style::new().fg(fixed::DIM);
+        let clear = Style::new();
+        let room = room(self.size, self.filter.is_some(), self.extra.len());
+        let mut out = Vec::with_capacity(self.size.rows as usize);
+
+        let label = centered(self.head(), width.saturating_sub(7));
+        out.push(card_edge_labeled(edge, clear, width, label));
+
+        // The page's own word about the filter comes before the box: what it looks at, then the
+        // box to type in. The key hints wait at the bottom, under the data.
+        if let Some(filter) = &self.filter {
+            let caption = centered(caption(&filter.caption), content);
+            out.push(card_row(inset(caption, pad), edge, clear, width));
+            out.push(rule(edge, width));
+            out.push(card_row(inset(self.query(filter), pad), edge, clear, width));
+            out.push(rule(edge, width));
+        }
+
+        for line in &self.extra {
+            out.push(card_row(inset(line.clone(), pad), edge, clear, width));
+        }
+
+        let rows = self.body_rows();
+        let mut taken = 0;
+        if body.is_empty() {
+            if let Some(empty) = &self.empty {
+                let word = centered(empty.clone(), content);
+                out.push(card_row(inset(word, pad), edge, clear, width));
+                taken = 1;
+            }
+        } else {
+            for line in body.into_iter().take(rows) {
+                out.push(card_row(inset(line, pad), edge, clear, width));
+                taken += 1;
+            }
+        }
+
+        for _ in taken..rows {
+            out.push(card_row(Line::default(), edge, clear, width));
+        }
+
+        out.push(rule(edge, width));
+        for row in pack(&self.hints, content, hint_rows(room)) {
+            let hint = centered(hint_line(&row, self.accent), content);
+            out.push(card_row(inset(hint, pad), edge, clear, width));
+        }
+        out.push(card_edge(edge, clear, width));
+
+        // A terminal shorter than the chassis itself takes the front of it: nothing may overflow.
+        out.truncate(self.size.rows as usize);
+        out
+    }
+
+    // The head line: the page's own words, in the live color.
+    fn head(&self) -> Line<'static> {
+        if self.title.is_empty() {
+            return Line::default();
+        }
+        Line::from(Span::styled(
+            self.title.clone(),
+            self.accent.style().add_modifier(Modifier::BOLD),
+        ))
+    }
+
+    // The filter row: a prompt, then the reader's words or the placeholder.
+    fn query(&self, filter: &Filter) -> Line<'static> {
+        let prompt = Span::styled("> ", self.accent.style().add_modifier(Modifier::BOLD));
+        if filter.text.is_empty() {
+            return Line::from(vec![
+                prompt,
+                Span::styled(filter.placeholder.clone(), Style::new().fg(fixed::DIM)),
+            ]);
+        }
+        Line::from(vec![
+            prompt,
+            Span::styled(filter.text.clone(), Style::new().fg(fixed::SYSTEM)),
+        ])
+    }
+}
+
+// Rows the body may take, for a caller that needs the figure before it composes a page.
+pub fn body_rows(size: TermSize, with_filter: bool, extra: usize, hints: &[Hint]) -> usize {
+    let room = room(size, with_filter, extra);
+    let hints = pack(hints, content(size), hint_rows(room)).len();
+    // One row is always the body's, however short the terminal is.
+    room.saturating_sub(hints).max(1).min(room)
+}
+
+// The frame's interior width.
+fn inner(size: TermSize) -> usize {
+    (size.cols as usize).saturating_sub(4)
+}
+
+// Blank columns on either side of the content: none on a narrow terminal, four at most.
+fn margin(size: TermSize) -> usize {
+    (inner(size) / 20).min(4)
+}
+
+// The width a page composes its rows at.
+fn content(size: TermSize) -> usize {
+    inner(size).saturating_sub(2 * margin(size))
+}
+
+// Rows left once the edges, the head, the filter box and the `extra` lines are paid for.
+fn room(size: TermSize, with_filter: bool, extra: usize) -> usize {
+    (size.rows as usize).saturating_sub(FIXED + BOX * usize::from(with_filter) + extra)
+}
+
+// Rows the hints may take: never more than half the room, so the body always keeps the rest.
+fn hint_rows(room: usize) -> usize {
+    (room / 2).max(1)
+}
+
+// The caption under the filter box: what the filter looks at, in the frame's dim ink.
+fn caption(text: &str) -> Line<'static> {
+    if text.is_empty() {
+        return Line::default();
+    }
+    Line::from(Span::styled(text.to_string(), Style::new().fg(fixed::DIM)))
+}
+
+// A rule between two content rows: the frame's sides, joined into the line with a `+`.
+// A rule between two content rows: the frame's sides, joined into the line with a `+`.
+fn rule(edge: Style, width: usize) -> Line<'static> {
+    if width < 8 {
+        return card_edge(edge, Style::new(), width);
+    }
+    Line::from(vec![
+        Span::styled("|+", edge),
+        Span::styled("-".repeat(width - 4), edge),
+        Span::styled("+|", edge),
+    ])
+}
+
+// The page's own words sit in the middle of the row; data rows keep their left edge.
+fn centered(line: Line<'static>, inner: usize) -> Line<'static> {
+    // A word too long for the row is cut here: `card_row` would otherwise leave it unclipped.
+    if line.width() > inner {
+        return Line::from(clip_spans(line.spans, inner));
+    }
+    let used = line.width();
+    let lead = inner.saturating_sub(used) / 2;
+    if lead == 0 {
+        return line;
+    }
+    let mut spans = Vec::with_capacity(line.spans.len() + 1);
+    spans.push(Span::raw(" ".repeat(lead)));
+    spans.extend(line.spans);
+    Line::from(spans)
+}
+
+// The frame's inner margin, put in front of one row.
+fn inset(line: Line<'static>, pad: usize) -> Line<'static> {
+    if pad == 0 {
+        return line;
+    }
+    let mut spans = Vec::with_capacity(line.spans.len() + 1);
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(line.spans);
+    Line::from(spans).style(line.style)
+}
+
+// Whole hints packed into rows that fit: a hint never splits across two rows.
+// `room` bounds the rows all hints may take; a terminal too short for all of them keeps the front.
+fn pack(hints: &[Hint], inner: usize, room: usize) -> Vec<Vec<&Hint>> {
+    let budget = room.max(1);
+    let mut out: Vec<Vec<&Hint>> = Vec::new();
+    let mut row: Vec<&Hint> = Vec::new();
+    let mut used = 0usize;
+    for hint in hints {
+        if out.len() >= budget {
+            return out;
+        }
+        let width = hint.width();
+        if !row.is_empty() && used + GAP_COLS + width > inner {
+            out.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        used += if row.is_empty() {
+            width
+        } else {
+            GAP_COLS + width
+        };
+        row.push(hint);
+    }
+    if !row.is_empty() && out.len() < budget {
+        out.push(row);
+    }
+    out
+}
+
+// One row of hints: the keys in the live color, what they do dim.
+fn hint_line(row: &[&Hint], accent: Accent) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (at, hint) in row.iter().enumerate() {
+        if at > 0 {
+            spans.push(Span::styled(GAP, Style::new().fg(fixed::DIM)));
+        }
+        spans.push(Span::styled(
+            hint.keys,
+            accent.style().add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            hint.what.clone(),
+            Style::new().fg(fixed::MUTED),
+        ));
+    }
+    Line::from(spans)
+}

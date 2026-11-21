@@ -14,7 +14,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | `action.rs` | `Action`, `Key`, `KeyCode`, `Mods`, crossterm projections | public |
 | `term.rs` | `Term`, `Input`: alternate screen, flags, size, one frame, drain and wait | public |
 | `app/` | `App`: registry, display ledger, delivery, landing, lifecycle, memo | public |
-| `zone/` | `contract`, `registry`, the three major zones | public |
+| `zone/` | `contract`, `registry`, `page` (the full-screen chassis), the three major zones | public |
 | `theme/` | the live accent and the fixed palette | public |
 | `text/` | display width, truncation, wrapping, the card frame | public |
 
