@@ -1,9 +1,10 @@
-//! The slash commands this front end knows: one file each, and the table that holds them.
+// The slash commands this front end knows: one file each, and the table that holds them.
 
 mod call;
 mod cdp;
 mod compact;
 mod effort;
+mod hub;
 mod memo;
 mod meta;
 mod model;

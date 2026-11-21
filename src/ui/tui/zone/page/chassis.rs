@@ -63,6 +63,9 @@ pub struct Panel {
     pub title: String,
     pub filter: Option<Filter>,
 
+    // What the page is for, under the head; absent leaves the head against the data.
+    pub note: Option<String>,
+
     // Lines under the body: the server's opening word, anything the page must say last.
     pub extra: Vec<Line<'static>>,
 
@@ -90,6 +93,7 @@ impl Panel {
         body_rows(
             self.size,
             self.filter.is_some(),
+            self.note.is_some(),
             self.extra.len(),
             &self.hints,
         )
@@ -105,6 +109,7 @@ impl Panel {
         let air = air(
             self.size,
             self.filter.is_some(),
+            self.note.is_some(),
             self.extra.len(),
             &self.hints,
         );
@@ -114,12 +119,25 @@ impl Panel {
 
         out.push(card_edge_labeled(edge, clear, width, self.head()));
 
+        // The page's own words sit over the data, one blank either side once the air is earned.
+        // A note and a caption share that air: a seam between two blocks never takes two blanks.
+        let mut owed = false;
+        if let Some(note) = &self.note {
+            if air.note {
+                out.push(blank());
+            }
+            let line = centered(caption(note), content);
+            out.push(card_row(inset(line, pad), edge, clear, width));
+            owed = air.note;
+        }
+
         // The page's own word about the filter comes over the box: what it looks at, then the box
         // to type in. The key hints wait at the bottom, under the data.
         if let Some(filter) = &self.filter {
-            if air.caption {
+            if owed || air.caption {
                 out.push(blank());
             }
+            owed = false;
             let caption = centered(caption(&filter.caption), content);
             out.push(card_row(inset(caption, pad), edge, clear, width));
             if air.caption {
@@ -127,6 +145,12 @@ impl Panel {
             }
             out.push(rule(edge, width));
             out.push(card_row(inset(self.query(filter), pad), edge, clear, width));
+            out.push(rule(edge, width));
+        }
+
+        // Without a filter box the note is closed by a rule itself, so the head keeps its own band.
+        if owed {
+            out.push(blank());
             out.push(rule(edge, width));
         }
 
@@ -201,12 +225,11 @@ impl Panel {
     }
 }
 
-// How much air this size can spare, and the rows left for the hints and the body.
-// Air is granted a block at a time from the bottom up, so a growing terminal spends its new rows
-// on the keys before the caption. The filter box never takes any: it belongs against the data.
+// on the keys before the caption and the note. The box takes none: it belongs against the data.
 struct Air {
     keys: bool,
     caption: bool,
+    note: bool,
     room: usize,
 }
 
@@ -217,22 +240,29 @@ impl Air {
 }
 
 // Rows the body may take, for a caller that needs the figure before it composes a page.
-pub fn body_rows(size: TermSize, with_filter: bool, extra: usize, hints: &[Hint]) -> usize {
-    let room = air(size, with_filter, extra, hints).room();
+pub fn body_rows(
+    size: TermSize,
+    with_filter: bool,
+    with_note: bool,
+    extra: usize,
+    hints: &[Hint],
+) -> usize {
+    let room = air(size, with_filter, with_note, extra, hints).room();
     // One row is always the body's, however short the terminal is.
     room.saturating_sub(pack(hints, content(size), hint_rows(room)).len())
         .max(1)
         .min(room)
 }
 
-fn air(size: TermSize, with_filter: bool, extra: usize, hints: &[Hint]) -> Air {
+fn air(size: TermSize, with_filter: bool, with_note: bool, extra: usize, hints: &[Hint]) -> Air {
     let rows = size.rows as usize;
     let cols = content(size);
-    // The caption and the box, without any air between them.
-    let top = if with_filter { CAPTION + BOX } else { 0 };
-    // Without air: the two edges, the rule over the keys, the caption, the box and the extra lines.
+    // The caption and the box, without any air between them; a note takes one row wherever.
+    let top = if with_filter { CAPTION + BOX } else { 0 } + usize::from(with_note);
+    // Without air: the two edges, the rule over the keys, the note and the extra lines.
     let rest = rows.saturating_sub(FRAME + RULE + top + extra);
-    let grants = if with_filter { 2 } else { 1 };
+    // Air is granted from the bottom up: the keys, then the caption, then the note.
+    let grants = 1 + usize::from(with_filter) + usize::from(with_note);
 
     // The roomiest layout that still leaves the body its floor; each step down spends two rows.
     for grant in (0..=grants).rev() {
@@ -242,6 +272,7 @@ fn air(size: TermSize, with_filter: bool, extra: usize, hints: &[Hint]) -> Air {
             return Air {
                 keys: grant >= 1,
                 caption: with_filter && grant >= 2,
+                note: with_note && grant >= 2 + usize::from(with_filter),
                 room,
             };
         }
@@ -249,6 +280,7 @@ fn air(size: TermSize, with_filter: bool, extra: usize, hints: &[Hint]) -> Air {
     Air {
         keys: false,
         caption: false,
+        note: false,
         room: rest,
     }
 }
@@ -291,6 +323,11 @@ fn rule(edge: Style, width: usize) -> Line<'static> {
         Span::styled(dashes(width - 2), edge),
         Span::styled("|", edge),
     ])
+}
+
+// A rule between two blocks of one page, for a renderer that cuts its own body in two.
+pub fn divider(width: usize) -> Line<'static> {
+    rule(Style::new().fg(fixed::DIM), width)
 }
 
 // The page's own words sit in the middle of the row; data rows keep their left edge.

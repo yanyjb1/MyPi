@@ -1,8 +1,9 @@
-//! The table: every command's declaration, its own dispatch, and the two lookups.
+// The table: every command's declaration, its own dispatch, and the two lookups.
 
 use super::meta::{self, CommandMeta};
 use super::{
-    cdp, compact, effort, memo, model, name, new, prepare, profile, quit, resume, switch, usage,
+    cdp, compact, effort, hub, memo, model, name, new, prepare, profile, quit, resume, switch,
+    usage,
 };
 
 pub const TABLE: &[CommandMeta] = &[
@@ -17,23 +18,24 @@ pub const TABLE: &[CommandMeta] = &[
     memo::META,
     prepare::META,
     resume::META,
+    hub::META,
     new::META,
     quit::META,
 ];
 
 const _: () = assert!(meta::valid(TABLE));
 
-/// One line of input: the command it names, and its argument text.
+// One line of input: the command it names, and its argument text.
 pub fn split(input: &str) -> Option<(&'static CommandMeta, &str)> {
     meta::split(TABLE, input)
 }
 
-/// One name (with its slash) to its declaration.
+// One name (with its slash) to its declaration.
 pub fn lookup(name: &str) -> Option<&'static CommandMeta> {
     meta::lookup(TABLE, name)
 }
 
-/// `provider:model`, both halves non-empty.
+// `provider:model`, both halves non-empty.
 pub fn pair(args: &str) -> Option<(String, String)> {
     let (provider, model) = args.split_once(':')?;
     let (provider, model) = (provider.trim(), model.trim());

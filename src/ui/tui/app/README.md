@@ -9,7 +9,7 @@ The front end's centre: the registry, the display ledger, and the one post box b
 | field | meaning |
 |---|---|
 | `session: Session` | the only handle; nothing below this file holds one |
-| `zones: Vec<Box<dyn Zone>>` | Main, Resume, Tree, in `ZoneId` order |
+| `zones: Vec<Box<dyn Zone>>` | Main, Resume, Tree, Hub, in `ZoneId` order |
 | `owner: Option<ZoneId>` | who shows; `None` after the last handover and the loop end |
 | `memo: Memo` | what one zone leaves for the next |
 | `size: TermSize` | the last size handed down |

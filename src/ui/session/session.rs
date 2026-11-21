@@ -40,8 +40,11 @@ impl Session {
         self.down.structure_mut().clear();
     }
 
+    // The slot is filled when the writer left it out: a zone reading another conversation keeps its own.
     pub fn send(&self, mut frame: Frame) {
-        if let (Some(id), Some(object)) = (self.attached, frame.payload.as_object_mut()) {
+        if let (Some(id), Some(object)) = (self.attached, frame.payload.as_object_mut())
+            && !object.contains_key("session")
+        {
             object.insert("session".to_string(), json!(id));
         }
         self.up.send(frame);
@@ -68,7 +71,11 @@ impl Session {
         self.up.send(Frame::new("register", "bye", json!({})));
     }
 
+    // Only the attached conversation's structure reaches the window: a page may read another.
     fn absorb(&mut self, content: &Value) {
+        if !self.mine(content) {
+            return;
+        }
         if let Some(signal) = content.get("signal").and_then(Value::as_str) {
             if signal == "rewind"
                 && let Some(block) = content.get("block").and_then(Value::as_i64)
@@ -84,6 +91,18 @@ impl Session {
             return;
         }
         self.round(content);
+    }
+
+    // Whether a frame speaks about the conversation this connection follows.
+    fn mine(&self, content: &Value) -> bool {
+        match (
+            content.get("session").and_then(Value::as_i64),
+            self.attached,
+        ) {
+            (Some(said), Some(attached)) => said == attached,
+            (Some(_), None) => false,
+            (None, _) => true,
+        }
     }
 
     fn round(&mut self, value: &Value) {

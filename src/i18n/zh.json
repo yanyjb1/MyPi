@@ -165,5 +165,15 @@
   "role_tool_result": "工具结果",
   "role_block": "块",
   "resume_filter_caption": "名字 · 首条消息 · 目录",
-  "tree_filter_caption": "角色 · 摘要"
+  "tree_filter_caption": "角色 · 摘要",
+  "cmd_hub": "列出本会话的子代理，翻看每一个做了什么",
+  "hub_note": "每一行是一个子代理，Enter 翻阅它的记录",
+  "hub_title": "子代理 · {count} 个 · {running} 在跑",
+  "hub_empty_loading": "正在读取…",
+  "hub_empty": "这个会话还没有子代理",
+  "hub_read_failed": "子代理列表读取失败：{detail}",
+  "hub_rounds": "{n} 轮",
+  "hub_preview_empty": "还没有块",
+  "hint_peek": "翻阅",
+  "hint_interrupt": "打断"
 }

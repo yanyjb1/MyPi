@@ -54,6 +54,7 @@ pub(super) fn lines(z: &mut TreeZone) -> Vec<Line<'static>> {
             placeholder: text(lang, "tree_filter_hint", json!({})),
             caption: text(lang, "tree_filter_caption", json!({})),
         }),
+        note: None,
         extra: Vec::new(),
         empty: empty(z, lang),
         hints: hints(lang, z.cherish(), z.only_user()),
@@ -128,7 +129,7 @@ pub(super) fn hints(lang: Lang, cherish: bool, only_user: bool) -> Vec<Hint> {
 
 // Rows the body may take on this size, with these hints at the bottom.
 pub(super) fn body_rows(size: TermSize, hints: &[Hint]) -> usize {
-    crate::ui::tui::zone::page::body_rows(size, true, 0, hints)
+    crate::ui::tui::zone::page::body_rows(size, true, false, 0, hints)
 }
 
 // Inverts the whole row, keeping its colors.

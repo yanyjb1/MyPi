@@ -1,6 +1,6 @@
 # contract — the zone boundary
 
-The only vocabulary the app and the three major zones share.
+The only vocabulary the app and the major zones share.
 
 ## 1. Design / Schema
 
@@ -14,7 +14,7 @@ The only vocabulary the app and the three major zones share.
 | `Shared` | the post box, the one color and the draft, handed out at boot |
 | `Draft` | what a session will open with |
 | `Outcome` | what a delivery made the screen do |
-| `ZoneId` | `Main`, `Resume`, `Tree` |
+| `ZoneId` | `Main`, `Resume`, `Tree`, `Hub` |
 | `TermSize` | columns and rows |
 | `Memo` | string-to-string, owned by the app, open to the zone it starts |
 | `Shout` | one `(name, content)` event on the chat zone's bus |

@@ -63,6 +63,7 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
             placeholder: text(lang, "resume_filter_hint", json!({})),
             caption: text(lang, "resume_filter_caption", json!({})),
         }),
+        note: None,
         extra,
         empty: empty(z, lang),
         hints: hints(lang),

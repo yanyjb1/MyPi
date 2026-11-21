@@ -48,6 +48,7 @@ to change and broadcasts only when the numbers moved.
 |---|---|
 | `OpenTree` | `Outcome::Show { to: Tree }` |
 | `OpenResume` | `Outcome::Show { to: Resume }` |
+| `OpenHub` | `Outcome::Show { to: Hub }` |
 | `Quit` | `Outcome::Quit` |
 | `New` | history and editor cleared, `Local::Detach` |
 

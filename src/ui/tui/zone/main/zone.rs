@@ -317,6 +317,12 @@ impl MainZone {
                         memo: Vec::new(),
                     };
                 }
+                ExitRequest::OpenHub => {
+                    outcome = Outcome::Show {
+                        to: ZoneId::Hub,
+                        memo: Vec::new(),
+                    };
+                }
                 ExitRequest::Quit => outcome = Outcome::Quit,
                 ExitRequest::New => {
                     self.history.reset();

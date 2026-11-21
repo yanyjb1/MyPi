@@ -16,7 +16,10 @@ One conversation on the wire: a connection up, frames down, and the structural w
 
 `open`, `attach`, `detach`, `send`, `receive`, `structure`, `close`.
 
-`send` writes one frame and says nothing about any answer. `receive` hands back everything the connection produced since the last call, in arrival order, each frame whole.
+`send` writes one frame and says nothing about any answer. The `session` field is filled in
+only when the writer left it out: a page that reads another conversation's rows sends that id
+itself. `receive` hands back everything the connection produced since the last call, in arrival
+order, each frame whole.
 
 ### The window
 
@@ -31,6 +34,8 @@ Three shapes reach it:
 | carrying `signal: rewind` and `block` | everything after that block goes, and the round owning it keeps only its head |
 
 `attach` and `detach` empty the window: a round belongs to one conversation.
+
+A frame naming another session changes nothing: the window is this conversation's alone.
 
 A `local` frame is this layer's own voice: `disconnected`, once, when the read half closes.
 

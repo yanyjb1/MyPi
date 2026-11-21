@@ -2,7 +2,7 @@
 
 The one frame every full-screen page draws inside: a dashed top edge with the title laid over its
 middle, the filter's caption and its box, the body, the extra words, a rule, the key hints and the
-dashed bottom edge. `resume` and `tree` both fill it; a page never draws its own border.
+dashed bottom edge. `resume`, `tree` and `hub` fill it; a page never draws its own border.
 
 Beside the chassis sits `Picker`, the column of rows those two pages share: the rows, the words that
 filter them, the cursor and the window. The chassis places finished lines; the picker holds what a
@@ -17,21 +17,29 @@ page lists.
 | `size` | the terminal size the page was started with |
 | `title` | the head line, drawn over the middle of the top edge |
 | `filter` | `Some` when the page takes a filter word |
+| `note` | one sentence on what the page is for, under the head |
 | `extra` | lines under the body: the server's opening word, anything said last |
 | `empty` | what the page says when the body has nothing |
 | `hints` | every key the page answers to, in the order they are worth learning |
 | `accent` | the live theme color for the title, the filter's prompt and every key |
 
 A `Filter` is the reader's words, the placeholder shown while it is empty, and a caption sitting
-over the box that says what the filter looks at. A `Hint` is the keys to press and what they do.
+over the box that says what the filter looks at. A page without a filter puts the same sentence in
+`note` instead, so every full-screen page opens with one line saying what it holds. A `Hint` is the keys to press and what they do.
 `draw(body)` returns the whole screen; the page supplies the body lines and nothing else.
+`divider(width)` is the same rule, offered to a page that cuts its own body into two bands.
 
 ### Layout and budget
 
-The order down the screen is fixed: dashed top edge, the caption (with a blank either side when it
-earns one), the rule, the filter box, the rule, the body, the `extra` lines, rule, the hint rows,
-dashed bottom edge. The reader meets the count first, then one short word on what the filter is for, then the
-box, then the data, then whatever the page must say last, and the keys at the very end.
+The order down the screen is fixed: dashed top edge, the note (with a blank either side when it
+earns one), the caption over the box (with a blank either side when it earns one), the rule, the
+filter box, the rule, the body, the `extra` lines, rule, the hint rows, dashed bottom edge. The
+reader meets the count first, then one short word on what the page holds, then the box, then the
+data, then whatever the page must say last, and the keys at the very end.
+
+A note and a caption meet on one blank, never two: the blank belongs to the seam, so air granted to
+either block opens that seam without doubling it. A page with a note and no filter box closes the
+note's band with a rule, so the head keeps its own band instead of bleeding into the data.
 
 Every rule and both edges are dashed: a dash, a blank, and so on. The title splits the top edge
 into two runs of equal length, so the two sides match.
@@ -45,13 +53,13 @@ size its request before it composes a page.
 ### Air
 
 The blanks are what a frame earns, never what it assumes. They are granted one block at a time,
-bottom first: the keys get their blank rows, then the caption. A block keeps its air only if the
-body still holds `FLOOR` rows afterwards; when even the topmost grant would cost the body too much,
-the block that asks goes without.
+bottom first: the keys get their blank rows, then the caption, then the note. A block keeps its air
+only if the body still holds `FLOOR` rows afterwards; when even the last grant would cost the body
+too much, the block that asks goes without.
 
 The filter box never takes air: it is the word the reader is typing, and it belongs against the
-data underneath it. So a growing terminal spends its new rows on the keys before the caption, and
-the data shrinks by two rows per grant, never below the floor. One function decides, and the draw
+data underneath it. So a growing terminal spends its new rows on the keys before the caption and
+the note, and the data shrinks by two rows per grant, never below the floor. One function decides, and the draw
 and the budget both read its answer.
 
 ### Margins
@@ -93,6 +101,9 @@ description dim.
 
 - **Air is bought, not assumed.** A short terminal keeps its data and loses its blanks; a tall one
   shows them. The reader never scrolls a page to look at empty rows.
+
+- **A seam is one blank.** Two blocks that meet share the blank between them instead of each
+  opening one, so a page carrying both a note and a caption never doubles the gap.
 
 ## 3. Picker
 

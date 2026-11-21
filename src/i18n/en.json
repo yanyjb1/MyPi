@@ -165,5 +165,15 @@
   "role_tool_result": "tool result",
   "role_block": "block",
   "resume_filter_caption": "name · first message · directory",
-  "tree_filter_caption": "role · summary"
+  "tree_filter_caption": "role · summary",
+  "cmd_hub": "list this conversation's subagents and read what each one did",
+  "hub_note": "each row is one subagent; Enter reads its transcript",
+  "hub_title": "subagents · {count} · {running} running",
+  "hub_empty_loading": "reading…",
+  "hub_empty": "no subagent in this conversation",
+  "hub_read_failed": "the subagent list could not be read: {detail}",
+  "hub_rounds": "{n} rounds",
+  "hub_preview_empty": "no block yet",
+  "hint_peek": "read",
+  "hint_interrupt": "interrupt"
 }

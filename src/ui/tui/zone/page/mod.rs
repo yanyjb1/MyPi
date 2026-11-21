@@ -3,5 +3,5 @@
 mod chassis;
 mod picker;
 
-pub use chassis::{Filter, Hint, Panel, body_rows};
+pub use chassis::{Filter, Hint, Panel, body_rows, divider};
 pub use picker::Picker;
