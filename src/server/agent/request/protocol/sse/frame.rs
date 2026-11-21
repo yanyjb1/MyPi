@@ -32,6 +32,12 @@ pub fn worker_error(line: &str) -> Option<anyhow::Error> {
     }))
 }
 
+/// One field's value: the name, a colon, and at most one space SSE leaves optional.
+pub fn strip_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let rest = line.strip_prefix(name)?.strip_prefix(':')?;
+    Some(rest.strip_prefix(' ').unwrap_or(rest))
+}
+
 /// Classify one line.
 pub fn frame(line: &str) -> Result<Frame> {
     if let Some(error) = worker_error(line) {
@@ -40,7 +46,7 @@ pub fn frame(line: &str) -> Result<Frame> {
     let line = line.strip_suffix('\n').unwrap_or(line);
     let line = line.strip_suffix('\r').unwrap_or(line);
 
-    let Some(payload) = line.strip_prefix("data: ") else {
+    let Some(payload) = strip_field(line, "data") else {
         return Ok(Frame::Skip);
     };
     if payload == "[DONE]" {

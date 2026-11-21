@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow};
 
 use self::client::Client;
 use self::worker::{ChannelReader, SessionWorker};
+use super::protocol::stream::SILENCE;
 use super::protocol::{ProtocolId, WireRequest};
 use super::retry::Failure;
 
@@ -40,9 +41,8 @@ pub(crate) fn send(
     let body = wire.body.clone();
     let headers = wire.headers.clone();
     let timeout_ms = client.retry.timeout.as_millis() as u64;
-    let (first, idle) = client.budget().resolved();
-    let first_ms = first.as_millis() as u64;
-    let idle_ms = idle.as_millis() as u64;
+    let first_ms = SILENCE.as_millis() as u64;
+    let idle_ms = first_ms;
     std::thread::spawn(move || {
         let result = shared
             .lock()

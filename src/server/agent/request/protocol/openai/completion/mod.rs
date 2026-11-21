@@ -58,10 +58,6 @@ impl Protocol for Completion {
         })
     }
 
-    fn budget(&self) -> protocol::stream::Budget {
-        protocol::stream::Budget::default()
-    }
-
     fn decode(
         &self,
         reader: Box<dyn BufRead>,

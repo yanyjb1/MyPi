@@ -7,7 +7,6 @@ use anyhow::Result;
 
 use crate::server::agent::request::live::Line;
 use crate::server::agent::request::message::AssistantMessage;
-use crate::server::agent::request::protocol::stream::Budget;
 use crate::server::agent::request::protocol::{Endpoint, Output, Protocol, ProtocolRequest};
 use crate::server::agent::request::retry::{self, Class, Failure, RetryPolicy};
 use crate::server::agent::request::transport::Provider;
@@ -38,11 +37,6 @@ impl Client {
 
     pub fn model(&self) -> &str {
         &self.model
-    }
-
-    /// The deadlines the child holds a silent stream to.
-    pub(crate) fn budget(&self) -> Budget {
-        self.protocol.budget()
     }
 
     /// One call, retried per policy. Every failure is said out loud exactly once.

@@ -102,7 +102,7 @@ pub(crate) fn decode(
     let mut usage = Usage::default();
     let mut calls = Calls::default();
 
-    let end = stream::data(reader.as_mut(), cancel, |payload| {
+    let interrupted = stream::data(reader.as_mut(), cancel, |payload| {
         let chunk: Value = serde_json::from_str(payload)
             .with_context(|| format!("malformed stream chunk: {payload}"))?;
 
@@ -147,7 +147,6 @@ pub(crate) fn decode(
         }
         Ok(true)
     })?;
-    let interrupted = end == stream::End::Canceled;
 
     let mut placed = calls.finish();
     let declared = placed.len();

@@ -42,12 +42,10 @@ Notice = { level, text }
 
 `ToolEvent` belongs to the loop.
 
-A stream has no total budget: one lap runs as long as the model keeps talking. The worker child
-holds it to the protocol's silence budget (600 s when the host names none) and reports a timeout when
-it expires. Cancellation is one `stop()`: the session's tree goes down and the reader sees its pipe
-close. A
-closed pipe is the body's end, not a failure; the child sends a marker line before it closes when
-the request itself failed.
+A stream has no total budget: one lap runs as long as the model keeps talking.
+The worker child holds every protocol to one silence deadline (600 s, before the first payload and between two) and reports a timeout when it expires.
+Cancellation is one `stop()`: the session's tree goes down and the reader sees its pipe close.
+A closed pipe is the body's end, not a failure; the child sends a marker line before it closes when the request itself failed.
 
 The history read port has three queries: `messages(session)` — the session's messages, shared, so a
 lap never copies them; `turns(session)` — the same list as turns with their interval lists (a turn

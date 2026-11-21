@@ -13,7 +13,7 @@ use crate::server::agent::request::message::{
 };
 use crate::server::agent::request::protocol::blocks;
 use crate::server::agent::request::protocol::stitch::Calls;
-use crate::server::agent::request::protocol::stream::{self, Budget};
+use crate::server::agent::request::protocol::stream;
 use crate::server::agent::request::protocol::{
     Effort, Endpoint, Output, Protocol, ProtocolRequest, WireRequest, broken_calls, fault, silence,
 };
@@ -66,10 +66,6 @@ impl Protocol for Deepseek {
         })
     }
 
-    fn budget(&self) -> Budget {
-        Budget::default()
-    }
-
     fn decode(
         &self,
         mut reader: Box<dyn BufRead>,
@@ -82,7 +78,7 @@ impl Protocol for Deepseek {
         let mut calls = Calls::default();
         let mut finish: Option<String> = None;
 
-        let end = stream::data(reader.as_mut(), cancel, |payload| {
+        let interrupted = stream::data(reader.as_mut(), cancel, |payload| {
             let chunk: Value = serde_json::from_str(payload)?;
 
             if let Some(u) = chunk.get("usage").filter(|v| !v.is_null()) {
@@ -118,7 +114,6 @@ impl Protocol for Deepseek {
             })?;
             Ok(true)
         })?;
-        let interrupted = end == stream::End::Canceled;
 
         let mut placed = calls.finish();
         let declared = placed.len();

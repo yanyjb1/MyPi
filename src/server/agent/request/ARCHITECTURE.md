@@ -14,10 +14,10 @@
 | `compact.rs` | the cut, the shrink check, the instruction rendering |
 | `artifact.rs` | citations, the artifact file, the citation line |
 | `retry.rs` | policy, failure classes, the notice one failure produces |
-| `protocol/mod.rs` | `ProtocolId`, `Protocol` (body, decode, silence budget), `Endpoint`, `ProtocolRequest`, `WireRequest`, `Output` |
+| `protocol/mod.rs` | `ProtocolId`, `Protocol` (body, decode), `Endpoint`, `ProtocolRequest`, `WireRequest`, `Output` |
 | `protocol/blocks.rs` | block constructors |
-| `protocol/sse/` | `read` (one raw line), `frame` (`data:` frames and the worker's error line), `event` (`event:` + `data:` frames) |
-| `protocol/stream.rs` | the stream loop: cancel, `data:` or `event:` frames, how it ended |
+| `protocol/sse/` | `read` (one raw line), `frame` (one `data:` field and the worker's error line) |
+| `protocol/stream.rs` | the stream loop: `data:` frames, and whether the turn was cancelled |
 | `protocol/stitch.rs` | tool calls stitched out of stream deltas |
 | `protocol/openai/` | the OpenAI family: `completion`, `deepseek`, each with its own body and decode |
 | `protocol/openai/completion/` | the standard completion dialect: the request body, the message mapping, the SSE decode |
@@ -38,8 +38,8 @@
   lands one block per result.
 - `ask::Request::compact` plans the cut with `compact::plan`, builds with `assembly::compaction`,
   streams the summary, and checks the shrink before returning.
-- `transport::send` asks the session's worker for its child and hands over the protocol's silence
-  budget. It never retries.
+- `transport::send` asks the session's worker for its child and hands over the silence deadline. It
+  never retries.
 - No protocol says what a model takes: `vision` and the effort rungs are the model entry's own
   declaration, read by the api and the tools before a write or a read is allowed through. A rung
   other than `auto` goes out as `reasoning_effort` on both hosts.
