@@ -74,8 +74,7 @@ created by the user in the same layout.
 string naming another file of rules, resolved against the manifest's own directory and written with
 forward slashes. Each set is flattened in where it is named, so one ordered list of rules emerges.
 
-The built-in manifest names one set per site under `web-rulesets/`, and each is compiled into the
-binary, so a machine with no manifest runs the same rules it would be given. A set that cannot be
+The built-in manifest names one set per site or site family under `web-rulesets/` (courts of one
 read warns, and only that set is lost. The web domain is the reader: it asks for the regions a page
 keeps, and for the drops inside each.
 

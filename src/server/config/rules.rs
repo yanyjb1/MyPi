@@ -85,6 +85,7 @@ const SETS: &[(&str, &str)] = sets![
     "tmtpost.json",
     "yicai.json",
     "cnki.json",
+    "courts.json",
 ];
 
 impl Rules {

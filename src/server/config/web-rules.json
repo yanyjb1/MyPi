@@ -23,5 +23,6 @@
   "web-rulesets/stdaily.json",
   "web-rulesets/tmtpost.json",
   "web-rulesets/yicai.json",
-  "web-rulesets/cnki.json"
+  "web-rulesets/cnki.json",
+  "web-rulesets/courts.json"
 ]
