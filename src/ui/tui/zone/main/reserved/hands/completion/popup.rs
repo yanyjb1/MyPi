@@ -6,7 +6,8 @@
 //! Alignment contract (the whole point of this module's layout):
 //! the **first character of every candidate name sits at exactly the cursor's
 //! column**. Command rows park their `>` marker in the two columns *left* of that
-//! column, so the marker never pushes the name rightward.
+//! column and draw the trigger `/` blank, so a command's letters start one
+//! column right, exactly on the letters the user typed.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -120,6 +121,7 @@ pub fn render(
 // - `Command` (`/model`): the **whole** name is accent, always. The accent's job
 //   there is to separate the command from its description, and there are only a
 //   handful of commands — highlighting the typed prefix would just look ragged.
+//   Its leading `/` is drawn blank: only the glyph goes, the letters keep their columns.
 // - `Plain` (paths, profile names, model ids): only the matched characters are
 //   accent. Here the list is long and unsorted-by-relevance, so showing which
 //   characters matched is what tells the user why a row is in it.
@@ -137,7 +139,10 @@ fn name_spans(
     selected: bool,
     accent: &Accent,
 ) -> Vec<ratatui::text::Span<'static>> {
-    if kind == CandidateKind::Command || selected {
+    if kind == CandidateKind::Command {
+        return vec![Span::raw(" "), accent.span(&name[1..])];
+    }
+    if selected {
         return vec![accent.span(name)];
     }
     let chars: Vec<char> = name.chars().collect();
