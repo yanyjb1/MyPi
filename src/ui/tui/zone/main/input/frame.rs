@@ -1,4 +1,4 @@
-//! One frame in, and every read the zone takes from it.
+// One frame in, and every read the zone takes from it.
 
 use serde_json::Value;
 
@@ -10,7 +10,7 @@ use crate::ui::tui::lang::Lang;
 use crate::ui::tui::zone::{Frame, Shout, name};
 
 impl InputZone {
-    /// One frame answer the zone reads for itself.
+    // One frame answer the zone reads for itself.
     pub(super) fn read_frame(&mut self, frame: &Frame) {
         match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "init") => {
@@ -63,18 +63,21 @@ impl InputZone {
         }
     }
 
-    /// The session's opening word: the effort is memory-only, so this is the one place a
-    /// fresh front end learns it.
+    // The session's opening word: the effort is memory-only, so this is the one place a fresh front end learns it.
     fn read_init(&mut self, content: &Value) {
         if let Some(effort) = content.get("effort").and_then(Value::as_str) {
             self.data.effort = effort.to_ascii_lowercase();
         }
     }
 
-    /// The session row: name, and the model its widgets follow.
+    // The session row: name, directory and the model its widgets follow.
     fn read_meta(&mut self, row: &Value) {
-        if let Some(name) = row.get("name").and_then(Value::as_str) {
-            self.data.name = Some(name.to_string());
+        if let Some(name) = row.get("name") {
+            self.data.name = name.as_str().map(str::to_string);
+        }
+        if let Some(cwd) = row.get("cwd").and_then(Value::as_str) {
+            self.data.cwd.clear();
+            self.data.cwd.push_str(cwd);
         }
         let Some(provider) = row.get("provider").and_then(Value::as_str) else {
             return;
@@ -86,13 +89,17 @@ impl InputZone {
         if self.data.address.as_deref() == Some(address.as_str()) {
             return;
         }
-        self.model(&address);
+        // A row's address is asked for without touching what the row holds: the session's effort is the server's answer, not a fresh model's default.
+        self.data.address = Some(address.clone());
+        self.data.model = None;
+        self.data.limit = 0;
+        self.data.efforts.clear();
+        self.want(&format!("models.model.{address}"));
     }
 
-    /// The model whose facts the widgets follow: the entry, and the wire behind it.
+    // The model whose facts the widgets follow: the entry, and the wire behind it.
     pub(super) fn model(&mut self, address: &str) {
-        // A model change drops the rung: the new model declares its own, and `Auto` is the one
-        // state every model shares.
+        // A model change drops the rung: the new model declares its own, and `Auto` is the one state every model shares.
         if self.data.address.is_some() {
             self.data.effort = "auto".to_string();
         }
@@ -103,21 +110,22 @@ impl InputZone {
         self.want(&format!("models.model.{address}"));
     }
 
-    /// One config answer: the statusline's own keys, and the running model's facts.
+    // One config answer: the statusline's own keys, and the running model's facts.
     fn read_config(&mut self, content: &Value) {
         let Some(key) = content.get("key").and_then(Value::as_str) else {
             return;
         };
         let value = content.get("value");
+
         if key == DEFAULT_MODEL_KEY {
-            // Asked at boot and when leaving a session: it names the draft's model, and only
-            // while the pill has none.
+            // Asked at boot and when leaving a session: it names the draft's model, and only while the pill has none.
             if self.data.address.is_none()
                 && let Some(address) = value
                     .and_then(Value::as_str)
                     .filter(|address| !address.is_empty())
             {
                 self.model(address);
+                self.draft.set_model(address.to_string());
             }
             return;
         }
@@ -166,7 +174,7 @@ impl InputZone {
         }
     }
 
-    /// The model's entry: the pill's text and the gauge's denominator.
+    // The model's entry: the pill's text and the gauge's denominator.
     fn read_model(&mut self, address: &str, value: Option<&Value>) {
         if self.data.address.as_deref() != Some(address) {
             return;
@@ -199,7 +207,7 @@ impl InputZone {
             .unwrap_or_default();
     }
 
-    /// What the session has cost, and where its context stands. Both are the server's to say.
+    // What the session has cost, and where its context stands. Both are the server's to say.
     fn read_usage(&mut self, content: &Value) {
         let number = |key: &str| content.get(key).and_then(Value::as_f64).unwrap_or(0.0);
         self.data.money.cny = number("cny");

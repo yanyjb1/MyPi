@@ -1,14 +1,12 @@
-//! The draft: what a session will open with, kept by every zone until its row exists.
+// The draft: what a session will open with, kept by every zone until its row exists.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use serde_json::{Value, json};
-
 use crate::ui::tui::zone::Frame;
 
-/// One shared memo. Whoever needs it reads it; whoever changes it says so at once.
+// One shared memo. Whoever needs it reads it; whoever changes it says so at once.
 #[derive(Debug, Clone, Default)]
 pub struct Draft {
     slots: Rc<RefCell<Slots>>,
@@ -30,14 +28,26 @@ impl Draft {
         self.slots.borrow().cwd.clone()
     }
 
-    /// The directory a user picked; the server may not move it behind their back.
+    pub fn name(&self) -> Option<String> {
+        self.slots.borrow().name.clone()
+    }
+
+    pub fn model(&self) -> Option<String> {
+        self.slots.borrow().model.clone()
+    }
+
+    pub fn effort(&self) -> Option<String> {
+        self.slots.borrow().effort.clone()
+    }
+
+    // The directory a user picked; the server may not move it behind their back.
     pub fn land(&self, cwd: PathBuf) {
         let mut slots = self.slots.borrow_mut();
         slots.cwd = cwd;
         slots.picked = true;
     }
 
-    /// The server named the directory it actually opened in.
+    // The server named the directory it actually opened in.
     pub fn moved(&self, cwd: PathBuf) {
         self.slots.borrow_mut().cwd = cwd;
     }
@@ -58,8 +68,9 @@ impl Draft {
         self.slots.borrow_mut().effort = Some(effort);
     }
 
-    /// The row an opening message needs.
+    // The row an opening message needs.
     pub fn opening(&self) -> Frame {
+        use serde_json::json;
         let slots = self.slots.borrow();
         let model = slots
             .model
@@ -71,7 +82,7 @@ impl Draft {
                     "model": model,
                 })
             });
-        let content: Value = json!({
+        let content = json!({
             "cwd": slots.cwd.to_string_lossy(),
             "name": slots.name,
             "model": model,
@@ -82,7 +93,7 @@ impl Draft {
         Frame::new("post", "init", content)
     }
 
-    /// The row exists: the memos are spent, and the directory stays where it landed.
+    // The row exists: the memos are spent, and the directory stays where it landed.
     pub fn clear(&self) {
         let cwd = self.cwd();
         *self.slots.borrow_mut() = Slots {

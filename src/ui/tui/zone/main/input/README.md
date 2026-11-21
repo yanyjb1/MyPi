@@ -24,7 +24,7 @@ finish itself.
 | `cursor_col`, `cursor_row` | the cursor inside the container, recomputed on render |
 | `statusline: StatusLine` | the deco table and the row engine |
 | `session: Option<i64>` | the conversation this zone follows; `None` = a draft |
-| `data: Data` | model, the rungs it declares, thinking effort, name, directory, context size and window, money, busy |
+| `data: Data` | the followed id's row: model, rungs, effort, name, directory, context, money, busy; `DRAFT` for a draft |
 | `queue: Queue` | sentences sent while a round was running, head first |
 | `in_flight` | the sentence a submit put out, until the door answers |
 | `prepare_pending` | this session's first message, or the first after a compaction, still owes the preparation |
@@ -71,15 +71,19 @@ only the user's own words. `config.ui.tui.zone.main.input.autoPrepare` (default 
 preparation on a session's first message and on the first message after a compaction; the
 structural window decides both.
 
-`/effort` work in a draft: each writes the shared draft, and the draft rides the `post init` that
-opens the row. A draft's `/cdp` lands only on a directory that exists — `~`
-expanded, a relative path read from where the draft stands — because the name travels into `init`,
-and a directory that is not there cannot be entered. Anything else is refused and said.
-`/compact` needs a session and is refused in a draft.
-declares for itself, this session only. In a draft the rung stays in the front end and rides the row
-that opens; a model that declares no rung is refused here, and a rung the model never declared is
-refused before the request leaves. `Shift+Tab` walks those same rungs without a command, and the key
-is inert on a model that declares none.
+A draft's commands write the shared draft, and the row this zone shows follows it at once: what the
+statusline displays is what the next `post init` would carry. That draft rides that letter, so the
+name, the model, the effort and the directory it holds are the ones the session opens with.
+
+A draft's `/cdp` lands only on a directory that exists — `~` expanded, a relative path read from
+where the draft stands — because the name travels into `init`, and a directory that is not there
+cannot be entered. Anything else is refused and said. `/compact` needs a session and is refused in a draft.
+
+`/effort` and `Shift+Tab` both walk the rungs the model declares: a session writes the rung it lands
+on, a model that declares no rung is refused here, and a rung the model never declared is refused
+before the request leaves. `Shift+Tab` in a draft writes the draft, so the rung it lands on is the
+one the session opens with; the key is inert on a model that declares none.
+
 Deletion has no command: the resume picker owns it.
 
 ### Submit, interrupt, Esc
@@ -136,12 +140,17 @@ Enter after a send already knows a round is coming.
 
 ### The data it reads
 
-`call meta` names the session's model, name and directory. A model the zone has not seen makes it
-ask `call config` for `models.model.<address>`, which answers the whole entry; the pill takes the
-name, the gauge the window. A model or a name another front end changed reaches this zone as a
-`signal` on the bus. In a draft the boot answer and the one taken on leaving a session name the
-model; `/model` moves the pill itself, from the address it wrote. `call usage` is the one answer for
-money and context, asked at attach, at every round's end and after each request.
+Every figure belongs to one id, and `Data::key` names it: a draft's row sits under `DRAFT`, an id
+the server never mints. Attaching a session turns the row over to that session, so what a previous
+one left never stands in for the new one.
+
+`call meta` names the session's model, name and directory, and the zone asks for it itself whenever
+it starts following a row. A model the zone has not seen makes it ask `call config` for
+`models.model.<address>`, which answers the whole entry; the pill takes the name, the gauge the
+window. A model or a name another front end changed reaches this zone as a `signal` on the bus. In a
+draft the boot answer and the one taken on leaving a session name the model, and `/model` moves the
+pill from the address it wrote. `call usage` is the one answer for money and context, asked at
+attach, at every round's end and after each request.
 
 ### Height and rendering
 
@@ -153,19 +162,23 @@ clock runs in `tick_statusline`, once a round.
 ### Statusline
 
 One row, exactly the terminal width. The deco table is `activity`, `model`, `cwd`, `git`, `cost`,
-`usage`, `session`. Each deco reads the zone's `Data`; none of them can act.
+`usage`, `session`. Each deco reads the zone's `Data`; none of them can act. A narrow row drops
+whole decos, lowest priority first: the gauge goes before the name, the price and the directory.
 
-`Data` is filled from four places. The conversation row gives the name and the model address;
-`models.model.<address>` gives the model pill, the gauge's denominator and the rungs the model
-declares, so the pill's marker reads the rung on a model that takes one and `M` on one that declares
-none; the living thinking effort comes from `call init` and from each `/effort` receipt, because no
-row holds it, and a model switch resets it to `auto`; `call usage` gives the cost in
-`config.ui.tui.fx.currency`, never from a model. The cost pill reads `¥1.23(+0.45)` while
-the subagents' pool carries a price — same currency, same precision, no symbol inside the
-parentheses — and hides the parentheses when the pool holds none.
-when the count is an estimate; the dashes carry no mark. `activity` steps one glyph per `tick`
-shout. `git` scans on its own tick: the first one at once, then once per configured interval, and
-once more when a round starts or ends.
+`Data` is one row, and `Data::key` is the id it belongs to. The conversation row gives the name, the
+directory and the model address; `models.model.<address>` gives the model pill, the gauge's
+denominator and the rungs the model declares, so the pill's marker reads the rung on a model that
+takes one and `M` on one that declares none; the living thinking effort comes from `call init` and
+from each `/effort` receipt, because no row holds it, and a model switch resets it to `auto`, while
+a session's own row leaves it alone; `call usage` gives the cost in `config.ui.tui.fx.currency`,
+never from a model. The cost pill reads `¥1.23(+0.45)` while the subagents' pool carries a price —
+same currency, same precision, no symbol inside the parentheses — and hides the parentheses when the
+pool holds none.
+
+The gauge reads `>--8.3%-----:1M`: `~` prefixes the percentage while the count is an estimate, and the
+dashes carry no mark of their own. `activity` steps one glyph per `tick` shout. `git` scans on its
+own tick: the first one at once, then once per configured interval, and once more when a round
+starts or ends.
 
 ### Invariants
 

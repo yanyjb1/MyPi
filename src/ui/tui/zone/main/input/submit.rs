@@ -1,4 +1,4 @@
-//! Enter: a line leaves as a turn, a command, or a sentence in the mailbox.
+// Enter: a line leaves as a turn, a command, or a sentence in the mailbox.
 
 use std::time::{Duration, Instant};
 
@@ -13,17 +13,17 @@ use crate::ui::tui::zone::Frame;
 use crate::ui::tui::zone::main::input::command::CommandMeta;
 use crate::ui::tui::zone::{Shout, name};
 
-/// Two Enter presses this close together: the second one interrupts the round.
+// Two Enter presses this close together: the second one interrupts the round.
 const ENTER_WINDOW: Duration = Duration::from_millis(600);
 
-/// One notice waiting for the receipt that says its write landed.
+// One notice waiting for the receipt that says its write landed.
 pub(super) struct Waiting {
     pub door: &'static str,
     pub notice: Notice,
 }
 
 impl InputZone {
-    /// Enter: the box's text leaves by the route it names.
+    // Enter: the box's text leaves by the route it names.
     pub(super) fn enter(&mut self) -> bool {
         let text = self.editor.expanded_text();
         if text.trim().is_empty() {
@@ -60,7 +60,7 @@ impl InputZone {
         }
     }
 
-    /// One command line: run it, then take the box away unless it asks to stay.
+    // One command line: run it, then take the box away unless it asks to stay.
     fn run(&mut self, meta: &'static CommandMeta, args: &str) {
         let call = Call {
             args,
@@ -80,17 +80,18 @@ impl InputZone {
             Done::Notice(notice) => self.say(&notice),
             Done::Hold => return,
         }
+        self.settle_draft();
         self.take_line();
     }
 
-    /// Take the line out of the box: it is history now, and the box is idle.
+    // Take the line out of the box: it is history now, and the box is idle.
     fn take_line(&mut self) {
         self.history.push(self.editor.text());
         self.editor.clear();
         self.finished = true;
     }
 
-    /// One write leaves: what settles here settles now; the two doors the server must settle wait for their receipt.
+    // One write leaves: what settles here settles now; the two doors the server must settle wait for their receipt.
     fn wrote(&mut self, write: command::Write) {
         match &write.effect {
             Some(super::super::desk::Effect::Rename(name)) => {
@@ -114,10 +115,11 @@ impl InputZone {
             }),
             None => self.say(&write.notice),
         }
+        self.settle_draft();
         self.bump();
     }
 
-    /// One line for the history zone.
+    // One line for the history zone.
     pub(super) fn say(&mut self, notice: &Notice) {
         let text = notice.text(self.data.lang);
         self.shouts.push(Shout::new(
@@ -126,8 +128,7 @@ impl InputZone {
         ));
     }
 
-    /// One write answered: the notice speaks only if the write landed. A draft's default
-    /// model is the one it just wrote, so the pill follows the notice.
+    // One write answered: the notice speaks only if the write landed. A draft's default model is the one it just wrote, so the pill follows the notice.
     pub(super) fn receipt(&mut self, door: &str, content: &Value) {
         let Some(at) = self
             .pending_notice
@@ -155,7 +156,7 @@ impl InputZone {
         self.say(&wait.notice);
     }
 
-    /// A sentence sent while a round runs: the slot takes it, the round is untouched.
+    // A sentence sent while a round runs: the slot takes it, the round is untouched.
     fn enqueue(&mut self, prefix: Option<String>, text: String) {
         self.take_line();
         let Some(session) = self.session else {
@@ -169,7 +170,7 @@ impl InputZone {
         self.enter_armed = Some(Instant::now());
     }
 
-    /// A sentence sent while nothing runs: it opens a turn.
+    // A sentence sent while nothing runs: it opens a turn.
     fn send(&mut self, prefix: Option<String>, text: String) {
         self.take_line();
         self.in_flight = Some(text.clone());
@@ -194,7 +195,7 @@ impl InputZone {
             .push(Shout::new(name::BUSY, json!({"on": true})));
     }
 
-    /// One message a command built: the mailbox while a round runs, a new turn otherwise.
+    // One message a command built: the mailbox while a round runs, a new turn otherwise.
     fn leave(&mut self, prefix: Option<String>, text: String) {
         self.prepare_pending = false;
         match self.data.busy {
@@ -203,7 +204,7 @@ impl InputZone {
         }
     }
 
-    /// The preparation a message carries on its own, when it is due.
+    // The preparation a message carries on its own, when it is due.
     fn auto_prefix(&mut self) -> Option<String> {
         if !self.data.auto_prepare || !self.prepare_pending {
             return None;
@@ -212,7 +213,7 @@ impl InputZone {
         command::payload(&self.data.cwd, true)
     }
 
-    /// The reply to a submit that opened nothing: the sentence comes back, and says why.
+    // The reply to a submit that opened nothing: the sentence comes back, and says why.
     pub(super) fn refused(&mut self, content: &Value) {
         let reason = crate::ui::tui::lang::refused(self.data.lang, content)
             .unwrap_or_else(|| "the session is still in a turn".to_string());
@@ -223,14 +224,14 @@ impl InputZone {
         }
     }
 
-    /// A write the server refused: one line, and nothing to retract.
+    // A write the server refused: one line, and nothing to retract.
     pub(super) fn say_refused(&mut self, content: &Value) {
         let reason = crate::ui::tui::lang::refused(self.data.lang, content)
             .unwrap_or_else(|| "the write was refused".to_string());
         self.say(&Notice::Refused(reason));
     }
 
-    /// The server took the slot: the head left the queue, and the next one takes the slot.
+    // The server took the slot: the head left the queue, and the next one takes the slot.
     pub(super) fn opened(&mut self) {
         // A turn just opened: the box is busy before its first piece arrives.
         self.data.busy = true;
@@ -252,9 +253,29 @@ impl InputZone {
             ));
         }
     }
+
+    // A draft's command wrote its own memo, so the row a session would open with is what this front end shows: the name, the model and the directory follow it.
+    fn settle_draft(&mut self) {
+        if self.session.is_some() {
+            return;
+        }
+        self.data.name = self.draft.name();
+        if let Some(address) = self.draft.model()
+            && self.data.address.as_deref() != Some(address.as_str())
+        {
+            self.model(&address);
+        }
+        if let Some(effort) = self.draft.effort() {
+            self.data.effort = effort;
+        }
+        let cwd = self.draft.cwd();
+        if !cwd.as_os_str().is_empty() {
+            self.data.cwd = cwd.to_string_lossy().into_owned();
+        }
+    }
 }
 
-/// The door whose receipt a write waits for.
+// The door whose receipt a write waits for.
 fn door_of(name: &str) -> Option<&'static str> {
     match name {
         "default_model" => Some("default_model"),

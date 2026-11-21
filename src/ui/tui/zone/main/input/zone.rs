@@ -1,4 +1,4 @@
-//! The input zone: what it holds, and the two contracts it answers.
+// The input sub-zone: what it holds, and the two contracts it answers.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -9,7 +9,7 @@ use super::super::desk::Hire;
 use super::super::geometry;
 use super::super::pane::Pane;
 use super::boot::DEFAULT_MODEL_KEY;
-use super::ctx::{Ctx, Data};
+use super::ctx::{Ctx, DRAFT, Data};
 use super::draft::Draft;
 use super::editor::{Editor, History};
 use super::exit::ExitRequest;
@@ -24,104 +24,105 @@ use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::Frame;
 use crate::ui::tui::zone::{Claim, Kind, Shared, Shout, SubZone, TermSize, name};
 
-/// The input sub-zone. Its height comes from its own content.
+// The input sub-zone. Its height comes from its own content.
 pub struct InputZone {
-    /// The post box and the palette every zone shares.
+    // The post box and the palette every zone shares.
     pub(super) shared: Shared,
 
-    /// The draft a session opens with; only this zone keeps one.
+    // The draft a session opens with; only this zone keeps one.
     pub(super) draft: Draft,
 
-    /// Input viewport start (wrapped row). Independent of the cursor.
+    // Input viewport start (wrapped row). Independent of the cursor.
     pub scroll: usize,
 
-    /// The height it declares: editor rows + statusline + border.
+    // The height it declares: editor rows + statusline + border.
     pub rows: u16,
 
-    /// The editor itself: text, cursor, undo.
+    // The editor itself: text, cursor, undo.
     pub editor: Editor,
 
-    /// Input history: an in-memory ring, 20 entries, never stored.
+    // Input history: an in-memory ring, 20 entries, never stored.
     pub history: History,
 
-    /// Idle and rewinding: the box is empty, so ↑↓ walks the history.
+    // Idle and rewinding: the box is empty, so up and down walk the history.
     pub finished: bool,
 
-    /// The cursor sits in a trigger word: the condition for lending keys.
+    // The cursor sits in a trigger word: the condition for lending keys.
     pub hang: bool,
 
-    /// The hand to hire, produced here and taken by the zone.
+    // The hand to hire, produced here and taken by the zone.
     pub(super) pending_hire: Option<Hire>,
 
-    /// The last ↑↓ goal column, carried for `Editor::up` / `down`.
+    // The last up/down goal column, carried for the editor's vertical walks.
     pub goal_col: Option<usize>,
 
-    /// Exit requests, in order: taken by the main zone.
+    // Exit requests, in order: taken by the main zone.
     pub(super) pending_exits: Vec<ExitRequest>,
 
-    /// Sentences sent while a round was running, head first.
+    // Sentences sent while a round was running, head first.
     pub(super) queue: Queue,
 
-    /// The sentence a submit put out, kept only until its reply says it opened nothing.
+    // The sentence a submit put out, kept only until its reply says it opened nothing.
     pub(super) in_flight: Option<String>,
 
-    /// The message whose opening `post init` is out; it leaves as soon as the row answers.
+    // The message whose opening `post init` is out; it leaves as soon as the row answers.
     pub(super) pending_open: Option<(Option<String>, String)>,
-    /// A preparation waits for this session's first message, or the first after a compaction.
+
+    // A preparation waits for this session's first message, or the first after a compaction.
     pub(super) prepare_pending: bool,
 
-    /// The structure snapshot of this attachment has been read.
+    // The structure snapshot of this attachment has been read.
     pub(super) struct_seen: bool,
 
-    /// The newest compaction round this attachment has seen.
+    // The newest compaction round this attachment has seen.
     pub(super) last_compact: Option<i64>,
 
-    /// The line that opens a draft is out: the structure that answers `init` is not a second primer.
+    // The line that opens a draft is out: the structure that answers `init` is not a second primer.
     pub(super) opening_sent: bool,
 
-    /// When the last un-lent Esc fired: another one inside the window opens the tree.
+    // When the last un-lent Esc fired: another one inside the window opens the tree.
     pub(super) esc_armed: Option<Instant>,
 
-    /// When a sentence last entered the mailbox: the next Enter interrupts.
+    // When a sentence last entered the mailbox: the next Enter interrupts.
     pub(super) enter_armed: Option<Instant>,
 
-    /// Notices waiting for the receipt that says their write landed.
+    // Notices waiting for the receipt that says their write landed.
     pub(super) pending_notice: VecDeque<Waiting>,
 
-    /// The cursor's absolute terminal column, border included.
+    // The cursor's absolute terminal column, border included.
     pub cursor_col: u16,
 
-    /// The cursor's row inside the container (0 = the statusline row).
+    // The cursor's row inside the container (0 = the statusline row).
     pub cursor_row: u16,
 
-    /// The statusline: the top edge of the container and its own deco table.
+    // The statusline: the top edge of the container and its own deco table.
     pub statusline: StatusLine,
 
-    /// The session this zone follows; `None` = a draft.
+    // The session this zone follows; `None` = a draft.
     pub(super) session: Option<i64>,
 
-    /// The startup questions were asked; one answer per run is enough.
+    // The startup questions were asked; one answer per run is enough.
     pub(super) booted: bool,
 
-    /// The terminal size from this round's arbitration.
+    // The terminal size from this round's arbitration.
     pub(super) term: TermSize,
 
-    /// What the parts read.
+    // The figures of the id this zone follows, one row for a draft and one per session.
     pub(super) data: Data,
 
-    /// Events this zone puts out.
+    // Events this zone puts out.
     pub(super) shouts: Vec<Shout>,
 
-    /// Bumped whenever this zone's rows would differ.
+    // Bumped whenever this zone's rows would differ.
     rev: u64,
 
-    /// The editor text wrapped at the width it was last laid at.
+    // The editor text wrapped at the width it was last laid at.
     view: crate::ui::tui::text::Wrapped,
 
-    /// The `(columns, edit generation)` `view` was wrapped from.
+    // The `(columns, edit generation)` `view` was wrapped from.
     view_key: (usize, u64),
 
-    /// Bumped on every edit: the wrap follows it.
+    // Bumped on every edit: the wrap follows it.
     pub(super) wrap_gen: u64,
 }
 
@@ -155,7 +156,11 @@ impl Default for InputZone {
             session: None,
             booted: false,
             term: TermSize { cols: 80, rows: 24 },
-            data: Data::default(),
+            // The zone opens on a draft: its row belongs to the id no session holds yet.
+            data: Data {
+                key: DRAFT,
+                ..Data::default()
+            },
             shouts: Vec::new(),
             rev: 0,
             view: crate::ui::tui::text::Wrapped::default(),
@@ -166,26 +171,28 @@ impl Default for InputZone {
 }
 
 impl InputZone {
-    /// Everything the editor acts on, named in `claim.rs`.
+    // Everything the editor acts on, named in `claim.rs`.
     pub const CLAIMS: &'static [Claim] = super::claim::CLAIMS;
 
-    /// The hand the editor asked for, if it asked this frame.
+    // The hand the editor asked for, if it asked this frame.
     pub fn take_hire(&mut self) -> Option<Hire> {
         self.pending_hire.take()
     }
 
-    /// The exits waiting to be turned into asks.
+    // The exits waiting to be turned into asks.
     pub fn take_exits(&mut self) -> Vec<ExitRequest> {
         std::mem::take(&mut self.pending_exits)
     }
 
-    /// The shared handles arrive once, at boot.
+    // The shared handles arrive once, at boot.
     pub(in crate::ui::tui::zone::main) fn bind(&mut self, shared: Shared) {
         self.shared = shared;
     }
 
     pub fn draft_moved(&mut self, cwd: &str) {
         self.draft.moved(cwd.into());
+        self.data.cwd.clear();
+        self.data.cwd.push_str(cwd);
     }
 
     pub fn draft_cleared(&mut self) {
@@ -197,18 +204,29 @@ impl InputZone {
         (!cwd.as_os_str().is_empty()).then(|| cwd.to_string_lossy().into_owned())
     }
 
+    // A carried model is a draft's own: the row follows what would leave with the next message.
     pub fn draft_set_model(&mut self, model: &str) {
         self.draft.set_model(model.to_string());
+        self.model(model);
     }
 
-    /// One configuration key.
+    // One configuration key.
     pub(super) fn want(&self, key: &str) {
         self.shared
             .mail
             .send(Frame::new("call", "config", json!({"key": key})));
     }
 
-    /// The session's bill: the server is the only party that knows it.
+    // The session's own row: the model, the name, the directory.
+    pub(super) fn ask_meta(&self) {
+        if let Some(session) = self.session {
+            self.shared
+                .mail
+                .send(Frame::new("call", "meta", json!({"session": session})));
+        }
+    }
+
+    // The session's bill: the server is the only party that knows it.
     pub(super) fn bill(&self) {
         if let Some(session) = self.session {
             self.shared
@@ -217,7 +235,7 @@ impl InputZone {
         }
     }
 
-    /// One frame for the statusline: a deco with work of its own runs it here.
+    // One frame for the statusline: a deco with work of its own runs it here.
     pub fn tick_statusline(&mut self) {
         let ctx = Ctx { data: &self.data };
         if self.statusline.tick(&ctx) {
@@ -229,7 +247,7 @@ impl InputZone {
         self.rev = self.rev.wrapping_add(1);
     }
 
-    /// One key press read through the intent table.
+    // One key press read through the intent table.
     fn act(&mut self, a: &Action) -> bool {
         let key = match a {
             Action::Key(key) => *key,
@@ -242,6 +260,7 @@ impl InputZone {
             Action::ScrollUp { .. } | Action::ScrollDown { .. } => return false,
         };
         let intent = semantics::translate(key);
+
         if matches!(intent, semantics::Intent::None) {
             return false;
         }
@@ -255,19 +274,19 @@ impl InputZone {
         self.edited(consumed)
     }
 
-    /// The editor's text and where the cursor sits in it.
+    // The editor's text and where the cursor sits in it.
     pub fn draft(&self) -> (String, usize) {
         (self.editor.text(), self.editor.cursor())
     }
 
-    /// The height it asks for: content rows, capped at a share of the terminal.
+    // The height it asks for: content rows, capped at a share of the terminal.
     fn request_height_for(&self, wrapped_lines: usize, term_h: u16) -> u16 {
         geometry::container_height(term_h, wrapped_lines)
             .try_into()
             .unwrap_or(u16::MAX)
     }
 
-    /// The wrapped result at the current width: keys and rendering share it.
+    // The wrapped result at the current width: keys and rendering share it.
     fn ensure_view(&mut self, cols: u16) {
         let key = (usize::from(cols.max(1)), self.wrap_gen);
         if self.view_key != key {
@@ -277,20 +296,20 @@ impl InputZone {
         }
     }
 
-    /// A copy of the wrapped text: the cursor-walking intents ask for one.
+    // A copy of the wrapped text: the cursor-walking intents ask for one.
     fn wrapped(&mut self) -> crate::ui::tui::text::Wrapped {
         let cols = self.term.cols;
         self.ensure_view(cols);
         self.view.clone()
     }
 
-    /// The statusline's own reading of an event.
+    // The statusline's own reading of an event.
     fn notify(&mut self, event: &str, content: &Value) {
         let ctx = Ctx { data: &self.data };
         self.statusline.on_event(event, content, &ctx);
     }
 
-    /// One signal: a field this zone follows changed.
+    // One signal: a field this zone follows changed.
     fn signal(&mut self, content: &Value) {
         if let Some(address) = content.get("model").and_then(Value::as_str) {
             self.model(address);
@@ -317,10 +336,9 @@ impl SubZone for InputZone {
     fn deliver_event(&mut self, frame: &Frame, size: TermSize) {
         self.term = size;
         self.read_frame(frame);
-        self.bump();
+        self.bump()
     }
 
-    /// One key press read through the intent table.
     fn deliver_action(&mut self, a: &Action) -> bool {
         let consumed = self.act(a);
         self.bump();
@@ -328,12 +346,11 @@ impl SubZone for InputZone {
     }
 
     fn attach(&mut self, session: i64, _size: TermSize) {
-        // A draft turning real carries its own live state; only a session
-        // switch has old data to wipe.
+        // A draft keeps working inside itself; entering a row is what refreshes the figures.
         if self.session.is_some() {
-            self.reset_data();
             self.opening_sent = false;
         }
+        self.data.turn(session);
         self.session = Some(session);
         self.prepare_pending = false;
         self.struct_seen = false;
@@ -341,6 +358,7 @@ impl SubZone for InputZone {
         self.queue.clear();
         self.in_flight = None;
         self.pending_notice.clear();
+
         // The line that opened this row was waiting for its id.
         if let Some((prefix, text)) = self.pending_open.take() {
             self.in_flight = Some(text.clone());
@@ -356,12 +374,14 @@ impl SubZone for InputZone {
             self.shouts
                 .push(Shout::new(name::BUSY, json!({"on": true})));
         }
+        self.ask_meta();
         self.bill();
-        self.bump();
+        self.bump()
     }
 
     fn detach(&mut self) {
         self.session = None;
+        self.data.turn(DRAFT);
         self.prepare_pending = false;
         self.struct_seen = false;
         self.last_compact = None;
@@ -376,12 +396,11 @@ impl SubZone for InputZone {
         self.history.exit();
         self.finished = true;
         self.scroll = 0;
-        self.reset_data();
         self.queue.clear();
         self.in_flight = None;
         self.pending_notice.clear();
         self.want(DEFAULT_MODEL_KEY);
-        self.bump();
+        self.bump()
     }
 
     fn take_shouts(&mut self) -> Vec<Shout> {
@@ -451,9 +470,7 @@ impl Pane for InputZone {
 }
 
 impl InputZone {
-    /// Self-rendering; the width comes in as an argument, like its siblings.
-    ///
-    /// Order: wrap, scroll to the cursor, the statusline row, then the container.
+    // Self-rendering; the width comes in as an argument, like its siblings. Order: wrap, scroll to the cursor, the statusline row, then the container.
     pub fn render_rows(
         &mut self,
         term: TermSize,

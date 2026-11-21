@@ -11,17 +11,17 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `claim.rs` | `CLAIMS` | private |
 | `exit.rs` | `ExitRequest` | private |
 | `intent.rs` | one intent applied: editor, history ring, the epilogue | private |
-| `submit.rs` | Enter, the command run, writes and their notices, the mailbox accounting | private |
+| `submit.rs` | Enter, the command run, writes and their notices, the draft's settle, the mailbox accounting | private |
 | `frame.rs` | the frames this zone decodes | private |
-| `boot.rs` | startup questions, session enter/leave, the draft reset, the config keys | private |
+| `boot.rs` | startup questions, the draft reset, the config keys | private |
 | `notice.rs` | the sentences a command earns, as i18n keys | private |
-| `ctx.rs` | `Data`, `Ctx`, `Money` (with the subagents' pool), `Context`, `Currency` — what the parts read | private |
+| `ctx.rs` | `Data` (one row per id, `DRAFT` for a draft), `Ctx`, `Money` (with the subagents' pool), `Context`, `Currency` — what the parts read | private |
 | `editor/` | the text, undo, paste store, separators and script classes, submission ring | private |
 | `semantics.rs` | key → intent, one context-free table | private |
 | `route.rs` | one line classified as a message or a command | private |
 | `command/` | the table, the answer shapes, one module per command, and the completion trigger; `prepare/` also holds the payload | private |
 | `render.rs` | the container: top edge, body rows, bottom edge, cursor | private |
-| `statusline/` | the row engine, `StatusTheme`, and the seven decos | private |
+| `statusline/` | the row engine, `StatusTheme`, and the decos with their table | private |
 
 ## What it exposes
 
@@ -31,8 +31,8 @@ Through `SubZone`: `claims`, `kinds`, `deliver_event`, `deliver_action`, `attach
 To `Main`: `take_hire`, `take_exits`, `draft`, `apply_reply`, `clear`, `boot`, `bind`, `render_rows`,
 `cursor_row`, `cursor_col`, `editor`, `statusline`.
 
-The module root re-exports `InputZone`, `ExitRequest`, `Notice`, `Ctx`, `Context`, `Currency` and
-`Data`; `command` stays public for the completion hand.
+The module root re-exports `InputZone`, `ExitRequest`, `Notice`, `Ctx` and `Currency`; `Data` stays
+inside the zone, and `command` stays public for the completion hand.
 
 ## What it calls
 
@@ -58,11 +58,13 @@ InputZone
  ├── editor   ── text, cursor, undo, paste, separators
  ├── history  ── the 20-entry submission ring
  ├── statusline ── table + decos
- ├── data     ── model, name, directory, context, money, busy
+ ├── data     ── the followed id's row: model, name, directory, context, money, busy
  ├── session  ── the id it follows, or none for a draft
  └── pending_exits / pending_notice / pending_hire / shouts / outbox
 ```
 
+- `attach` turns `data` over to the row's id, then asks `call meta` and `call usage` for it; no other
+  zone asks on its behalf, and `detach` turns the row back to `DRAFT`.
 - `deliver_action` applies the intent, then re-reads `hang`; a word in range hires completion. A
   command answers with one `Done`: a write and its notice, an exit, a hire, a picked profile, a
   refusal notice, or `Hold`.

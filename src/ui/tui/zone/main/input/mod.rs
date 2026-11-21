@@ -1,5 +1,5 @@
-//! The input zone: editor, history, statusline, submit, command routing.
-//! It does not know what sits above it; it only knows when it lent its keys away.
+// The input zone: editor, history, statusline, submit, command routing.
+// It does not know what sits above it; it only knows when it lent its keys away.
 
 mod boot;
 mod claim;
@@ -19,7 +19,7 @@ mod statusline;
 mod submit;
 mod zone;
 
-pub use ctx::{Ctx, Currency, Data};
+pub use ctx::{Ctx, Currency};
 pub use draft::Draft;
 pub use exit::ExitRequest;
 pub use notice::Notice;

@@ -1,25 +1,24 @@
-//! The zone's own life: the startup questions, the draft reset, and what outlives a session.
+// The zone's own life: the startup questions and the draft reset.
 
-use super::Data;
 use super::zone::InputZone;
 
-/// The git segment's scan interval, in seconds.
+// The git segment's scan interval, in seconds.
 pub(super) const GIT_SCAN_KEY: &str = "config.ui.tui.zone.main.input.deco.gitScanInterval";
 
-/// Whether a session's first message carries the workspace preparation.
+// Whether a session's first message carries the workspace preparation.
 pub(super) const AUTO_PREPARE_KEY: &str = "config.ui.tui.zone.main.input.autoPrepare";
 
-/// The currency the cost pill counts in.
+// The currency the cost pill counts in.
 pub(super) const FX_CURRENCY_KEY: &str = "config.ui.tui.fx.currency";
 
-/// The model a draft opens with; a session row overrides it once there is one.
+// The model a draft opens with; a session row overrides it once there is one.
 pub(super) const DEFAULT_MODEL_KEY: &str = "config.server.api.defaultModel";
 
-/// The display language the panel and number formats follow.
+// The display language the panel and number formats follow.
 pub(super) const LANG_KEY: &str = crate::ui::tui::lang::Lang::KEY;
 
 impl InputZone {
-    /// First frame: the process-wide facts a draft can ask for on its own.
+    // First frame: the process-wide facts a draft can ask for on its own.
     pub fn boot(&mut self) {
         if self.booted {
             return;
@@ -36,23 +35,7 @@ impl InputZone {
         }
     }
 
-    /// Drop one session's readings. What the process owns stays: the workspace, the git
-    /// scan interval, the display currency and the language outlive any one conversation.
-    pub(super) fn reset_data(&mut self) {
-        let cwd = std::mem::take(&mut self.data.cwd);
-        let git_scan = self.data.git_scan;
-        let auto_prepare = self.data.auto_prepare;
-        let currency = self.data.money.currency;
-        let lang = self.data.lang;
-        self.data = Data::default();
-        self.data.cwd = cwd;
-        self.data.git_scan = git_scan;
-        self.data.auto_prepare = auto_prepare;
-        self.data.money.currency = currency;
-        self.data.lang = lang;
-    }
-
-    /// Drop the draft and every transient interaction. Submission history stays.
+    // Drop the draft and every transient interaction. Submission history stays.
     pub fn clear(&mut self) {
         self.editor.clear();
         self.history.exit();
