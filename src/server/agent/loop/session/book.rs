@@ -101,7 +101,7 @@ impl Loop {
             .unwrap_or_default()
             .join("mcp.json");
         let slots = super::jobs::Slots::new();
-        let factory = job::Factory::new(super::jobs::values(cfg), slots.clone());
+        let factory = job::Factory::new(super::jobs::values(cfg, path.clone()), slots.clone());
         let source = super::source::Db::new(path.clone(), global_mcp, factory);
         let defaults = Defaults {
             limits: crate::server::agent::tools::contract::env::Limits { lines, bytes },

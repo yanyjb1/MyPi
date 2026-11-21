@@ -1,4 +1,4 @@
-//! The `kairos` tool: accept background operations and return their receipts.
+// The `kairos` tool: accept background operations and return their receipts.
 
 use anyhow::Result;
 
@@ -14,7 +14,7 @@ pub(crate) const TYPE: usize = 0;
 pub(crate) const TASKS: usize = 1;
 pub(crate) const ID: usize = 2;
 
-/// One task a starting operation carries.
+// One task a starting operation carries.
 pub(crate) const TASK_FIELDS: &[Param] = &[
     Param::new("content", Kind::Text, "The command or wake text."),
     Param::df(
@@ -36,8 +36,9 @@ pub(crate) const PARAMS: &[Param] = &[
             "now", "after", "every", "list", "status", "result", "cancel",
         ]),
         "`now` starts tasks immediately, `after` waits for a delay, `every` repeats on a \
-         five-field cron, `list` shows the held tasks, `status` reports one, `result` hands back \
-         what it left, `cancel` stops it.",
+         five-field cron, `list` shows the held tasks by id and label, `status` reports one \
+         (including the round trips it has billed), `result` hands back what it left, `cancel` \
+         stops it.",
     ),
     Param::new(
         "tasks",
@@ -65,7 +66,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     service::run(env, args)
 }
 
-/// One line for a history listing: the operation.
+// One line for a history listing: the operation.
 fn summary(call: &CallRecord) -> String {
     summary::field(call, "type").unwrap_or_default()
 }

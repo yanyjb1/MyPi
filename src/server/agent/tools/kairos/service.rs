@@ -107,6 +107,8 @@ fn start_one(env: &Env, jobs: &dyn JobHost, item: &Item, op: &str) -> Result<Val
                 needs_slot: true,
                 kind: "command",
                 wake_on_done: true,
+                target: None,
+                label: None,
             }
         }
         "text" => JobSpec {
@@ -119,6 +121,8 @@ fn start_one(env: &Env, jobs: &dyn JobHost, item: &Item, op: &str) -> Result<Val
             needs_slot: false,
             kind: "text",
             wake_on_done: true,
+            target: None,
+            label: None,
         },
         _ => unreachable!("Item::choice validates kind"),
     };
@@ -154,6 +158,7 @@ fn list(jobs: &dyn JobHost) -> ToolOutput {
                 "kind": &row.kind,
                 "state": &row.state,
                 "bytes": row.bytes,
+                "label": &row.label,
             })
         })
         .collect();
@@ -171,6 +176,8 @@ fn status(status: &Status) -> ToolOutput {
         "next": status.next.map(stamp),
         "remaining": status.remaining,
         "skipped": status.skipped,
+        "label": &status.label,
+        "rounds": status.rounds,
     }))
 }
 

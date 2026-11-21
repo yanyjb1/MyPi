@@ -12,14 +12,17 @@ use super::scheduler;
 use super::wake::WakeSink;
 use crate::server::agent::tools::contract::job as port;
 use crate::server::platform::time;
+use crate::server::storage::query::{Cond, Query, Sheet};
 
 // The scheduler's own numbers, read from config by whoever builds the factory.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct Values {
     pub(crate) max_concurrent: usize,
     pub(crate) timeout_secs: u64,
     pub(crate) max_output_bytes: usize,
     pub(crate) max_retained: usize,
+    // The database a session job's round trips are counted in.
+    pub(crate) db: std::path::PathBuf,
 }
 
 // Builds one service per session and owns the shared wake handle.
@@ -46,7 +49,7 @@ impl Factory {
         Arc::new(JobService {
             inner: Arc::new(Inner {
                 session,
-                values: self.values,
+                values: self.values.clone(),
                 wake: self.wake.clone(),
                 state,
                 stop,
@@ -82,7 +85,7 @@ impl Inner {
         st.alive = true;
         if let Err(e) = scheduler::spawn(
             self.session,
-            self.values,
+            self.values.clone(),
             self.wake.clone(),
             self.state.clone(),
             self.stop.clone(),
@@ -153,6 +156,7 @@ impl port::JobHost for JobService {
                 kind: task.kind.clone(),
                 state: task.state.to_string(),
                 bytes: task.bytes,
+                label: task.label.clone(),
             });
         }
         for schedule in st.schedules.values() {
@@ -161,6 +165,7 @@ impl port::JobHost for JobService {
                 kind: schedule.spec.kind.to_string(),
                 state: "scheduled".to_string(),
                 bytes: 0,
+                label: schedule.spec.label.clone(),
             });
         }
         rows
@@ -184,12 +189,15 @@ impl port::JobHost for JobService {
                 next: schedule.next,
                 remaining: schedule.remaining,
                 skipped: schedule.skipped,
+                label: schedule.spec.label.clone(),
+                rounds: rounds_of(&self.inner.values.db, schedule.spec.target),
             });
         }
         let task = st
             .tasks
             .get(&id)
             .ok_or_else(|| anyhow::anyhow!("no job {id}"))?;
+        let rounds = rounds_of(&self.inner.values.db, task.target);
         Ok(port::Status {
             id: id.to_string(),
             state: task.state.to_string(),
@@ -200,6 +208,8 @@ impl port::JobHost for JobService {
             next: None,
             remaining: None,
             skipped: 0,
+            label: task.label.clone(),
+            rounds,
         })
     }
 
@@ -365,6 +375,32 @@ impl JobService {
         }
         spec
     }
+}
+
+// How many HTTP round trips a session has spent: one per block carrying a usage stamp.
+fn rounds_of(db: &std::path::Path, session: Option<i64>) -> i64 {
+    let Some(session) = session else {
+        return 0;
+    };
+    let Ok(reader) = crate::server::storage::Reader::open(db) else {
+        return 0;
+    };
+    let count = || -> anyhow::Result<i64> {
+        let ranges = reader.ranges(session)?;
+        if ranges.is_empty() {
+            return Ok(0);
+        }
+        let rows = reader.query(
+            &Query::new(Sheet::Blocks)
+                .columns(&["usage_prompt"])
+                .filter(vec![Cond::Within("id", ranges)]),
+        )?;
+        Ok(rows
+            .iter()
+            .filter(|row| row["usage_prompt"].is_i64())
+            .count() as i64)
+    };
+    count().unwrap_or(0)
 }
 
 // One id as the model wrote it.

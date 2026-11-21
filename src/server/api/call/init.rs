@@ -59,6 +59,7 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
         .map(|effort| effort.as_str())
         .unwrap_or("auto");
     Ok(json!({
+        "session": session,
         "structure": structure,
         "blocks": blocks,
         "todo": todo,

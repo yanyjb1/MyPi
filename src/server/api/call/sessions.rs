@@ -49,64 +49,84 @@ fn dirs(reader: &Reader, dir: &str) -> Result<HashSet<i64>> {
         .collect())
 }
 
-// Besides the session's own columns, a row carries what the picker draws: the first user message, the transcript's size, the time of the last block, and how many memos the session holds.
+// The figures a list row draws: the first user message, the transcript's size, the time of the
+// last block, how many rounds it holds, and how many memos.
+pub(crate) struct Stats {
+    pub(crate) first_user: Option<String>,
+    pub(crate) bytes: i64,
+    pub(crate) last_ts: Option<String>,
+    pub(crate) rounds: i64,
+    pub(crate) memos: i64,
+}
+
+// Besides the session's own columns, a row carries what a list draws.
 fn extras(reader: &Reader, row: Value) -> Result<Value, Refuse> {
     let Some(session) = row.get("id").and_then(Value::as_i64) else {
         return Ok(row);
     };
-    let ranges = reader.ranges(session)?;
-    let mut first_user: Option<String> = None;
-    let mut bytes: i64 = 0;
-    let mut last_ts: Option<String> = None;
-    let mut memos: i64 = 0;
-
-    if !ranges.is_empty() {
-        let blocks = reader.query(
-            &Query::new(Sheet::Blocks)
-                .columns(&["kind", "content", "text", "result", "ts"])
-                .filter(vec![Cond::Within("id", ranges.clone())])
-                .order("id", Order::Asc),
-        )?;
-        for block in &blocks {
-            if first_user.is_none() && block["kind"].as_str() == Some("user") {
-                let body = block["content"]
-                    .as_str()
-                    .or_else(|| block["text"].as_str())
-                    .filter(|text| !text.trim().is_empty());
-                first_user = body.map(str::to_string);
-            }
-            for key in ["content", "text", "result"] {
-                if let Some(text) = block[key].as_str() {
-                    bytes += text.len() as i64;
-                }
-            }
-            if let Some(ts) = block["ts"].as_str() {
-                last_ts = Some(ts.to_string());
-            }
-        }
-
-        let named = reader.query(
-            &Query::new(Sheet::Memos)
-                .columns(&["name"])
-                .filter(vec![Cond::Within("anchor", ranges)]),
-        )?;
-        let mut names: HashSet<&str> = HashSet::new();
-        for memo in &named {
-            if let Some(name) = memo["name"].as_str() {
-                names.insert(name);
-            }
-        }
-        memos = names.len() as i64;
-    }
-
+    let stats = stats(reader, session)?;
     match row {
         Value::Object(mut map) => {
-            map.insert("first_user".to_string(), json!(first_user));
-            map.insert("bytes".to_string(), json!(bytes));
-            map.insert("last_ts".to_string(), json!(last_ts));
-            map.insert("memos".to_string(), json!(memos));
+            map.insert("first_user".to_string(), json!(stats.first_user));
+            map.insert("bytes".to_string(), json!(stats.bytes));
+            map.insert("last_ts".to_string(), json!(stats.last_ts));
+            map.insert("rounds".to_string(), json!(stats.rounds));
+            map.insert("memos".to_string(), json!(stats.memos));
             Ok(Value::Object(map))
         }
         other => Ok(other),
     }
+}
+
+// One session's figures, read from its own listed rounds.
+pub(crate) fn stats(reader: &Reader, session: i64) -> Result<Stats, Refuse> {
+    let ranges = reader.ranges(session)?;
+    let mut stats = Stats {
+        first_user: None,
+        bytes: 0,
+        last_ts: None,
+        rounds: reader.list(session)?.len() as i64,
+        memos: 0,
+    };
+    if ranges.is_empty() {
+        return Ok(stats);
+    }
+
+    let blocks = reader.query(
+        &Query::new(Sheet::Blocks)
+            .columns(&["kind", "content", "text", "result", "ts"])
+            .filter(vec![Cond::Within("id", ranges.clone())])
+            .order("id", Order::Asc),
+    )?;
+    for block in &blocks {
+        if stats.first_user.is_none() && block["kind"].as_str() == Some("user") {
+            let body = block["content"]
+                .as_str()
+                .or_else(|| block["text"].as_str())
+                .filter(|text| !text.trim().is_empty());
+            stats.first_user = body.map(str::to_string);
+        }
+        for key in ["content", "text", "result"] {
+            if let Some(text) = block[key].as_str() {
+                stats.bytes += text.len() as i64;
+            }
+        }
+        if let Some(ts) = block["ts"].as_str() {
+            stats.last_ts = Some(ts.to_string());
+        }
+    }
+
+    let named = reader.query(
+        &Query::new(Sheet::Memos)
+            .columns(&["name"])
+            .filter(vec![Cond::Within("anchor", ranges)]),
+    )?;
+    let mut names: HashSet<&str> = HashSet::new();
+    for memo in &named {
+        if let Some(name) = memo["name"].as_str() {
+            names.insert(name);
+        }
+    }
+    stats.memos = names.len() as i64;
+    Ok(stats)
 }

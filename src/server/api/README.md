@@ -108,12 +108,12 @@ Subscribe: `watch`, `submit`, `compact`.
 | `register` | `hello` | `viewer` | `{"notices"}` |
 | `register` | `bye` | — | nothing |
 | `call` | `init` | `session` | `structure` (`turn` + `ranges` + `compact` per round, the whole list, borrowed rounds left out), `blocks` (newest 32, whole rows), `todo` (the list, or null), `effort` (the rung the session runs with now) |
-| `call` | `blocks` | `session`, `ranges` | `blocks`, whole rows, in request order |
+| `call` | `blocks` | `session`, `ranges` | `session`, and `blocks`: whole rows, in request order |
 | `call` | `meta` | `session` | the session row |
 | `call` | `usage` | `session` | session totals, `cache_hit_rate`, `cny`, `usd`, `context`, `estimated`, `baseline_prompt`, `groups` by `provider:model`, and the subagents' `subagent_price` + `subagent_groups` |
 | `call` | `todo` | `session` | the replayed list, `[{"text", "done"}]` |
 | `call` | `memo` | `session` (current only), `op`, `scope`, `name` | `names`, or `content`, or `history` |
-| `call` | `children` | `session` | `rows`, each a child session's `id` and `anchor` |
+| `call` | `children` | `session` | `session`, and `rows`: each child's `id`, `name`, `cwd`, `anchor`, `rounds`, `bytes`, `last_ts`, `first_user` and `running` |
 | `call` | `config` | `key` | the value; a bare `models.model.<address>` answers the whole entry |
 | `call` | `pools` | — | `models`, `profiles` |
 | `call` | `sessions` | `under` (optional directory) | `rows`: main sessions, newest first, each carrying `first_user`, `bytes`, `last_ts`, `memos` |

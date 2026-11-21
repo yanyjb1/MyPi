@@ -1,4 +1,4 @@
-//! The sub-agent job: run one child session to its end, then settle it.
+// The sub-agent job: run one child session to its end, then settle it.
 
 use std::path::PathBuf;
 use std::sync::Weak;
@@ -11,7 +11,7 @@ use super::book::{Birth, Inner, book_child, unbook};
 use crate::server::agent::tools::contract::job::{JobCtx, JobOutcome, JobRunner};
 use crate::server::agent::tools::contract::view::Source;
 
-/// One child session, held open until `final submit` or until the nags run out.
+// One child session, held open until `final submit` or until the nags run out.
 pub(crate) struct AgentRunner {
     inner: Weak<Inner>,
     child: i64,
@@ -37,13 +37,33 @@ impl AgentRunner {
         }
     }
 
-    /// The answer file's stem: the name the parent was told at spawn.
+    // The answer file's stem: the name the parent was told at spawn.
     fn name(&self) -> String {
-        self.answer
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_default()
+        stem(&self.answer)
     }
+}
+
+// The one spelling of a child's name: its answer file's stem.
+pub(crate) fn stem(answer: &std::path::Path) -> String {
+    answer
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+// Whether the child's newest round was closed by a stop the runner did not send.
+fn interrupted(db: &std::path::Path, child: i64) -> bool {
+    let Ok(reader) = crate::server::storage::Reader::open(db) else {
+        return false;
+    };
+    let Ok(turns) = reader.turns(child) else {
+        return false;
+    };
+    turns
+        .iter()
+        .next_back()
+        .and_then(|turn| turn["stop_reason"].as_str())
+        .is_some_and(|reason| reason == "interrupted")
 }
 
 impl JobRunner for AgentRunner {
@@ -93,10 +113,15 @@ impl JobRunner for AgentRunner {
             .source
             .child(self.child)
             .is_some_and(|child| child.submitted());
+        // How the child's last round closed: the row is written before the busy flag drops.
+        let ended = inner.writer.path();
+        let stopped_by_user = !stopped && interrupted(&ended, self.child);
         unbook(&inner, self.child);
         let ok = submitted && !stopped;
         let wake = if ok {
             format!("{name} finished: {}", self.answer.display())
+        } else if stopped_by_user {
+            format!("{name} interrupted by user")
         } else if stopped {
             format!("{name} failed: the task was stopped")
         } else {

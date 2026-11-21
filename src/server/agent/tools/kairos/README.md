@@ -37,6 +37,10 @@ after aliases and `#ref` are resolved.
 `now`, `after` and `every` answer the receipts they started. The history summary names the
 operation; a `kairos` call's own parameters are the interesting part.
 
+A task that runs a session of its own carries that session's `label`, the stem of its answer file.
+`status` also counts the round trips it has billed: one per block carrying a usage stamp, which is
+the only figure that says what a subagent has actually cost.
+
 ## 2. Design intent
 
 - **Long work leaves the round.** A job is started and forgotten until its wake; the model's turn

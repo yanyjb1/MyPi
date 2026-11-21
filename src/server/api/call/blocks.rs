@@ -21,5 +21,5 @@ pub(crate) fn answer(api: &Api, session: i64, ranges: Vec<[i64; 2]>) -> Result<V
         }
         found.extend(reader.blocks(&[[lo, hi]])?);
     }
-    Ok(json!({"blocks": found}))
+    Ok(json!({"session": session, "blocks": found}))
 }

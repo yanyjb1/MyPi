@@ -1,4 +1,4 @@
-//! The lap cycle: ask, run the batch, take the mailboxes, settle.
+// The lap cycle: ask, run the batch, take the mailboxes, settle.
 
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use super::ask::{CompactInput, LapInput, ResultsInput, Stop};
 use super::fence::Fence;
 use crate::ipc::contract::Text;
 use crate::server::agent::r#loop::pen::{self, Pen};
-use crate::server::agent::r#loop::session::agent::AgentRunner;
+use crate::server::agent::r#loop::session::agent::{AgentRunner, stem};
 use crate::server::agent::r#loop::session::book::{Birth, Inner, Retention};
 use crate::server::agent::r#loop::session::child::State as ChildState;
 use crate::server::agent::r#loop::session::handle::Handle;
@@ -24,13 +24,13 @@ use crate::server::agent::tools::subagent::{FINAL, TASK};
 use crate::server::platform::time::now_stamp;
 use crate::server::storage::{Ref, RequestMeta, Row};
 
-/// Which machine a turn runs.
+// Which machine a turn runs.
 #[derive(Clone)]
 pub enum Mode {
     Normal,
     Compact {
         retention: Option<Retention>,
-        /// Rendered when the round opened; the same text the round's own block holds.
+        // Rendered when the round opened; the same text the round's own block holds.
         instruction: String,
     },
 }
@@ -126,8 +126,7 @@ pub(crate) fn run(
     }
 }
 
-/// Close one turn: its receipt leaves on the same queue as everything else the turn said, so a
-/// front end can never see the next turn's first frame before it.
+// Close one turn: its receipt leaves on the same queue as everything else the turn said, so a front end can never see the next turn's first frame before it.
 fn settle(
     inner: &Arc<Inner>,
     handle: &Handle,
@@ -149,7 +148,7 @@ fn settle(
     Ok(())
 }
 
-/// One turn's laps. Every early return lands here; the caller owns the settle.
+// One turn's laps. Every early return lands here; the caller owns the settle.
 fn laps(
     inner: &Arc<Inner>,
     handle: &Arc<Handle>,
@@ -273,7 +272,7 @@ fn laps(
                     cwd: spec.cwd,
                 },
                 spec.start,
-                spec.answer,
+                spec.answer.clone(),
             ));
             jobs.start(JobSpec {
                 runner,
@@ -283,6 +282,8 @@ fn laps(
                 needs_slot: true,
                 kind: "agent",
                 wake_on_done: true,
+                target: Some(id),
+                label: Some(stem(&spec.answer)),
             })?;
         }
         if !deletes.is_empty() {
@@ -295,7 +296,7 @@ fn laps(
     }
 }
 
-/// Keep what a dead lap already produced: the stored turn matches what the front end showed.
+// Keep what a dead lap already produced: the stored turn matches what the front end showed.
 fn keep_blocks(pen: Option<Arc<Pen>>, handle: &Handle) {
     let Some(pen) = pen else {
         return;
@@ -322,7 +323,7 @@ fn keep_blocks(pen: Option<Arc<Pen>>, handle: &Handle) {
     }
 }
 
-/// A child's list: `task` is dropped silently, `final` is added because the parent never names it.
+// A child's list: `task` is dropped silently, `final` is added because the parent never names it.
 fn child_tools(tools: &[String]) -> Vec<String> {
     let mut out: Vec<String> = tools
         .iter()
@@ -333,8 +334,7 @@ fn child_tools(tools: &[String]) -> Vec<String> {
     out
 }
 
-/// The model a child runs on: the one its call named, else the parent's own.
-/// The roster only hands out `provider:model` addresses, so the split cannot fail.
+// The model a child runs on: the one its call named, else the parent's own. The roster only hands out `provider:model` addresses, so the split cannot fail.
 fn child_model(
     named: Option<&str>,
     config: &super::super::session::config::Config,
@@ -351,15 +351,15 @@ struct Spawn {
     start: String,
     budget: u32,
     answer: std::path::PathBuf,
-    /// The model this child runs on.
+    // The model this child runs on.
     model: (String, String),
-    /// Whether the child's model takes image parts on the wire.
+    // Whether the child's model takes image parts on the wire.
     vision: bool,
-    /// The row that holds the child's own request archive.
+    // The row that holds the child's own request archive.
     meta_at: usize,
 }
 
-/// Put every effect into the lap's commit; return what still needs acting after it lands.
+// Put every effect into the lap's commit; return what still needs acting after it lands.
 fn effects(
     inner: &Inner,
     blocks: &Pen,
@@ -410,7 +410,7 @@ fn effects(
                             started_at: now_stamp(),
                             cwd: cwd.to_string_lossy().into_owned(),
                             model: Some((provider.clone(), model.clone())),
-                            name: None,
+                            name: Some(stem(answer)),
                             anchor: Some(anchor),
                             meta: Some(Ref::Batch(meta_at)),
                         },
@@ -442,7 +442,7 @@ fn effects(
     }
     Ok((children, deletes))
 }
-/// One finished call, as the request half takes it.
+// One finished call, as the request half takes it.
 fn report(result: ToolResult) -> Reported {
     Reported {
         call_id: result.call_id,
@@ -456,7 +456,7 @@ fn report(result: ToolResult) -> Reported {
     }
 }
 
-/// The user stopped this turn: no notice, no error text, settled as interrupted.
+// The user stopped this turn: no notice, no error text, settled as interrupted.
 fn stopped(handle: &Handle, why: &anyhow::Error) -> bool {
     if handle.stop.is_stopped() {
         return true;
@@ -477,7 +477,7 @@ fn broken(
     failed(inner, handle, turn, baseline, why, "turn_broke");
 }
 
-/// One round died: the watcher reads one line naming what kind of round it was, then the reason.
+// One round died: the watcher reads one line naming what kind of round it was, then the reason.
 fn failed(
     inner: &Arc<Inner>,
     handle: &Handle,
@@ -494,8 +494,7 @@ fn failed(
     let _ = settle(inner, handle, turn, Stop::Broken, baseline);
 }
 
-/// Take both boxes into the running turn at a blocking point: wakes first, then the slot.
-/// Every text taken is already a block row; `true` = something was taken, so the turn goes on.
+// Take both boxes into the running turn at a blocking point: wakes first, then the slot. Every text taken is already a block row; `true` = something was taken, so the turn goes on.
 fn take_mail(
     inner: &Arc<Inner>,
     handle: &Handle,

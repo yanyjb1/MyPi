@@ -1,4 +1,4 @@
-//! One scheduler thread per session: pools, clocks, skips and one wake per tick.
+// One scheduler thread per session: pools, clocks, skips and one wake per tick.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -14,11 +14,10 @@ use super::job::{Id, Job, State, TaskState};
 use super::output::OutputDir;
 use super::wake::{self, Wake, WakeSink};
 
-/// The scheduler's wake: a flag inside the condvar's own mutex, so a ring lands either before the
-/// wait or inside it, never between the two.
+// The scheduler's wake: a flag inside the condvar's own mutex, so a ring lands either before the wait or inside it, never between the two.
 pub(crate) type Bell = Arc<(Mutex<bool>, Condvar)>;
 
-/// Wake the scheduler: something it was waiting for has changed.
+// Wake the scheduler: something it was waiting for has changed.
 pub(crate) fn ring(bell: &Bell) {
     let mut rung = bell.0.lock().unwrap_or_else(|e| e.into_inner());
     *rung = true;
@@ -40,13 +39,13 @@ pub(crate) fn spawn(
         .map(|_| ())
 }
 
-/// What the thread does after one pass.
+// What the thread does after one pass.
 enum Next {
-    /// Something is scheduled: wake at this point.
+    // Something is scheduled: wake at this point.
     At(Duration),
-    /// Nothing is due, but a running job or a schedule may still need this thread.
+    // Nothing is due, but a running job or a schedule may still need this thread.
     Idle,
-    /// Nothing left: the thread ends.
+    // Nothing left: the thread ends.
     Done,
 }
 
@@ -60,7 +59,7 @@ fn run(
     dir: OutputDir,
 ) {
     while !stop.load(Ordering::Relaxed) {
-        match tick(session, values, &wake, &state, &bell, &dir) {
+        match tick(session, &values, &wake, &state, &bell, &dir) {
             Next::Done => return,
             Next::Idle => park(&bell, None),
             Next::At(wait) => park(&bell, Some(wait)),
@@ -68,8 +67,7 @@ fn run(
     }
 }
 
-/// Block on the bell: until the deadline, or until a job finishes or a schedule appears. A ring
-/// that arrived while this pass ran returns at once.
+// Block on the bell: until the deadline, or until a job finishes or a schedule appears. A ring that arrived while this pass ran returns at once.
 fn park(bell: &Bell, wait: Option<Duration>) {
     let mut rung = bell.0.lock().unwrap_or_else(|e| e.into_inner());
     if *rung {
@@ -93,7 +91,7 @@ fn park(bell: &Bell, wait: Option<Duration>) {
 
 fn tick(
     session: i64,
-    values: Values,
+    values: &Values,
     wake: &Arc<dyn WakeSink>,
     state: &Arc<Mutex<State>>,
     bell: &Bell,
@@ -141,7 +139,7 @@ fn tick(
     }
 }
 
-/// The earliest point at which a scheduled task or a cron entry becomes due.
+// The earliest point at which a scheduled task or a cron entry becomes due.
 fn deadline(st: &State) -> Option<i64> {
     let tasks = st
         .tasks
@@ -152,7 +150,7 @@ fn deadline(st: &State) -> Option<i64> {
     tasks.chain(schedules).min()
 }
 
-/// Whether anything could still need this thread: a schedule, or a task the pool has not finished.
+// Whether anything could still need this thread: a schedule, or a task the pool has not finished.
 fn pending(st: &State) -> bool {
     !st.schedules.is_empty()
         || st.tasks.values().any(|task| {
@@ -163,7 +161,7 @@ fn pending(st: &State) -> bool {
         })
 }
 
-fn start_after(st: &mut State, values: Values, now: i64, starts: &mut Vec<Id>) {
+fn start_after(st: &mut State, values: &Values, now: i64, starts: &mut Vec<Id>) {
     let ids: Vec<Id> = st
         .tasks
         .iter()
@@ -192,7 +190,7 @@ fn start_after(st: &mut State, values: Values, now: i64, starts: &mut Vec<Id>) {
 
 fn start_every(
     st: &mut State,
-    values: Values,
+    values: &Values,
     now: i64,
     starts: &mut Vec<Id>,
     messages: &mut Vec<String>,
@@ -433,7 +431,7 @@ pub(crate) fn run_job(state: Arc<Mutex<State>>, bell: Bell, id: Id) -> Result<()
         })
 }
 
-/// No thread: the job fails here, its pool slot returns, and its wake rides the next tick.
+// No thread: the job fails here, its pool slot returns, and its wake rides the next tick.
 fn settle_unstarted(state: &Mutex<State>, id: Id, why: &std::io::Error) {
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     let mut needs_slot = false;

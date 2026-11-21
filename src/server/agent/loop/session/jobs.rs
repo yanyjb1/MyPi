@@ -1,4 +1,4 @@
-//! The job service, one per session, the session table it wakes, and its numbers from config.
+// The job service, one per session, the session table it wakes, and its numbers from config.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,7 @@ use crate::server::config::{
     KEY_CONFIG_SERVER_AGENT_TOOLS_KAIROS_TIMEOUT_SECS,
 };
 
-/// The loop's open sessions; a finished job's wake goes to its session's mailbox.
+// The loop's open sessions; a finished job's wake goes to its session's mailbox.
 pub(crate) struct Slots {
     inner: Arc<Mutex<HashMap<i64, Arc<Handle>>>>,
 }
@@ -33,7 +33,7 @@ impl Slots {
             .cloned()
     }
 
-    /// Take one slot; `false` means the session is already booked.
+    // Take one slot; `false` means the session is already booked.
     pub(crate) fn insert(&self, session: i64, handle: Arc<Handle>) -> bool {
         let mut slots = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if slots.contains_key(&session) {
@@ -59,8 +59,8 @@ impl WakeSink for Slots {
     }
 }
 
-/// The scheduler's numbers, as the config hands them over.
-pub(crate) fn values(cfg: &Config) -> job::Values {
+// The scheduler's numbers, as the config hands them over.
+pub(crate) fn values(cfg: &Config, db: std::path::PathBuf) -> job::Values {
     let int = |key: &str, fallback: i64| -> u64 {
         cfg.get(key, None)
             .ok()
@@ -76,5 +76,6 @@ pub(crate) fn values(cfg: &Config) -> job::Values {
             8_388_608,
         ) as usize,
         max_retained: int(KEY_CONFIG_SERVER_AGENT_TOOLS_KAIROS_MAX_RETAINED, 8).max(1) as usize,
+        db,
     }
 }
