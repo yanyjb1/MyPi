@@ -1,4 +1,4 @@
-// The input sub-zone: what it holds, and the two contracts it answers.
+// The input zone: what it holds, and the pane contract it answers.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -22,7 +22,7 @@ use super::submit::Waiting;
 use crate::ui::tui::action::Action;
 use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::Frame;
-use crate::ui::tui::zone::{Claim, Kind, Shared, Shout, SubZone, TermSize, name};
+use crate::ui::tui::zone::{Claim, Kind, Shared, Shout, TermSize, name};
 
 // The input sub-zone. Its height comes from its own content.
 pub struct InputZone {
@@ -320,32 +320,32 @@ impl InputZone {
     }
 }
 
-impl SubZone for InputZone {
-    fn claims(&self) -> &'static [Claim] {
+impl InputZone {
+    pub(in crate::ui::tui::zone::main) fn claims(&self) -> &'static [Claim] {
         Self::CLAIMS
     }
 
-    fn kinds(&self) -> &'static [Kind] {
+    pub(in crate::ui::tui::zone::main) fn kinds(&self) -> &'static [Kind] {
         &[Kind::Call, Kind::Post, Kind::Subscribe]
     }
 
-    fn revision(&self) -> u64 {
+    pub(in crate::ui::tui::zone::main) fn revision(&self) -> u64 {
         self.rev
     }
 
-    fn deliver_event(&mut self, frame: &Frame, size: TermSize) {
+    pub(in crate::ui::tui::zone::main) fn deliver_event(&mut self, frame: &Frame, size: TermSize) {
         self.term = size;
         self.read_frame(frame);
         self.bump()
     }
 
-    fn deliver_action(&mut self, a: &Action) -> bool {
+    pub(in crate::ui::tui::zone::main) fn deliver_action(&mut self, a: &Action) -> bool {
         let consumed = self.act(a);
         self.bump();
         consumed
     }
 
-    fn attach(&mut self, session: i64, _size: TermSize) {
+    pub(in crate::ui::tui::zone::main) fn attach(&mut self, session: i64, _size: TermSize) {
         // A draft keeps working inside itself; entering a row is what refreshes the figures.
         if self.session.is_some() {
             self.opening_sent = false;
@@ -379,7 +379,7 @@ impl SubZone for InputZone {
         self.bump()
     }
 
-    fn detach(&mut self) {
+    pub(in crate::ui::tui::zone::main) fn detach(&mut self) {
         self.session = None;
         self.data.turn(DRAFT);
         self.prepare_pending = false;
@@ -403,11 +403,11 @@ impl SubZone for InputZone {
         self.bump()
     }
 
-    fn take_shouts(&mut self) -> Vec<Shout> {
+    pub(in crate::ui::tui::zone::main) fn take_shouts(&mut self) -> Vec<Shout> {
         std::mem::take(&mut self.shouts)
     }
 
-    fn hear(&mut self, event: &str, content: &Value) {
+    pub(in crate::ui::tui::zone::main) fn hear(&mut self, event: &str, content: &Value) {
         match event {
             name::CWD => {
                 if let Some(path) = content.get("path").and_then(Value::as_str) {

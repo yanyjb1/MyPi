@@ -1,4 +1,4 @@
-//! The zone contract: the vocabulary the app and the three major zones share.
+// The zone contract: the vocabulary the app and the three major zones share.
 
 mod claim;
 mod kind;
@@ -20,7 +20,7 @@ pub use outcome::{Outcome, ZoneId};
 pub use shared::Shared;
 pub use shout::{Shout, name};
 pub use size::TermSize;
-pub use zone::{SubZone, Zone};
+pub use zone::Zone;
 
 // The wire's frame and the session's window, named here so that no zone reaches past this file.
 pub use crate::ipc::contract::Frame;

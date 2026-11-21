@@ -4,6 +4,10 @@ The one frame every full-screen page draws inside: a dashed top edge with the ti
 middle, the filter's caption and its box, the body, the extra words, a rule, the key hints and the
 dashed bottom edge. `resume` and `tree` both fill it; a page never draws its own border.
 
+Beside the chassis sits `Picker`, the column of rows those two pages share: the rows, the words that
+filter them, the cursor and the window. The chassis places finished lines; the picker holds what a
+page lists.
+
 ## 1. Design / Schema
 
 `Panel` is what a page hands over:
@@ -90,14 +94,56 @@ description dim.
 - **Air is bought, not assumed.** A short terminal keeps its data and loses its blanks; a tall one
   shows them. The reader never scrolls a page to look at empty rows.
 
-## 3. Unresolved
+## 3. Picker
 
-1. A page without a filter takes no filter box; there is no mode that hides the box after the
-   fact.
+A page that lists rows keeps a `Picker<Row>` instead of its own copy of the column. It holds the
+rows, the indices that passed the filter, the cursor and the first drawn row, and nothing else: not
+the keys, not the colors, not what a row means.
 
-2. The chassis owns no scrollbar: a page draws its own window and tells the chassis only what
-   fits.
+| call | what it does |
+|---|---|
+| `replace(rows, haystack)` | a whole new list; the visible set is rebuilt, the window stays |
+| `edit_filter(edit, haystack)` | the reader edits the words through `edit`; the visible set follows, and the window returns to the top |
+| `move_by` / `first` / `last` / `select` | the cursor, never past either end |
+| `settle_scroll(body)` | the window, kept on the cursor |
+| `row_at` / `row` / `position` | a row by screen position, the row under the cursor, the position of a row that matches |
+| `clear_rows` / `clear` | no list arrived / the page was left |
+| `filter` / `visible_len` / `selected` / `scroll` / `set_scroll` | what the renderer reads and writes back |
 
-## 4. Config fields
+`haystack` is the page's own closure: it says what text a row can be matched on, in which language.
+The skeleton lowercases the words and matches them; it never learns a row's fields.
+
+### Why the skeleton keeps no keys
+
+A page decides which key means what, and calls one call here. A new key on a new page costs one
+line in that page's own key match and nothing here. A skeleton that read keys would have to be
+reopened every time a page grew one, and would then be a name for a shape rather than a shared rule.
+
+### The two invariants
+
+The visible set holds indices into the rows, never copies, so a page can address a row by its
+screen position without the list being reordered. The cursor and the window are both kept inside
+the visible set by every call that can move them; a page writes `set_scroll` back after its draw
+only to record where it actually started drawing.
+
+## 4. Design intent (picker)
+
+- **One column, one owner.** Filtering, clamping the cursor and keeping the window on it are three
+  rules, and a page that restates them will eventually restate them differently.
+
+- **Replacing the list is one call.** A page whose rows are rebuilt from live data (the tree) and a
+  page whose rows arrive whole (the session list) both say `replace`; neither tracks a row count to
+  decide when to recompute.
+
+- **The window is not reset by a refresh.** Only the reader's own edits send it back to the top. A
+  refresh keeps it, so a list that grows underneath the reader does not jump.
+
+## 5. Unresolved
+
+1. A page without a filter takes no filter box; there is no mode that hides the box after the fact.
+2. Neither the chassis nor the picker draws a scrollbar; a page owns its window and tells them only
+   what fits.
+
+## 6. Config fields
 
 None.

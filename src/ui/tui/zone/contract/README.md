@@ -1,4 +1,4 @@
-# contract — the two-level zone boundary
+# contract — the zone boundary
 
 The only vocabulary the app and the three major zones share.
 
@@ -7,7 +7,6 @@ The only vocabulary the app and the three major zones share.
 | type | meaning |
 |---|---|
 | `Zone` | what the app knows of a major zone |
-| `SubZone` | what `Main` knows of history, input and reserved |
 | `Kind` | a frame kind a zone may declare |
 | `Claim` | one action a zone may declare |
 | `Mail` | the post box every zone drops its letters in |
@@ -38,10 +37,6 @@ The only vocabulary the app and the three major zones share.
 | `anim` | how often time alone rewrites the rows; `None` = never |
 | `render` | this zone's rows; it changes nothing |
 | `cursor` | the hardware cursor, if any |
-
-### `SubZone`
-
-`claims`, `kinds`, `deliver_event(frame, size)`, `deliver_action(action)`, `attach(session, size)`, `detach`, `borrowed`, `revision`, `take_shouts`, `hear`. `Main` is the only host. A sub-zone never asks the screen for anything: what it wants the server to do it posts itself.
 
 ### `Frame`
 

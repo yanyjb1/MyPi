@@ -1,17 +1,17 @@
-//! The chat zone: the host of history, input and reserved.
+// The chat zone: the host of history, input and reserved.
 
 use serde_json::{Value, json};
 
 use super::input::ExitRequest;
 use super::{arbitrate, history, input, keys, reserved};
 use crate::ui::tui::zone::{
-    Claim, Frame, Kind, Local, Memo, Outcome, Shared, Shout, SubZone, TermSize, Zone, ZoneId, name,
+    Claim, Frame, Kind, Local, Memo, Outcome, Shared, Shout, TermSize, Zone, ZoneId, name,
 };
 
-/// The fallback size before the first resize arrives.
+// The fallback size before the first resize arrives.
 const GUESS: TermSize = TermSize { cols: 80, rows: 24 };
 
-/// Every class the three sub-zones consume between them.
+// Every class the three sub-zones consume between them.
 const KINDS: &[Kind] = &[
     Kind::Call,
     Kind::Post,
@@ -30,21 +30,21 @@ pub struct MainZone {
     pub(super) heights: super::arbitrate::Heights,
     pub(super) shared: Shared,
 
-    /// Events this zone itself put out, not yet on the bus.
+    // Events this zone itself put out, not yet on the bus.
     shouts: Vec<Shout>,
 
-    /// The directory the conversation row last named; a temporary `cd` never touches it.
+    // The directory the conversation row last named; a temporary `cd` never touches it.
     session_cwd: Option<String>,
 
-    /// Bumped whenever any sub-zone's rows would differ.
+    // Bumped whenever any sub-zone's rows would differ.
     rev: u64,
 
-    /// The sub-zone revisions this `rev` was minted from.
+    // The sub-zone revisions this `rev` was minted from.
     seen: (u64, u64, u64),
 }
 
 impl MainZone {
-    /// Where the hardware cursor goes, in terminal coordinates.
+    // Where the hardware cursor goes, in terminal coordinates.
     fn cursor_position(&self) -> Option<(u16, u16)> {
         super::arbitrate::cursor_position(self)
     }
@@ -53,24 +53,18 @@ impl MainZone {
         self.size.unwrap_or(GUESS)
     }
 
-    /// Put one event of this zone's own on the bus.
+    // Put one event of this zone's own on the bus.
     fn shout(&mut self, name: &'static str, content: Value) {
         self.shouts.push(Shout::new(name, content));
     }
 
-    /// Hand every pending event to whoever did not put it out, then drain what that
-    /// provoked. A shout during delivery lands on the same queue, never in a nested call.
+    // Hand every pending event to whoever did not put it out, then drain what that provoked; a shout during delivery lands on the same queue, never in a nested call.
     fn flush(&mut self) {
         loop {
             let own = std::mem::take(&mut self.shouts);
             let from_history = self.history.take_shouts();
             let from_input = self.input.take_shouts();
-            let from_reserved = self.reserved.take_shouts();
-            if own.is_empty()
-                && from_history.is_empty()
-                && from_input.is_empty()
-                && from_reserved.is_empty()
-            {
+            if own.is_empty() && from_history.is_empty() && from_input.is_empty() {
                 return;
             }
             for event in own {
@@ -86,14 +80,10 @@ impl MainZone {
                 self.history.hear(event.name, &event.content);
                 self.reserved.hear(event.name, &event.content);
             }
-            for event in from_reserved {
-                self.history.hear(event.name, &event.content);
-                self.input.hear(event.name, &event.content);
-            }
         }
     }
 
-    /// The conversation's directory, out of the row and the signals that carry it.
+    // The conversation's directory, out of the row and the signals that carry it.
     fn read_cwd(&mut self, frame: &Frame) {
         let path = match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "meta") | ("local", "cwd") | ("post", "meta") => {
@@ -255,11 +245,12 @@ impl Zone for MainZone {
     }
 
     fn action(&mut self, action: &crate::ui::tui::action::Action) -> (Outcome, Vec<Local>) {
-        let seat = self.keys.seat(action);
-        if let Some(seat) = seat {
-            let sinks: [&mut dyn SubZone; 3] =
-                [&mut self.history, &mut self.input, &mut self.reserved];
-            sinks[seat].deliver_action(action);
+        if let Some(seat) = self.keys.seat(action) {
+            match seat {
+                0 => self.history.deliver_action(action),
+                1 => self.input.deliver_action(action),
+                _ => self.reserved.deliver_action(action),
+            };
         }
         let (outcome, mut locals) = self.exits();
         // An edit lands the hand here, not at draw time: its asks must leave with this frame.
@@ -289,7 +280,7 @@ impl Zone for MainZone {
 }
 
 impl MainZone {
-    /// Fold the sub-zones' revisions into one: the app compares only this.
+    // Fold the sub-zones' revisions into one: the app compares only this.
     fn sync_revision(&mut self) {
         let now = (
             self.history.revision(),
@@ -308,7 +299,7 @@ impl MainZone {
         self.flush();
     }
 
-    /// Turn the input zone's exits into the app's own asks or one handover.
+    // Turn the input zone's exits into the app's own asks or one handover.
     fn exits(&mut self) -> (Outcome, Vec<Local>) {
         let mut locals = Vec::new();
         let mut outcome = Outcome::Stay;
@@ -337,7 +328,7 @@ impl MainZone {
         (outcome, locals)
     }
 
-    /// A hand on duty holds the keys; a desk with nobody at it returns them.
+    // A hand on duty holds the keys; a desk with nobody at it returns them.
     pub(super) fn sync_borrowed(&mut self) {
         let claims = self.reserved.borrowed();
         if claims.is_empty() {
@@ -347,7 +338,7 @@ impl MainZone {
         }
     }
 
-    /// The editor asked for a hand: seat it, feed it the text, and let it leave if it is done.
+    // The editor asked for a hand: seat it, feed it the text, and let it leave if it is done.
     fn deliver_hires(&mut self) {
         self.seat_hand();
         if let Some(reply) = self.reserved.take_reply() {
@@ -362,36 +353,11 @@ impl MainZone {
         self.sync_borrowed();
     }
 
-    /// One pending hire, if the editor asked for one.
+    // One pending hire, if the editor asked for one.
     fn seat_hand(&mut self) {
         let Some(who) = self.input.take_hire() else {
             return;
         };
         self.reserved.hire(who);
-    }
-}
-
-// The host answers no sub-zone contract of its own.
-impl SubZone for MainZone {
-    fn claims(&self) -> &'static [Claim] {
-        &[]
-    }
-
-    fn kinds(&self) -> &'static [Kind] {
-        KINDS
-    }
-
-    fn deliver_event(&mut self, _frame: &Frame, _size: TermSize) {}
-
-    fn deliver_action(&mut self, _action: &crate::ui::tui::action::Action) -> bool {
-        false
-    }
-
-    fn attach(&mut self, _session: i64, _size: TermSize) {}
-
-    fn detach(&mut self) {}
-
-    fn revision(&self) -> u64 {
-        self.rev
     }
 }

@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
+use crate::ui::tui::zone::page::Picker;
 use crate::ui::tui::zone::{Claim, Frame, Kind, Local, Outcome, Shared, TermSize, Zone, ZoneId};
 
 use super::render;
@@ -84,20 +85,7 @@ impl Row {
 pub struct ResumeZone {
     shared: Shared,
     size: Option<TermSize>,
-    rows: Vec<Row>,
-
-    // Indices that passed the filter: filtering keeps indices, not rows.
-    visible: Vec<usize>,
-
-    // Row count at the last load: the visible set is recomputed only when it moves.
-    seen: usize,
-    filter: String,
-
-    // Position inside `visible`.
-    selected: usize,
-
-    // First visible row (written back by the render).
-    scroll: usize,
+    picker: Picker<Row>,
     scope: Scope,
     cwd: std::path::PathBuf,
 
@@ -128,12 +116,7 @@ impl Default for ResumeZone {
         Self {
             shared: Shared::default(),
             size: None,
-            rows: Vec::new(),
-            visible: Vec::new(),
-            seen: usize::MAX,
-            filter: String::new(),
-            selected: 0,
-            scroll: 0,
+            picker: Picker::default(),
             scope: Scope::Current,
             cwd: std::path::PathBuf::from("."),
             loaded: false,
@@ -151,11 +134,10 @@ impl ResumeZone {
     // Enter the page: reset, then ask for the list.
     fn begin(&mut self) {
         self.loaded = false;
-        self.scroll = 0;
         self.pending_delete = None;
         self.failed = false;
         self.error = None;
-        self.filter.clear();
+        self.picker.clear();
         self.list();
     }
 
@@ -181,20 +163,15 @@ impl ResumeZone {
             .and_then(Value::as_array)
             .map(|rows| rows.iter().filter_map(Row::of).collect())
             .unwrap_or_default();
-        self.rows = rows;
+        self.picker.replace(rows, haystack);
+        self.picker.set_scroll(0);
         self.loaded = true;
-        self.seen = self.rows.len();
-        self.refilter();
     }
 
     // The list did not arrive: the render says why rather than draw the failure as an empty directory.
     fn refused(&mut self, message: String) {
         self.error = Some(message);
-        self.rows.clear();
-        self.visible.clear();
-        self.seen = 0;
-        self.selected = 0;
-        self.scroll = 0;
+        self.picker.clear_rows();
         self.loaded = true;
     }
 
@@ -211,34 +188,11 @@ impl ResumeZone {
     }
 
     fn row(&self) -> Option<&Row> {
-        self.rows.get(*self.visible.get(self.selected)?)
+        self.picker.row()
     }
 
     fn selected_id(&self) -> Option<i64> {
         self.row().map(|row| row.id)
-    }
-
-    // Recompute the visible set. The filter matches what the answer carries.
-    fn refilter(&mut self) {
-        let needle = self.filter.to_lowercase();
-        self.visible = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| needle.is_empty() || haystack(row).contains(&needle))
-            .map(|(i, _)| i)
-            .collect();
-        self.selected = self.selected.min(self.visible.len().saturating_sub(1));
-        self.scroll = 0;
-    }
-
-    fn move_by(&mut self, delta: i64) {
-        if self.visible.is_empty() {
-            return;
-        }
-        let last = self.visible.len() - 1;
-        let next = self.selected as i64 + delta;
-        self.selected = next.clamp(0, last as i64) as usize;
     }
 
     fn bump(&mut self) {
@@ -260,12 +214,7 @@ impl ResumeZone {
 
     fn follow(&mut self, id: Option<i64>) {
         if id.is_none() {
-            self.rows.clear();
-            self.visible.clear();
-            self.seen = usize::MAX;
-            self.filter.clear();
-            self.selected = 0;
-            self.scroll = 0;
+            self.picker.clear();
             self.loaded = false;
             self.pending_delete = None;
         }
@@ -308,12 +257,12 @@ impl ResumeZone {
             Vec::new(),
         );
         match action {
-            Action::ScrollUp { .. } => self.move_by(-1),
-            Action::ScrollDown { .. } => self.move_by(1),
+            Action::ScrollUp { .. } => self.picker.move_by(-1),
+            Action::ScrollDown { .. } => self.picker.move_by(1),
             Action::Paste(text) => {
                 // A paste is a filter word here: a picker is not worth multi-line semantics.
-                self.filter.push_str(&text.replace('\n', " "));
-                self.refilter();
+                self.picker
+                    .edit_filter(|filter| filter.push_str(&text.replace('\n', " ")), haystack);
             }
             Action::Key(key) => {
                 let ctrl = key.mods.ctrl;
@@ -348,29 +297,25 @@ impl ResumeZone {
                             vec![Local::Attach(id)],
                         );
                     }
-                    KeyCode::Up => self.move_by(-1),
-                    KeyCode::Down => self.move_by(1),
-                    KeyCode::PageUp => self.move_by(-PAGE),
-                    KeyCode::PageDown => self.move_by(PAGE),
-                    KeyCode::Home => self.selected = 0,
-                    KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
+                    KeyCode::Up => self.picker.move_by(-1),
+                    KeyCode::Down => self.picker.move_by(1),
+                    KeyCode::PageUp => self.picker.move_by(-PAGE),
+                    KeyCode::PageDown => self.picker.move_by(PAGE),
+                    KeyCode::Home => self.picker.first(),
+                    KeyCode::End => self.picker.last(),
                     KeyCode::Tab => {
                         self.scope = self.scope.toggled();
                         self.list();
                         return stay;
                     }
-                    KeyCode::Backspace => {
-                        self.filter.pop();
-                        self.refilter();
-                    }
-                    KeyCode::Char('u') if ctrl => {
-                        self.filter.clear();
-                        self.refilter();
-                    }
-                    KeyCode::Char(c) if !ctrl => {
-                        self.filter.push(c);
-                        self.refilter();
-                    }
+                    KeyCode::Backspace => self.picker.edit_filter(
+                        |f| {
+                            f.pop();
+                        },
+                        haystack,
+                    ),
+                    KeyCode::Char('u') if ctrl => self.picker.edit_filter(String::clear, haystack),
+                    KeyCode::Char(c) if !ctrl => self.picker.edit_filter(|f| f.push(c), haystack),
                     _ => {}
                 }
             }
@@ -526,10 +471,6 @@ impl ResumeZone {
         self.shared.palette.get()
     }
 
-    pub(crate) fn filter(&self) -> &str {
-        &self.filter
-    }
-
     pub(crate) fn pending_delete(&self) -> Option<i64> {
         self.pending_delete
     }
@@ -550,29 +491,15 @@ impl ResumeZone {
         &self.opening
     }
 
-    pub(crate) fn visible_len(&self) -> usize {
-        self.visible.len()
+    pub(crate) fn picker(&self) -> &Picker<Row> {
+        &self.picker
     }
 
-    pub(crate) fn selected(&self) -> usize {
-        self.selected
-    }
-
-    pub(crate) fn set_scroll(&mut self, top: usize) {
-        self.scroll = top;
-    }
-
-    pub(crate) fn scroll(&self) -> usize {
-        self.scroll
+    pub(crate) fn picker_mut(&mut self) -> &mut Picker<Row> {
+        &mut self.picker
     }
 
     pub(crate) fn size(&self) -> Option<TermSize> {
         self.size
-    }
-
-    // Row `i` of the visible list.
-    pub(crate) fn row_at(&self, i: usize) -> Option<&Row> {
-        let k = *self.visible.get(i)?;
-        self.rows.get(k)
     }
 }

@@ -15,8 +15,8 @@ What each file holds, who calls it, and what it depends on. Current state only.
 
 ## What it exposes
 
-Through `SubZone`: `claims`, `kinds`, `borrowed`, `deliver_event`, `deliver_action`, `attach`,
-`detach`, `hear`, plus `super::pane::Pane`'s `request_height` and `assign`.
+To `Main` as calls on the zone itself: `kinds`, `borrowed`, `deliver_event`, `deliver_action`,
+`attach`, `detach`, `hear`, plus `super::pane::Pane`'s `request_height` and `assign`.
 
 To `Main`: `hire`, `text`, `col`, `take_reply`, `take_locals`, `render_rows`. The list it carries holds
 `Local::Copy` alone: every memo ask the desk writes is posted straight into the box.
@@ -33,8 +33,8 @@ To `Input`: nothing directly; the main zone carries `Reply` across.
 
 ## Who calls it
 
-`MainZone` only: `arbitrate` → `request_height` / `assign`, `dispatch` → `deliver_action`, `event` →
-`deliver_event`, `render` → `render_rows`, `deliver_hires` → `hire` / `text` / `take_reply`, the bus
+`MainZone` only: `arbitrate` → `request_height` / `assign`, a claimed key → `deliver_action`, a frame
+→ `deliver_event`, `render` → `render_rows`, `deliver_hires` → `hire` / `text` / `take_reply`, the bus
 → `hear`.
 
 ## What it does not know

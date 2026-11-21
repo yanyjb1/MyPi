@@ -22,8 +22,8 @@ arrival, and it leaves before another sits down.
 | `shared: Shared` | the post box, the one color and the draft |
 | `locals: Vec<Local>` | asks the desk owes the app itself |
 
-`Hire` is `Completion`, `Usage`, or `Memo(MemoAsk)`. `ReservedZone::CLAIMS` is empty: the desk only
-borrows keys through a hand's report.
+`Hire` is `Completion`, `Usage`, or `Memo(MemoAsk)`. The desk claims no key of its own: it only
+borrows them through a hand's report.
 
 ### The hand contract
 

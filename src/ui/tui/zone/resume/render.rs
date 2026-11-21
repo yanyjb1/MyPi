@@ -47,7 +47,7 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
     let header = text(
         lang,
         "resume_title",
-        json!({"count": z.visible_len(), "scope": scope}),
+        json!({"count": z.picker().visible_len(), "scope": scope}),
     );
 
     let mut extra = Vec::new();
@@ -59,7 +59,7 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
         size,
         title: header,
         filter: Some(Filter {
-            text: z.filter().to_string(),
+            text: z.picker().filter().to_string(),
             placeholder: text(lang, "resume_filter_hint", json!({})),
             caption: text(lang, "resume_filter_caption", json!({})),
         }),
@@ -71,15 +71,15 @@ pub(super) fn lines(z: &mut ResumeZone) -> Vec<Line<'static>> {
 
     let rows = panel.body_rows();
     let (blocks, top) = window(z, rows);
-    z.set_scroll(top);
+    z.picker_mut().set_scroll(top);
 
-    let count = z.visible_len();
+    let count = z.picker().visible_len();
     let mut body = Vec::new();
     for i in top..(top + blocks).min(count) {
-        let Some(row) = z.row_at(i) else {
+        let Some(row) = z.picker().row_at(i) else {
             continue;
         };
-        let selected = i == z.selected();
+        let selected = i == z.picker().selected();
         let confirming = z.pending_delete() == Some(row.id);
         body.extend(row_lines(&row, selected, confirming, z.failed(), lang));
         // Blank line between blocks; the last one is covered by the body padding.
@@ -96,14 +96,14 @@ fn empty(z: &ResumeZone, lang: Lang) -> Option<Line<'static>> {
         let word = text(lang, "resume_read_failed", json!({"detail": error}));
         return Some(Line::from(fg(word, fixed::ERR)));
     }
-    if z.visible_len() > 0 {
+    if z.picker().visible_len() > 0 {
         return None;
     }
     let key = if !z.loaded() {
         "resume_empty_loading"
     } else if z.scope() == Scope::Current {
         "resume_empty_current"
-    } else if z.filter().is_empty() {
+    } else if z.picker().filter().is_empty() {
         "resume_empty_all"
     } else {
         "resume_empty_filtered"
@@ -193,13 +193,13 @@ fn hints(lang: Lang) -> Vec<Hint> {
 // The budget is in physical rows; the last block may be drawn part-way, so the tail of the body is
 // never given up just because a block would not fit whole. The draw cuts the rest.
 fn window(z: &ResumeZone, budget: usize) -> (usize, usize) {
-    let count = z.visible_len();
+    let count = z.picker().visible_len();
     if count == 0 || budget == 0 {
         return (0, 0);
     }
-    let mut top = z.scroll().min(count - 1);
-    if z.selected() < top {
-        top = z.selected();
+    let mut top = z.picker().scroll().min(count - 1);
+    if z.picker().selected() < top {
+        top = z.picker().selected();
     }
     loop {
         let mut used = 0usize;
@@ -212,7 +212,7 @@ fn window(z: &ResumeZone, budget: usize) -> (usize, usize) {
             }
         }
         // The selected block fell outside the window: move it down one and retry.
-        if z.selected() >= top + seen && seen > 0 {
+        if z.picker().selected() >= top + seen && seen > 0 {
             top += 1;
             continue;
         }
@@ -221,7 +221,8 @@ fn window(z: &ResumeZone, budget: usize) -> (usize, usize) {
 }
 
 fn has_preview(z: &ResumeZone, i: usize) -> bool {
-    z.row_at(i)
+    z.picker()
+        .row_at(i)
         .map(|r| super::zone::preview(r).is_some())
         .unwrap_or(false)
 }

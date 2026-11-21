@@ -1,4 +1,4 @@
-//! The desk: one temp hand at a time, its frozen report, its keys, its rows.
+// The desk: one temp hand at a time, its frozen report, its keys, its rows.
 
 mod hand;
 mod hands;
@@ -12,63 +12,60 @@ use super::pane::Pane;
 use crate::ui::tui::action::Action;
 use crate::ui::tui::lang::Lang;
 use crate::ui::tui::theme::Accent;
-use crate::ui::tui::zone::{Claim, Frame, Kind, Local, Shared, SubZone, TermSize, name};
+use crate::ui::tui::zone::{Claim, Frame, Kind, Local, Shared, TermSize, name};
 
 use crate::ui::tui::zone::main::input::Currency;
 
 use hand::{Hand, IDLE_ROWS, MAX_ROWS, Report};
 use pools::Pools;
 
-/// The classes the desk reads.
+// The classes the desk reads.
 const KINDS: &[Kind] = &[Kind::Call, Kind::Post];
 
-/// The desk.
+// The desk.
 #[derive(Default)]
 pub struct ReservedZone {
     completion: hands::completion::CompletionService,
     usage: hands::usage::UsagePanel,
     memo: hands::memo::MemoHand,
 
-    /// The post box, the palette and the draft every zone shares.
+    // The post box, the palette and the draft every zone shares.
     shared: Shared,
 
-    /// The conversation this zone follows; `None` = a draft.
+    // The conversation this zone follows; `None` = a draft.
     session: Option<i64>,
 
-    /// Who is on duty now.
+    // Who is on duty now.
     on_duty: Option<Hire>,
 
-    /// The report taken the first frame after arrival: height and keys frozen here.
+    // The report taken the first frame after arrival: height and keys frozen here.
     report: Option<Report>,
 
-    /// Rows the desk allocated this frame.
+    // Rows the desk allocated this frame.
     want: u16,
 
-    /// A reply for the editor, waiting for the zone to take it.
+    // A reply for the editor, waiting for the zone to take it.
     reply: Option<Reply>,
 
-    /// The workspace: the launch directory until a conversation reports its own.
+    // The workspace: the launch directory until a conversation reports its own.
     cwd: String,
 
-    /// Sentences waiting in the slot, as the input zone counts them.
+    // Sentences waiting in the slot, as the input zone counts them.
     queued: usize,
 
-    /// What the desk wants the app itself to do.
+    // What the desk wants the app itself to do.
     locals: Vec<Local>,
 
-    /// Bumped whenever this zone's rows would differ.
+    // Bumped whenever this zone's rows would differ.
     rev: u64,
 }
 
 impl ReservedZone {
-    /// Nothing is claimed up front; the desk only borrows.
-    pub const CLAIMS: &'static [Claim] = &[];
-
     fn bump(&mut self) {
         self.rev = self.rev.wrapping_add(1);
     }
 
-    /// One memo ask, as the two doors spell it.
+    // One memo ask, as the two doors spell it.
     fn memo_ask(&self, ask: &MemoAsk) {
         let scope = ask.scope().as_str();
         match ask {
@@ -100,7 +97,7 @@ impl ReservedZone {
         }
     }
 
-    /// One key, when a hand is on duty. A hand that answers hands its reply to the editor.
+    // One key, when a hand is on duty. A hand that answers hands its reply to the editor.
     fn act(&mut self, a: &Action) -> bool {
         let Action::Key(key) = a else {
             return false;
@@ -115,7 +112,7 @@ impl ReservedZone {
         true
     }
 
-    /// The hand for one hire signal. One `match`: a new hand touches here only.
+    // The hand for one hire signal. One `match`: a new hand touches here only.
     fn hand(&mut self, who: &Hire) -> &mut dyn Hand {
         match who {
             Hire::Completion => &mut self.completion,
@@ -124,7 +121,7 @@ impl ReservedZone {
         }
     }
 
-    /// Call a hand in. Whoever is on duty leaves first; the name pools are asked every time.
+    // Call a hand in. Whoever is on duty leaves first; the name pools are asked every time.
     pub fn hire(&mut self, who: Hire) {
         // A second memo ask lands in the hand on duty: its frozen height never moves.
         if let (Some(Hire::Memo(_)), Hire::Memo(ask)) = (self.on_duty.clone(), &who) {
@@ -178,22 +175,21 @@ impl ReservedZone {
         self.bump();
     }
 
-    /// The editor's text and cursor, after every edit. A hand that needs them reads them;
-    /// the report is what the desk needs, not the other way round.
+    // The editor's text and cursor, after every edit; a hand that needs them reads them, and the report is what the desk needs, not the other way round.
     pub fn text(&mut self, text: &str, cursor: usize) {
         if let Some(who) = self.on_duty.clone() {
             self.hand(&who).text(text, cursor);
         }
     }
 
-    /// The cursor's column, after every draw.
+    // The cursor's column, after every draw.
     pub fn col(&mut self, col: u16) {
         if let Some(who) = self.on_duty.clone() {
             self.hand(&who).col(col);
         }
     }
 
-    /// The idle line: how many sentences wait, or one blank row.
+    // The idle line: how many sentences wait, or one blank row.
     fn idle_row(&self, accent: &Accent) -> Line<'static> {
         if self.queued == 0 {
             return Line::from("");
@@ -209,17 +205,17 @@ impl ReservedZone {
         ])
     }
 
-    /// A reply the editor has to apply.
+    // A reply the editor has to apply.
     pub fn take_reply(&mut self) -> Option<Reply> {
         self.reply.take()
     }
 
-    /// The asks this zone owes the front end itself.
+    // The asks this zone owes the front end itself.
     pub fn take_locals(&mut self) -> Vec<Local> {
         std::mem::take(&mut self.locals)
     }
 
-    /// What the memo hand asked for.
+    // What the memo hand asked for.
     fn drain_memo(&mut self) {
         for out in self.memo.drain() {
             match out {
@@ -229,7 +225,7 @@ impl ReservedZone {
         }
     }
 
-    /// Frame start: drop a hand that left, take the report of a fresh one.
+    // Frame start: drop a hand that left, take the report of a fresh one.
     pub(super) fn settle(&mut self) {
         let before = (self.on_duty.clone(), self.report.is_some());
         self.settle_inner();
@@ -254,7 +250,7 @@ impl ReservedZone {
         }
     }
 
-    /// Idle: one blank row. On duty: the hand's own rows, padded to what it was given.
+    // Idle: one blank row. On duty: the hand's own rows, padded to what it was given.
     pub fn render_rows(&mut self, term: TermSize, accent: &Accent) -> Vec<Line<'static>> {
         let rows = usize::from(self.want.max(IDLE_ROWS));
         let Some(who) = self.on_duty.clone() else {
@@ -266,24 +262,20 @@ impl ReservedZone {
     }
 }
 
-impl SubZone for ReservedZone {
-    fn claims(&self) -> &'static [Claim] {
-        Self::CLAIMS
-    }
-
-    fn kinds(&self) -> &'static [Kind] {
+impl ReservedZone {
+    pub(in crate::ui::tui::zone::main) fn kinds(&self) -> &'static [Kind] {
         KINDS
     }
 
-    fn revision(&self) -> u64 {
+    pub(in crate::ui::tui::zone::main) fn revision(&self) -> u64 {
         self.rev
     }
 
-    fn borrowed(&self) -> &'static [Claim] {
+    pub(in crate::ui::tui::zone::main) fn borrowed(&self) -> &'static [Claim] {
         self.report.map(|r| r.keys).unwrap_or(&[])
     }
 
-    fn deliver_event(&mut self, frame: &Frame, _size: TermSize) {
+    pub(in crate::ui::tui::zone::main) fn deliver_event(&mut self, frame: &Frame, _size: TermSize) {
         match (frame.kind.as_str(), frame.name.as_str()) {
             ("call", "pools") => {
                 let pools = Pools::of(&frame.payload);
@@ -324,14 +316,14 @@ impl SubZone for ReservedZone {
         self.bump();
     }
 
-    fn deliver_action(&mut self, a: &Action) -> bool {
+    pub(in crate::ui::tui::zone::main) fn deliver_action(&mut self, a: &Action) -> bool {
         self.settle();
         let consumed = self.act(a);
         self.bump();
         consumed
     }
 
-    fn attach(&mut self, session: i64, _size: TermSize) {
+    pub(in crate::ui::tui::zone::main) fn attach(&mut self, session: i64, _size: TermSize) {
         self.session = Some(session);
         self.on_duty = None;
         self.report = None;
@@ -343,7 +335,7 @@ impl SubZone for ReservedZone {
         self.bump();
     }
 
-    fn detach(&mut self) {
+    pub(in crate::ui::tui::zone::main) fn detach(&mut self) {
         self.session = None;
         if let Some(who) = self.on_duty.clone() {
             self.hand(&who).left();
@@ -357,7 +349,7 @@ impl SubZone for ReservedZone {
         self.bump();
     }
 
-    fn hear(&mut self, event: &str, content: &Value) {
+    pub(in crate::ui::tui::zone::main) fn hear(&mut self, event: &str, content: &Value) {
         match event {
             name::QUEUE => {
                 self.queued = content
@@ -406,7 +398,7 @@ impl SubZone for ReservedZone {
 }
 
 impl ReservedZone {
-    /// The three shared handles arrive once, at boot.
+    // The three shared handles arrive once, at boot.
     pub(super) fn bind(&mut self, shared: Shared) {
         self.shared = shared;
     }

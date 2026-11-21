@@ -43,14 +43,14 @@ pub(super) fn lines(z: &mut TreeZone) -> Vec<Line<'static>> {
     let header = text(
         lang,
         "tree_title",
-        json!({"count": z.visible_len(), "turns": z.turns(), "scope": scope}),
+        json!({"count": z.picker().visible_len(), "turns": z.turns(), "scope": scope}),
     );
 
     let panel = Panel {
         size,
         title: header,
         filter: Some(Filter {
-            text: z.filter().to_string(),
+            text: z.picker().filter().to_string(),
             placeholder: text(lang, "tree_filter_hint", json!({})),
             caption: text(lang, "tree_filter_caption", json!({})),
         }),
@@ -62,34 +62,34 @@ pub(super) fn lines(z: &mut TreeZone) -> Vec<Line<'static>> {
 
     let rows = panel.body_rows();
     let cols = panel.content();
-    let count = z.visible_len();
-    let mut top = z.scroll().min(count.saturating_sub(1));
-    if z.selected() < top {
-        top = z.selected();
+    let count = z.picker().visible_len();
+    let mut top = z.picker().scroll().min(count.saturating_sub(1));
+    if z.picker().selected() < top {
+        top = z.picker().selected();
     }
     let shown = rows.min(count.saturating_sub(top));
-    if z.selected() >= top + shown && shown > 0 {
-        top = (z.selected() + 1).saturating_sub(rows);
+    if z.picker().selected() >= top + shown && shown > 0 {
+        top = (z.picker().selected() + 1).saturating_sub(rows);
     }
-    z.set_scroll(top);
+    z.picker_mut().set_scroll(top);
 
     let mut body = Vec::with_capacity(shown);
     for i in top..top + shown {
-        let Some(row) = z.row_at(i) else {
+        let Some(row) = z.picker().row_at(i) else {
             continue;
         };
         let line = paint(row, cols, lang, &accent);
-        body.push(highlight(line, i == z.selected(), cols));
+        body.push(highlight(line, i == z.picker().selected(), cols));
     }
     panel.draw(body)
 }
 
 // What the page says when it has nothing to show.
 fn empty(z: &TreeZone, lang: Lang) -> Option<Line<'static>> {
-    if z.visible_len() > 0 {
+    if z.picker().visible_len() > 0 {
         return None;
     }
-    let key = if z.filter().is_empty() {
+    let key = if z.picker().filter().is_empty() {
         "tree_empty"
     } else {
         "tree_empty_filtered"

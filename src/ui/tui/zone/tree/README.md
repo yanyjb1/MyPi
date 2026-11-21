@@ -11,10 +11,7 @@ the shared page chassis (`zone::page`), the same frame the session picker uses.
 |---|---|
 | `structure: Structure` | the last structural window handed down |
 | `blocks: BTreeMap<i64, Node>` | what each block says, as the answers carried it |
-| `rows: Vec<Row>` | the projection, rebuilt only when the inputs moved |
-| `visible: Vec<usize>` | indices into `rows` that passed the filter |
-| `filter` | the search words, matched against role and summary |
-| `selected` / `scroll` | position inside `visible` |
+| `picker: Picker<Row>` | the projection, the filter words, the cursor and the window; rebuilt only when the inputs moved |
 | `only_user` | `Tab` keeps user messages only |
 | `cherish` | `config.ui.tui.zone.tree.cherishYourWords`: Enter and Shift+Enter swap |
 | `lang` | the display language; `en` until the config answers |
@@ -43,10 +40,10 @@ window did not carry still gets a row, without a summary), filters `only_user`, 
 result out with `layout::rows`. The geometry is a single fork today. The run covers the whole
 conversation, and the draw scrolls it: the cursor never leaves the screen.
 
-The filter narrows `visible` and never reorders `rows`. It matches what the tree already holds:
-a block whose contents never arrived has only a placeholder for text, so it cannot match a
-summary. That is deliberate — the page asks for a screen at a time, and filtering nothing that
-is not already on hand keeps it that way.
+The filter narrows the picker's visible set and never reorders its rows. It matches what the tree
+already holds: a block whose contents never arrived has only a placeholder for text, so it cannot
+match a summary. That is deliberate — the page asks for a screen at a time, and filtering nothing
+that is not already on hand keeps it that way.
 
 The first build puts the cursor on the newest block; after that it stays where the reader put it.
 

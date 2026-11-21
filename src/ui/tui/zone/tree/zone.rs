@@ -12,6 +12,7 @@ use super::rows::Row;
 use crate::ui::tui::action::{Action, Key, KeyCode, Mods};
 use crate::ui::tui::lang::Lang;
 use crate::ui::tui::theme::Accent;
+use crate::ui::tui::zone::page::Picker;
 
 // No modifiers held.
 const PLAIN: Mods = Mods {
@@ -96,15 +97,7 @@ pub struct TreeZone {
     session: Option<i64>,
     structure: Structure,
     blocks: BTreeMap<i64, Node>,
-    rows: Vec<Row>,
-    // Indices into `rows` that passed the filter: filtering keeps indices, never reorders.
-    visible: Vec<usize>,
-    // Position inside `visible`.
-    selected: usize,
-    // First visible row (written back by the draw).
-    scroll: usize,
-    // The reader's filter words; empty keeps every row.
-    filter: String,
+    picker: Picker<Row>,
     only_user: bool,
     // Shift+Enter rewinds instead of looking: `config.ui.tui.zone.tree.cherishYourWords`.
     cherish: bool,
@@ -128,11 +121,7 @@ impl Default for TreeZone {
             session: None,
             structure: Structure::default(),
             blocks: BTreeMap::new(),
-            rows: Vec::new(),
-            visible: Vec::new(),
-            selected: 0,
-            scroll: 0,
-            filter: String::new(),
+            picker: Picker::default(),
             only_user: false,
             cherish: false,
             lang: Lang::default(),
@@ -151,56 +140,28 @@ impl TreeZone {
             return;
         }
         self.stale = false;
+        let lang = self.lang;
         let keep = self.row().map(|row| row.block_id);
-        self.rows = super::source::rows(&self.structure, &self.blocks, self.only_user);
-        self.refilter();
+        let rows = super::source::rows(&self.structure, &self.blocks, self.only_user);
+        self.picker
+            .replace(rows, |row| super::render::haystack(row, lang));
         let at = self
             .landed
             .then(|| keep.and_then(|id| self.position_of(id)))
             .flatten();
         if let Some(index) = at {
-            self.selected = index;
-        } else if self.rows.is_empty() {
-            self.selected = 0;
-        } else if self.landed {
-            self.selected = self.selected.min(self.visible.len().saturating_sub(1));
-        } else if let Some(index) = self.current() {
+            self.picker.select(index);
+        } else if !self.landed && self.picker.visible_len() > 0 {
             // The newest block is only known once the blocks themselves are here.
-            self.selected = index;
+            self.picker.last();
             self.landed = true;
         }
-        self.scroll = self.scroll.min(self.visible.len().saturating_sub(1));
+        let last = self.picker.visible_len().saturating_sub(1);
+        self.picker.set_scroll(self.picker.scroll().min(last));
     }
 
-    // Recompute the visible set. Only a row whose text is already here can match.
-    fn refilter(&mut self) {
-        let needle = self.filter.trim().to_lowercase();
-        self.visible = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| {
-                needle.is_empty() || super::render::haystack(row, self.lang).contains(&needle)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        self.selected = self.selected.min(self.visible.len().saturating_sub(1));
-    }
-
-    // Where a block sits in the visible set.
     fn position_of(&self, id: i64) -> Option<usize> {
-        self.visible
-            .iter()
-            .position(|slot| self.rows[*slot].block_id == id)
-    }
-
-    fn move_by(&mut self, delta: i64) {
-        if self.visible.is_empty() {
-            return;
-        }
-        let last = self.visible.len() - 1;
-        let next = self.selected as i64 + delta;
-        self.selected = next.clamp(0, last as i64) as usize;
+        self.picker.position(|row| row.block_id == id)
     }
 
     // The rows the body may take, the header and the hints excluded.
@@ -210,33 +171,18 @@ impl TreeZone {
         super::render::body_rows(size, &hints)
     }
 
-    // Keep the window on the cursor: one screen of rows at most.
-    pub(crate) fn settle_scroll(&mut self, body: usize) {
-        if self.visible.is_empty() {
-            self.scroll = 0;
-            return;
-        }
-        let body = body.max(1);
-        if self.selected < self.scroll {
-            self.scroll = self.selected;
-        } else if self.selected >= self.scroll + body {
-            self.scroll = self.selected + 1 - body;
-        }
-        self.scroll = self.scroll.min(self.visible.len().saturating_sub(body));
-    }
-
     // Ask for the blocks the window shows and does not hold yet.
     fn wanted(&mut self) {
-        if self.visible.is_empty() {
+        if self.picker.visible_len() == 0 {
             return;
         }
         let body = self.body().max(1);
-        self.settle_scroll(body);
-        let from = self.scroll.min(self.visible.len());
-        let to = (from + body).min(self.visible.len());
-        let mut ids: Vec<i64> = self.visible[from..to]
-            .iter()
-            .map(|slot| self.rows[*slot].block_id)
+        self.picker.settle_scroll(body);
+        let from = self.picker.scroll().min(self.picker.visible_len());
+        let to = (from + body).min(self.picker.visible_len());
+        let mut ids: Vec<i64> = (from..to)
+            .filter_map(|i| self.picker.row_at(i))
+            .map(|row| row.block_id)
             .filter(|id| !self.blocks.contains_key(id))
             .collect();
         ids.sort_unstable();
@@ -280,14 +226,8 @@ impl TreeZone {
             .map(|[lo, hi]| (*lo, *hi))
     }
 
-    // The newest visible row: rows are in block order, so it is the last one.
-    fn current(&self) -> Option<usize> {
-        (!self.visible.is_empty()).then(|| self.visible.len() - 1)
-    }
-
-    // The row under the cursor.
     fn row(&self) -> Option<&Row> {
-        self.row_at(self.selected)
+        self.picker.row()
     }
 
     fn merge(&mut self, rows: &Value) {
@@ -345,11 +285,7 @@ impl TreeZone {
         if id.is_none() {
             self.structure.clear();
             self.blocks.clear();
-            self.rows.clear();
-            self.visible.clear();
-            self.filter.clear();
-            self.selected = 0;
-            self.scroll = 0;
+            self.picker.clear();
             self.only_user = false;
             self.stale = true;
         }
@@ -407,32 +343,31 @@ impl TreeZone {
 
     fn act(&mut self, action: &Action) -> (Outcome, Vec<Local>) {
         self.sync();
+        let lang = self.lang;
+        let haystack = move |row: &Row| super::render::haystack(row, lang);
         match action {
-            Action::ScrollUp { shift } => self.move_by(if *shift { -10 } else { -1 }),
-            Action::ScrollDown { shift } => self.move_by(if *shift { 10 } else { 1 }),
-            // A paste is a filter word here: a navigator is not worth multi-line semantics.
-            Action::Paste(text) => {
-                self.filter.push_str(&text.replace('\n', " "));
-                self.scroll = 0;
-                self.refilter();
-            }
+            Action::ScrollUp { shift } => self.picker.move_by(if *shift { -10 } else { -1 }),
+            Action::ScrollDown { shift } => self.picker.move_by(if *shift { 10 } else { 1 }),
+            Action::Paste(text) => self
+                .picker
+                .edit_filter(|filter| filter.push_str(&text.replace('\n', " ")), haystack),
             Action::Key(key) => match key.code {
-                KeyCode::Up => self.move_by(-1),
-                KeyCode::Down => self.move_by(1),
-                KeyCode::PageUp => self.move_by(-10),
-                KeyCode::PageDown => self.move_by(10),
-                KeyCode::Home => self.selected = 0,
-                KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
+                KeyCode::Up => self.picker.move_by(-1),
+                KeyCode::Down => self.picker.move_by(1),
+                KeyCode::PageUp => self.picker.move_by(-10),
+                KeyCode::PageDown => self.picker.move_by(10),
+                KeyCode::Home => self.picker.first(),
+                KeyCode::End => self.picker.last(),
                 KeyCode::Tab => {
                     self.only_user = !self.only_user;
                     self.stale = true;
-                    self.scroll = 0;
+                    self.picker.set_scroll(0);
                     self.sync();
                 }
                 KeyCode::Enter => {
                     let rewind = key.mods.shift == self.cherish;
                     if rewind {
-                        if let Some(row) = self.row()
+                        if let Some(row) = self.picker.row()
                             && let Some(session) = self.session
                         {
                             let content = json!({
@@ -451,20 +386,17 @@ impl TreeZone {
                     }
                 }
                 KeyCode::Esc => return (self.handover(), Vec::new()),
-                KeyCode::Backspace => {
-                    self.filter.pop();
-                    self.scroll = 0;
-                    self.refilter();
-                }
+                KeyCode::Backspace => self.picker.edit_filter(
+                    |f| {
+                        f.pop();
+                    },
+                    haystack,
+                ),
                 KeyCode::Char('u') if key.mods.ctrl => {
-                    self.filter.clear();
-                    self.scroll = 0;
-                    self.refilter();
+                    self.picker.edit_filter(String::clear, haystack)
                 }
                 KeyCode::Char(c) if !key.mods.ctrl => {
-                    self.filter.push(c);
-                    self.scroll = 0;
-                    self.refilter();
+                    self.picker.edit_filter(|f| f.push(c), haystack)
                 }
                 _ => {}
             },
@@ -517,11 +449,10 @@ impl Zone for TreeZone {
     }
 
     fn tick(&mut self) -> Vec<Local> {
-        let before = (self.selected, self.scroll);
+        let before = (self.picker.selected(), self.picker.scroll());
         self.sync();
-        let body = self.body();
-        self.settle_scroll(body);
-        if (self.selected, self.scroll) != before {
+        self.picker.settle_scroll(self.body());
+        if (self.picker.selected(), self.picker.scroll()) != before {
             self.bump();
         }
         Vec::new()
@@ -553,8 +484,12 @@ impl TreeZone {
         self.lang
     }
 
-    pub(crate) fn filter(&self) -> &str {
-        &self.filter
+    pub(crate) fn picker(&self) -> &Picker<Row> {
+        &self.picker
+    }
+
+    pub(crate) fn picker_mut(&mut self) -> &mut Picker<Row> {
+        &mut self.picker
     }
 
     pub(crate) fn only_user(&self) -> bool {
@@ -569,32 +504,11 @@ impl TreeZone {
         self.structure.turns().count()
     }
 
-    pub(crate) fn visible_len(&self) -> usize {
-        self.visible.len()
-    }
-
-    pub(crate) fn selected(&self) -> usize {
-        self.selected
-    }
-
-    pub(crate) fn scroll(&self) -> usize {
-        self.scroll
-    }
-
-    pub(crate) fn set_scroll(&mut self, top: usize) {
-        self.scroll = top;
-    }
-
     pub(crate) fn size(&self) -> Option<TermSize> {
         self.size
     }
 
     pub(crate) fn accent(&self) -> Accent {
         self.shared.palette.get()
-    }
-
-    // Row `i` of the visible set.
-    pub(crate) fn row_at(&self, i: usize) -> Option<&Row> {
-        self.rows.get(*self.visible.get(i)?)
     }
 }

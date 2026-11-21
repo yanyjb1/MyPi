@@ -9,7 +9,7 @@ History above, the input box below, the desk between them.
 | field | meaning |
 |---|---|
 | `history` / `input` / `reserved` | the three sub-zones, private |
-| `keys: Borrowed` | runtime key loans, checked before the static table |
+| `keys: Keys` | the two static seat tables, plus what a hand lends at runtime |
 | `size: Option<TermSize>` | the last size handed down |
 | `heights: Heights` | the last row division |
 | `shouts` | events this zone put out, not yet on the bus |

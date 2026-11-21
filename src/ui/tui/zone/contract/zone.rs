@@ -1,4 +1,4 @@
-//! The two levels: the app talks to major zones, a major zone talks to its sub-zones.
+// The app's own words for a major zone.
 
 use std::time::Duration;
 
@@ -10,99 +10,62 @@ use super::local::Local;
 use super::memo::Memo;
 use super::outcome::Outcome;
 use super::shared::Shared;
-use super::shout::Shout;
 use super::size::TermSize;
 use crate::ipc::contract::Frame;
 use crate::ui::tui::action::Action;
 
-/// A major zone. The app only ever sees this.
+// A major zone. The app only ever sees this.
 pub trait Zone {
-    /// The post box and the palette: handed once, at boot.
+    // The post box and the palette: handed once, at boot.
     fn bind(&mut self, shared: Shared);
 
-    /// The draft's directory moved with the conversation; only the main zone keeps one.
+    // The draft's directory moved with the conversation; only the main zone keeps one.
     fn draft_moved(&mut self, _cwd: &str) {}
 
-    /// The draft became a row: its extra fields are spent.
+    // The draft became a row: its extra fields are spent.
     fn draft_cleared(&mut self) {}
 
-    /// The directory a new session would open in, if this zone keeps a draft.
+    // The directory a new session would open in, if this zone keeps a draft.
     fn draft_cwd(&self) -> Option<String> {
         None
     }
 
-    /// Every input this zone consumes, declared once.
+    // Every input this zone consumes, declared once.
     fn keys(&self) -> Vec<Claim>;
 
-    /// The frame kinds this zone handles. `local` never appears here: it is unconditional.
+    // The frame kinds this zone handles. `local` never appears here: it is unconditional.
     fn kinds(&self) -> &'static [Kind];
 
-    /// The app gives the screen to this zone: the size, and the memo the last zone left.
+    // The app gives the screen to this zone: the size, and the memo the last zone left.
     fn start(&mut self, size: TermSize, memo: &Memo) -> Vec<Local>;
 
-    /// The conversation was entered (`Some`) or left (`None`).
+    // The conversation was entered (`Some`) or left (`None`).
     fn session(&mut self, id: Option<i64>) -> Vec<Local>;
 
-    /// One frame the zone declared (or any `local` one).
+    // One frame the zone declared (or any `local` one).
     fn event(&mut self, frame: &Frame) -> Vec<Local>;
 
-    /// One input, already resolved to this zone.
+    // One input, already resolved to this zone.
     fn action(&mut self, action: &Action) -> (Outcome, Vec<Local>);
 
-    /// One frame's side effects, before any drawing: the asks this zone owes.
+    // One frame's side effects, before any drawing: the asks this zone owes.
     fn tick(&mut self) -> Vec<Local> {
         Vec::new()
     }
 
-    /// Bumped whenever this zone's rows would differ.
+    // Bumped whenever this zone's rows would differ.
     fn revision(&self) -> u64;
 
-    /// How often time alone rewrites the rows; `None` = never.
+    // How often time alone rewrites the rows; `None` = never.
     fn anim(&self) -> Option<Duration> {
         None
     }
 
-    /// This zone's rows for the frame.
+    // This zone's rows for the frame.
     fn render(&mut self) -> Vec<Line<'static>>;
 
-    /// Where the hardware cursor goes, in terminal coordinates.
+    // Where the hardware cursor goes, in terminal coordinates.
     fn cursor(&self) -> Option<(u16, u16)> {
         None
     }
-}
-
-/// A sub-zone of the chat zone. Only `Main` implements the host side.
-///
-/// A sub-zone never asks the screen for anything: what it wants the server to do it posts
-/// itself, and the one ask the desk keeps for the screen is taken by its host.
-pub trait SubZone {
-    fn claims(&self) -> &'static [Claim];
-
-    fn kinds(&self) -> &'static [Kind];
-
-    /// One frame this sub-zone declared.
-    fn deliver_event(&mut self, frame: &Frame, size: TermSize);
-
-    /// An action claimed by this sub-zone. `true` = consumed.
-    fn deliver_action(&mut self, action: &Action) -> bool;
-
-    fn attach(&mut self, session: i64, size: TermSize);
-
-    fn detach(&mut self);
-
-    /// The keys this sub-zone borrows right now.
-    fn borrowed(&self) -> &'static [Claim] {
-        &[]
-    }
-
-    /// Bumped whenever this sub-zone's rows would differ.
-    fn revision(&self) -> u64;
-
-    /// Events this sub-zone put out since the last call, oldest first.
-    fn take_shouts(&mut self) -> Vec<Shout> {
-        Vec::new()
-    }
-
-    /// One event another party put out.
-    fn hear(&mut self, _name: &str, _content: &serde_json::Value) {}
 }

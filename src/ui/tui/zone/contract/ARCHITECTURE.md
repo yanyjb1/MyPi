@@ -7,7 +7,7 @@ What each file holds and who names it. Current state only.
 | file | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list and the re-exports | public |
-| `zone.rs` | `Zone`, `SubZone` | public |
+| `zone.rs` | `Zone` | public |
 | `kind.rs` | `Kind`, `Kind::of` | public |
 | `claim.rs` | `Claim`, `Claim::of`, `matches` | public |
 | `mail.rs` | `Mail`, the post box | public |

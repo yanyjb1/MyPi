@@ -10,10 +10,7 @@ uses.
 
 | field | meaning |
 |---|---|
-| `rows: Vec<Row>` | the last answer, decoded |
-| `visible: Vec<usize>` | indices that passed the filter |
-| `filter` | the search word; matched case-insensitively |
-| `selected` / `scroll` | position inside `visible` |
+| `picker: Picker<Row>` | the decoded answer, the filter words, the cursor and the window |
 | `scope` | this directory, or every directory |
 | `cwd` | the launch directory, read out of the memo key `cwd` when the page starts |
 | `loaded` | an answer arrived at least once |
@@ -69,7 +66,7 @@ row, and the chassis cuts what does not fit.
 ## 2. Design intent
 
 - **Refetch on entry.** The list is a fact about the outside; last time's snapshot may be stale.
-- **Filter keeps indices.** The visible list is a projection; the rows are never reordered.
+- **Filter keeps indices.** The picker's visible set is a projection; the rows are never reordered.
 - **A delete is armed, then confirmed.** One keypress cannot destroy a session; the marker and
   the refusal both appear on the armed block's own title row, where the key was pressed.
 - **One frame for every page.** The edge, the head, the filter box and the key hints come from

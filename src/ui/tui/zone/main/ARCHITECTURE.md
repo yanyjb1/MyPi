@@ -9,9 +9,8 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `mod.rs` | the module list and the re-export | public |
 | `zone.rs` | `MainZone`, the bus flush, the directory reader, the `Zone` implementation | public |
 | `arbitrate.rs` | `Heights`, `arbitrate`, `settle`, `broadcast`, the cursor's position | private |
-| `dispatch.rs` | key routing, the exits that become requests or a handover | private |
 | `desk.rs` | `Hire`, `Reply` — what the input asks for and what a hand hands back | private |
-| `keys.rs` | `Seat`, `matches`, the static table, `Borrowed` | private |
+| `keys.rs` | `Keys`: the two static seat tables and the keys a hand lends | private |
 | `pane.rs` | `Pane`: the row ask, grant and broadcast a sub-zone answers | private |
 | `geometry.rs` | input container height, scroll, cursor clamping | private |
 | `num/` | compact, exact, and money formatting | private |
@@ -21,7 +20,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 
 ## What it talks to
 
-- `zone::contract` for `Zone`, `SubZone`, `Claim`, `Kind`, `Request`, `Outcome`, `TermSize`,
+- `zone::contract` for `Zone`, `Claim`, `Kind`, `Outcome`, `TermSize`,
   `Shout`, `name`, `Frame`, `Structure`.
 - `ui::tui::action::Action`, and `ui::tui::theme::Accent` for the one live color.
 - The three sub-zone crates directly; they are private fields.
@@ -59,11 +58,10 @@ MainZone
 1. `shout::name` and the children that shout or hear each name.
 2. `Hire` and the desk's hand table.
 3. `arbitrate` and the three children's `pane::Pane`: `request_height` / `assign` / `on_height_changed`.
-4. `keys::TABLE` and the children's own claims (`CLAIMS` on each type).
-5. `dispatch` and every `ExitRequest`.
-6. `keys::check` and the three `CLAIMS` lists: two sub-zones may not claim the same input.
-7. A child's mutating entry point and its `SubZone::revision`: a change that skips the bump never
-   draws.
+4. `keys::Keys::new` and the two static seat tables: history's `keys::CLAIMS` and `InputZone::CLAIMS`.
+5. `exits` and every `ExitRequest`.
+6. `Keys::seat` and the seat order: a lent hand first, then history and input as they were passed.
+7. A child's mutating entry point and its `revision`: a change that skips the bump never draws.
 8. `HistoryZone::anim` and `Zone::anim`: the ESC row's clock is the only time-driven row here.
 
 ## Not wired

@@ -7,7 +7,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | path | holds | outside |
 |---|---|---|
 | `mod.rs` | the module list | private |
-| `zone.rs` | `HistoryZone`, its state, the `SubZone` implementation, the `Pane` implementation | public |
+| `zone.rs` | `HistoryZone`, its state, the entry points `Main` calls, the `Pane` implementation | public |
 | `keys.rs` | `CLAIMS` and what each claimed key does to the layout | private |
 | `live.rs` | `Pin`, `Ask`, and what is still running: thoughts, calls, compactions | private |
 | `look.rs` | where the reader stands: one slot, one round, one round's first block | private |

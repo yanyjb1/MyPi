@@ -1,5 +1,7 @@
-// The page chassis: the edge, the head, the filter row, the body and the key hints.
+// The page chassis and the list skeleton every filtered page shares.
 
 mod chassis;
+mod picker;
 
 pub use chassis::{Filter, Hint, Panel, body_rows};
+pub use picker::Picker;

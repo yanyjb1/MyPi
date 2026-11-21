@@ -7,7 +7,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | file | holds | outside |
 |---|---|---|
 | `mod.rs` | the declarations and what the zone exports | private |
-| `zone.rs` | `InputZone`, `Default`, `SubZone`, `Pane`, the render entry | private |
+| `zone.rs` | `InputZone`, `Default`, the entry points `Main` calls, `Pane`, the render entry | private |
 | `claim.rs` | `CLAIMS` | private |
 | `exit.rs` | `ExitRequest` | private |
 | `intent.rs` | one intent applied: editor, history ring, the epilogue | private |
@@ -25,7 +25,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 
 ## What it exposes
 
-Through `SubZone`: `claims`, `kinds`, `deliver_event`, `deliver_action`, `attach`,
+To `Main` as calls on the zone itself: `kinds`, `deliver_event`, `deliver_action`, `attach`,
 `detach`, `take_shouts`, `hear`, plus `super::pane::Pane`'s `request_height` and `assign`.
 
 To `Main`: `take_hire`, `take_exits`, `draft`, `apply_reply`, `clear`, `boot`, `bind`, `render_rows`,
@@ -44,7 +44,7 @@ inside the zone, and `command` stays public for the completion hand.
 
 ## Who calls it
 
-`MainZone` only: `arbitrate` → `request_height` / `assign`, `dispatch` → `deliver_action`, `event` →
+`MainZone` only: `arbitrate` → `request_height` / `assign`, a claimed key → `deliver_action`, `event` →
 `deliver_event`, `render` → `render_rows`, the bus → `hear` / `take_shouts`.
 
 ## What it does not know
