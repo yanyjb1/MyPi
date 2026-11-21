@@ -1,0 +1,18 @@
+[
+  {
+    "match": "^kns\\.cnki\\.net/kcms2/article/abstract",
+    "keep": [
+      { "selector": ".doc-top", "drop": [".top-second", "#DownLoadParts", "#kcms-data-quoted-corefirerecomend", "#refpartdiv", "#literature-recommend", "#relBooks", ".operate-fixed"] },
+      { "selector": "#DownLoadParts .btn-dlpdf", "drop": [] }
+    ]
+  },
+  {
+    "match": "^kns\\.cnki\\.net/kns8s/search",
+    "keep": [
+      { "selector": "#countPageDiv", "drop": [] },
+      { "selector": "#divGroup dl[groupid^='ZYZT']", "drop": [] },
+      { "selector": "#divGroup dl[groupid^='LYBSM']", "drop": [] },
+      { "selector": "table.result-table-list", "drop": [".operat", ".seq input"] }
+    ]
+  }
+]

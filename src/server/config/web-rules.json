@@ -22,5 +22,6 @@
   "web-rulesets/sohu.json",
   "web-rulesets/stdaily.json",
   "web-rulesets/tmtpost.json",
-  "web-rulesets/yicai.json"
+  "web-rulesets/yicai.json",
+  "web-rulesets/cnki.json"
 ]
