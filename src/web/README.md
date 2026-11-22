@@ -229,23 +229,27 @@ Within a manifest or a set, rules are tried in order. The first rule whose `matc
   "match": "^example\\.com/doc/",
   "keep": [
     { "selector": "main", "drop": ["nav", "footer"] },
-    { "selector": "#appendix", "drop": [] }
+    { "selector": "#appendix", "drop": [], "plaintify": ["aside"] }
   ]
 }
 ```
 
 - `keep` is the prose: each entry names one region, by a selector looked for from the body, and
 the first element it names is what is read. Several entries are read in order and concatenated.
-- `drop` applies inside its own entry only. A `nav` inside the kept region goes; a `nav` outside
-it was never read.
+- `drop` applies inside its own entry only: the named elements are ignored — never read, never
+  offered as controls — and no element beside them moves.
+
+- `plaintify` applies inside its own entry only, to the whole subtree: an element it names is read
+  as its words, block boundaries kept as line breaks, and nothing inside it is offered as a control
+  or names itself by an attribute.
 - When no rule matches, or none of a rule's selectors resolve, the page is read whole: a broken
   rule must not hide a page.
 
 The `operable` section obeys the same regions. A read that narrowed the page scans the kept
-regions only, and an entry's `drop` is left out of the control list exactly as it was left out of
-the prose; a control in no kept region is not listed either. The same holds for a control's name:
-what a drop removed is missing from it too, so a button whose icon was cut introduces itself without
-the icon's word.
+regions only; an entry's `drop` and everything under its `plaintify` are left out of the control
+list exactly as they were left out of the prose, and a control in no kept region is not listed
+either. The same holds for a control's name: what a drop removed is missing from it too, so a
+button whose icon was cut introduces itself without the icon's word.
 
 A site that writes no `<main>` gets no special handling. The regions above are how such a site is
 named, and until it is, its whole body is what is read.

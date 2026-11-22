@@ -24,14 +24,17 @@ pub struct Rule {
     keep: Vec<Part>,
 }
 
-/// One kept region: a selector, and what to leave out of it.
+/// One kept region: a selector, what to ignore in it, and what to read as plain text.
 #[derive(Debug, Deserialize)]
 pub struct Part {
     /// Searched from the page body; the first element it names is the region.
     selector: String,
-    /// Removed from inside that region only.
+    /// Ignored inside that region only: never read, never offered, and no other element moves.
     #[serde(default)]
     drop: Vec<String>,
+    /// Read as text inside that region only, the whole subtree: never offered as a control.
+    #[serde(default)]
+    plaintify: Vec<String>,
 }
 
 /// One entry of the manifest: a rule written in place, or a path to a file of them.
@@ -107,6 +110,10 @@ impl Part {
 
     pub fn drops(&self) -> &[String] {
         &self.drop
+    }
+
+    pub fn plaintify(&self) -> &[String] {
+        &self.plaintify
     }
 }
 

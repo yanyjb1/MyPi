@@ -76,7 +76,7 @@ forward slashes. Each set is flattened in where it is named, so one ordered list
 
 The built-in manifest names one set per site or site family under `web-rulesets/` (courts of one
 read warns, and only that set is lost. The web domain is the reader: it asks for the regions a page
-keeps, and for the drops inside each.
+keeps, and for the drops and plaintify lists inside each.
 
 ### Warnings
 

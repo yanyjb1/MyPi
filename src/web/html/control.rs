@@ -16,6 +16,10 @@ const SCAN: &str = r#"(() => {
   const SCOPE = %SCOPE%;
   const DIRECT = %DIRECT%;
   const NAMES = ['aria-label', 'title', 'alt', 'placeholder', 'value'];
+  const MARKS = ['data-mypi-at', 'data-mypi-twin'];
+  const IGNORE = 'data-mypi-ignore';
+  const BREAKS = ['p', 'div', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'section',
+                  'table', 'dd', 'dt', 'td', 'th', 'blockquote', 'pre'];
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
   const clip = s => (s.length > 60 ? s.slice(0, 60) + '…' : s);
 
@@ -74,13 +78,101 @@ const SCAN: &str = r#"(() => {
     return tag;
   };
 
+  // A control is named by a mark the page never had, so its place in the copy is not what finds it.
+  const marks = new Map();
+  let painted = 0;
+  const paint = el => {
+    let mark = marks.get(el);
+    if (mark === undefined) {
+      mark = String(painted++);
+      marks.set(el, mark);
+      el.setAttribute(MARKS[0], mark);
+    }
+    return mark;
+  };
+
+  const twin_of = (copy, mark) => {
+    for (const tag of MARKS) {
+      const found = copy.querySelector('[' + tag + '="' + mark + '"]');
+      if (found) return found;
+    }
+    return null;
+  };
+
+  // An element declared plaintified is read as its words: the subtree loses every element, block
+  // boundaries stay as line breaks, and nothing inside it can be addressed again.
+  const words = el => {
+    const tokens = [];
+    const apart = () => {
+      const last = tokens[tokens.length - 1];
+      if (last !== undefined && last !== null && last !== ' ') tokens.push(' ');
+    };
+    const walk = node => {
+      for (const kid of Array.from(node.childNodes)) {
+        if (kid.nodeType === 3) {
+          const text = kid.nodeValue.replace(/\s+/g, ' ');
+          if (text) tokens.push(text);
+        } else if (kid.nodeType === 1) {
+          const tag = kid.tagName.toLowerCase();
+          if (tag === 'script' || tag === 'style' || tag === 'svg' || tag === 'mat-icon') continue;
+          if (tag === 'br') { tokens.push(null); continue; }
+          const block = BREAKS.includes(tag);
+          if (block) tokens.push(null);
+          else apart();
+          walk(kid);
+          if (block) tokens.push(null);
+        }
+      }
+    };
+    walk(el);
+    const kept = [];
+    for (const token of tokens) {
+      if (token === null) {
+        if (kept.length && kept[kept.length - 1] !== null) kept.push(null);
+        continue;
+      }
+      if (token.trim() === '' && (kept.length === 0 || kept[kept.length - 1] === null)) continue;
+      kept.push(token);
+    }
+    while (kept.length && kept[kept.length - 1] === null) kept.pop();
+    return kept;
+  };
+
+  const tidy = s => s.replace(/\s+/g, ' ')
+    .replace(/ ([,;.:!?%)\]}])/g, '$1')
+    .replace(/([(\[{]) /g, '$1')
+    .trim();
+
+  const plain = el => {
+    const lines = [[]];
+    for (const token of words(el)) {
+      if (token === null) {
+        if (lines[lines.length - 1].length) lines.push([]);
+      } else {
+        lines[lines.length - 1].push(token);
+      }
+    }
+    const out = document.createDocumentFragment();
+    let wrote = false;
+    for (const tokens of lines) {
+      const text = tidy(tokens.join(''));
+      if (text === '') continue;
+      if (wrote) out.appendChild(document.createElement('br'));
+      out.appendChild(document.createTextNode(text));
+      wrote = true;
+    }
+    // A plaintified block ends the line it stood on, so the next block starts on its own.
+    out.appendChild(document.createElement('br'));
+    el.replaceWith(out);
+  };
+
   const roots = [];
   if (SCOPE.length === 0) {
-    roots.push({ at: body, drop: [] });
+    roots.push({ at: body, drop: [], plain: [] });
   } else {
     for (const part of SCOPE) {
       const found = document.querySelector(part.selector);
-      if (found) roots.push({ at: found, drop: part.drop });
+      if (found) roots.push({ at: found, drop: part.drop, plain: part.plain });
     }
   }
 
@@ -90,29 +182,44 @@ const SCAN: &str = r#"(() => {
   let text = 0;
   for (const root of roots) {
     const region = root.at;
-    const copy = region.cloneNode(true);
     for (const selector of root.drop) {
-      for (const gone of copy.querySelectorAll(selector)) gone.remove();
+      for (const gone of region.querySelectorAll(selector)) gone.setAttribute(IGNORE, '1');
     }
-    html.push(copy.outerHTML);
-    text += clean(copy.innerText).length;
 
     const seen = new Set();
-    const add = el => {
+    const wanted = [];
+    const add = (el, direct) => {
       if (seen.has(el)) return;
       seen.add(el);
-      const select = path(el);
-      const twin = copy.querySelector(select);
-      if (!twin) return;
-      const item = { select: select, kind: kind(el), name: name(twin), context: context(twin) };
-      if (el.matches(DIRECT)) named.push(item);
-      else pointed.push(item);
+      paint(el);
+      wanted.push({ el: el, direct: direct });
     };
-    for (const el of region.querySelectorAll(DIRECT)) add(el);
+    for (const el of region.querySelectorAll(DIRECT)) add(el, true);
     for (const el of region.querySelectorAll('div, span, li, td')) {
-      if (getComputedStyle(el).cursor === 'pointer') add(el);
+      if (getComputedStyle(el).cursor === 'pointer') add(el, false);
     }
+
+    const copy = region.cloneNode(true);
+    for (const gone of copy.querySelectorAll('[' + IGNORE + ']')) gone.remove();
+    for (const selector of root.plain) {
+      for (const hit of copy.querySelectorAll(selector)) plain(hit);
+    }
+
+    for (const one of wanted) {
+      const twin = twin_of(copy, marks.get(one.el));
+      if (!twin) continue;
+      const item = { select: path(one.el), kind: kind(one.el), name: name(twin), context: context(twin) };
+      if (one.direct) named.push(item);
+      else pointed.push(item);
+    }
+
+    for (const el of copy.querySelectorAll('[' + MARKS[0] + ']')) el.removeAttribute(MARKS[0]);
+    html.push(copy.outerHTML);
+    text += clean(copy.innerText).length;
   }
+
+  for (const el of marks.keys()) el.removeAttribute(MARKS[0]);
+  for (const el of document.querySelectorAll('[' + IGNORE + ']')) el.removeAttribute(IGNORE);
   return JSON.stringify({ text: text, html: html.join('\n'), items: named.concat(pointed) });
 })()"#;
 
@@ -181,7 +288,13 @@ impl Scan {
 pub(crate) fn expression(regions: &[Part]) -> String {
     let scope: Vec<serde_json::Value> = regions
         .iter()
-        .map(|part| serde_json::json!({"selector": part.selector(), "drop": part.drops()}))
+        .map(|part| {
+            serde_json::json!({
+                "selector": part.selector(),
+                "drop": part.drops(),
+                "plain": part.plaintify(),
+            })
+        })
         .collect();
     let scope = serde_json::to_string(&scope).expect("a rule's regions always serialize");
     let direct = serde_json::to_string(DIRECT).expect("a selector list always serializes");
