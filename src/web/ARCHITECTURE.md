@@ -9,6 +9,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `mod.rs` | declares the modules; exports `WebArgs`, `run`, `close_session`, `shutdown`, `ENGINES` |
 | `args.rs` | `WebArgs`: the shared input shape of every operation |
 | `artifact.rs` | the files the model reads back: one writer, named for the site and numbered |
+| `seen.rs` | what each session last read: one record per session, its address and its prose |
 | `run.rs` | the two-operation permit, the in-flight count, and the `op` dispatch |
 | `url.rs` | URL normalisation, query encoding, percent and base64 decoding |
 

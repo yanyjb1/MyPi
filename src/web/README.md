@@ -113,7 +113,9 @@ Every file under `<temp>/mypi/web` is named for the site it came from and number
 
 ### What a read leaves out, and what it adds
 
-The answer is the page's prose, not its document: a read that names a URL navigates first and polls until the `<body>` is parsed and the text is not a script shell, and a page still unfinished when the budget ends is read as it stands.
+The answer is the page's prose, not its document: a read that names a URL navigates first and polls until the `<body>` is parsed and the text is not a script shell, and a page still unfinished when the budget ends is read as it stands. A body that scans to nothing is given three seconds and scanned once more before the answer calls it empty. Blank lines are collapsed to one, so a gap in the prose is never a wall of them.
+
+A session keeps the prose of its last read. A read of the same address answers a header counting the lines gone and the lines added, then the added lines alone; a different address, and the first read of one, answers the whole page. The record lives in memory and ends with the session or the process.
 
 - **SVG goes, whatever holds it.** Every `svg` element is cut out of the markup before conversion, so a button keeping its icon loses the icon and stays a button.
 - **Inline images go.** An `img` whose `src` is a `data:` URI is dropped and its alt text is kept, because a marketing page's icons routinely outnumber the prose; an image naming a real address is left as it is.
@@ -121,7 +123,7 @@ The answer is the page's prose, not its document: a read that names a URL naviga
 - **Landmarks go.** `<nav>`, `<footer>`, `<aside>` and `<form>` are removed, along with the elements whose class or role names them as chrome.
 - **Controls stay, reduced.** Every `button`, `input`, `select`, `textarea` and `summary` in the prose becomes one `<button>` around the text it shows, and a control showing no text leaves nothing behind.
 
-The `operable` section names each control's selector, because `click` and `fill` take one and Markdown has nowhere to put it; ten are listed inline and the rest go to one file the section points at.
+The `operable` section names each control's selector, because `click` and `fill` take one and Markdown has nowhere to put it; up to ten are listed inline, and a page offering more has every one of them written to a file the section points at.
 
 - **A control is named once.** Widgets nest — a checkbox is an `input` inside four decoration layers, a button wraps its own label — so a chain answers once: a widget beats the shells around it, a bare shell answers by the innermost one, and a shell whose subtree holds a widget leaves the entry to that widget.
 - **What is named is what an action addresses.** A widget inside a shell is named, never the shell, even though the shell's path is shorter.

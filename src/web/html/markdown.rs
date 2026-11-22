@@ -23,7 +23,8 @@ pub(crate) fn html_to_markdown(html: &str) -> anyhow::Result<String> {
     };
     let raw = fold_controls(&drop_svg(html));
     let result = convert(&raw, Some(options)).context("html-to-markdown conversion")?;
-    Ok(strip_inline_images(&result.content.unwrap_or_default()))
+    let markdown = strip_inline_images(&result.content.unwrap_or_default());
+    Ok(collapse_blank(&markdown))
 }
 
 // A page not painted yet answers an empty body with a large document: its bytes sit in the scripts.
@@ -58,5 +59,24 @@ fn strip_inline_images(markdown: &str) -> String {
         at = close + 1;
     }
     out.push_str(&markdown[at..]);
+    out
+}
+
+// A page's gaps are line breaks, not a wall of them: no run of blank lines survives twice.
+fn collapse_blank(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut blank = false;
+    for line in markdown.split('\n') {
+        if line.trim().is_empty() {
+            if blank {
+                continue;
+            }
+            blank = true;
+        } else {
+            blank = false;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
     out
 }

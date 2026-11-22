@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 
 use crate::server::config::rules::{Part, Rules};
@@ -7,7 +9,11 @@ use crate::web::browser::page::{Page, RENDER_WAIT};
 use crate::web::browser::tabs;
 use crate::web::html::{expression, html_to_markdown, is_js_shell, scan};
 use crate::web::ops::ACTION_TIMEOUT;
+use crate::web::seen;
 use crate::web::url;
+
+// How long a body that painted nothing gets before it is called empty.
+const EMPTY_WAIT: Duration = Duration::from_secs(3);
 
 // The work tab only: the search tab belongs to `search`.
 pub(crate) fn run(args: &WebArgs, session: i64, rules: &Rules) -> Result<String> {
@@ -38,22 +44,28 @@ pub(crate) fn run(args: &WebArgs, session: i64, rules: &Rules) -> Result<String>
                 Err(_) => None,
             })?;
         }
-        answered(page, target.as_deref(), rules)
+        answered(page, target.as_deref(), rules, session)
     })
 }
 
 // One page read as prose: a site rule narrows it once, and every later step sees only that.
-fn answered(page: &Page, target: Option<&str>, rules: &Rules) -> Result<String> {
+fn answered(page: &Page, target: Option<&str>, rules: &Rules, session: i64) -> Result<String> {
     let address = match target {
         Some(target) => target.to_string(),
         None => page.url().unwrap_or_default(),
     };
     let regions = regions(&address, rules);
-    let found = scan(&page.evaluate(&expression(regions), ACTION_TIMEOUT)?)?;
+    let expression = expression(regions);
+    let mut found = scan(&page.evaluate(&expression, ACTION_TIMEOUT)?)?;
+    if found.text == 0 {
+        // A body that paints late is worth one more look before it is called empty.
+        std::thread::sleep(EMPTY_WAIT);
+        found = scan(&page.evaluate(&expression, ACTION_TIMEOUT)?)?;
+    }
     if found.text == 0 {
         return Ok("target url has an empty body".to_string());
     }
-    let mut text = html_to_markdown(&found.html)?;
+    let mut text = seen::answer(session, &address, &html_to_markdown(&found.html)?);
     text.push_str(&found.section(&url::site(&address))?);
     Ok(text)
 }

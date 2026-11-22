@@ -6,8 +6,8 @@ use serde_json::Value;
 use crate::server::config::rules::Part;
 use crate::web::artifact;
 
-// How many controls the answer lists inline; the rest go to one file a reader can still open.
-const LISTED: usize = 10;
+// Up to this many controls an answer shows inline; past it every one goes to a file.
+const INLINE: usize = 10;
 
 // The page-side scan; `expression` fills its one placeholder.
 const SCAN: &str = include_str!("control.js");
@@ -52,19 +52,19 @@ impl Scan {
             return Ok(String::new());
         }
         let mut out = String::from("\n## operable\n\n");
-        let (listed, rest) = self.controls.split_at(self.controls.len().min(LISTED));
-        for control in listed {
-            out.push_str(&control.line());
+        if self.controls.len() <= INLINE {
+            for control in &self.controls {
+                out.push_str(&control.line());
+            }
+            return Ok(out);
         }
-        if !rest.is_empty() {
-            let body: String = rest.iter().map(Control::line).collect();
-            let path = artifact::save(site, "md", body.as_bytes())?;
-            out.push_str(&format!(
-                "\n{} more controls: {}\n",
-                rest.len(),
-                path.display()
-            ));
-        }
+        let body: String = self.controls.iter().map(Control::line).collect();
+        let path = artifact::save(site, "md", body.as_bytes())?;
+        out.push_str(&format!(
+            "\n{} controls: {}\n",
+            self.controls.len(),
+            path.display()
+        ));
         Ok(out)
     }
 }

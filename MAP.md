@@ -27,5 +27,15 @@ src/
       text/    文本换行、宽度、卡片
       theme/   配色与强调色
       zone/    分区：contract 词表、main 聊天区、resume 续选、tree 结构树
-  web/         浏览器工具：browser CDP 驱动、html 转换、ops 操作、search 搜索
+  web/         浏览器工具：browser CDP 驱动、html 转换、ops 操作、search 搜索、seen 读取差量
 ```
+
+# 工具指南
+
+splice有授权修改机制，必须先read/grep才有修改权，并发修改中，同一批内只要有一个点没有成功，就会失去授权，此时必须重新grep/read，建议使用grep（限制范围即可），结合splice的报错提示，迅速定位相关上下文，此时grep由于命中稀少，基本会全部展开。
+需要一个函数内部的全量行号时，可使用read的item模式，但是更建议一次性根据给出的关键行，把关键行内部的代码完整替换。
+write/splice写入后，只要有成功写入，就会被fmt，因此，不满意/不确定需要再次编辑时，请务必重新read/grep。
+
+# 特别行为
+
+如果使用的网关质量较差，用户会持续地发1来保证连接正常，除此之外无实意。
