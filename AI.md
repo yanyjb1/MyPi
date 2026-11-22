@@ -1,6 +1,7 @@
 ```prepare
 - TERMS.md
 - GOAL.md
+- MAP.md
 ```
 
 用户未指定的文档**不允许**读取。
