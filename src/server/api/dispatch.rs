@@ -20,6 +20,9 @@ use super::relay::Relay;
 use super::route;
 use super::subscribe;
 
+// How long a turn may take to notice the server is leaving before its database closes anyway.
+const HALT: Duration = Duration::from_secs(5);
+
 // Why a write refused: a machine key for the message, plus optional template arguments.
 pub struct Refuse(pub Text);
 
@@ -175,6 +178,12 @@ impl Api {
         }
         std::thread::sleep(grace);
         self.relay.live() == 0
+    }
+
+    // Every front end is gone for good: end the turns still running, then close the database.
+    pub(crate) fn shutdown(&self) -> anyhow::Result<()> {
+        self.ledger.halt(HALT);
+        self.writer.close()
     }
 
     // Put a session the loop does not know back on the table, out of its own rows.

@@ -1,7 +1,7 @@
 //! One session's history: read once, appended as turns land.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
@@ -14,7 +14,7 @@ use crate::server::storage::Reader;
 /// One session's read side. The list is read when the session opens; a turn appends to it as it
 /// lands. A rewind or a compaction rewrites the list and asks for a reload.
 pub struct Transcript {
-    reader: Mutex<Reader>,
+    path: PathBuf,
     session: i64,
     state: Mutex<State>,
 }
@@ -28,11 +28,10 @@ struct State {
 impl Transcript {
     /// Read the session once and keep it until the session closes or is cut back.
     pub fn open(path: &Path, session: i64) -> Result<Self> {
-        let reader = Reader::open(path)?;
-        let turns = read_turns(&reader, session)?;
+        let turns = read_turns(&Reader::open(path)?, session)?;
         let blank = turns.is_empty();
         Ok(Self {
-            reader: Mutex::new(reader),
+            path: path.to_path_buf(),
             session,
             state: Mutex::new(State {
                 messages: Arc::new(flatten(turns)),
@@ -78,10 +77,7 @@ impl Transcript {
 
     /// Read the session again: a rewind or a compaction rewrote the list.
     pub fn reload(&self) -> Result<()> {
-        let turns = {
-            let reader = self.reader.lock().unwrap_or_else(|e| e.into_inner());
-            read_turns(&reader, self.session)?
-        };
+        let turns = read_turns(&Reader::open(&self.path)?, self.session)?;
         let blank = turns.is_empty();
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.messages = Arc::new(flatten(turns));
@@ -95,8 +91,7 @@ impl History for Transcript {
         if session != self.session {
             bail!("transcript for {} asked for {session}", self.session);
         }
-        let reader = self.reader.lock().unwrap_or_else(|e| e.into_inner());
-        read_turns(&reader, self.session)
+        read_turns(&Reader::open(&self.path)?, self.session)
     }
 
     fn messages(&self, session: i64) -> Result<Arc<Vec<Message>>> {
@@ -107,7 +102,7 @@ impl History for Transcript {
     }
 
     fn holder(&self, reference: &str) -> Result<Option<String>> {
-        let reader = self.reader.lock().unwrap_or_else(|e| e.into_inner());
+        let reader = Reader::open(&self.path)?;
         let rows = reader.artifacts_by_ref(reference)?;
         Ok(rows
             .first()

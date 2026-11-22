@@ -11,6 +11,12 @@ use super::job::{Answer, Job, What};
 pub(crate) fn run(work: Receiver<Job>, mut store: Store) {
     while let Ok(job) = work.recv() {
         let answer = match job.what {
+            What::Close => {
+                // The thread ends here: the connection closes with it.
+                let answer = store.shut();
+                let _ = job.back.send(answer.map(|()| Answer::Done));
+                return;
+            }
             What::Submit(submit) => apply(&mut store.conn, submit).map(Answer::Landed),
             What::Rewind(target) => store.rewind(target).map(|()| Answer::Done),
             What::DeleteRows(table, ids) => store.delete_rows(table, &ids).map(Answer::Rows),

@@ -43,8 +43,9 @@ truth for every column.
   live line itself.
 - Deletion is one door: `delete_rows(table, ids)` — the rows, whatever only they held, then the
   same sweep. A session's deletion is its row; the memo export is its own queued job.
-- A rewind is not row deletion: it rewrites a round's interval, then deletes the tail rows and
-  sweeps.
+- A rewind is not row deletion: it rewrites a round's interval, then deletes the tail rows and sweeps.
+- `Writer::close()` is the exit: the log is merged into the database and the connection shut, so
+  nothing but the database file is left behind.
 
 ### The read side
 

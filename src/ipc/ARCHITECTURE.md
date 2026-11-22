@@ -26,7 +26,9 @@
   the entry, and `serve` can stop.
 - `serve` stops when `Api::idle_for` reports no connection for a whole grace period. A server
   that has not seen its first front end yet waits `BOOT` for it, because the front end starts
-  the server and reaches for its endpoint a moment later.
+  the server and reaches for its endpoint a moment later. Before the endpoint itself goes,
+  `serve` calls `Api::shutdown`: running turns stop and the database is closed, so nothing but
+  the database file is left behind.
 - `client.rs` is used by `ui::session`, which sends frames and drains the connection; replies
   and pushes both arrive through `drain`.
 - `contract` imports no server, ui, or transport code.

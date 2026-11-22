@@ -208,6 +208,20 @@ impl Loop {
         unbook(&self.inner, id);
     }
 
+    // Stop every session and wait for its turn to end: the server closes its database only after this.
+    pub fn halt(&self, wait: std::time::Duration) {
+        let handles = self.inner.slots.sessions();
+        for handle in &handles {
+            unbook(&self.inner, handle.id);
+        }
+        let deadline = std::time::Instant::now() + wait;
+        for handle in handles {
+            while handle.busy.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+                handle.wait_idle_for(std::time::Duration::from_millis(20));
+            }
+        }
+    }
+
     // A rewind rewrote this session's list: drop the cache and read it again.
     pub fn forget(&self, session: i64) {
         let Ok(handle) = self.handle(session) else {

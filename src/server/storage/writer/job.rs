@@ -23,6 +23,9 @@ pub(crate) enum What {
         session: i64,
         dir: std::path::PathBuf,
     },
+
+    /// Shut the connection; the writer thread ends with it.
+    Close,
 }
 
 /// What the writer answers with.

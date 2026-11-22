@@ -49,6 +49,16 @@ impl Slots {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&session)
     }
+
+    // Every session on the table, as it stands: shutting down walks this list.
+    pub(crate) fn sessions(&self) -> Vec<Arc<Handle>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect()
+    }
 }
 
 impl WakeSink for Slots {

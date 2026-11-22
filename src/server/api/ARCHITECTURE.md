@@ -7,7 +7,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | file | holds |
 |---|---|
 | `mod.rs` | module declarations and the three exports |
-| `dispatch.rs` | `Api`, `Conn`, `Refuse`: the connection table, the frame entry, the booking of an existing session |
+| `dispatch.rs` | `Api`, `Conn`, `Refuse`: the connection table, the frame entry, the booking of an existing session, the shutdown that closes the database |
 | `route.rs` | the name tables: kind plus name pick the write or read; JSON picks its arguments |
 | `relay.rs` | the stream: viewers per session, the running turn, the buffer, the frame shapes |
 | `convert.rs` | the rewind cut, the only storage shape this domain renames |
@@ -27,7 +27,8 @@ What is here, what each file holds, who talks to whom. Current state only.
 - **`config`**: `Config`, read once at startup; `resolve_profile`, `default_model`, `models`,
   `profiles`, `get_json`, `set_default_model`, and the loop/request values read while `Api::open`
   builds them.
-- **Who calls it**: `ipc::server` — `Api::open`, `connect`, `receive`, `disconnect`, `idle_for`.
+- **Who calls it**: `ipc::server` — `Api::open`, `connect`, `receive`, `disconnect`, `idle_for`,
+  `shutdown` (on the way out).
 - **Knows nothing about**: the front end, the terminal, SQL, column names, block bodies.
 
 ## Inside

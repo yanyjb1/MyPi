@@ -21,6 +21,13 @@ impl Store {
     fn new(conn: Connection) -> Self {
         Self { conn }
     }
+
+    // Merge the log back into the database and shut: the only exit that takes the sidecar files with it.
+    pub(crate) fn shut(self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        self.conn.close().map_err(|(_, e)| anyhow::Error::from(e))
+    }
 }
 
 /// The write door, as a handle.
@@ -87,6 +94,14 @@ impl Writer {
         })? {
             Answer::Export(path) => Ok(path),
             other => anyhow::bail!("the writer answered `{}` to an export", other.name()),
+        }
+    }
+
+    /// Close the database: the writer thread ends and its connection goes with it.
+    pub fn close(&self) -> Result<()> {
+        match self.call(What::Close)? {
+            Answer::Done => Ok(()),
+            other => anyhow::bail!("the writer answered `{}` to a close", other.name()),
         }
     }
 

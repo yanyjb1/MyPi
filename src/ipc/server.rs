@@ -117,6 +117,7 @@ pub fn serve(bound: Bound) -> Result<()> {
         std::thread::sleep(Duration::from_millis(250));
     }
     stopping.store(true, Ordering::Relaxed);
+    api.shutdown()?;
     transport::unlink(&endpoint);
     endpoint::remove(&endpoint_file);
     Ok(())
