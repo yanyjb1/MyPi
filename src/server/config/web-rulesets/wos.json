@@ -62,26 +62,29 @@
         "drop": [
           "button[aria-label^='More information about']",
           "button[aria-label='affiliation details']",
-          "#FundingTa-fundAck",
-          "#FundingTa-fundingShowHide",
-          "#FundingTa-fundingShowHide2",
           "#HiddenSecTa-showMoreDataButton",
           "mat-icon",
-          "a[href*=\"/api/gateway\"]",
-          "a[id^=\"SumAuthTa-FrAddrNbr\"]"
+          "a[href*=\"/api/gateway\"]"
+        ],
+        "plaintify": [
+          "app-full-record-authors",
+          "app-full-record-author-identifiers",
+          "app-full-record-conferences",
+          "app-full-record-keywords",
+          "app-full-record-author-organization",
+          "app-full-record-addresses-data",
+          "app-full-record-categories-classification",
+          "app-full-record-funding"
         ]
       },
       {
         "selector": "#snCitationData",
         "drop": [
-          "button.create-cit-alert",
-          "#FullRRPTa-showScoreCardButton",
-          "#FullRRPTa-cited-references-summary-viewRelatedRecordsLink",
-          "#FullRRPTa-comparisionMetricsInfo",
-          "#FullRRPTa-learnMore",
-          "#FullRRPTa-improveQuality",
           "mat-icon",
           "a[href*=\"/api/gateway\"]"
+        ],
+        "plaintify": [
+          "section"
         ]
       }
     ]
