@@ -14,6 +14,7 @@ use crate::server::agent::tools::contract::halt::INTERRUPTED;
 use crate::server::agent::tools::contract::output::ToolOutput;
 
 use crate::server::agent::tools::fs::change;
+use crate::server::agent::tools::fs::eol;
 use crate::server::agent::tools::fs::lang;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
@@ -392,8 +393,10 @@ enum Run {
 
 // The whole group: the snapshot, one write, and one answer per call. `Stopped` = the turn was stopped before the write, so the file is exactly as it was and no call has an answer.
 fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Stop) -> Result<Run> {
-    // Blocking: the snapshot is read, edited and written inside the per-path lock, so every other writer waits.
-    let text = std::fs::read_to_string(path).context("failed to read file")?;
+    let raw = std::fs::read_to_string(path).context("failed to read file")?;
+    // The file's own line ending: the edits are read and laid out on plain lines, and the ending is put back once at the write.
+    let ending = eol::Eol::of(&raw);
+    let text = ending.plain(&raw).into_owned();
     let base: Vec<&str> = text.lines().collect();
     let Some(license) = license else {
         return Ok(Run::Refused(format!(
@@ -407,13 +410,12 @@ fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Stop) -
             path.display()
         )));
     }
-    if license.hash != License::of(&text).hash {
+    if license.hash != License::of(&raw).hash {
         return Ok(Run::Refused(format!(
             "`{}` is unauthorized: it changed on disk after it was read; read or grep it again",
             path.display()
         )));
     }
-
     let (edits, pieces, unreadable) = flatten(plans, &base);
     let (kept, dropped) = edit::settle_overlaps(&edits, &base);
     let formatter = lang::format(path);
@@ -467,9 +469,13 @@ fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Stop) -
     }
 
     if let Some(write) = &written {
-        write_atomic(path, write)?;
+        write_atomic(path, &ending.write(write))?;
     }
-    let shown = written.clone().unwrap_or_else(|| text.clone());
+    // What the disk holds now: the written text in the file's own ending, else the file as it was.
+    let shown = match &written {
+        Some(now) => ending.write(now),
+        None => raw.clone(),
+    };
     Ok(Run::Done(Box::new(Built {
         base: text,
         shown,

@@ -8,6 +8,7 @@
 
 pub(crate) mod change;
 pub(crate) mod edit;
+pub(crate) mod eol;
 pub(crate) mod fault;
 pub(crate) mod gate;
 pub(crate) mod grep;

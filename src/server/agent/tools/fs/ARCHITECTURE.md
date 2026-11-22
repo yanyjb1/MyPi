@@ -10,6 +10,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `change.rs` | one line-addressed change: the context around it, its receipt and its line arithmetic |
 | `fault.rs` | the batch's audit: checks and tests after the last write, and where each fault lands |
 | `gate.rs` | the process gate: one child, its deadline, the turn's stop and its own group |
+| `eol.rs` | the line ending a written text keeps: read as plain lines, written back in the file's own ending |
 | `skeleton.rs` | the report skeleton: numbered source lines, pieces and the seam around an error |
 | `edit/` | one unique text run replaced in place |
 | `grep/` | structural search over the tree a language claims |

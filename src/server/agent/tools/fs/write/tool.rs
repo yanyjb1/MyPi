@@ -7,6 +7,7 @@ use crate::server::agent::tools::contract::env::{Env, Shell, Slot};
 use crate::server::agent::tools::contract::halt::stopped;
 use crate::server::agent::tools::contract::output::ToolOutput;
 
+use crate::server::agent::tools::fs::eol;
 use crate::server::agent::tools::fs::fault;
 use crate::server::agent::tools::fs::lang;
 use crate::server::agent::tools::fs::lang::verdict::Outcome;
@@ -86,6 +87,11 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         content.clone()
     };
 
+    // The line ending is the file's own: a file that already ended its lines in CRLF keeps doing so, and a new one is LF.
+    let ending = std::fs::read_to_string(&p)
+        .map(|old| eol::Eol::of(&old))
+        .unwrap_or(eol::Eol::Lf);
+    let written = ending.write(&written);
     env.workspace
         .with_write(&p, || write_atomic(&p, &written))?;
     env.seen.stamp(p.clone(), &written);

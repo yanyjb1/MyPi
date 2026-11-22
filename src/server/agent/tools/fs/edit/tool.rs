@@ -7,6 +7,7 @@ use crate::server::agent::tools::contract::env::{Env, Shell, Slot};
 use crate::server::agent::tools::contract::output::ToolOutput;
 
 use crate::server::agent::tools::fs::change;
+use crate::server::agent::tools::fs::eol;
 use crate::server::agent::tools::fs::lang;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
@@ -73,9 +74,13 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
 
     let edited = env.workspace.with_write(&p, || {
         // Blocking: the whole file is read and written inside the per-path lock, so every other writer waits.
-        let text = std::fs::read_to_string(&p).context("failed to read file")?;
+        let raw = std::fs::read_to_string(&p).context("failed to read file")?;
+        // The file's own line ending, kept: the tools match and splice on plain lines and write the ending back.
+        let ending = eol::Eol::of(&raw);
+        let text = ending.plain(&raw);
         let table = lang::table(&p, &text);
-        let edited = exact_text(&text, &table, &old, &new, env.full_item_budget)?;
+        let mut edited = exact_text(&text, &table, &old, &new, env.full_item_budget)?;
+        edited.text = ending.write(&edited.text);
         write_atomic(&p, &edited.text)?;
         Ok(edited)
     })?;
