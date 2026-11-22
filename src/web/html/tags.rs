@@ -1,7 +1,6 @@
-//! Tag-level HTML extraction shared by search providers.
+// Scans raw HTML for elements and their text, shared by the search providers and the conversion.
 
-/// Remove tags and collapse whitespace runs (titles wrap query terms in
-/// `<b>`, so text arrives interleaved with inline markup).
+// Removes tags and collapses whitespace runs; titles arrive with inline markup interleaved.
 pub(crate) fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut depth = 0usize;
@@ -16,7 +15,7 @@ pub(crate) fn strip_tags(s: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Decode the entities engines emit: XML, `nbsp`, typographic, and numeric.
+// Decodes the entities engines emit: XML, `nbsp`, typographic, and numeric.
 pub(crate) fn unescape_entities(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
@@ -69,8 +68,7 @@ fn decode_entity(name: &str) -> Option<char> {
         "quot" => '"',
         "apos" => '\'',
         "nbsp" => ' ',
-        // Spacing/zero-width entities the SERPs use as separators; mapping
-        // them to a space keeps them from leaking into snippets verbatim.
+        // Spacing and zero-width entities the SERPs use as separators: a space keeps them out of snippets.
         "ensp" | "emsp" | "thinsp" | "zwnj" | "zwj" => ' ',
         "hellip" => '…',
         "mdash" => '—',
@@ -99,8 +97,7 @@ fn decode_entity(name: &str) -> Option<char> {
     })
 }
 
-/// Tag-free, entity-decoded, whitespace-collapsed text — what a title or
-/// snippet fragment turns into before it reaches the model.
+// Tag-free, entity-decoded, whitespace-collapsed text, as a title or snippet reaches the model.
 pub(crate) fn decode_text(s: &str) -> String {
     unescape_entities(&strip_tags(s)).trim().to_string()
 }
@@ -135,12 +132,12 @@ pub(crate) fn extract_attr(tag: &str, attr: &str) -> Option<String> {
     None
 }
 
-/// Byte offset of the first element whose `class` lists `token` whole.
+// Byte offset of the first element whose `class` lists `token` whole.
 pub(crate) fn class_element(hay: &str, token: &str) -> Option<usize> {
     class_elements(hay, token).into_iter().next()
 }
 
-/// Byte offsets of every element whose class list contains `token`.
+// Byte offsets of every element whose class list contains `token`.
 pub(crate) fn class_elements(hay: &str, token: &str) -> Vec<usize> {
     let mut found = Vec::new();
     let mut from = 0usize;
@@ -153,7 +150,7 @@ pub(crate) fn class_elements(hay: &str, token: &str) -> Vec<usize> {
         {
             let value = &after[1..1 + end];
             if value.split_whitespace().any(|c| c == token) {
-                // Walk back to the tag's opening angle bracket.
+                // Back up to the tag's opening angle bracket.
                 if let Some(open) = hay[..at].rfind('<') {
                     found.push(open);
                 }
@@ -166,7 +163,7 @@ pub(crate) fn class_elements(hay: &str, token: &str) -> Vec<usize> {
     found
 }
 
-/// Slices of `hay`, one per element carrying `token`, each to the next.
+// Slices of `hay`, one per element carrying `token`, each up to the next.
 pub(crate) fn class_blocks<'a>(hay: &'a str, token: &str) -> Vec<&'a str> {
     let starts = class_elements(hay, token);
     let mut blocks = Vec::with_capacity(starts.len());
@@ -177,14 +174,13 @@ pub(crate) fn class_blocks<'a>(hay: &'a str, token: &str) -> Vec<&'a str> {
     blocks
 }
 
-/// The opening tag of the element starting at `offset` (which must point at
-/// its `<`).
+// The opening tag of the element at `offset`, which must point at its `<`.
 pub(crate) fn open_tag_at(hay: &str, offset: usize) -> Option<&str> {
     let gt = hay[offset..].find('>')? + offset;
     Some(&hay[offset..=gt])
 }
 
-/// The element's tag name, lowercased (`<A href=…>` → `"a"`).
+// The element's tag name, lowercased: `<A href=…>` answers `a`.
 fn tag_name(open_tag: &str) -> Option<String> {
     let rest = open_tag.strip_prefix('<')?;
     let end = rest.find(['>', ' ', '\t', '\n', '\r', '/'])?;
@@ -194,12 +190,12 @@ fn tag_name(open_tag: &str) -> Option<String> {
     Some(rest[..end].to_ascii_lowercase())
 }
 
-/// Closers used when the matching one is out of the slice.
+// Closers used when the matching one falls outside the slice.
 const CLOSERS: [&str; 9] = [
     "</div>", "</span>", "</p>", "</a>", "</li>", "</td>", "</h1>", "</h2>", "</h3>",
 ];
 
-/// Inner HTML of the element at `gt`, up to its matching close tag.
+// Inner HTML of the element at `gt`, up to its matching close tag.
 fn matching_inner(hay: &str, gt: usize, tag: &str) -> Option<String> {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
@@ -228,15 +224,13 @@ fn matching_inner(hay: &str, gt: usize, tag: &str) -> Option<String> {
     None
 }
 
-/// Text content of the element starting at `offset` (which must point at its
-/// `<`).
+// Text content of the element at `offset`, which must point at its `<`.
 pub(crate) fn text_at(hay: &str, offset: usize) -> Option<String> {
     let open = open_tag_at(hay, offset)?;
     let gt = offset + open.len() - 1; // the element's `>`
     let inner = match tag_name(open).and_then(|tag| matching_inner(hay, gt, &tag)) {
         Some(inner) => inner,
-        // A windowed slice can end mid-element, leaving no matching closer;
-        // the nearest closer still yields a usable partial snippet.
+        // A windowed slice can end mid-element; the nearest closer still yields a usable snippet.
         None => {
             let rest = &hay[gt + 1..];
             let end = CLOSERS
@@ -249,14 +243,14 @@ pub(crate) fn text_at(hay: &str, offset: usize) -> Option<String> {
     Some(decode_text(&inner))
 }
 
-/// Text content of the first element whose class list contains `token`.
+// Text content of the first element whose class list contains `token`.
 pub(crate) fn class_text(hay: &str, token: &str) -> Option<String> {
     let offset = class_element(hay, token)?;
     let text = text_at(hay, offset)?;
     (!text.is_empty()).then_some(text)
 }
 
-/// The opening tag of the nearest unclosed `tag` before `pos`.
+// The opening tag of the nearest unclosed `tag` before `pos`.
 pub(crate) fn enclosing_open_before(hay: &str, pos: usize, tag: &str) -> Option<String> {
     let needle = format!("<{tag}");
     let closer = format!("</{tag}>");
@@ -285,4 +279,68 @@ pub(crate) fn enclosing_open_before(hay: &str, pos: usize, tag: &str) -> Option<
         return Some(hay[start..=gt].to_string());
     }
     None
+}
+
+// Every `svg` element removed, contents and all, and nothing else touched. An icon is a path
+// payload no reader can read, and a control kept as HTML carries its own copy of it.
+pub(crate) fn drop_svg(html: &str) -> String {
+    const CLOSE: &str = "</svg>";
+    let mut out = String::with_capacity(html.len());
+    let mut at = 0usize;
+    while let Some((start, gt, own)) = svg_open(html, at) {
+        out.push_str(&html[at..start]);
+        if own {
+            at = gt + 1;
+            continue;
+        }
+        let Some(end) = svg_end(html, gt + 1) else {
+            return out;
+        };
+        at = end + CLOSE.len();
+    }
+    out.push_str(&html[at..]);
+    out
+}
+
+// The next `<svg` opening tag at or after `from`: its start, its `>`, and whether it closes
+// itself. `<svgx` is another element, and `svg=` inside a tag is an attribute.
+fn svg_open(hay: &str, from: usize) -> Option<(usize, usize, bool)> {
+    let mut at = from;
+    while let Some(start) = hay[at..].find("<svg").map(|n| at + n) {
+        let boundary = hay[start + 4..].chars().next();
+        if boundary.is_some_and(|c| matches!(c, '>' | ' ' | '\t' | '\n' | '\r' | '/')) {
+            let gt = hay[start..].find('>').map(|n| start + n)?;
+            return Some((start, gt, hay[start..gt].ends_with('/')));
+        }
+        at = start + 4;
+    }
+    None
+}
+
+// Where the `svg` element opened before `from` ends: its matching `</svg>`, counting nesting.
+fn svg_end(hay: &str, from: usize) -> Option<usize> {
+    const CLOSE: &str = "</svg>";
+    let mut depth = 0usize;
+    let mut at = from;
+    loop {
+        let close = hay[at..].find(CLOSE).map(|n| at + n);
+        let open =
+            svg_open(hay, at).filter(|(start, _, _)| close.is_none_or(|close| *start < close));
+        match open {
+            Some((_, gt, own)) => {
+                if !own {
+                    depth += 1;
+                }
+                at = gt + 1;
+            }
+            None => {
+                let close = close?;
+                if depth == 0 {
+                    return Some(close);
+                }
+                depth -= 1;
+                at = close + CLOSE.len();
+            }
+        }
+    }
 }

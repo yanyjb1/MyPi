@@ -28,7 +28,10 @@ const SCAN: &str = r#"(() => {
     let cur = el;
     for (let guard = 0; cur && cur.nodeType === 1 && guard < 40; guard++) {
       const tag = cur.tagName.toLowerCase();
-      if (cur.id) { parts.unshift('#' + CSS.escape(cur.id)); break; }
+      if (cur.id) {
+        parts.unshift('#' + CSS.escape(cur.id));
+        if (document.querySelectorAll('#' + CSS.escape(cur.id)).length === 1) break;
+      }
       if (tag === 'body' || tag === 'html') { parts.unshift('body'); break; }
       const holder = cur.parentElement;
       if (!holder) { parts.unshift(tag); break; }

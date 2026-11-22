@@ -54,9 +54,9 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 | file | holds |
 |---|---|
-| `html/markdown.rs` | DOM → Markdown, the inline-image drop, and the JS-shell check |
+| `html/markdown.rs` | DOM → Markdown, the SVG and inline-image drops, and the JS-shell check |
 | `html/control.rs` | the page-side scan for clickable and fillable controls, the region each is searched in, and the selector each is reached by |
-| `html/tags.rs` | the tag scanner and entity decoder the providers use |
+| `html/tags.rs` | the tag scanner and entity decoder the providers use, and the SVG cut the conversion begins with |
 | `rules.rs` | the page-side half of a site rule: the kept regions, and the HTML read back |
 
 ## What it talks to

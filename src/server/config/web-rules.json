@@ -24,5 +24,6 @@
   "web-rulesets/tmtpost.json",
   "web-rulesets/yicai.json",
   "web-rulesets/cnki.json",
-  "web-rulesets/courts.json"
+  "web-rulesets/courts.json",
+  "web-rulesets/wos.json"
 ]

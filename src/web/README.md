@@ -168,12 +168,15 @@ was written, so two calls in the same second never land on each other.
 
 The answer is the page's prose, not its document. A read that names a URL navigates first, and
 the document is polled until its `<body>` has been parsed and the text is not a script shell;
-a page still unfinished when the budget ends is read as it stands. Four things shape it:
+a page still unfinished when the budget ends is read as it stands. Five things shape it:
 
-- **Inline images go.** An `svg` element and an `img` whose `src` is a `data:` URI are dropped, and
-  the alt text is kept where there is one. A marketing page carries its icons and sprites inline,
-  and that payload routinely outnumbers the prose by a wide margin. An image naming a real address
-  is left as it is.
+- **SVG goes, whatever holds it.** Every `svg` element is cut out of the markup before conversion,
+  contents and all, and nothing around it is touched: a button keeping its icon loses the icon and
+  stays a button. Not cutting it there would leave two trails — a converter placeholder in the
+  prose, and the raw paths of any `svg` inside a control the conversion preserves as HTML.
+- **Inline images go.** An `img` whose `src` is a `data:` URI is dropped, and the alt text is kept
+  where there is one. A marketing page carries its icons and sprites inline, and that payload
+  routinely outnumbers the prose by a wide margin. An image naming a real address is left as it is.
 - **The head's metadata goes.** No frontmatter is emitted at all. A page's `<meta>` tags are
   written for crawlers and for the site's own scripts: nonces, signatures, catalogue hashes, a
   visitor payload. None of it describes the article, and the article carries its own title and
