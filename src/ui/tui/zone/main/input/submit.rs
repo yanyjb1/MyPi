@@ -174,6 +174,8 @@ impl InputZone {
     fn send(&mut self, prefix: Option<String>, text: String) {
         self.take_line();
         self.in_flight = Some(text.clone());
+        // An opened turn is the first half of the double tap: the next Enter interrupts it.
+        self.enter_armed = Some(Instant::now());
         // The server never echoes a writer's own letter: history draws it from here, at once.
         self.shouts
             .push(Shout::new(name::ECHO, json!({"text": text})));

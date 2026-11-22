@@ -91,8 +91,8 @@ Deletion has no command: the resume picker owns it.
 - `Enter` with a non-empty box and no round running: the line leaves as a turn.
 - `Enter` with a non-empty box while a round runs, and the line is a **message**: it joins the queue
   and its head is written to the server's one slot. Nothing opens now.
-- A second `Enter` inside 600 ms, the box now empty, interrupts the round; the sentence waiting in
-  the slot opens the next one. Any other key spends the arm.
+- A second `Enter` inside 600 ms, the box now empty, interrupts the round; the sentence waiting in the slot opens the next one. Any other key spends the arm.
+- A line that opened a round arms that window too, so a twice-tapped `Enter` on a fresh line both opens and stops.
 - A command skips all of that: it runs at once, and the server decides whether this connection may
   write.
 - `Alt+Up` takes the newest queued sentence back into the box, above what is already there.

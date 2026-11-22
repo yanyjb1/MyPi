@@ -92,11 +92,7 @@ fn read_stream(zone: &mut HistoryZone, frame: &Frame) {
             }
             if matches!(field, Some("user") | Some("mailbox")) {
                 match content.get("text").and_then(Value::as_str) {
-                    Some(text) => {
-                        let at = zone.local.running_mut().echo(text);
-                        zone.mark(Idx::Turn(at as u32));
-                        zone.shouts.push(Shout::new(name::TICK, json!({})));
-                    }
+                    Some(text) => zone.echo(text),
                     // No words: the api read this front end as the writer, so the words are its own.
                     None => zone.shouts.push(Shout::new(name::MAILBOX, json!({}))),
                 }
@@ -281,6 +277,7 @@ fn closed(zone: &mut HistoryZone, content: &Value) {
     if ranges.is_empty() {
         zone.local.drop_turn();
         zone.run.clear();
+        zone.release_echo();
         zone.ask_init();
     } else {
         // A call that did not finish cleanly states why in the row the turn kept, not in the stream.
@@ -367,6 +364,7 @@ fn settle_pending(zone: &mut HistoryZone) {
     zone.pending = None;
     zone.local.drop_turn();
     zone.run.clear();
+    zone.release_echo();
     zone.busy = false;
     zone.shouts
         .push(Shout::new(name::BUSY, json!({"on": false})));

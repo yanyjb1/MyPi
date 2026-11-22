@@ -55,6 +55,9 @@ The two regions are the only holders of block content. What the budget takes awa
 |front end sent arrives on the session stream as `signal: user` or `signal: mailbox` carrying its
 |`text`, and is drawn the same way. A `signal: mailbox` with no `text` says the server read this front
 |end as the writer: history asks input for the letter it holds and draws what comes back.
+
+A user line that arrives while the running region is owed a refetch is held back instead: that refetch wipes the region and asks only for the closed round's own ids, so a line belonging to the next round would be drawn and then lost. It takes its place once the wipe is done.
+
 ### Products
 
 One product per block: text blocks hand over segments, everything else hands over rows folded at a

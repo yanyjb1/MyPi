@@ -105,6 +105,8 @@ pub struct HistoryZone {
     pub(super) awaiting: Vec<i64>,
     // The id ranges asked for and not yet answered.
     pub(super) asking: HashSet<[i64; 2]>,
+    // Echoes that arrived while the running region was owed a refetch: they belong to the next round, and drawing them now would let the refetch's wipe take them.
+    pub(super) held_echo: Vec<String>,
     // A closed turn whose receipt does not line up: the ranges its own rows must come from.
     pub(super) pending: Option<Vec<[i64; 2]>>,
     // A fresh attach lays the structure out again.
@@ -158,6 +160,7 @@ impl Default for HistoryZone {
             ask: None,
             awaiting: Vec::new(),
             asking: HashSet::new(),
+            held_echo: Vec::new(),
             pending: None,
             needs_layout: false,
             busy: false,
@@ -341,6 +344,26 @@ impl HistoryZone {
         self.after = None;
         self.ask = None;
         self.awaiting.clear();
+        self.held_echo.clear();
+    }
+
+    // One user line this front end or another wrote: it draws at once, unless the running region is still owed a refetch — that wipe would take it, so it waits for the next round.
+    pub(super) fn echo(&mut self, text: &str) {
+        if self.pending.is_some() {
+            self.held_echo.push(text.to_string());
+            return;
+        }
+        let at = self.local.running_mut().echo(text);
+        self.mark(Idx::Turn(at as u32));
+        self.shouts
+            .push(Shout::new(name::TICK, serde_json::json!({})));
+    }
+
+    // The refetch wiped the running region: the lines held back take their places in the empty round now.
+    pub(super) fn release_echo(&mut self) {
+        for text in std::mem::take(&mut self.held_echo) {
+            self.echo(&text);
+        }
     }
 
     // The three shared handles arrive once, at boot.
@@ -503,14 +526,13 @@ impl HistoryZone {
             }
             name::ECHO => {
                 if let Some(text) = content.get("text").and_then(Value::as_str) {
-                    let at = self.local.running_mut().echo(text);
-                    self.mark(Idx::Turn(at as u32));
-                    self.shouts
-                        .push(Shout::new(name::TICK, serde_json::json!({})));
+                    self.echo(text);
                 }
             }
             name::RETRACT => {
-                if let Some(at) = self.local.running_mut().retract() {
+                if self.held_echo.pop().is_none()
+                    && let Some(at) = self.local.running_mut().retract()
+                {
                     self.mark(Idx::Turn(at as u32));
                 }
                 let reason = content
