@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::zone::{HubZone, Row, title};
 use crate::ui::tui::lang::Lang;
-use crate::ui::tui::text::bytes as byte_size;
+use crate::ui::tui::text::{bytes as byte_size, short};
 use crate::ui::tui::theme::{Accent, fixed};
 use crate::ui::tui::zone::page::{Hint, Panel, divider};
 
@@ -157,7 +157,7 @@ fn row_lines(row: &Row, selected: bool, accent: &Accent, lang: Lang) -> Vec<Line
     meta.push(fg(byte_size(row.bytes.max(0) as u64), fixed::DIM));
     if let Some(cwd) = row.cwd.as_deref() {
         meta.push(dot());
-        meta.push(fg(shorten(cwd), fixed::DIM));
+        meta.push(fg(short(cwd), fixed::DIM));
     }
     vec![Line::from(spans), Line::from(meta), Line::default()]
 }
@@ -235,13 +235,4 @@ fn hints(lang: Lang, peek: bool) -> Vec<Hint> {
         hint("PgUp/PgDn", "hint_page"),
         hint("Home/End", "hint_ends"),
     ]
-}
-
-// Path shortening: at most the last two segments, no leading slash.
-fn shorten(path: &str) -> String {
-    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-    if parts.len() <= 2 {
-        return parts.join("/");
-    }
-    format!("…/{}", parts[parts.len() - 2..].join("/"))
 }

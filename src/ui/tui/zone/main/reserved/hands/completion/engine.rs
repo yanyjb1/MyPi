@@ -329,7 +329,10 @@ pub fn expand_tilde(s: &str, home: &Path) -> PathBuf {
     if s == "~" {
         return home.to_path_buf();
     }
-    if let Some(rest) = s.strip_prefix("~/") {
+    if let Some(rest) = s
+        .strip_prefix('~')
+        .and_then(|rest| rest.strip_prefix(['/', '\\']))
+    {
         return home.join(rest);
     }
     s.into()

@@ -16,7 +16,7 @@ What is here, what each file holds, who calls whom. Current state only.
 | `app/` | `App`: registry, display ledger, delivery, landing, lifecycle, memo | public |
 | `zone/` | `contract`, `registry`, `page` (the full-screen chassis), the three major zones | public |
 | `theme/` | the live accent and the fixed palette | public |
-| `text/` | display width, truncation, wrapping, the card frame | public |
+| `text/` | display width, truncation, wrapping, the card frame, and paths as text (forward slashes, no `\\?\` prefix, shortened, relativized) | public |
 
 ## What it talks to
 

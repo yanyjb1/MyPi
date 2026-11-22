@@ -14,6 +14,9 @@ pub(super) const FX_CURRENCY_KEY: &str = "config.ui.tui.fx.currency";
 // The model a draft opens with; a session row overrides it once there is one.
 pub(super) const DEFAULT_MODEL_KEY: &str = "config.server.api.defaultModel";
 
+// What `~` stands for; the server answers it, resolving an unset key to the platform's own home.
+pub(super) const HOME_KEY: &str = "config.server.platform.home";
+
 // The display language the panel and number formats follow.
 pub(super) const LANG_KEY: &str = crate::ui::tui::lang::Lang::KEY;
 
@@ -30,6 +33,7 @@ impl InputZone {
             FX_CURRENCY_KEY,
             DEFAULT_MODEL_KEY,
             LANG_KEY,
+            HOME_KEY,
         ] {
             self.want(key);
         }

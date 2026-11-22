@@ -2,7 +2,9 @@
 
 use serde_json::Value;
 
-use super::boot::{AUTO_PREPARE_KEY, DEFAULT_MODEL_KEY, FX_CURRENCY_KEY, GIT_SCAN_KEY, LANG_KEY};
+use super::boot::{
+    AUTO_PREPARE_KEY, DEFAULT_MODEL_KEY, FX_CURRENCY_KEY, GIT_SCAN_KEY, HOME_KEY, LANG_KEY,
+};
 use super::ctx::{Context, Currency};
 use super::notice::Notice;
 use super::zone::InputZone;
@@ -159,6 +161,14 @@ impl InputZone {
         }
         if key == AUTO_PREPARE_KEY {
             self.data.auto_prepare = value.and_then(Value::as_bool).unwrap_or(false);
+            return;
+        }
+        if key == HOME_KEY {
+            if let Some(home) = value.and_then(Value::as_str) {
+                self.data.home = home.to_string();
+                self.shouts
+                    .push(Shout::new(name::HOME, serde_json::json!({"path": home})));
+            }
             return;
         }
         if let Some(address) = key.strip_prefix("models.model.") {

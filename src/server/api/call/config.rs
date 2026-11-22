@@ -5,9 +5,10 @@ use serde_json::{Value, json};
 
 use crate::server::api::{Api, Refuse};
 use crate::server::config::{
-    KEY_CONFIG_SERVER_API_DEFAULT_MODEL, KEY_CONFIG_SERVER_PLATFORM_TIMEZONE, ResolvedModel,
+    KEY_CONFIG_SERVER_API_DEFAULT_MODEL, KEY_CONFIG_SERVER_PLATFORM_HOME,
+    KEY_CONFIG_SERVER_PLATFORM_TIMEZONE, ResolvedModel,
 };
-use crate::server::platform::time;
+use crate::server::platform::{env, time};
 
 // A keyed answer: the caller never has to remember what it asked for.
 pub(crate) fn answer(api: &Api, key: &str) -> Result<Value, Refuse> {
@@ -19,6 +20,12 @@ fn value(api: &Api, key: &str) -> Result<Value, Refuse> {
     // The offset is answered normalized: the machine's own when the key is unset or a name.
     if key == KEY_CONFIG_SERVER_PLATFORM_TIMEZONE {
         return Ok(Value::String(time::display()));
+    }
+    // What `~` stands for is answered resolved too: the platform's own home when the key is unset.
+    if key == KEY_CONFIG_SERVER_PLATFORM_HOME {
+        return Ok(env::tilde_home().map_or(Value::Null, |home| {
+            Value::String(home.to_string_lossy().into_owned())
+        }));
     }
     // The default model is answered resolved: an unset key still names the table's fallback.
     if key == KEY_CONFIG_SERVER_API_DEFAULT_MODEL {

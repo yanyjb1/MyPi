@@ -68,6 +68,7 @@ impl InputZone {
             cwd: &self.data.cwd,
             efforts: &self.data.efforts,
             draft: &self.draft,
+            home: &self.data.home,
         };
         match (meta.run)(&call) {
             Done::Write(write) => self.wrote(write),

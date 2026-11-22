@@ -208,6 +208,7 @@ fn cwd(env: &Env, item: &Item) -> Result<PathBuf> {
     };
     let path = path
         .canonicalize()
+        .map(|real| crate::server::agent::tools::workspace::unverbatim(real))
         .map_err(|e| anyhow::anyhow!("cannot resolve cwd `{raw}`: {e}"))?;
     anyhow::ensure!(path.is_dir(), "cwd `{raw}` is not a directory");
     Ok(path)

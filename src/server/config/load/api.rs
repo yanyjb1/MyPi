@@ -29,7 +29,7 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES, KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES,
     KEY_CONFIG_SERVER_AGENT_TOOLS_READ_PERSISTENT_DOCS, KEY_CONFIG_SERVER_AGENT_TOOLS_SHELL,
     KEY_CONFIG_SERVER_AGENT_TOOLS_SHELL_TIMEOUT, KEY_CONFIG_SERVER_API_DEFAULT_MODEL,
-    KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE,
+    KEY_CONFIG_SERVER_PLATFORM_HOME, KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE,
     KEY_CONFIG_SERVER_REQUEST_COMPACT_RETAIN_TAIL, KEY_CONFIG_SERVER_REQUEST_STREAMING,
     KEY_CONFIG_WEB_BRING_TO_FRONT,
 };
@@ -338,11 +338,18 @@ impl Config {
             .and_then(|value| value.as_text())
             .map(str::trim)
             .filter(|path| !path.is_empty())?;
-        let named = match named.strip_prefix("~") {
-            Some(tail) => crate::server::platform::env::home()?.join(tail.trim_start_matches('/')),
-            None => PathBuf::from(named),
-        };
-        Some(named)
+        crate::server::platform::env::expand(named)
+    }
+
+    // What `~` stands for: the configured directory; empty = this platform's own home.
+    pub fn home(&self) -> Option<PathBuf> {
+        self.effective(None)
+            .values
+            .get(KEY_CONFIG_SERVER_PLATFORM_HOME)
+            .and_then(|value| value.as_text())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
     }
 
     // Tool-round fence; `None` turns it off.

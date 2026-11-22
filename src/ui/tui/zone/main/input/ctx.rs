@@ -117,6 +117,9 @@ pub struct Data {
     // The first message of a session, and the first after a compaction, carry the preparation.
     pub auto_prepare: bool,
 
+    // What `~` stands for; the process's, so a row change keeps it.
+    pub home: String,
+
     // A round is running.
     pub busy: bool,
 }
@@ -127,7 +130,7 @@ impl Data {
         !self.efforts.is_empty()
     }
 
-    // Point the row at another id. Its figures are the new id's to answer, so they go; the language, the directory, the scan interval, the preparation switch and the currency are the process's and stay.
+    // Point the row at another id. Its figures are the new id's to answer, so they go; the language, the directory, the scan interval, the preparation switch, the tilde anchor and the currency are the process's and stay.
     pub fn turn(&mut self, key: i64) {
         if key == self.key {
             return;
@@ -136,6 +139,7 @@ impl Data {
         let cwd = self.cwd.clone();
         let git_scan = self.git_scan;
         let auto_prepare = self.auto_prepare;
+        let home = self.home.clone();
         let currency = self.money.currency;
         *self = Data {
             key,
@@ -143,6 +147,7 @@ impl Data {
             cwd,
             git_scan,
             auto_prepare,
+            home,
             money: Money {
                 currency,
                 ..Money::default()

@@ -325,27 +325,7 @@ pub(crate) fn truncate(text: &str, max: usize) -> String {
     }
 }
 
-pub(crate) fn relativize(base: &str, path: &str) -> String {
-    let base = base.trim_end_matches('/');
-    if !path.starts_with('/') || base.is_empty() {
-        return path.to_string();
-    }
-    if let Some(rest) = path.strip_prefix(base) {
-        if rest.is_empty() {
-            return ".".to_string();
-        }
-        if let Some(rest) = rest.strip_prefix('/') {
-            return format!("./{rest}");
-        }
-    }
-    let parent = base
-        .rsplit_once('/')
-        .map(|(p, _)| if p.is_empty() { "/" } else { p });
-    if parent == Some(path) {
-        return "..".to_string();
-    }
-    path.to_string()
-}
+pub(crate) use crate::ui::tui::text::relative as relativize;
 
 // A call's arguments as an object.
 pub(crate) fn call_args(args: &str) -> Option<Value> {

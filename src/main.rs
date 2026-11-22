@@ -30,6 +30,7 @@ fn main() -> anyhow::Result<()> {
     }
     let cfg = Config::load()?;
     init_time(&cfg);
+    init_home(&cfg);
     let file = Endpoint::file_path(&db);
     // A leftover endpoint file whose server is gone is no reason to refuse to start.
     if let Ok(running) = endpoint::read(&file)
@@ -92,6 +93,7 @@ fn run_server(db: &Path) -> anyhow::Result<()> {
         anyhow::bail!("another mypi owns {}", db.display());
     };
     init_time(&cfg);
+    init_home(&cfg);
     let endpoint = Endpoint::for_db(db, ipc_kind(&cfg));
     let served = server::run(Api::open(db.to_path_buf(), cfg)?, db, endpoint, claim);
     mypi::web::shutdown();
@@ -122,6 +124,11 @@ fn init_time(cfg: &Config) {
         .ok()
         .and_then(|value| value.as_text().map(str::to_string));
     time::init(zone.as_deref());
+}
+
+// What `~` stands for: the configured directory, else nothing and the platform's own home answers.
+fn init_home(cfg: &Config) {
+    mypi::server::platform::env::anchor(cfg.home());
 }
 
 // The front end on an open connection: read the launch directory, pick the first zone, go.

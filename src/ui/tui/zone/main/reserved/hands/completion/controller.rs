@@ -177,14 +177,12 @@ pub struct CompletionService {
 
 impl CompletionService {
     /// The hand builds itself: the workspace and the name pools come from the view,
-    /// `~` resolves against the environment it runs in.
+    /// `~` resolves against the home the input zone hands it from the config.
     pub fn new() -> Self {
         Self {
             controller: CompletionController::new(),
             cwd: PathBuf::new(),
-            home: std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_default(),
+            home: PathBuf::new(),
             pools: None,
             awaiting: false,
             anchor_col: 0,
@@ -195,12 +193,21 @@ impl CompletionService {
         }
     }
 
-    /// The language the command details read in; the next edit reads it.
+    /// The home `~` stands for, as the input zone heard it from the config.
+    pub fn set_home(&mut self, home: &str) {
+        let seen = PathBuf::from(home);
+        if self.home != seen {
+            self.home = seen;
+            let (text, cursor) = self.last.clone();
+            self.refresh(&text, cursor);
+        }
+    }
+
+    /// The display language the panel and details read; the next edit reads it.
     pub fn set_lang(&mut self, lang: Lang) {
         self.lang = lang;
     }
 
-    /// The model entry as the input zone heard it: its declared rungs narrow the popup.
     /// The model entry as the input zone heard it: its declared rungs narrow the popup.
     pub fn set_model_entry(&mut self, entry: &Value) {
         self.efforts = entry

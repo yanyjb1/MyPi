@@ -1,6 +1,7 @@
 // Directories, and the environment variables behind them.
 
 use std::path::PathBuf;
+use std::sync::{LazyLock, RwLock};
 
 use super::os::{self, Family};
 
@@ -10,6 +11,39 @@ pub fn home() -> Option<PathBuf> {
         Family::Unix => var_os("HOME").map(PathBuf::from),
         Family::Windows => var_os("USERPROFILE").map(PathBuf::from),
     }
+}
+
+// What `~` stands for: the directory the run anchored, else the platform's home.
+static TILDE: LazyLock<RwLock<Option<PathBuf>>> = LazyLock::new(|| RwLock::new(None));
+
+// Fix what `~` stands for, once, at startup. `None` keeps the platform's own home.
+pub fn anchor(named: Option<PathBuf>) {
+    *TILDE.write().unwrap_or_else(|e| e.into_inner()) = named;
+}
+
+// What `~` stands for right now.
+pub fn tilde_home() -> Option<PathBuf> {
+    TILDE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .or_else(home)
+}
+
+// One path with a leading `~` replaced: `~`, `~/x` and `~\\x` alike. `None` = a `~` this process cannot expand: another user's home, or no home at all.
+pub fn expand(raw: &str) -> Option<PathBuf> {
+    let Some(rest) = raw.strip_prefix('~') else {
+        return Some(PathBuf::from(raw));
+    };
+    if !rest.is_empty() && !rest.starts_with(['/', '\\']) {
+        return None;
+    }
+    let rest = rest.trim_start_matches(['/', '\\']);
+    let home = tilde_home()?;
+    Some(match rest.is_empty() {
+        true => home,
+        false => home.join(rest),
+    })
 }
 
 // Persistent, machine-generated data: the sessions database and the browser profile. `$XDG_DATA_HOME/mypi` on unix, `%LOCALAPPDATA%\mypi` on windows.

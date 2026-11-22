@@ -73,6 +73,11 @@ On unix they follow XDG: the environment variable wins, and the specification's 
 it is unset. On windows configuration lives under `%APPDATA%` and data under `%LOCALAPPDATA%`, so a
 roaming profile never carries the database or the browser profile. Empty counts as unset.
 
+One thing here is not the platform's own answer: what `~` stands for. It is one directory for the
+whole process, configured (`config.server.platform.home`) or, when nothing is configured, the
+platform's home above. `env::expand` is the only reader of a leading `~`; the front end asks the
+same question through the api instead of reading the environment itself.
+
 ### What is asked of the system, and when
 
 System identity is decided at compile time: a binary is built for one target, and nothing probes at

@@ -21,10 +21,10 @@ pub fn run(call: &Call<'_>) -> Done {
     if call.args.is_empty() {
         return Done::Hold;
     }
-    let Some(target) = resolve(&call.draft.cwd(), call.args) else {
+    let Some(target) = resolve(&call.draft.cwd(), call.home, call.args) else {
         return Done::Notice(Notice::NoDir(call.args.to_string()));
     };
-    let note = Notice::Cwd(target.to_string_lossy().to_string());
+    let note = Notice::Cwd(crate::ui::tui::text::short(&target.to_string_lossy()));
     let Some(session) = call.session else {
         call.draft.land(target);
         return Done::Notice(note);
@@ -40,17 +40,22 @@ pub fn run(call: &Call<'_>) -> Done {
     Done::Write(Write::new(letter, note))
 }
 
-/// The directory a `/cdp` lands on: `~` expanded, a relative path read from where the draft
-/// stands, and the answer MUST be a directory that exists. `None` = it is not there.
-fn resolve(cwd: &Path, raw: &str) -> Option<PathBuf> {
+fn resolve(cwd: &Path, home: &str, raw: &str) -> Option<PathBuf> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
     }
     let given = match raw.strip_prefix('~') {
-        Some(rest) => std::env::var_os("HOME")
-            .map(PathBuf::from)?
-            .join(rest.trim_start_matches('/')),
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            let home = Path::new(home);
+            let rest = rest.trim_start_matches(['/', '\\']);
+            match rest.is_empty() {
+                true => home.to_path_buf(),
+                false => home.join(rest),
+            }
+        }
+        // Another user's home is not this process's to expand.
+        Some(_) => return None,
         None => PathBuf::from(raw),
     };
     let given = if given.is_absolute() {

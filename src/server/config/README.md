@@ -23,6 +23,10 @@ directory.
 The global root is not built here: `platform::env::config_dir()` answers it. Unix uses
 `$XDG_CONFIG_HOME/mypi`, else `~/.config/mypi`; Windows must answer `%APPDATA%\mypi`.
 
+`config.server.platform.home` names what `~` stands for across the whole program; empty means this
+platform's own home. The entry point hands it to `platform::env` once at startup, and the api answers
+the key resolved, so a front end asks the same question instead of reading the environment.
+
 The project root is the process startup directory, and it counts only when it carries `.mypi`. The
 project layer lives **inside** that folder — `<startup>/.mypi/config.yaml` and
 `<startup>/.mypi/profiles/` — so nothing this tool writes or reads scatters beside a project's own

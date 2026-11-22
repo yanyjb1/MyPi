@@ -19,6 +19,8 @@ pub struct Call<'a> {
 
     /// The rungs the model this front end shows declares; empty takes no effort.
     pub efforts: &'a [String],
+    /// What `~` stands for in this process.
+    pub home: &'a str,
     /// The draft every zone shares: a command without a session writes here.
     pub draft: &'a Draft,
 }

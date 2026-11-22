@@ -75,9 +75,12 @@ A draft's commands write the shared draft, and the row this zone shows follows i
 statusline displays is what the next `post init` would carry. That draft rides that letter, so the
 name, the model, the effort and the directory it holds are the ones the session opens with.
 
-A draft's `/cdp` lands only on a directory that exists — `~` expanded, a relative path read from
-where the draft stands — because the name travels into `init`, and a directory that is not there
 cannot be entered. Anything else is refused and said. `/compact` needs a session and is refused in a draft.
+
+The directory a leading `~` names is the process's one anchor: the zone asks
+`config.server.platform.home` at boot, keeps the answer in its `Data`, and both `/cdp` and the path
+completion expand `~` against it. The server answers that key resolved, so an unset key still lands
+on this platform's own home.
 
 `/effort` and `Shift+Tab` both walk the rungs the model declares: a session writes the rung it lands
 on, a model that declares no rung is refused here, and a rung the model never declared is refused

@@ -8,7 +8,7 @@ use serde_json::json;
 
 use super::zone::{ResumeZone, Row, Scope};
 use crate::ui::tui::lang::Lang;
-use crate::ui::tui::text::bytes as byte_size;
+use crate::ui::tui::text::{bytes as byte_size, short};
 use crate::ui::tui::theme::fixed;
 use crate::ui::tui::zone::page::{Filter, Hint, Panel};
 
@@ -168,7 +168,7 @@ fn row_lines(
     }
     if let Some(cwd) = row.cwd.as_deref() {
         meta.push(dot());
-        meta.push(fg(shorten(cwd), fixed::DIM));
+        meta.push(fg(short(cwd), fixed::DIM));
     }
     out.push(Line::from(meta));
     out
@@ -311,13 +311,4 @@ fn human_age(secs: u64, lang: Lang) -> String {
         _ => ("resume_age_days", secs / 86_400),
     };
     text(lang, key, json!({"n": n}))
-}
-
-// Path shortening: at most the last two segments, no leading slash, an ellipsis when segments were dropped.
-fn shorten(path: &str) -> String {
-    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-    if parts.len() <= 2 {
-        return parts.join("/");
-    }
-    format!("…/{}", parts[parts.len() - 2..].join("/"))
 }

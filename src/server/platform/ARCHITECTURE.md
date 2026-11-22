@@ -11,7 +11,7 @@ keeps — is in `README.md`.
 |---|---|
 | `mod.rs` | the declarations |
 | `os.rs` | which system this is: `Family`, `Os` (family, name, architecture) and `current()` — decided at compile time, no probing, no subprocess |
-| `env.rs` | the directories and the environment variables behind them: home, data directory, config directory, the system temp directory, and one raw variable |
+| `env.rs` | the directories and the environment variables behind them: home, data directory, config directory, the system temp directory, one raw variable, and the one anchor `~` is expanded against (`anchor`, `tilde_home`, `expand`) |
 | `time.rs` | the process's fixed offset, and the program's one stamp shape: `init`, `display`, `now_stamp`, `age_seconds`, `days_from_stamp` |
 | `stamp.rs` | the timestamp templates: `parse` and `render` turn two instants into the prefix and suffix of one user message |
 | `log.rs` | the in-process ring of what happened to us: a level, a scope, a message and a millisecond |
@@ -26,6 +26,7 @@ keeps — is in `README.md`.
 | `os::{Family, Os, current()}` | which family, name and architecture this is |
 | `env::{home, data_dir, config_dir, temp_dir, downloads_dir}` | the directories, XDG-based on unix, `%APPDATA%`/`%LOCALAPPDATA%` on windows; `downloads_dir` reads `XDG_DOWNLOAD_DIR` and falls back to `~/Downloads`; the IPC endpoint directory belongs to `ipc::endpoint` |
 | `env::{var, var_os}` | one environment variable, as text or raw |
+| `env::{anchor, tilde_home, expand}` | what `~` stands for, fixed once at startup from the configuration, and the one place a leading `~` is expanded |
 | `time::init(name)` | take the offset from configuration, once, at startup (`None` or a geographic name = the machine's) |
 | `time::now_stamp()` | now, in the process's offset, as `YYYY-MM-DD HH:MM:SS` |
 | `time::age_seconds(stamp)` | how old a stamp is |

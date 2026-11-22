@@ -42,6 +42,8 @@ pub mod name {
     pub const TICK: &str = "tick";
     /// The display language the panel reads. `{lang}`.
     pub const LANG: &str = "lang";
+    /// What `~` stands for in this process. `{path}`.
+    pub const HOME: &str = "home";
     /// The display currency the panel prices in. `{currency}`.
     pub const CURRENCY: &str = "currency";
     /// One model's config entry, addressed by its display. `{address, name, provider}`.

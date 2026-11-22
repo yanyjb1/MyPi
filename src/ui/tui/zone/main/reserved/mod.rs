@@ -383,6 +383,11 @@ impl ReservedZone {
                     self.usage.set_currency(currency);
                 }
             }
+            name::HOME => {
+                if let Some(path) = content.get("path").and_then(Value::as_str) {
+                    self.completion.set_home(path);
+                }
+            }
             name::MODEL_ENTRY => {
                 self.usage.display(content);
                 self.completion.set_model_entry(content);

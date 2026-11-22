@@ -18,7 +18,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `spec.rs` | `Kind`, `Param`, `schema_of`, `Args`, `Item`, `Tool`, `Run`, `Summary`, `ToolProgress` |
 | `summary.rs` | one recorded call's arguments, the one-line history summary every file tool reuses, and the shared text parts: whitespace folding and a summary's own line |
 | `registry.rs` | `TOOLS`, `spec`, `roster` |
-| `workspace.rs` | `Workspace`, the licensed zones, the per-path write lock, `write_atomic`, `canonicalize_lenient` |
+| `workspace.rs` | `Workspace`, the licensed zones, the per-path write lock, `write_atomic`, `canonicalize_lenient`, `unverbatim` |
 | `fs/mod.rs` | declares the fs family |
 | `fs/gate.rs` | the process gate: one child run to its end under a deadline, its whole group killed by a stop or a deadline, its two streams read on threads of their own, and where a toolchain program is found |
 | `fs/skeleton.rs` | the report's skeleton over a line table: the gutter width and a numbered source line, the innermost piece holding a line, the seam drawn around a range |

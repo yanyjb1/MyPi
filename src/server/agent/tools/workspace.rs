@@ -81,14 +81,20 @@ pub fn write_atomic(path: &std::path::Path, content: &str) -> Result<()> {
     }
     result.map_err(|e| anyhow!("failed to write {}: {e}", path.display()))
 }
-
+// `\\?\C:\x` -> `C:\x`: the windows canonical form without its verbatim prefix.
+pub(crate) fn unverbatim(p: std::path::PathBuf) -> std::path::PathBuf {
+    match p.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+        Some(rest) => std::path::PathBuf::from(rest),
+        None => p,
+    }
+}
 // Canonicalize as far as it goes, then re-attach the tail. The `write` target may not exist yet, and the zone check MUST run on the **real** path.
 pub(crate) fn canonicalize_lenient(p: &std::path::Path) -> std::path::PathBuf {
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = p.to_path_buf();
     loop {
         if let Ok(real) = cur.canonicalize() {
-            let mut out = real;
+            let mut out = unverbatim(real);
             for part in tail.iter().rev() {
                 out.push(part);
             }
@@ -115,20 +121,14 @@ pub fn resolve_cwd(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBu
 pub fn resolve_dir(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBuf> {
     anyhow::ensure!(!raw.trim().is_empty(), "empty path");
     let raw = raw.trim();
-    let home = crate::server::platform::env::home();
-    let target = match raw.strip_prefix('~') {
-        Some(rest) => home
-            .as_ref()
-            .context("no home directory to expand `~` into")?
-            .join(rest.trim_start_matches('/')),
-        None => std::path::PathBuf::from(raw),
-    };
+    let target = crate::server::platform::env::expand(raw)
+        .context("no home directory to expand `~` into")?;
     let target = if target.is_absolute() {
         target
     } else {
         cwd.join(target)
     };
-    let real = target.canonicalize().with_context(|| "no such dir")?;
+    let real = unverbatim(target.canonicalize().with_context(|| "no such dir")?);
     anyhow::ensure!(real.is_dir(), "not a directory");
     Ok(real)
 }
@@ -136,12 +136,8 @@ pub fn resolve_dir(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBu
 // The directory `init` was handed, landed: `~` expanded, relative read from the process. Anything that is not an existing directory a session may stand in becomes the temp dir.
 pub fn launch_dir(raw: &str) -> std::path::PathBuf {
     let raw = raw.trim();
-    let given = match raw.strip_prefix('~') {
-        Some(rest) => match crate::server::platform::env::home() {
-            Some(home) => home.join(rest.trim_start_matches('/')),
-            None => return canonicalize_lenient(&crate::server::platform::env::temp_dir()),
-        },
-        None => std::path::PathBuf::from(raw),
+    let Some(given) = crate::server::platform::env::expand(raw) else {
+        return canonicalize_lenient(&crate::server::platform::env::temp_dir());
     };
     let given = if given.is_absolute() {
         given
