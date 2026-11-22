@@ -53,13 +53,17 @@ fn one_line(text: &str) -> String {
     text.replace(['\r', '\n'], " ")
 }
 
-/// The head row's counts: hits, files, mode. The density tier stays out, being the answer's own
-/// choice of shape.
+// is. Read by field name, so the tool's own order costs nothing here.
 fn counts(text: &str) -> Vec<String> {
     let Some(stats) = text.lines().next().and_then(head_stats) else {
         return Vec::new();
     };
-    stats.split(", ").take(3).map(str::to_string).collect()
+    stats
+        .split(", ")
+        .map(str::to_string)
+        .filter(|field| field != "literal" && field != "regex")
+        .take(4)
+        .collect()
 }
 
 /// What follows the query on the head row. The split is on the last `": "`, since the query itself
@@ -92,6 +96,15 @@ fn rows(text: &str) -> Vec<Row> {
 fn row(line: &str) -> Row {
     if let Some(rest) = line.trim_start().strip_prefix('[') {
         return notice(line, rest);
+    }
+    if line.starts_with("DOWNSHIFTED") {
+        return Row::of(Lead::None, vec![Run::fixed(line.to_string(), fixed::WARN)]);
+    }
+    if line.starts_with("==> ") {
+        return Row::of(
+            Lead::None,
+            vec![Run::fixed(line.to_string(), fixed::TOOL_PATH)],
+        );
     }
     if line.trim_start().starts_with("in: ") {
         return Row::of(Lead::None, vec![Run::fixed(line.to_string(), fixed::DIM)]);
@@ -126,7 +139,9 @@ fn notice(line: &str, rest: &str) -> Row {
             vec![Run::fixed(line.to_string(), fixed::TOOL_TITLE).bold()],
         );
     }
-    let ink = match rest.starts_with("scope]") {
+    let capped =
+        rest.starts_with("scope]") || line.starts_with("[+") || line.starts_with("DOWNSHIFTED");
+    let ink = match capped {
         true => fixed::WARN,
         false => fixed::DIM,
     };

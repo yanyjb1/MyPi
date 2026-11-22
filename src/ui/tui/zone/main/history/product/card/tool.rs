@@ -90,6 +90,12 @@ impl ToolBlock<'_> {
             runs.push(Run::fixed(format!(": {title}"), fixed::TOOL_TITLE));
             return Row::of(Lead::None, runs);
         }
+        if self.renderer().quiet(self) {
+            if let Some(path) = self.renderer().path(self) {
+                runs.push(Run::fixed(format!(" {path}"), fixed::TOOL_PATH));
+            }
+            return Row::of(Lead::None, runs);
+        }
         if let Some(intent) = self.intent.filter(|intent| !intent.trim().is_empty()) {
             runs.push(Run::fixed(format!(": {}", one_line(intent)), fixed::MUTED));
         }
@@ -169,6 +175,10 @@ pub(crate) trait ToolRenderer {
         None
     }
 
+    // Whether the header names the file alone: no intent and no separator before it.
+    fn quiet(&self, _b: &ToolBlock<'_>) -> bool {
+        false
+    }
     fn result_measure(&self, o: ToolOutcome<'_>) -> Option<String> {
         let lines = non_empty_lines(o.text);
         (lines > 1).then(|| format!("{lines} lines"))

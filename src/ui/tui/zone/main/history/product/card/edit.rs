@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
 use super::{
-    Excerpt, Numbered, Section, ToolBlock, ToolOutcome, ToolRenderer, ToolView, error_body, gutter,
+    Excerpt, GUTTER_MIN, Numbered, Section, ToolBlock, ToolOutcome, ToolRenderer, ToolView, gutter,
     indentation, output_lines, partial, path_of,
 };
 use crate::ui::tui::text::glyphs as g;
@@ -19,6 +19,11 @@ pub(crate) struct Edit;
 impl ToolRenderer for Edit {
     fn path(&self, b: &ToolBlock<'_>) -> Option<String> {
         path_of(b)
+    }
+
+    // A splice names the file it writes and nothing else: the change itself is the body.
+    fn quiet(&self, b: &ToolBlock<'_>) -> bool {
+        b.name == "splice"
     }
 
     fn call_body(&self, b: &ToolBlock<'_>) -> Vec<Row> {
@@ -100,48 +105,118 @@ fn splice_streaming(b: &ToolBlock<'_>) -> Vec<Row> {
     out
 }
 
-/// A splice's memo: one segment per range, in the call's order.
-fn segments(details: &Value) -> Option<Vec<Row>> {
-    let list = details.get("segments")?.as_array()?;
+// A splice's memo: one segment per range, drawn top to bottom by the line each one names. A segment is the file around the change, then the lines that went and the lines that stand there now; one that named no range carries nought and comes first.
+fn segments(b: &ToolBlock<'_>, details: &Value) -> Option<Vec<Row>> {
+    let mut list: Vec<&Value> = details.get("segments")?.as_array()?.iter().collect();
+    if list.is_empty() {
+        return None;
+    }
+    list.sort_by_key(|seg| number(seg, "fromLine"));
     let width = list
         .iter()
         .flat_map(|seg| [number(seg, "fromLine"), number(seg, "atLine")])
+        .chain(
+            list.iter()
+                .flat_map(|seg| [run(seg, "before"), run(seg, "after")])
+                .flatten()
+                .map(|run| run.0),
+        )
         .max()
         .unwrap_or(0)
         .to_string()
         .len()
-        .max(3);
+        .max(GUTTER_MIN);
+    let lang = path_of(b).as_deref().and_then(code::language_for_path);
+    let mut painter = code::Painter::new(lang);
     let mut rows: Vec<Row> = Vec::new();
-    for (at, seg) in list.iter().enumerate() {
+    for (at, seg) in list.into_iter().enumerate() {
         if at > 0 {
-            rows.push(Row::text(
-                Lead::None,
-                "…",
-                Some(Ink::Fixed(fixed::DIFF_CONTEXT)),
-            ));
+            rows.push(seam());
         }
-        let state = seg.get("state").and_then(Value::as_str).unwrap_or_default();
-        if state == "rejected" {
-            let why = seg
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("left out");
-            rows.push(Row::text(
-                Lead::None,
-                format!("left out: {why}"),
-                Some(Ink::Fixed(fixed::DIFF_REMOVED)),
-            ));
+        let mut next = None;
+        if let Some((from, lines)) = run(seg, "before") {
+            rows.extend(run_rows(&mut painter, from, &lines, width));
+            next = Some(from + lines.len());
         }
         let old = seg.get("old").and_then(Value::as_str).unwrap_or_default();
         let new = seg.get("new").and_then(Value::as_str).unwrap_or_default();
-        for line in numbered(Some(number(seg, "fromLine")), old) {
-            rows.push(diff_row('-', line.at, &line.text, None, width));
+        let first = number(seg, "fromLine");
+        if first > 0 && next.is_some_and(|after| first > after) {
+            rows.push(seam());
         }
-        for line in numbered(Some(number(seg, "atLine")), new) {
-            rows.push(diff_row('+', line.at, &line.text, None, width));
+        let deletions = numbered(Some(first), old);
+        let insertions = numbered(Some(number(seg, "atLine")), new);
+        let paired = deletions.len() == insertions.len();
+        for (i, line) in deletions.iter().enumerate() {
+            let span = paired
+                .then(|| {
+                    changed_spans(
+                        &indentation(&line.text).1,
+                        &indentation(&insertions[i].text).1,
+                    )
+                })
+                .flatten()
+                .map(|(removed, _)| removed);
+            rows.push(diff_row('-', line.at, &line.text, span, width));
+        }
+        if let Some(error) = seg.get("error").and_then(Value::as_str) {
+            rows.push(Row::of(
+                Lead::None,
+                vec![Run::fixed(error.to_string(), fixed::ERR)],
+            ));
+        }
+        for (i, line) in insertions.iter().enumerate() {
+            let span = paired
+                .then(|| {
+                    changed_spans(
+                        &indentation(&deletions[i].text).1,
+                        &indentation(&line.text).1,
+                    )
+                })
+                .flatten()
+                .map(|(_, added)| added);
+            rows.push(diff_row('+', line.at, &line.text, span, width));
+        }
+        if let Some((from, lines)) = run(seg, "after") {
+            let last = number(seg, "atLine") + new.lines().count();
+            if from > last {
+                rows.push(seam());
+            }
+            rows.extend(run_rows(&mut painter, from, &lines, width));
         }
     }
     Some(rows)
+}
+
+// One side of a segment's excerpt: where it starts, and its lines.
+fn run(seg: &Value, key: &str) -> Option<(usize, Vec<String>)> {
+    let held = seg.get(key).filter(|v| !v.is_null())?;
+    let from = number(held, "from");
+    let lines = held
+        .get("lines")?
+        .as_array()?
+        .iter()
+        .map(|line| line.as_str().unwrap_or_default().to_string())
+        .collect();
+    Some((from, lines))
+}
+
+// The lines around a change: numbered by their own place, painted by the file's language.
+fn run_rows(painter: &mut code::Painter, from: usize, lines: &[String], width: usize) -> Vec<Row> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(at, text)| {
+            let mut runs = vec![Run::fixed(gutter(' ', Some(from + at), width), fixed::DIM)];
+            for run in painter.runs(text) {
+                runs.push(run);
+            }
+            if runs.len() == 1 {
+                runs.push(Run::plain(text.clone()));
+            }
+            Row::of(Lead::None, runs)
+        })
+        .collect()
 }
 
 /// One number a segment carries; 0 when it carries none.
@@ -246,11 +321,15 @@ fn changed_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
 }
 
 fn edit_result(b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Row> {
-    if o.ok == Some(false) {
-        return error_body(&o.failure_text());
-    }
-    if let Some(rows) = o.details.and_then(segments) {
+    if let Some(rows) = o.details.and_then(|details| segments(b, details)) {
         return rows;
+    }
+    if o.ok == Some(false) {
+        return o
+            .text
+            .lines()
+            .map(|line| Row::text(Lead::None, line, Some(Ink::Fixed(fixed::ERR))))
+            .collect();
     }
     match ToolView::from_details(o.details, o.text) {
         ToolView::Diff {
@@ -480,10 +559,11 @@ fn gap(out: &mut Vec<Row>, prev: Option<usize>, next: Option<usize>) {
     if let (Some(above), Some(below)) = (prev, next)
         && below > above + 1
     {
-        out.push(Row::text(
-            Lead::None,
-            "…",
-            Some(Ink::Fixed(fixed::DIFF_CONTEXT)),
-        ));
+        out.push(seam());
     }
+}
+
+// The seam between two pieces of a file that do not touch.
+fn seam() -> Row {
+    Row::text(Lead::None, "…", Some(Ink::Fixed(fixed::DIFF_CONTEXT)))
 }

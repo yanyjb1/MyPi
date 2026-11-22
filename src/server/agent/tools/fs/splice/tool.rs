@@ -263,6 +263,7 @@ impl Built {
         let lines: Vec<&str> = self.shown.lines().collect();
         let base = change::lines_of(&self.base);
         let table = lang::table(path, &self.shown);
+        let base_table = lang::table(path, &self.base);
         let spots = self.spots();
         let refusal: Vec<Option<Why>> = {
             let mut out: Vec<Option<Why>> = vec![None; self.edits.len()];
@@ -288,11 +289,7 @@ impl Built {
                 let mut slots: Vec<Slot> = Vec::new();
                 for piece in &self.pieces[at] {
                     if let Some(why) = &piece.why {
-                        rows.push(receipt::Row {
-                            index: piece.index,
-                            from: 0,
-                            state: receipt::State::Broken { why: why.clone() },
-                        });
+                        rows.push(receipt::Row::broken(piece.index, why.clone()));
                         slots.push(Slot {
                             landing: None,
                             insert_at: 0,
@@ -316,6 +313,7 @@ impl Built {
                             &lines,
                             &base,
                             &table,
+                            &base_table,
                         ));
                         slots.push(Slot {
                             landing: why.is_none().then_some(spots[index]),

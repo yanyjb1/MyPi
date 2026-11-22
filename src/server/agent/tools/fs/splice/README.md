@@ -159,7 +159,14 @@ The check's counts cover every diagnostic the crate's check found, whether it ha
 
 ### The memo
 
-One segment per range, in the call's order: the lines it took and the lines that stand there now, numbered on both sides.
+One segment per range, in the order the call sent it: the lines it took and the lines that stand there now,
+numbered on both sides.
+
+A segment also carries the file around the change, taken from the file as it stood before the write. A
+change inside an item hands the item's own outermost lines above and below it; a change that covers
+one item whole hands the items beside it instead, as far as the file allows. A front end holding only
+the memo draws the change in full from these two sides, so they are sent even when the answer's own
+text shows less.
 
 A range that was left out carries positions and a reason, never lines.
 
@@ -167,7 +174,9 @@ A range left out carries no lines at all: its `fromLine` is the line it named, i
 
 A `@@CUT(a..b)@@` adds a segment of its own — the lines it removed, with an empty `new`, under the same edit number.
 
-Segments that are not neighbours are drawn apart, and the card folds what it does not need.
+Segments that are not neighbours are drawn apart, and the card folds what it does not need. A front
+end lays them by the line each one names, never in the order they arrived: a call whose ranges were
+sent out of order still reads top to bottom, and a segment that named no line keeps its place last.
 
 The new line numbers are the formatter's, so the tool carries them rather than leaving the front end to guess.
 

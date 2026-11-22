@@ -7,8 +7,8 @@ use super::super::super::prefetch::color::code;
 use super::super::super::row::{Ink, Lead, Row, Run};
 use super::frame::{GUTTER_MIN, gutter_of, markdown_numbered, wrap_rows};
 use super::{
-    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, expand_tabs, head, indentation,
-    item_error, partial, path_of, relativize,
+    State, ToolBlock, ToolOutcome, ToolRenderer, arg_str, expand_tabs, head, indentation, one_line,
+    partial, path_of, relativize,
 };
 use crate::ui::tui::theme::fixed;
 
@@ -42,19 +42,40 @@ pub(crate) fn read_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) 
         return out;
     }
     for (index, item) in files.iter().enumerate() {
-        let mut runs = head(State::of_item(result, index), "Read");
+        let mut runs = head(State::of_item(result, index), "Read:");
         let path = partial::field(item, "path").unwrap_or_default();
-        if !path.trim().is_empty() {
-            let mut target = relativize(cwd, &path);
-            if let Some(span) = read_range(item) {
-                target.push_str(&span);
-            }
-            runs.push(Run::fixed(format!(" {target}"), fixed::TOOL_PATH));
+        let mut named = relativize(cwd, &path);
+        if let Some(span) = read_range(item) {
+            named.push_str(&span);
         }
+        if let Some(wanted) = partial::field(item, "item").filter(|w| !w.trim().is_empty()) {
+            named.push_str(&format!(" (item: {wanted})"));
+        }
+        let ink = match read_failure(result, index) {
+            Some(why) => {
+                named.push_str(&format!(" ({why})"));
+                fixed::ERR
+            }
+            None => fixed::TOOL_PATH,
+        };
+        runs.push(Run::fixed(format!(" {named}"), ink));
         out.push(Row::of(Lead::None, runs));
-        out.extend(item_error(result, index));
     }
     out
+}
+
+// What one path's answer said went wrong, on the line of the path it names.
+fn read_failure(result: Option<ToolOutcome<'_>>, index: usize) -> Option<String> {
+    let error = result
+        .and_then(|o| o.items.get(index))
+        .filter(|item| !item.ok)
+        .and_then(|item| item.error.as_deref())?;
+    // The line already names the path, so a path that is nowhere says only that.
+    let text = one_line(error.trim());
+    Some(match text.strip_prefix("file not found: ") {
+        Some(_) => "file not found".to_string(),
+        None => text,
+    })
 }
 
 pub(crate) fn cd_line(args: &str, result: Option<ToolOutcome<'_>>, cwd: &str) -> Vec<Row> {

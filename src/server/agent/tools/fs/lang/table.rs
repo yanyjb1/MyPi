@@ -205,6 +205,15 @@ impl Table {
             .collect()
     }
 
+    // Every piece that opens a line, named or not: a comment block is a piece like any other.
+    pub(crate) fn heads(&self) -> Vec<(usize, &Line)> {
+        self.lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.head())
+            .collect()
+    }
+
     // The pieces this one directly holds, in line order.
     pub(crate) fn inner(&self, at: usize) -> Vec<(usize, &Line)> {
         let Some(end) = self.end(at) else {

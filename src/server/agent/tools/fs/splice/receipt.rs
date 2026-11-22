@@ -10,24 +10,61 @@ use crate::server::agent::tools::fs::skeleton;
 // How many lines one side of a diff shows before its middle is folded away.
 const SIDE: usize = 12;
 
-// One edit of one call, as that call's answer shows it.
+// What one side of the excerpt holds: its first line, 1-based, and the lines themselves.
+pub(crate) struct Run {
+    pub from: usize,
+    pub lines: Vec<String>,
+}
+
+// The lines around one edit, taken from the file as it stood before the write.
+#[derive(Default)]
+pub(crate) struct Context {
+    pub before: Option<Run>,
+    pub after: Option<Run>,
+}
+
+// One edit of one call, as that call's answer shows it and as a front end draws it.
 pub(crate) struct Row {
     // Which item of the call's `edits`, 1-based; a range cut by a macro carries its owner's.
     pub index: usize,
+
     // The first line it named, 1-based, in the file as it was before the write.
     pub from: usize,
     pub state: State,
+
+    // The lines it took, and the lines that stand there now; a refused edit carries the text it sent.
+    pub old: Vec<String>,
+    pub new: Vec<String>,
+
+    // What stopped it, in the words a front end prints: `OVERLAP`, `MISMATCH: …`, or the reader's own.
+    pub error: Option<String>,
+    pub context: Context,
+}
+
+impl Row {
+    // An item the call could not read at all: no range, no lines.
+    pub(crate) fn broken(index: usize, why: String) -> Row {
+        Row {
+            index,
+            from: 0,
+            state: State::Broken,
+            old: Vec::new(),
+            new: Vec::new(),
+            error: Some(why),
+            context: Context::default(),
+        }
+    }
 }
 
 pub(crate) enum State {
-    // It was written: where it landed, the lines it took and the ones that stand there now.
+    // It was written: where it landed, and the item holding it.
     Applied {
         first: usize,
         last: usize,
-        old: Vec<String>,
-        new: Vec<String>,
+
         // The item holding it, innermost two, outermost first: `impl X for Y > fn z`.
         item: Option<String>,
+
         // The parser's words, when its block does not parse on its own.
         blame: Option<String>,
     },
@@ -35,17 +72,14 @@ pub(crate) enum State {
     // It lost to an edit the batch had already accepted.
     Overlap,
 
-    // Its anchor words name a line that reads otherwise: the range it asked for, where its own lines sit now, and what it read instead.
+    // Its anchor words name a line that reads otherwise: the range it asked for, and where its own lines sit now.
     Mismatch {
         sent: (usize, usize),
         now: (usize, usize),
-        why: String,
     },
 
     // The item could not be read at all: no range to name.
-    Broken {
-        why: String,
-    },
+    Broken,
 }
 
 // The answer's fixed points: the file it writes and the formatter's verdict on the merged text.
@@ -79,8 +113,6 @@ pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usiz
             State::Applied {
                 first,
                 last,
-                old,
-                new,
                 item,
                 blame,
             } => {
@@ -88,17 +120,17 @@ pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usiz
                 if let Some(item) = item {
                     out.push(format!("  in: {item}"));
                 }
-                if new.is_empty() {
-                    out.extend(side(old, *first, '-', width));
+                if row.new.is_empty() {
+                    out.extend(side(&row.old, *first, '-', width));
                 } else {
-                    out.extend(side(new, *first, '+', width));
+                    out.extend(side(&row.new, *first, '+', width));
                 }
                 if let Some(blame) = blame {
                     out.push(format!("  ! {blame}"));
                 }
             }
             State::Overlap => out.push("OVERLAP".to_string()),
-            State::Mismatch { sent, now, why } => {
+            State::Mismatch { sent, now } => {
                 let moved = if sent == now {
                     String::new()
                 } else {
@@ -108,10 +140,17 @@ pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usiz
                     "{moved}{}; REREAD OR REGREP to issue another splice",
                     span(now.0, now.1)
                 ));
-                out.push(format!("  ! {why}"));
+                if let Some(error) = &row.error {
+                    out.push(format!("  ! {error}"));
+                }
             }
-            State::Broken { why } => out.push(format!("  ! {why}")),
+            State::Broken => {
+                if let Some(error) = &row.error {
+                    out.push(format!("  ! {error}"));
+                }
+            }
         }
+        marks.push(out.len());
         marks.push(out.len());
     }
     if landed > 0 {
@@ -199,41 +238,35 @@ fn fold(rows: &[(usize, &str)], width: usize, sign: char) -> Vec<String> {
 fn memo(rows: &[Row]) -> Value {
     let mut segments = Vec::new();
     for row in rows {
-        match &row.state {
-            State::Applied {
-                first, old, new, ..
-            } => segments.push(json!({
-                "edit": row.index,
-                "state": "applied",
-                "fromLine": row.from,
-                "atLine": first,
-                "old": old.join("\n"),
-                "new": new.join("\n"),
-            })),
-            State::Overlap => segments.push(json!({
-                "edit": row.index,
-                "state": "rejected",
-                "fromLine": row.from,
-                "atLine": row.from,
-                "error": "OVERLAP",
-            })),
-            State::Mismatch { now, why, .. } => segments.push(json!({
-                "edit": row.index,
-                "state": "rejected",
-                "fromLine": row.from,
-                "atLine": now.0,
-                "error": why,
-            })),
-            State::Broken { why } => segments.push(json!({
-                "edit": row.index,
-                "state": "rejected",
-                "fromLine": 0,
-                "atLine": 0,
-                "error": why,
-            })),
-        }
+        let at = match &row.state {
+            State::Applied { first, .. } => *first,
+            State::Mismatch { now, .. } => now.0,
+            _ => row.from,
+        };
+        segments.push(json!({
+            "edit": row.index,
+            "state": match row.state {
+                State::Applied { .. } => "applied",
+                _ => "rejected",
+            },
+            "fromLine": row.from,
+            "atLine": at,
+            "old": row.old.join("\n"),
+            "new": row.new.join("\n"),
+            "error": row.error,
+            "before": run_json(&row.context.before),
+            "after": run_json(&row.context.after),
+        }));
     }
     json!({ "segments": segments })
+}
+
+// One side of an excerpt, as the memo carries it; `null` when the edit stands at that edge.
+fn run_json(run: &Option<Run>) -> Value {
+    match run {
+        Some(run) => json!({"from": run.from, "lines": run.lines}),
+        None => Value::Null,
+    }
 }
 
 // What the batch knows about one edit before its row is drawn.
@@ -249,8 +282,16 @@ pub(crate) struct Fate {
 }
 
 // One edit, as its own call's answer shows it.
-pub(crate) fn row(edit: &Edit, fate: &Fate, lines: &[&str], base: &[String], table: &Table) -> Row {
+pub(crate) fn row(
+    edit: &Edit,
+    fate: &Fate,
+    lines: &[&str],
+    base: &[String],
+    table: &Table,
+    base_table: &Table,
+) -> Row {
     let from = edit.start + 1;
+    let context = excerpt(edit, base, base_table);
     let Some(why) = &fate.why else {
         let (first, last) = fate.at;
         let item = if edit.cut {
@@ -261,11 +302,13 @@ pub(crate) fn row(edit: &Edit, fate: &Fate, lines: &[&str], base: &[String], tab
         return Row {
             index: edit.index,
             from,
+            old: edit.taken(base).to_vec(),
+            new: take(lines, first, last),
+            error: None,
+            context,
             state: State::Applied {
                 first,
                 last,
-                old: edit.taken(base).to_vec(),
-                new: take(lines, first, last),
                 item,
                 blame: fate.blame.clone(),
             },
@@ -273,17 +316,81 @@ pub(crate) fn row(edit: &Edit, fate: &Fate, lines: &[&str], base: &[String], tab
     };
     let state = match why {
         Why::Overlap => State::Overlap,
-        Why::Mismatch(why) => State::Mismatch {
+        Why::Mismatch(_) => State::Mismatch {
             sent: (from, edit.end.max(from)),
             now: fate.at,
-            why: why.clone(),
         },
+    };
+    let error = match why {
+        Why::Overlap => "OVERLAP".to_string(),
+        Why::Mismatch(why) => format!("MISMATCH: {why}"),
     };
     Row {
         index: edit.index,
         from,
+        old: edit.taken(base).to_vec(),
+        new: edit.block.clone(),
+        error: Some(error),
+        context,
         state,
     }
+}
+
+// The lines around one edit, taken from the file before the write.
+//
+// A change inside an item carries that item's outermost extent, with the change's own lines cut out. A change that
+// covers one item whole carries the items beside it instead: above and below, as far as the file allows.
+fn excerpt(edit: &Edit, base: &[String], table: &Table) -> Context {
+    // `edit.end` is one past the last line taken, so the first line after the change is numbered `end + 1`.
+    match outermost(table, edit.start) {
+        Some((open, end)) if is_whole(edit, open, end) => Context {
+            before: neighbour(table, base, open, true),
+            after: neighbour(table, base, end + 1, false),
+        },
+        Some((open, end)) => Context {
+            before: run_of(base, open + 1, edit.start),
+            after: run_of(base, edit.end + 1, end + 1),
+        },
+        None => Context::default(),
+    }
+}
+
+// The outermost piece holding a 0-based line, with the line it opens and closes on.
+fn outermost(table: &Table, at: usize) -> Option<(usize, usize)> {
+    let (open, line) = table.around(at).into_iter().next()?;
+    Some((open, line.mate.unwrap_or(open)))
+}
+
+// Whether the change covers this piece whole: its range is exactly the piece's own lines.
+fn is_whole(edit: &Edit, open: usize, end: usize) -> bool {
+    edit.start == open && edit.end == end + 1
+}
+
+// The piece next to one edge of an item: the nearest one that starts above or below it.
+fn neighbour(table: &Table, base: &[String], at: usize, above: bool) -> Option<Run> {
+    let opens: Vec<usize> = table.heads().into_iter().map(|(open, _)| open).collect();
+    let split = match above {
+        true => opens.iter().rfind(|open| **open < at).copied()?,
+        false => opens.iter().find(|open| **open >= at).copied()?,
+    };
+    let end = table.end(split).unwrap_or(split);
+    run_of(base, split + 1, end + 1)
+}
+
+// One 1-based inclusive range of the file, when it holds any line.
+fn run_of(base: &[String], first: usize, last: usize) -> Option<Run> {
+    if base.is_empty() || last < first {
+        return None;
+    }
+    let first = first.clamp(1, base.len());
+    let last = last.min(base.len());
+    if last < first {
+        return None;
+    }
+    Some(Run {
+        from: first,
+        lines: base[first - 1..last].to_vec(),
+    })
 }
 
 // The lines one 1-based inclusive range holds, owned.

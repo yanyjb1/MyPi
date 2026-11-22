@@ -109,6 +109,24 @@ An `edit` result is drawn from its memo plus its arguments: the memo names what 
 (the line an `exact` match sat on, the text a `mass` range replaced) and the arguments carry the
 rest. A call with no diff memo — `final`'s `edit` — draws the same shape from its arguments alone.
 
+A `splice` header names the file alone, with no intent beside it: the change is the body.
+
+A `read` call draws one row per path under a `Read:` title, the path in the path color with the range
+and the item it asked for appended; a path that failed turns red and carries its reason in
+parentheses. The reason never repeats the path, and a path the workspace could not find says only
+that it is not there.
+
+A `grep` answer's head row carries the query and the counts the tool measured; a section title stands
+bold, a scope warning or a folded-down notice in the warn color, and a hit's own path in the path
+color.
+
+A `splice` result is drawn from its memo alone: one segment per range, each holding the outermost
+item's own lines around the change, the lines that went, the lines that stand there now, and the
+reason when the range was refused. Segments are laid top to bottom by the line each one names, never
+in the order the call sent them; a segment that named no range at all keeps its place at the end.
+Two sides of one segment that hold the same count of lines are paired in order, so the run that
+changed is reversed on both.
+
 A diff line carries its text in one color end to end — marker, number, bar and body — and only the
 run that changed is reversed, with the indentation never part of it. Its sign and line number are
 padded together, so the bar sits in one column; a number the line above already printed is left out.
