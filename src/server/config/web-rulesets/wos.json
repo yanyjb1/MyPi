@@ -31,18 +31,41 @@
         "drop": [
           "button.copy-link-button",
           "button.search-create-alert-btn",
+          "div.addKeywordContainer",
           "mat-icon",
           "a[href*=\"/api/gateway\"]"
         ]
       },
       {
-        "selector": "div.summary-page",
+        "selector": "fieldset#filter-section-PY",
         "drop": [
+          "mat-icon",
+          "a[href*=\"/api/gateway\"]"
+        ]
+      },
+      {
+        "selector": "fieldset#filter-section-DT",
+        "drop": [
+          "mat-icon",
+          "a[href*=\"/api/gateway\"]"
+        ]
+      },
+      {
+        "selector": "div.results",
+        "drop": [
+          "li:has(app-record:empty)",
+          "app-jcr-sidenav",
           "button[aria-label^='Options for record']",
           "button.ecr-button-summary",
           "app-refine-export",
           "mat-icon",
           "a[href*=\"/api/gateway\"]"
+        ],
+        "plaintify": [
+          "app-record a[href*='/wos/author/']",
+          "app-record a[href*='general-summary']",
+          "app-record a[href*='citing-summary']",
+          "app-record a[href*='cited-references-summary']"
         ]
       }
     ]

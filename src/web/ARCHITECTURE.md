@@ -55,7 +55,8 @@ What is here, what each file holds, who talks to whom. Current state only.
 | file | holds |
 |---|---|
 | `html/markdown.rs` | DOM → Markdown, the SVG and inline-image drops, and the JS-shell check |
-| `html/control.rs` | the page-side half of a read: one site rule applied once, answering the kept HTML and every control that survived in it |
+| `html/control.rs` | `expression` fills the scan's one placeholder, `scan` reads its answer, and `section` writes the control list |
+| `html/control.js` | the scan itself, compiled in: one site rule applied once, answering the kept HTML and every control that survived in it |
 | `html/tags.rs` | the tag scanner and entity decoder the providers use, and the two cuts the conversion begins with: SVG, and controls reduced to their text |
 
 ## What it talks to
@@ -101,6 +102,8 @@ lifecycle::signal → shutdown
   meet at the same engine: what the scan names, `click` and `fill` can reach.
 - `html::control` applies a site rule once, in the page, and answers the kept HTML together with the
   controls still inside it; the prose and the `operable` section come from that one answer.
+- `control.js` names a control once per chain: a widget beats the shells around it, a bare shell
+  answers by the innermost one, and a shell whose subtree holds a widget leaves it to that widget.
 
 ## Must stay in step
 

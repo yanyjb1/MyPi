@@ -1,18 +1,15 @@
 # web
 
-A self-contained domain for reading pages, searching, and driving a browser. The tool layer maps a
-call's arguments into `WebArgs` and hands it over: `web` for the work tab, `search` for searches.
-Everything below that line — Chromium, CDP, tabs, providers, HTML conversion — belongs here and
-nowhere else.
-
-It is not part of the tool layer. It decides for itself when the browser starts and when it dies,
-which is why it reads its own configuration instead of receiving it through `Env`.
+A self-contained domain for reading pages, searching, and driving a browser.
+The tool layer maps a call's arguments into `WebArgs` and hands it over: `web` for the work tab, `search` for searches.
+Everything below that line — Chromium, CDP, tabs, providers, HTML conversion — belongs here and nowhere else.
+It is not part of the tool layer, and it decides for itself when the browser starts and when it dies, which is why it reads its own configuration instead of receiving it through `Env`.
 
 ## 1. Design / Schema
 
 ### One operation
 
-`WebArgs` is the only input. `op` selects the operation; all other fields are shared.
+`WebArgs` is the only input; `op` selects the operation and all other fields are shared.
 
 | op | input | tab | output |
 |---|---|---|---|
@@ -26,13 +23,11 @@ which is why it reads its own configuration instead of receiving it through `Env
 | `eval` | `value` (JS expression) | work | evaluation result |
 | `screenshot` | `full_page` | work | file path and byte count |
 
-`run(args, session)` is the whole entry. It takes one of two permits, dispatches on `op`, and
-returns the text the model reads.
+`run(args, session)` is the whole entry: it takes one of two permits, dispatches on `op`, and returns the text the model reads.
 
 ### Browser process
 
-One Chromium per process, **always headed**, launched on the first operation and never before. The
-binary has no default: `config.server.agent.tools.browser.bin` must name it before the first launch.
+One Chromium per process, always headed, launched on the first operation and never before; `config.server.agent.tools.browser.bin` must name the binary before that launch.
 
 ```text
 ensure
@@ -43,20 +38,11 @@ ensure
   → otherwise                                      → launch
 ```
 
-- `owned` browsers are launched into a container of their own (`setsid` on unix, a job object on
-  windows); closing stops the whole container (TERM, grace, KILL on unix; TerminateJobObject on
-  windows).
-- `attached` browsers belong to the user: this domain never signals them, and never idles them out.
-- The idle clock is set at launch and at the end of every tab lease; an operation in flight also
-  keeps the browser alive. Ten minutes without either closes an owned browser: tabs, group and all.
-  The next operation launches a new one.
-- `shutdown()` closes the owner and forgets every tab; it is idempotent. `main` calls it after the
-  IPC server returns, and a signal thread calls it for INT, TERM and HUP before letting the signal
-  take its default action.
-- An owned browser must not survive the server. The platform binds every following tree to the main
-  process, so the browser dies with the server without the domain keeping a thread for it.
-- No display (`DISPLAY` / `WAYLAND_DISPLAY` missing) is an error, not a fallback: there is no
-  headless mode.
+- `owned` browsers run in a container of their own and closing stops the whole container, while `attached` browsers belong to the user and are never signalled or idled out.
+- The idle clock is set at launch and at the end of every tab lease; ten minutes without an operation closes an owned browser, tabs and group and all.
+- `shutdown()` closes the owner and forgets every tab, idempotently; `main` calls it after the IPC server returns, and a signal thread calls it for INT, TERM and HUP.
+- An owned browser must not survive the server, so the platform binds every following tree to the main process.
+- No display is an error, not a fallback: there is no headless mode.
 
 Launch argv:
 
@@ -72,16 +58,11 @@ Launch argv:
   about:blank
 ```
 
-The profile is persistent: logins, cookies and user-installed extensions live there. The
-User-Agent is not overridden; a headed Chromium already reports `Chrome/<major>` consistently with
-`Sec-CH-UA`. `--disable-blink-features=AutomationControlled` is what keeps `navigator.webdriver`
-false while a CDP client is attached.
+The profile is persistent — logins, cookies and user extensions live there — and the User-Agent is left alone because a headed Chromium already reports `Chrome/<major>` consistently with `Sec-CH-UA`.
 
 ### Search
 
-Three engines, one per call: `google`, `bing`, `baidu`. Each page yields hits, and the loop walks
-pages 1..=`pages`, stopping at the first page that adds nothing new. Pages are fetched one at a
-time, with a 1.5–3 s pause between them.
+Three engines, one per call — `google`, `bing`, `baidu` — and the loop walks pages 1..=`pages`, stopping at the first page that adds nothing new, with a 1.5–3 s pause between pages.
 
 ```text
 google  https://www.google.com/search?q=…&udm=14&pws=0&start=10×(n-1)
@@ -89,27 +70,10 @@ bing    https://www.bing.com/search?q=…&first=10×(n-1)+1
 baidu   https://www.baidu.com/s?wd=…&pn=10×(n-1)
 ```
 
-- A result's `href` is not always a destination. Google mints `/goto?url=<token>`, Baidu mints
-  `/link?url=<token>`, and both only become the real URL through the engine's own answer: a `302`
-  with `Location`, or — for some Google tokens — a `200` whose body is a meta refresh and one
-  anchor. `provider::settle` asks once per hit — one at a time, 300–800 ms apart, six seconds each
-  — and drops what does not resolve to an external page. Bing encodes the destination in
-  `ck/a?…&u=a1<base64url>`, so it is decoded locally.
-- An external host is not enough: ad gateways (`googleadservices`, `googlesyndication`, `ubs.baidu.com`,
-  `bdstatic`, `bdurl`) and the engines' own search paths (`/search`, `/s`, `/ck`, …) are not
-  destinations. Content hosts on an engine's own domain — `baike.baidu.com`,
-  `developers.google.com` — are kept.
-- Hiding is not removing. A card an ad blocker sets to `display: none` is still in the serialized
-  DOM, and `DOM.getOuterHTML` serializes the DOM, not what is drawn. So before parsing, the search
-  tab deletes every result container with no layout box — `display`, `visibility`, or a hidden
-  ancestor — and re-reads the document. Whatever a human sees is what the parser reads; no
-  per-engine ad marker is needed. A card that is *visible* is still a hit.
-- **A gate is not diagnosed.** `normal()` answers whether the DOM is the engine's own results page —
-  parsed hits, or the engine's own empty-results mark. Consent walls, `/sorry/` traffic challenges,
-  Baidu's security check and a half-rendered shell all answer "no", and the caller waits for a
-  human instead of reasoning about which gate it is. Wording is not a mark: Bing embeds its own
-  "no results" sentence in every page and names the empty-results class in its stylesheet, so the
-  one place that mark means a result is the `<body>` tag.
+- A result's `href` is not always a destination: Google mints `/goto?url=<token>`, Baidu mints `/link?url=<token>`, and both only resolve through the engine's own answer of a `302` with `Location` or a `200` holding a meta refresh; `provider::settle` asks once per hit and drops what does not resolve to an external page, while Bing's `a1<base64url>` is decoded locally.
+- An external host is not enough: ad gateways and the engines' own search paths are not destinations, but content hosts on an engine's own domain are kept.
+- Hiding is not removing: `DOM.getOuterHTML` serializes the DOM rather than what is drawn, so before parsing the search tab deletes every result container with no layout box and re-reads the document.
+- A gate is not diagnosed: `normal()` only answers whether the DOM is the engine's own results page, and anything else is something a human has to clear.
 
 ### Tabs
 
@@ -120,90 +84,57 @@ baidu   https://www.baidu.com/s?wd=…&pn=10×(n-1)
 (session, TabKind::Work)    → read, open, the actions, screenshot
 ```
 
-- Tabs are created on demand and keyed by session and kind.
-- A tab that vanished from the browser is recreated on the next call.
-- Every tab — search and work — is serial per session through a slot lock held for the whole call,
-  so two calls in one session queue on the tab rather than interleave on it. The pool lock only
-  guards the maps; `/json/list`, `/json/new` and the CDP handshake happen outside it.
-- A tab closes after 30 minutes without an active call. `active` counts the call in flight, so a
-  busy tab is never reclaimed underneath itself.
-- `close_session` closes both of a session's tabs, and `unbook` calls it: a session that ends —
-  delete, or a sub-session finishing its task — takes its tabs with it.
-- The `about:blank` the launch argv opens is reclaimed once a pool tab exists, so an owned browser
-  shows the session's tabs and nothing else. An attached browser is never touched that way.
+- Tabs are created on demand and keyed by session and kind, and a tab that vanished from the browser is recreated on the next call.
+- Every tab is serial per session through a slot lock held for the whole call, so two calls in one session queue rather than interleave, and the pool lock only guards the maps.
+- A tab closes after 30 minutes without an active call, and `active` counts the call in flight so a busy tab is never reclaimed underneath itself.
+- `close_session` closes both of a session's tabs and `unbook` calls it, so a session that ends takes its tabs with it.
+- The `about:blank` the launch argv opens is reclaimed once a pool tab exists, so an owned browser shows the session's tabs and nothing else.
 
 ### Verification
 
-A gate is not diagnosed: the provider only answers whether the DOM is its own results page
-(`normal()` — hits, or the engine's own "no results" wording). Anything else is something a human
-has to clear, and the domain waits instead of failing:
+A gate is not diagnosed: the provider only answers whether the DOM is its own results page, and the domain waits for a human instead of failing.
 
-1. If `config.web.bringToFront` is true, the tab is raised once. The flag only decides whether the
-   window comes forward; polling happens either way.
-2. Every 30 seconds the current URL and DOM are handed to a predicate supplied by the caller; the
-   default predicate is the provider's `normal()` answering "the results page is back".
-3. Passing inside five minutes is silent: the page is fetched again and the operation continues as
-   if nothing happened. The model never learns a verification occurred.
-4. Five minutes without passing returns an error saying the user may be away or may not have
-   noticed the window; the model is expected to ask the user, and a later retry starts over.
+1. If `config.web.bringToFront` is true the tab is raised once; the flag only decides whether the window comes forward, and polling happens either way.
+2. Every 30 seconds the current URL and DOM are handed to a predicate supplied by the caller, which by default is the provider's `normal()`.
+3. Passing inside five minutes is silent: the page is fetched again and the operation continues as if nothing happened.
+4. Five minutes without passing returns an error saying the user may be away, and a later retry starts over.
 
 The poll never navigates, so the page the user is working on is not reset.
 
 ### The permit
 
-At most two operations run at once across the process. The third waits on a condition variable.
-The permit is taken once in `run`, so no operation can forget it. The count is also what the idle
-sweep reads: a browser with an operation in flight is never closed.
+At most two operations run at once across the process, and the third waits on a condition variable; the permit is taken once in `run`, so no operation can forget it, and the idle sweep reads the same count.
 
 ### Output
 
-`read` answers Markdown; with `raw` it writes the DOM to `<temp>/mypi/web/<site>-<n>.html` and
-answers that path. `search` answers the provider, the page range, the count and a numbered list. The
-rest answer a status line, except `screenshot`, which names its file and its size.
+`read` answers Markdown, or with `raw` writes the DOM to `<temp>/mypi/web/<site>-<n>.html` and answers that path; `search` answers the provider, the page range, the count and a numbered list; the rest answer a status line, except `screenshot`, which names its file and its size.
 
-Every file under `<temp>/mypi/web` is named for the site it came from and numbered in the order it
-was written, so two calls in the same second never land on each other.
+Every file under `<temp>/mypi/web` is named for the site it came from and numbered in the order it was written, so two calls in the same second never land on each other.
 
 ### What a read leaves out, and what it adds
 
-The answer is the page's prose, not its document. A read that names a URL navigates first, and
-the document is polled until its `<body>` has been parsed and the text is not a script shell;
-a page still unfinished when the budget ends is read as it stands. Five things shape it:
+The answer is the page's prose, not its document: a read that names a URL navigates first and polls until the `<body>` is parsed and the text is not a script shell, and a page still unfinished when the budget ends is read as it stands.
 
-- **SVG goes, whatever holds it.** Every `svg` element is cut out of the markup before conversion,
-  contents and all, and nothing around it is touched: a button keeping its icon loses the icon and
-  stays a button. Not cutting it there would leave two trails — a converter placeholder in the
-  prose, and the raw paths of any `svg` inside a control the conversion preserves as HTML.
-- **Inline images go.** An `img` whose `src` is a `data:` URI is dropped, and the alt text is kept
-  where there is one. A marketing page carries its icons and sprites inline, and that payload
-  routinely outnumbers the prose by a wide margin. An image naming a real address is left as it is.
-- **The head's metadata goes.** No frontmatter is emitted at all. A page's `<meta>` tags are
-  written for crawlers and for the site's own scripts: nonces, signatures, catalogue hashes, a
-  visitor payload. None of it describes the article, and the article carries its own title and
-  date in the text.
-- **Landmarks go.** `<nav>`, `<footer>`, `<aside>` and `<form>` are removed, along with the
-  elements whose class or role names them as chrome.
-- **Controls stay, reduced.** Every `button`, `input`, `select`, `textarea` and `summary` in the
-  prose becomes one `<button>` around the text it shows: the attributes describe the page's own
-  scripts, and naming a selector is the `operable` section's job, not the prose's. A control showing
-  no text leaves nothing behind, so a search box appears only where it was filled. That section then
-  names each control's selector, because the tool's `click` and `fill` take one and Markdown has
-  nowhere to put it. Ten are listed inline; the rest go to one file, and the section says where.
+- **SVG goes, whatever holds it.** Every `svg` element is cut out of the markup before conversion, so a button keeping its icon loses the icon and stays a button.
+- **Inline images go.** An `img` whose `src` is a `data:` URI is dropped and its alt text is kept, because a marketing page's icons routinely outnumber the prose; an image naming a real address is left as it is.
+- **The head's metadata goes.** No frontmatter is emitted at all, because a page's `<meta>` tags describe crawlers and the site's own scripts rather than the article.
+- **Landmarks go.** `<nav>`, `<footer>`, `<aside>` and `<form>` are removed, along with the elements whose class or role names them as chrome.
+- **Controls stay, reduced.** Every `button`, `input`, `select`, `textarea` and `summary` in the prose becomes one `<button>` around the text it shows, and a control showing no text leaves nothing behind.
 
-A page whose body renders no text at all answers `target url has an empty body` rather than an
-empty document, so the model can tell an unrendered page from a quiet one.
+The `operable` section names each control's selector, because `click` and `fill` take one and Markdown has nowhere to put it; ten are listed inline and the rest go to one file the section points at.
+
+- **A control is named once.** Widgets nest — a checkbox is an `input` inside four decoration layers, a button wraps its own label — so a chain answers once: a widget beats the shells around it, a bare shell answers by the innermost one, and a shell whose subtree holds a widget leaves the entry to that widget.
+- **What is named is what an action addresses.** A widget inside a shell is named, never the shell, even though the shell's path is shorter.
+
+A page whose body renders no text at all answers `target url has an empty body` rather than an empty document, so the model can tell an unrendered page from a quiet one.
 
 ### Site rules
 
-A site whose `<body>` mixes prose with furniture needs naming, and the naming lives in a file the
-user owns: `<config dir>/web-rules.json`, beside `config.yaml`. The file is read once, when the
-configuration is loaded; a file that cannot be read is named there, and the built-in set answers
-instead. A machine that has none is given the built-in one on first launch, sets and all, so a site
-deleted from it falls back to the generic conversion.
+A site whose `<body>` mixes prose with furniture needs naming, and the naming lives in `<config dir>/web-rules.json` beside `config.yaml`, read once when the configuration is loaded.
 
-The file is a manifest: one array whose entries are either a rule written in place or a string
-naming another file of rules. Each set is flattened in at the position it is named, and the
-top-level order is the order rules are tried in.
+A missing file is given the built-in one on first launch, sets and all, and a file that cannot be read is named in a notice while the built-in set answers instead.
+
+The file is a manifest: one array whose entries are either a rule written in place or a string naming another file of rules, each set flattened in at the position it is named, and the top-level order is the order rules are tried in.
 
 ```json
 [
@@ -213,16 +144,11 @@ top-level order is the order rules are tried in.
 ]
 ```
 
-A set's path is relative to the manifest's own directory and written with forward slashes. A set
-that cannot be read is one warning and one hole: the rest of the manifest still applies.
+A set's path is relative to the manifest's own directory and written with forward slashes, and a set that cannot be read is one warning and one hole while the rest of the manifest still applies.
 
-The built-in set is authored the same way — the manifest names one set per site under
-`server/config/web-rulesets/`, and every one of them is compiled into the binary. Launching on a
-machine with no manifest writes the manifest and the sets it names, so the files the user edits
-are the files that were read.
+The built-in set is authored the same way — the manifest names one set per site under `server/config/web-rulesets/`, and every one is compiled into the binary — so the files the user edits are the files that were read.
 
-Within a manifest or a set, rules are tried in order. The first rule whose `match` — a regex over
-`host + path`, never the query — matches the page is the rule that applies.
+Within a manifest or a set, rules are tried in order, and the first rule whose `match` — a regex over `host + path`, never the query — matches the page is the rule that applies.
 
 ```json
 {
@@ -234,72 +160,41 @@ Within a manifest or a set, rules are tried in order. The first rule whose `matc
 }
 ```
 
-- `keep` is the prose: each entry names one region, by a selector looked for from the body, and
-the first element it names is what is read. Several entries are read in order and concatenated.
-- `drop` applies inside its own entry only: the named elements are ignored — never read, never
-  offered as controls — and no element beside them moves.
+- `keep` is the prose: each entry names one region by a selector looked for from the body, the first element it names is what is read, and several entries are read in order and concatenated.
+- `drop` applies inside its own entry only: the named elements are ignored — never read, never offered as controls — and no element beside them moves.
+- `plaintify` applies inside its own entry only, to the whole subtree: an element it names is read as its words with block boundaries kept as line breaks, and nothing inside it is offered as a control or names itself by an attribute.
+- When no rule matches, or none of a rule's selectors resolve, the page is read whole, because a broken rule must not hide a page.
 
-- `plaintify` applies inside its own entry only, to the whole subtree: an element it names is read
-  as its words, block boundaries kept as line breaks, and nothing inside it is offered as a control
-  or names itself by an attribute.
-- When no rule matches, or none of a rule's selectors resolve, the page is read whole: a broken
-  rule must not hide a page.
+The `operable` section obeys the same regions: a narrowed read scans the kept regions only, an entry's `drop` and everything under its `plaintify` are left out of the control list exactly as they were left out of the prose, and a control's name loses what a drop removed.
 
-The `operable` section obeys the same regions. A read that narrowed the page scans the kept
-regions only; an entry's `drop` and everything under its `plaintify` are left out of the control
-list exactly as they were left out of the prose, and a control in no kept region is not listed
-either. The same holds for a control's name: what a drop removed is missing from it too, so a
-button whose icon was cut introduces itself without the icon's word.
-
-A site that writes no `<main>` gets no special handling. The regions above are how such a site is
-named, and until it is, its whole body is what is read.
+A site that writes no `<main>` gets no special handling; the regions above are how such a site is named, and until it is, its whole body is what is read.
 
 ## 2. Design intent
 
-- **A domain, not a tool.** The browser's behaviour is its own: when to start, how many tabs, when
-  to reclaim them, when to die. The tool layer gives the model a convenient verb; it does not steer
-  the browser.
-- **Always headed.** A challenge needs a human in front of a window, and a headed browser carries
-  fewer automation tells than any headless mode. This domain is for surfaces that need operating;
-  plain text fetching has other tools.
-- **One browser per process.** One persistent profile keeps logins; one window keeps the user able
-  to supervise; one tree gives the exit path a single handle.
-- **Owned versus attached.** A browser the user started is theirs; the domain only speaks CDP to it.
-  A browser the domain started is a child of the server and must not survive it.
-- **The platform owns the binding.** On unix `PR_SET_PDEATHSIG` binds to the forking thread, so the
-  platform creates every tree on one thread that never ends; on windows the job object carries
-  `KILL_ON_JOB_CLOSE`. Either way a connection thread's end cannot orphan the browser.
-- **Idle close.** The profile is on disk, so closing costs only a relaunch. Leaving the process up
-  costs an orphan every time the server goes away badly.
-- **Two tabs per session.** Search and interactive work have different lifetimes: a search tab may
-  be replaced freely, a work tab must survive between `open`, `click`, `fill` and `read`. A session
-  that ends closes both, so a long-lived browser never accumulates tabs from finished work.
-- **A serial tab.** One call at a time per tab keeps a gate attributable to the engine that raised
-  it, and keeps two calls from steering one page.
-- **A silent verification.** The model asked for results; a human solving a challenge is
-  infrastructure, not an outcome. Only a timeout is worth reporting.
-- **30 seconds and five minutes are constants.** They are interaction pacing, not deployment
-  parameters; a config key would invite tuning that makes the wait either useless or hostile.
-- **Config read late and once.** Reading at launch keeps a long-lived session from re-parsing the
-  file on every call, and keeps the domain from holding state it does not act on.
+- **A domain, not a tool.** The browser's behaviour is its own — when to start, how many tabs, when to reclaim them, when to die — and the tool layer gives the model a convenient verb without steering it.
+- **Always headed.** A challenge needs a human in front of a window, and a headed browser carries fewer automation tells than any headless mode.
+- **One browser per process.** One persistent profile keeps logins, one window keeps the user able to supervise, and one tree gives the exit path a single handle.
+- **Owned versus attached.** A browser the user started is theirs, and one the domain started is a child of the server that must not survive it.
+- **The platform owns the binding.** `PR_SET_PDEATHSIG` on unix and the job object on windows both bind the tree, so a connection thread's end cannot orphan the browser.
+- **Idle close.** The profile is on disk, so closing costs only a relaunch while leaving the process up costs an orphan every time the server goes away badly.
+- **Two tabs per session.** A search tab may be replaced freely and a work tab must survive between `open`, `click`, `fill` and `read`, and a session that ends closes both.
+- **A serial tab.** One call at a time per tab keeps a gate attributable to the engine that raised it.
+- **A silent verification.** The model asked for results, and a human solving a challenge is infrastructure rather than an outcome, so only a timeout is worth reporting.
+- **30 seconds and five minutes are constants.** They are interaction pacing, and a config key would invite tuning that makes the wait either useless or hostile.
+- **Config read late and once.** Reading at launch keeps a long-lived session from re-parsing the file on every call.
 
 ## 3. Unresolved
 
-- macOS has no parent-death equivalent; only the explicit exit path covers it there.
-- Attached mode cannot switch a user's browser between headed and headless — irrelevant now, since
-  there is no headless mode.
-- The parsers are tuned against captured live pages; the engines edit their markup, so a
-  parse that suddenly yields nothing is a selector problem, not a gate. Baidu's ads are not
-  separated from organic results.
+- macOS has no parent-death equivalent, so only the explicit exit path covers it there.
+- Attached mode cannot switch a user's browser between headed and headless, which is irrelevant now since there is no headless mode.
+- The parsers are tuned against captured live pages, and Baidu's visible ads are not separated from organic results.
 - A machine without a display cannot use this domain at all.
 
 ## 4. Config fields
 
-Read by this domain itself, never through `Env`.
-
 | key | use |
 |---|---|
-| `config.server.agent.tools.browser.bin` | the executable; required before the browser tool can launch one |
+| `config.server.agent.tools.browser.bin` | the executable, required before the browser tool can launch one |
 | `config.server.agent.tools.browser.profileDir` | the persistent profile; empty = `<data dir>/browser/profile` |
 | `config.server.agent.tools.browser.port` | attach to a running browser instead of launching |
 | `config.server.agent.tools.browser.idleSecs` | seconds of no activity before an owned browser is closed; default 600 |
