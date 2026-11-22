@@ -236,9 +236,10 @@ fn fold(rows: &[(usize, &str)], width: usize, sign: char) -> Vec<String> {
 
 // The memo a front end draws from: one segment per edit, in the call's order.
 fn memo(rows: &[Row]) -> Value {
+    let context = trimmed(rows);
     let mut segments = Vec::new();
-    for row in rows {
-        let at = match &row.state {
+    for (at, row) in rows.iter().enumerate() {
+        let place = match &row.state {
             State::Applied { first, .. } => *first,
             State::Mismatch { now, .. } => now.0,
             _ => row.from,
@@ -250,15 +251,62 @@ fn memo(rows: &[Row]) -> Value {
                 _ => "rejected",
             },
             "fromLine": row.from,
-            "atLine": at,
+            "atLine": place,
             "old": row.old.join("\n"),
             "new": row.new.join("\n"),
             "error": row.error,
-            "before": run_json(&row.context.before),
-            "after": run_json(&row.context.after),
+            "before": run_json(&context[at].before),
+            "after": run_json(&context[at].after),
         }));
     }
     json!({ "segments": segments })
+}
+
+// Every edit's excerpt with what an edit above already drew cut away: a line of the file as it stood is drawn once, and a change reaches down only as far as the next change's first line.
+fn trimmed(rows: &[Row]) -> Vec<Context> {
+    let mut out: Vec<Context> = (0..rows.len()).map(|_| Context::default()).collect();
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by_key(|at| rows[*at].from);
+    // The last line of the file as it stood that the edit just walked has drawn.
+    let mut shown = 0usize;
+    for (place, at) in order.iter().enumerate() {
+        let row = &rows[*at];
+        let opens = row.from;
+        out[*at].before = row
+            .context
+            .before
+            .as_ref()
+            .and_then(|run| between(run, shown, opens.saturating_sub(1)));
+        shown = shown.max((opens + row.old.len()).saturating_sub(1));
+        let below = order
+            .get(place + 1)
+            .map_or(usize::MAX, |next| rows[*next].from.saturating_sub(1));
+        out[*at].after = row
+            .context
+            .after
+            .as_ref()
+            .and_then(|run| between(run, shown, below));
+        if let Some(run) = &out[*at].after {
+            shown = shown.max(run.from + run.lines.len() - 1);
+        }
+    }
+    out
+}
+
+// One side of an excerpt, cut to the lines `above + 1` through `below`; `None` when it holds none of them.
+fn between(run: &Run, above: usize, below: usize) -> Option<Run> {
+    if run.lines.is_empty() {
+        return None;
+    }
+    let first = run.from.max(above + 1);
+    let last = (run.from + run.lines.len() - 1).min(below);
+    if last < first {
+        return None;
+    }
+    Some(Run {
+        from: first,
+        lines: run.lines[first - run.from..=last - run.from].to_vec(),
+    })
 }
 
 // One side of an excerpt, as the memo carries it; `null` when the edit stands at that edge.

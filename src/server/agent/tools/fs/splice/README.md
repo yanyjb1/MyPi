@@ -178,6 +178,8 @@ Segments that are not neighbours are drawn apart, and the card folds what it doe
 end lays them by the line each one names, never in the order they arrived: a call whose ranges were
 sent out of order still reads top to bottom, and a segment that named no line keeps its place last.
 
+No line of the file as it stood is carried twice in one memo: a change reaches down only as far as the next change's first line, so an item between two changes rides the one above it. A side cut away entirely is sent as `null`, and the front end draws the gap itself.
+
 The new line numbers are the formatter's, so the tool carries them rather than leaving the front end to guess.
 
 ### Stopping
