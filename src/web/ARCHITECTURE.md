@@ -55,9 +55,8 @@ What is here, what each file holds, who talks to whom. Current state only.
 | file | holds |
 |---|---|
 | `html/markdown.rs` | DOM → Markdown, the SVG and inline-image drops, and the JS-shell check |
-| `html/control.rs` | the page-side scan for clickable and fillable controls, the region each is searched in, and the selector each is reached by |
-| `html/tags.rs` | the tag scanner and entity decoder the providers use, and the SVG cut the conversion begins with |
-| `rules.rs` | the page-side half of a site rule: the kept regions, and the HTML read back |
+| `html/control.rs` | the page-side half of a read: one site rule applied once, answering the kept HTML and every control that survived in it |
+| `html/tags.rs` | the tag scanner and entity decoder the providers use, and the two cuts the conversion begins with: SVG, and controls reduced to their text |
 
 ## What it talks to
 
@@ -78,7 +77,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 ```text
 run (permit)
   → ops::read ────→ tabs::with_work → page
-                    rules::load → evaluate → rules::kept_html
+                    config::rules → html::control::expression → evaluate → html::control::scan
   → search ───────→ tabs::with_search → verify::await_human
   → ops::open ────→ tabs::with_work → page
   → ops::drive ───→ tabs::with_work → page
@@ -100,9 +99,8 @@ lifecycle::signal → shutdown
 - `idle` reads the permit count from `run`; the timer reads `idle` and `tabs`.
 - `html::control` scans the live page through `evaluate`, so its expression and `drive`'s selectors
   meet at the same engine: what the scan names, `click` and `fill` can reach.
-- `rules` narrows a page through `evaluate` too, and states which regions survived. `read` hands
-  each surviving region, with the drops its rule wrote for it, to the control scan, so the two read
-  the same part of the page and leave out the same furniture.
+- `html::control` applies a site rule once, in the page, and answers the kept HTML together with the
+  controls still inside it; the prose and the `operable` section come from that one answer.
 
 ## Must stay in step
 

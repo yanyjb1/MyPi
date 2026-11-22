@@ -183,11 +183,12 @@ a page still unfinished when the budget ends is read as it stands. Five things s
   date in the text.
 - **Landmarks go.** `<nav>`, `<footer>`, `<aside>` and `<form>` are removed, along with the
   elements whose class or role names them as chrome.
-- **Controls stay, named.** `button`, `input`, `select`, `textarea` and `summary` are emitted as
-  HTML where they sit, so the prose still shows a control was there, and the answer ends with an
-  `operable` section naming each one's selector: the tool's `click` and `fill` take a selector, and
-  Markdown has nowhere to put one. Ten controls are listed inline; the rest are written to one
-  file, and the section ends with a line naming how many and where.
+- **Controls stay, reduced.** Every `button`, `input`, `select`, `textarea` and `summary` in the
+  prose becomes one `<button>` around the text it shows: the attributes describe the page's own
+  scripts, and naming a selector is the `operable` section's job, not the prose's. A control showing
+  no text leaves nothing behind, so a search box appears only where it was filled. That section then
+  names each control's selector, because the tool's `click` and `fill` take one and Markdown has
+  nowhere to put it. Ten are listed inline; the rest go to one file, and the section says where.
 
 A page whose body renders no text at all answers `target url has an empty body` rather than an
 empty document, so the model can tell an unrendered page from a quiet one.
@@ -242,7 +243,9 @@ it was never read.
 
 The `operable` section obeys the same regions. A read that narrowed the page scans the kept
 regions only, and an entry's `drop` is left out of the control list exactly as it was left out of
-the prose; a control in no kept region is not listed either.
+the prose; a control in no kept region is not listed either. The same holds for a control's name:
+what a drop removed is missing from it too, so a button whose icon was cut introduces itself without
+the icon's word.
 
 A site that writes no `<main>` gets no special handling. The regions above are how such a site is
 named, and until it is, its whole body is what is read.

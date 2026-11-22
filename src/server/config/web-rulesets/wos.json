@@ -2,29 +2,88 @@
   {
     "match": "^www\\.webofscience\\.com/wos/woscc/smart-search$",
     "keep": [
-      { "selector": "div.simple-search-container", "drop": [] }
+      {
+        "selector": "div.simple-search-container",
+        "drop": []
+      }
     ]
   },
   {
     "match": "^www\\.webofscience\\.com/wos/woscc/basic-search$",
     "keep": [
-      { "selector": "div.select-database-on-simple-search-container", "drop": [] },
-      { "selector": "form#snSearchType", "drop": [] }
+      {
+        "selector": "div.select-database-on-simple-search-container",
+        "drop": []
+      },
+      {
+        "selector": "form#snSearchType",
+        "drop": [
+          "mat-icon"
+        ]
+      }
     ]
   },
   {
     "match": "^www\\.webofscience\\.com/wos/woscc/summary/",
     "keep": [
-      { "selector": "app-search-friendly-display", "drop": [] },
-      { "selector": "div.summary-page", "drop": [] }
+      {
+        "selector": "app-search-friendly-display",
+        "drop": [
+          "button.copy-link-button",
+          "button.search-create-alert-btn",
+          "mat-icon",
+          "a[href*=\"/api/gateway\"]"
+        ]
+      },
+      {
+        "selector": "div.summary-page",
+        "drop": [
+          "button[aria-label^='Options for record']",
+          "button.ecr-button-summary",
+          "app-refine-export",
+          "mat-icon",
+          "a[href*=\"/api/gateway\"]"
+        ]
+      }
     ]
   },
   {
     "match": "^www\\.webofscience\\.com/wos/woscc/full-record/",
     "keep": [
-      { "selector": "div.top-sticky-pageControl", "drop": [] },
-      { "selector": "#snMainArticle", "drop": [] },
-      { "selector": "#snCitationData", "drop": [] }
+      {
+        "selector": "div.top-sticky-pageControl",
+        "drop": [
+          "mat-icon",
+          "a[href*=\"/api/gateway\"]"
+        ]
+      },
+      {
+        "selector": "#snMainArticle",
+        "drop": [
+          "button[aria-label^='More information about']",
+          "button[aria-label='affiliation details']",
+          "#FundingTa-fundAck",
+          "#FundingTa-fundingShowHide",
+          "#FundingTa-fundingShowHide2",
+          "#HiddenSecTa-showMoreDataButton",
+          "mat-icon",
+          "a[href*=\"/api/gateway\"]",
+          "a[id^=\"SumAuthTa-FrAddrNbr\"]"
+        ]
+      },
+      {
+        "selector": "#snCitationData",
+        "drop": [
+          "button.create-cit-alert",
+          "#FullRRPTa-showScoreCardButton",
+          "#FullRRPTa-cited-references-summary-viewRelatedRecordsLink",
+          "#FullRRPTa-comparisionMetricsInfo",
+          "#FullRRPTa-learnMore",
+          "#FullRRPTa-improveQuality",
+          "mat-icon",
+          "a[href*=\"/api/gateway\"]"
+        ]
+      }
     ]
   }
 ]

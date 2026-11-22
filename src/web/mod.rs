@@ -3,7 +3,6 @@ mod artifact;
 mod browser;
 mod html;
 mod ops;
-mod rules;
 mod run;
 mod search;
 mod url;

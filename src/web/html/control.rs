@@ -1,5 +1,4 @@
-//! The controls a Markdown document cannot express: what the page offers to click or to fill,
-//! and the selector that reaches each one.
+// The page-side half of a read: apply a site rule once, answer the kept HTML and the controls in it.
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
@@ -7,17 +6,14 @@ use serde_json::Value;
 use crate::server::config::rules::Part;
 use crate::web::artifact;
 
-/// How many controls the answer lists inline. Past this the rest go to one file, so a reader
-/// still has somewhere to look.
+// How many controls the answer lists inline; the rest go to one file a reader can still open.
 const LISTED: usize = 10;
 
-/// The page-side half: one expression whose value is a JSON object. The placeholders are
-/// filled by `expression`, so the script itself stays one readable literal.
+// One expression whose value is a JSON object; `expression` fills the placeholders.
 const SCAN: &str = r#"(() => {
   const body = document.body;
-  if (!body) return JSON.stringify({ text: 0, items: [] });
+  if (!body) return JSON.stringify({ text: 0, html: '', items: [] });
   const SCOPE = %SCOPE%;
-  const SKIP = %SKIP%;
   const DIRECT = %DIRECT%;
   const NAMES = ['aria-label', 'title', 'alt', 'placeholder', 'value'];
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
@@ -50,8 +46,7 @@ const SCAN: &str = r#"(() => {
     return clip(clean(el.innerText || el.textContent));
   };
 
-  // The nearest heading or label before the control, so a row of identical "Submit" buttons
-  // still says which one is which.
+  // The nearest heading or label before the control, so a row of identical buttons still says which is which.
   const context = el => {
     let cur = el;
     for (let hop = 0; cur && hop < 6; hop++) {
@@ -89,49 +84,43 @@ const SCAN: &str = r#"(() => {
     }
   }
 
-  // A rule's drops belong to the region they were written for; a match above that region says
-  // nothing about what is inside it.
-  const skipped = (el, region, drops) => {
-    if (el.closest(SKIP)) return true;
-    return drops.some(selector => {
-      const hit = el.closest(selector);
-      return hit !== null && hit !== region && region.contains(hit);
-    });
-  };
-
-  const seen = new Set();
-  const items = [];
-  const add = (el, region, drops) => {
-    if (seen.has(el) || skipped(el, region, drops) || el.getClientRects().length === 0) return;
-    seen.add(el);
-    items.push({ select: path(el), kind: kind(el), name: name(el), context: context(el) });
-  };
-
+  const html = [];
+  const named = [];
+  const pointed = [];
+  let text = 0;
   for (const root of roots) {
     const region = root.at;
-    const drops = root.drop;
-    for (const el of region.querySelectorAll(DIRECT)) add(el, region, drops);
+    const copy = region.cloneNode(true);
+    for (const selector of root.drop) {
+      for (const gone of copy.querySelectorAll(selector)) gone.remove();
+    }
+    html.push(copy.outerHTML);
+    text += clean(copy.innerText).length;
+
+    const seen = new Set();
+    const add = el => {
+      if (seen.has(el)) return;
+      seen.add(el);
+      const select = path(el);
+      const twin = copy.querySelector(select);
+      if (!twin) return;
+      const item = { select: select, kind: kind(el), name: name(twin), context: context(twin) };
+      if (el.matches(DIRECT)) named.push(item);
+      else pointed.push(item);
+    };
+    for (const el of region.querySelectorAll(DIRECT)) add(el);
     for (const el of region.querySelectorAll('div, span, li, td')) {
-      if (seen.has(el) || skipped(el, region, drops)) continue;
-      if (getComputedStyle(el).cursor === 'pointer') add(el, region, drops);
+      if (getComputedStyle(el).cursor === 'pointer') add(el);
     }
   }
-
-  const text = roots.reduce((sum, root) => sum + clean(root.at.innerText).length, 0);
-  return JSON.stringify({ text: text, items: items });
+  return JSON.stringify({ text: text, html: html.join('\n'), items: named.concat(pointed) });
 })()"#;
 
-/// Elements the conversion drops, or that carry no prose a reader asked for, are not controls a
-/// reader should be handed either: the list describes what survived.
-const SKIP: &str = "footer, nav, aside, header, [aria-hidden=\"true\"]";
-
-/// What a click may be meant for, by what the markup says. A handler attached from script
-/// leaves no attribute behind, so the pointer cursor is scanned for as well: it is the one
-/// trace it does leave.
+// What a click may be meant for. A handler from script leaves no attribute, so the pointer cursor counts too.
 const DIRECT: &str = "button, input, select, textarea, summary, [role=\"button\"], [onclick], \
                       a[href^=\"javascript:\"], a[href=\"#\"]";
 
-/// One control, as the page answers for it.
+// One control, as the page answers for it.
 struct Control {
     select: String,
     kind: String,
@@ -140,7 +129,7 @@ struct Control {
 }
 
 impl Control {
-    /// One line, the same one inline and in the file the rest go to.
+    // One line, the same one inline and in the file the rest go to.
     fn line(&self) -> String {
         let mut out = String::from("- ");
         out.push_str(&self.kind);
@@ -155,16 +144,17 @@ impl Control {
     }
 }
 
-/// What the page offers, and whether it holds any text at all.
-pub(crate) struct Operable {
-    /// Trimmed length of the body's rendered text.
+// What the page holds once the rule has been applied, and what it offers.
+pub(crate) struct Scan {
+    // Trimmed length of the kept regions' rendered text.
     pub(crate) text: usize,
+    // The kept regions as HTML, every drop removed.
+    pub(crate) html: String,
     controls: Vec<Control>,
 }
 
-impl Operable {
-    /// The section appended to the answer, or nothing when the page offers no control. The ones
-    /// past the inline budget are written out, and the answer names where they went.
+impl Scan {
+    // The section appended to the answer, nothing when no control survives; the rest go to a file.
     pub(crate) fn section(&self, site: &str) -> Result<String> {
         if self.controls.is_empty() {
             return Ok(String::new());
@@ -187,25 +177,28 @@ impl Operable {
     }
 }
 
-/// The scan expression. `regions` are the kept regions, each with the drops its rule wrote for it;
-/// empty searches the whole body and drops nothing.
+// The scan expression. `regions` are the kept regions with their drops; empty reads the whole body.
 pub(crate) fn expression(regions: &[Part]) -> String {
     let scope: Vec<serde_json::Value> = regions
         .iter()
         .map(|part| serde_json::json!({"selector": part.selector(), "drop": part.drops()}))
         .collect();
     let scope = serde_json::to_string(&scope).expect("a rule's regions always serialize");
-    let skip = serde_json::to_string(SKIP).expect("a selector list always serializes");
     let direct = serde_json::to_string(DIRECT).expect("a selector list always serializes");
-    SCAN.replace("%SKIP%", &skip)
-        .replace("%DIRECT%", &direct)
-        .replace("%SCOPE%", &scope)
+    SCAN.replace("%DIRECT%", &direct).replace("%SCOPE%", &scope)
 }
 
-/// Read the answer: how much text the body held, and which controls it offered.
-pub(crate) fn scan(answered: &str) -> anyhow::Result<Operable> {
-    let value: Value = serde_json::from_str(answered).context("control scan")?;
+// Read the answer: the kept HTML, how much text it holds, and which controls it offers.
+pub(crate) fn scan(answered: &str) -> anyhow::Result<Scan> {
+    let value: Value = serde_json::from_str(answered).context("page scan")?;
     let number = |key: &str| value.get(key).and_then(Value::as_u64).unwrap_or(0) as usize;
+    let text = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
     let field = |item: &Value, key: &str| {
         item.get(key)
             .and_then(Value::as_str)
@@ -227,8 +220,9 @@ pub(crate) fn scan(answered: &str) -> anyhow::Result<Operable> {
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Operable {
+    Ok(Scan {
         text: number("text"),
+        html: text("html"),
         controls,
     })
 }

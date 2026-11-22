@@ -281,8 +281,7 @@ pub(crate) fn enclosing_open_before(hay: &str, pos: usize, tag: &str) -> Option<
     None
 }
 
-// Every `svg` element removed, contents and all, and nothing else touched. An icon is a path
-// payload no reader can read, and a control kept as HTML carries its own copy of it.
+// Every `svg` element removed, contents and all, nothing else touched: an icon is a path payload.
 pub(crate) fn drop_svg(html: &str) -> String {
     const CLOSE: &str = "</svg>";
     let mut out = String::with_capacity(html.len());
@@ -302,8 +301,7 @@ pub(crate) fn drop_svg(html: &str) -> String {
     out
 }
 
-// The next `<svg` opening tag at or after `from`: its start, its `>`, and whether it closes
-// itself. `<svgx` is another element, and `svg=` inside a tag is an attribute.
+// The next `<svg` opening tag at or after `from`: its start, its `>`, and whether it closes itself.
 fn svg_open(hay: &str, from: usize) -> Option<(usize, usize, bool)> {
     let mut at = from;
     while let Some(start) = hay[at..].find("<svg").map(|n| at + n) {
@@ -343,4 +341,78 @@ fn svg_end(hay: &str, from: usize) -> Option<usize> {
             }
         }
     }
+}
+
+// Every control kept under its own tag name, attributes gone, an empty tag where it shows no text.
+pub(crate) fn fold_controls(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut at = 0usize;
+    while let Some((start, gt, name)) = control_open(html, at) {
+        out.push_str(&html[at..start]);
+        if name == "input" {
+            out.push_str("<input>");
+            at = gt + 1;
+            continue;
+        }
+        let Some((close, after)) = control_close(html, name, gt + 1) else {
+            out.push_str(&html[start..]);
+            return out;
+        };
+        let text = control_text(&html[gt + 1..close]);
+        out.push_str(&format!("<{name}>{text}</{name}>"));
+        at = after;
+    }
+    out.push_str(&html[at..]);
+    out
+}
+
+// The next control opening tag at or after `from`: its start, its `>`, and which control it is.
+fn control_open(hay: &str, from: usize) -> Option<(usize, usize, &'static str)> {
+    const CONTROLS: [&str; 5] = ["button", "input", "select", "textarea", "summary"];
+    let mut at = from;
+    while let Some(start) = hay[at..].find('<').map(|n| at + n) {
+        let rest = &hay[start + 1..];
+        for name in CONTROLS {
+            let Some(tail) = rest.strip_prefix(name) else {
+                continue;
+            };
+            let boundary = tail.chars().next();
+            if boundary.is_some_and(|c| matches!(c, '>' | ' ' | '\t' | '\n' | '\r' | '/')) {
+                let gt = hay[start..].find('>').map(|n| start + n)?;
+                return Some((start, gt, name));
+            }
+        }
+        at = start + 1;
+    }
+    None
+}
+
+// Where the control opened at `from` ends: the index of its closing tag, and the index after it.
+fn control_close(hay: &str, name: &str, from: usize) -> Option<(usize, usize)> {
+    let needle = format!("</{name}");
+    let close = hay[from..].find(&needle).map(|n| from + n)?;
+    let boundary = hay[close + needle.len()..].chars().next();
+    if !boundary.is_some_and(|c| matches!(c, '>' | ' ' | '\t' | '\n' | '\r')) {
+        return control_close(hay, name, close + needle.len());
+    }
+    let gt = hay[close..].find('>').map(|n| close + n)?;
+    Some((close, gt + 1))
+}
+
+// The text a control shows; each tag becomes a space so sibling labels do not run together.
+fn control_text(inner: &str) -> String {
+    let mut out = String::with_capacity(inner.len());
+    let mut depth = 0usize;
+    for ch in inner.chars() {
+        match ch {
+            '<' => {
+                depth += 1;
+                out.push(' ');
+            }
+            '>' => depth = depth.saturating_sub(1),
+            c if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
