@@ -1,4 +1,4 @@
-//! The `search` tool: one engine, one query, pages merged.
+// The `search` tool: one engine, one query, pages merged.
 
 use anyhow::Result;
 
@@ -64,7 +64,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     Ok(ToolOutput::text(text))
 }
 
-/// One line for a history listing: the query.
+// One line for a history listing: the query.
 fn summary(call: &CallRecord) -> String {
     summary::flat(&summary::field(call, "query").unwrap_or_default())
 }

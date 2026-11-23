@@ -1,4 +1,4 @@
-//! The DevTools HTTP endpoints: which targets exist, and how to add or drop one.
+// The DevTools HTTP endpoints: which targets exist, and how to add or drop one.
 
 mod cdp;
 mod target;
@@ -18,7 +18,7 @@ impl Client {
         Self { port }
     }
 
-    /// True when something accepts TCP on 127.0.0.1:port.
+    // True when something accepts TCP on 127.0.0.1:port.
     pub(crate) fn port_alive(port: u16) -> bool {
         std::net::TcpStream::connect_timeout(
             &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
@@ -27,7 +27,7 @@ impl Client {
         .is_ok()
     }
 
-    /// GET /json/list, parsed.
+    // GET /json/list, parsed.
     pub(crate) fn targets(&self) -> anyhow::Result<Vec<Target>> {
         let url = format!("http://127.0.0.1:{}/json/list", self.port);
         let body: Vec<Target> = ureq::get(&url)
@@ -40,8 +40,7 @@ impl Client {
         Ok(body)
     }
 
-    /// PUT /json/new?url=… — open a fresh tab, return its target.
-    /// (Chromium ≥ 111 requires PUT; GET returns 405.)
+    // PUT /json/new?url=… — open a fresh tab, return its target; Chromium ≥ 111 requires PUT, and GET returns 405.
     pub(crate) fn create_target(&self, url: &str) -> anyhow::Result<Target> {
         let endpoint = format!(
             "http://127.0.0.1:{}/json/new?{}",
@@ -59,7 +58,7 @@ impl Client {
         Ok(body)
     }
 
-    /// GET /json/close/<id> — close a tab by target id.
+    // GET /json/close/<id> — close a tab by target id.
     pub(crate) fn close_target(&self, id: &str) -> anyhow::Result<()> {
         let endpoint = format!("http://127.0.0.1:{}/json/close/{}", self.port, id);
         ureq::get(&endpoint)

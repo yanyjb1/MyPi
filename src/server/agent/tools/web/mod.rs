@@ -1,4 +1,4 @@
-//! The `web` tool: map a call's arguments into the domain's input, and hand the result back.
+// The `web` tool: map a call's arguments into the domain's input, and hand the result back.
 
 use anyhow::Result;
 
@@ -16,7 +16,7 @@ const VALUE: usize = 4;
 const PIXELS: usize = 5;
 const FULL_PAGE: usize = 6;
 
-/// Every operation; the schema and the dispatch read this one list.
+// Every operation; the schema and the dispatch read this one list.
 const OPS: &[&str] = &[
     "read",
     "open",
@@ -89,7 +89,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     Ok(ToolOutput::text(text))
 }
 
-/// One line for a history listing: the operation and the argument that locates it.
+// One line for a history listing: the operation and the argument that locates it.
 fn summary(call: &CallRecord) -> String {
     let op = summary::field(call, "type").unwrap_or_default();
     let at = match op.as_str() {
