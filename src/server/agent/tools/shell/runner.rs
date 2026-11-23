@@ -60,7 +60,7 @@ pub(crate) fn run_to(
     // Registered after the spawn: a stop that landed earlier runs this here and now.
     let hook = stop.on_stop(escalate.clone());
 
-    // Everything about this command travels on one channel: both output streams and the exit status. Line-oriented on purpose — the readers reassemble whole lines before saying anything.
+    // Everything about this command travels on one channel: both output streams and the exit status. A reader hands on every byte it can already be read as text, so a command that prints once a second reaches the live view once a second.
     enum Msg {
         Out(String),
         Err(String),
@@ -87,33 +87,25 @@ pub(crate) fn run_to(
             let mut rdr = std::io::BufReader::new(pipe);
             let mut raw = [0u8; 8192];
             let mut pending: Vec<u8> = Vec::new();
-            let mut batch = String::new();
-            // How much one message carries: a chatty command must not cost one wake per line.
-            const CHUNK: usize = 8 * 1024;
             loop {
                 match rdr.read(&mut raw) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        // Bytes, not text: a multi-byte character split across reads stays whole until its line ends.
+                        // Whatever this read brought goes on unless its tail is still unreadable: half a character, half an escape sequence, half a `\r\n`.
                         pending.extend_from_slice(&raw[..n]);
-                        while let Some(i) = pending.iter().position(|byte| *byte == b'\n') {
-                            let line: Vec<u8> = pending.drain(..=i).collect();
-                            let mut line = String::from_utf8_lossy(&line).into_owned();
-                            fold_crlf(&mut line);
-                            batch.push_str(&line);
-                            if batch.len() >= CHUNK {
-                                if tx.send(wrap(std::mem::take(&mut batch))).is_err() {
-                                    return;
-                                }
-                            }
+                        let at = readable(&pending);
+                        if at == 0 {
+                            continue;
+                        }
+                        let text = plain(&pending[..at]);
+                        pending.drain(..at);
+                        if tx.send(wrap(text)).is_err() {
+                            return;
                         }
                     }
                 }
             }
-            if !pending.is_empty() {
-                batch.push_str(&String::from_utf8_lossy(&pending));
-            }
-            if !batch.is_empty() && tx.send(wrap(batch)).is_err() {
+            if !pending.is_empty() && tx.send(wrap(plain(&pending))).is_err() {
                 return;
             }
             let _ = tx.send(Msg::ReaderDone);
@@ -139,48 +131,35 @@ pub(crate) fn run_to(
         }
     });
 
-    // Tool thread: one blocking receive. Output goes to the front end as it arrives, so a command that prints for a minute looks alive; nothing wakes this thread on a timer.
-    // How often the live view refreshes: fast enough to look live, slow enough that a chatty command cannot drown the front end.
-    const REPORT_EVERY: std::time::Duration = std::time::Duration::from_millis(120);
-
+    // Tool thread: one blocking receive, and every message goes on the moment it lands. The pipe is the only clock: a read returns as soon as the command writes.
     let mut status: Option<std::io::Result<std::process::ExitStatus>> = None;
     let mut readers_left = 2usize;
-    let mut unflushed = String::new();
-    let mut last_report = std::time::Instant::now();
     let mut sink_error: Option<anyhow::Error> = None;
 
     while readers_left > 0 || status.is_none() {
         match rx.recv() {
             Ok(Msg::Out(chunk)) => {
-                unflushed.push_str(&chunk);
-                if sink_error.is_none() {
-                    if let Err(e) = sink.out(&chunk) {
-                        sink_error = Some(e);
-                        escalate();
-                    }
+                if sink_error.is_none()
+                    && let Err(e) = sink.out(&chunk)
+                {
+                    sink_error = Some(e);
+                    escalate();
                 }
+                progress(ToolProgress::Output(crate::ansi::strip_ansi(&chunk)));
             }
             Ok(Msg::Err(chunk)) => {
-                unflushed.push_str(&chunk);
-                if sink_error.is_none() {
-                    if let Err(e) = sink.err(&chunk) {
-                        sink_error = Some(e);
-                        escalate();
-                    }
+                if sink_error.is_none()
+                    && let Err(e) = sink.err(&chunk)
+                {
+                    sink_error = Some(e);
+                    escalate();
                 }
+                progress(ToolProgress::Output(crate::ansi::strip_ansi(&chunk)));
             }
             Ok(Msg::ReaderDone) => readers_left = readers_left.saturating_sub(1),
             Ok(Msg::Exited(r)) => status = Some(r),
             Err(_) => anyhow::bail!("the shell waiter died unexpectedly"),
         }
-        if !unflushed.is_empty() && last_report.elapsed() >= REPORT_EVERY {
-            last_report = std::time::Instant::now();
-            progress(ToolProgress::Output(crate::ansi::strip_ansi(&unflushed)));
-            unflushed.clear();
-        }
-    }
-    if !unflushed.is_empty() {
-        progress(ToolProgress::Output(crate::ansi::strip_ansi(&unflushed)));
     }
     // The command is over: take the action off the signal before the status, so an early return below cannot signal a group that is already gone.
     drop(hook);
@@ -282,9 +261,82 @@ impl StopFlag {
     }
 }
 
-// Drop the `\r` of one line's `\r\n`; a lone CR stays, because a progress bar uses it to return to column zero.
-fn fold_crlf(line: &mut String) {
-    if line.ends_with("\r\n") {
-        line.remove(line.len() - 2);
+// Where the bytes stop being text this call may hand on: an unfinished trailing character or escape sequence stays for the next read.
+fn readable(bytes: &[u8]) -> usize {
+    let mut at = utf8_end(bytes);
+    if let Some(open) = open_escape(&bytes[..at]) {
+        at = open;
     }
+    // A trailing `\r` may be the first half of a `\r\n`.
+    if at > 0 && bytes[at - 1] == b'\r' {
+        at -= 1;
+    }
+    at
+}
+
+// Where an unfinished trailing UTF-8 character starts; its lead byte sits in the last four.
+fn utf8_end(bytes: &[u8]) -> usize {
+    let len = bytes.len();
+    let floor = len.saturating_sub(4);
+    let mut at = len;
+    while at > floor {
+        at -= 1;
+        let byte = bytes[at];
+        if byte & 0xC0 == 0x80 {
+            continue;
+        }
+        let need = match byte {
+            0x00..=0x7F => 1,
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            _ => return len,
+        };
+        return if len - at < need { at } else { len };
+    }
+    len
+}
+
+// Where an unfinished trailing escape sequence starts: text is handed on in whole sequences, so `ansi::strip_ansi` never sees half of one.
+fn open_escape(bytes: &[u8]) -> Option<usize> {
+    let from = bytes.iter().rposition(|byte| *byte == 0x1b)?;
+    (!escape_done(&bytes[from..])).then_some(from)
+}
+
+// Whether the sequence that starts at this ESC has ended.
+fn escape_done(tail: &[u8]) -> bool {
+    match tail.get(1) {
+        None => false,
+        Some(b'[') => tail[2..].iter().any(|byte| (0x40..=0x7e).contains(byte)),
+        Some(b']') => {
+            let body = &tail[2..];
+            let mut at = 0;
+            while at < body.len() {
+                if body[at] == 0x07 {
+                    return true;
+                }
+                if body[at] == 0x1b {
+                    return at + 1 >= body.len() || body[at + 1] == b'\\';
+                }
+                at += 1;
+            }
+            false
+        }
+        Some(0x20..=0x2f) => tail[2..].iter().any(|byte| !(0x20..=0x2f).contains(byte)),
+        Some(_) => true,
+    }
+}
+
+// The bytes as text, every `\r\n` folded to `\n`; a lone `\r` stays, because a progress bar returns to column zero with it.
+fn plain(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' && chars.peek() == Some(&'\n') {
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }

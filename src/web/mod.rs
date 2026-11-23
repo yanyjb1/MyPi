@@ -1,6 +1,9 @@
+// The web domain: what a call may do, and the browser it does it through.
+
 mod args;
 mod artifact;
 mod browser;
+mod halt;
 mod html;
 mod ops;
 mod run;

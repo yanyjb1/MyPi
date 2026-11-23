@@ -72,6 +72,19 @@ impl Stop {
         self.stopped.store(false, Ordering::Release);
     }
 
+    // Sleep this long unless the turn stops first; `false` means a stop woke it, so nothing that would follow should follow. The bell is a channel: a stop that landed before the wait still wakes it.
+    pub fn pause(self: &Arc<Self>, dur: std::time::Duration) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let _hook = self.on_stop(move || {
+            let _ = tx.send(());
+        });
+        let woken = match rx.recv_timeout(dur) {
+            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => true,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+        };
+        !(woken || self.is_stopped())
+    }
+
     // Register an action; a signal that already fired runs it here and now.
     pub fn on_stop(self: &Arc<Self>, action: impl Fn() + Send + Sync + 'static) -> Hook {
         let id = self.next.fetch_add(1, Ordering::Relaxed);

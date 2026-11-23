@@ -1,12 +1,17 @@
+// The `read` operation: navigate, wait for a body, hand back prose or the DOM as a file.
+
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 
 use crate::server::config::rules::{Part, Rules};
+use crate::server::platform::stop::Stop;
 use crate::web::WebArgs;
 use crate::web::artifact;
 use crate::web::browser::page::{Page, RENDER_WAIT};
 use crate::web::browser::tabs;
+use crate::web::halt;
 use crate::web::html::{expression, html_to_markdown, is_js_shell, scan};
 use crate::web::ops::ACTION_TIMEOUT;
 use crate::web::seen;
@@ -16,58 +21,100 @@ use crate::web::url;
 const EMPTY_WAIT: Duration = Duration::from_secs(3);
 
 // The work tab only: the search tab belongs to `search`.
-pub(crate) fn run(args: &WebArgs, session: i64, rules: &Rules) -> Result<String> {
+pub(crate) fn run(args: &WebArgs, session: i64, rules: &Rules, stop: &Arc<Stop>) -> Result<String> {
     let target = match args.url.as_deref() {
         Some(raw) => Some(url::normalize(raw)?),
         None => None,
     };
     tabs::with_work(session, |page: &Page| {
+        let _hook = page.end_on_stop(stop);
         if let Some(target) = target.as_deref() {
-            page.navigate(target)?;
+            if let Err(e) = page.navigate(target) {
+                return match halt::is(&e) {
+                    true => Ok(empty()),
+                    false => Err(e),
+                };
+            }
         }
+        let waited = match target.is_some() {
+            true => page.wait(RENDER_WAIT, stop, |html| ready(html, args.raw)),
+            false => page.dom_html(),
+        };
+        // A stopped read answers with the DOM already on the tab, and an empty one says so.
+        let html = match waited {
+            Ok(html) => html,
+            Err(e) if halt::is(&e) => page.dom_html().unwrap_or_default(),
+            Err(e) => return Err(e),
+        };
+        if html.is_empty() {
+            return Ok(empty());
+        }
+        let address = match target.as_deref() {
+            Some(target) => target.to_string(),
+            None => page.url().unwrap_or_default(),
+        };
         if args.raw {
-            let html = match target.is_some() {
-                true => page.wait(RENDER_WAIT, |html| has_body(html).then_some(Ok(())))?,
-                false => page.dom_html()?,
-            };
-            let address = match target.as_deref() {
-                Some(target) => target.to_string(),
-                None => page.url()?,
-            };
             return saved(&url::site(&address), &html);
         }
-        if target.is_some() {
-            page.wait(RENDER_WAIT, |html| match html_to_markdown(html) {
-                Ok(md) if is_js_shell(html.len(), &md) => None,
-                Ok(_) if has_body(html) => Some(Ok(())),
-                Ok(_) => None,
-                Err(_) => None,
-            })?;
-        }
-        answered(page, target.as_deref(), rules, session)
+        answered(page, &address, rules, session, stop, &html)
     })
 }
 
-// One page read as prose: a site rule narrows it once, and every later step sees only that.
-fn answered(page: &Page, target: Option<&str>, rules: &Rules, session: i64) -> Result<String> {
-    let address = match target {
-        Some(target) => target.to_string(),
-        None => page.url().unwrap_or_default(),
+// One page read as prose: a site rule narrows it once, and every later step sees only that. A stopped read answers the text already in hand.
+fn answered(
+    page: &Page,
+    address: &str,
+    rules: &Rules,
+    session: i64,
+    stop: &Arc<Stop>,
+    held: &str,
+) -> Result<String> {
+    let expression = expression(regions(address, rules));
+    let mut found = match page.evaluate(&expression, ACTION_TIMEOUT) {
+        Ok(raw) => match scan(&raw) {
+            Ok(found) => found,
+            Err(e) if halt::is(&e) => return prose(session, address, held),
+            Err(e) => return Err(e),
+        },
+        Err(e) if halt::is(&e) => return prose(session, address, held),
+        Err(e) => return Err(e),
     };
-    let regions = regions(&address, rules);
-    let expression = expression(regions);
-    let mut found = scan(&page.evaluate(&expression, ACTION_TIMEOUT)?)?;
-    if found.text == 0 {
-        // A body that paints late is worth one more look before it is called empty.
-        std::thread::sleep(EMPTY_WAIT);
+    if found.text == 0 && stop.pause(EMPTY_WAIT) {
         found = scan(&page.evaluate(&expression, ACTION_TIMEOUT)?)?;
     }
     if found.text == 0 {
-        return Ok("target url has an empty body".to_string());
+        return prose(session, address, held);
     }
-    let mut text = seen::answer(session, &address, &html_to_markdown(&found.html)?);
-    text.push_str(&found.section(&url::site(&address))?);
+    let mut text = seen::answer(session, address, &html_to_markdown(&found.html)?);
+    text.push_str(&found.section(&url::site(address))?);
     Ok(text)
+}
+
+// A document as this conversation reads pages: the prose, and the one card of what it now holds.
+fn prose(session: i64, address: &str, html: &str) -> Result<String> {
+    let md = match html_to_markdown(html) {
+        Ok(md) if !md.trim().is_empty() => md,
+        _ => return Ok(empty()),
+    };
+    Ok(seen::answer(session, address, &md))
+}
+
+// Whether a page is worth stopping at: a body is there, and for prose it is not still a script shell.
+fn ready(html: &str, raw: bool) -> Option<Result<()>> {
+    if raw {
+        return has_body(html).then_some(Ok(()));
+    }
+    match html_to_markdown(html) {
+        Ok(md) if is_js_shell(html.len(), &md) => None,
+        Ok(_) if has_body(html) => Some(Ok(())),
+        Ok(_) => None,
+        Err(_) => None,
+    }
+}
+
+// What a read says when it holds no page at all.
+fn empty() -> String {
+    "target url has an empty body".to_string()
 }
 
 // The rule that applies to an address; none reads the whole page, drops and all.

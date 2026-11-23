@@ -1,18 +1,16 @@
-//! The engine contract: page addresses, hits, and the link shapes only the
-//! engine itself can resolve.
+// The engine contract: page addresses, hits, and the link shapes only the engine itself can resolve.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::hit::Hit;
 use super::providers::PROVIDERS;
+use crate::server::platform::stop::Stop;
 
 pub(crate) trait SearchProvider: Sync {
     fn name(&self) -> &'static str;
     fn page_url(&self, query: &str, page: u32) -> String;
     fn parse(&self, html: &str) -> Vec<Hit>;
-    /// Whether this is the engine's own results page. Anything else — a
-    /// consent gate, a traffic challenge, a script check — is something a
-    /// human has to clear, so the caller keeps polling.
     fn normal(&self, html: &str) -> bool;
 }
 
@@ -47,9 +45,7 @@ pub(crate) fn absolute(href: &str, base: &str) -> Option<String> {
     base.join(href).ok().map(|u| u.to_string())
 }
 
-/// Redirect endpoints the engines mint into their result pages. The query value
-/// is an opaque token, not a destination; one request to the engine turns it
-/// into the real URL.
+// Redirect endpoints the engines mint into their result pages; the query value is an opaque token, not a destination.
 const REDIRECTS: [(&str, &str); 4] = [
     ("www.google.com", "/goto"),
     ("www.google.com", "/url"),
@@ -57,9 +53,7 @@ const REDIRECTS: [(&str, &str); 4] = [
     ("baidu.com", "/link"),
 ];
 
-/// Hosts that are never a destination: ad gateways, static assets, Bing's link
-/// shim. An engine's own content hosts (`baike.baidu.com`, `developers.google.com`)
-/// are not here: those are real results.
+// Hosts that are never a destination: ad gateways, static assets, Bing's link shim; an engine's content hosts are real results.
 const NOT_A_RESULT: [&str; 6] = [
     "googleadservices.com",
     "googlesyndication.com",
@@ -69,8 +63,7 @@ const NOT_A_RESULT: [&str; 6] = [
     "ubs.baidu.com",
 ];
 
-/// The engines' own search paths are navigation, not results. Only the site host
-/// is matched, so an engine page on a content host survives.
+// The engines' own search paths are navigation, not results; only the site host is matched, so an engine page on a content host survives.
 const ENGINE_PAGES: [&str; 4] = [
     "www.google.com",
     "www.baidu.com",
@@ -79,9 +72,9 @@ const ENGINE_PAGES: [&str; 4] = [
 ];
 const ENGINE_PATHS: [&str; 6] = ["/search", "/s", "/url", "/goto", "/link", "/ck"];
 
-/// How long one redirect lookup may take.
+// How long one redirect lookup may take.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(6);
-/// Enough of the redirect body to hold Google's meta-refresh fallback.
+// Enough of the redirect body to hold Google's meta-refresh fallback.
 const LOOKUP_BODY: u64 = 4096;
 
 fn is_redirect(url: &str) -> bool {
@@ -124,8 +117,7 @@ fn agent() -> &'static ureq::Agent {
     &AGENT
 }
 
-/// The destination named in a redirect body: Google answers some tokens with a
-/// 200 whose body is a meta refresh and one anchor instead of a `Location`.
+// The destination named in a redirect body: Google answers some tokens with a 200 holding a meta refresh and one anchor.
 fn body_target(body: &str) -> Option<String> {
     let lower = body.to_ascii_lowercase();
     let open = lower.find("<a href=\"")? + "<a href=\"".len();
@@ -133,7 +125,7 @@ fn body_target(body: &str) -> Option<String> {
     Some(body[open..end].to_string())
 }
 
-/// Follow the engine's own redirect once, without keeping the body.
+// Follow the engine's own redirect once, without keeping the body.
 fn resolve(url: &str) -> Option<String> {
     let mut resp = agent().get(url).call().ok()?;
     let target = match resp
@@ -164,13 +156,12 @@ fn clean(hit: Hit) -> Option<Hit> {
     is_destination(&url).then(|| Hit::new(hit.title, url, hit.snippet))
 }
 
-/// Turn parsed hits into final ones: resolve each engine redirect, and drop
-/// whatever the engine did not point at an external page. One lookup at a time, paced.
-pub(crate) fn settle(hits: Vec<Hit>) -> Vec<Hit> {
+pub(crate) fn settle(hits: Vec<Hit>, stop: &Arc<Stop>) -> Vec<Hit> {
     let mut settled = Vec::with_capacity(hits.len());
     for hit in hits {
-        if is_redirect(&hit.url) {
-            super::pace::between_lookups();
+        // A stop between lookups ends the settling: the hits already settled are the answer.
+        if is_redirect(&hit.url) && !super::pace::between_lookups(stop) {
+            break;
         }
         if let Some(hit) = clean(hit) {
             settled.push(hit);

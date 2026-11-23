@@ -3,7 +3,7 @@
 mod cdp;
 mod target;
 
-pub(crate) use cdp::Cdp;
+pub(crate) use cdp::{Cdp, Knocker};
 pub(crate) use target::Target;
 
 use anyhow::Context as _;

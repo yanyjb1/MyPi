@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use super::ACTION_TIMEOUT;
+use crate::server::platform::stop::Stop;
 use crate::web::WebArgs;
 use crate::web::browser::page::Page;
 use crate::web::browser::tabs;
@@ -49,49 +52,52 @@ fn selector(args: &WebArgs, what: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("{what} requires selector"))
 }
 
-pub(crate) fn run(args: &WebArgs, session: i64) -> Result<String> {
+pub(crate) fn run(args: &WebArgs, session: i64, stop: &Arc<Stop>) -> Result<String> {
     let op = args.op.as_str();
-    tabs::with_work(session, |page: &Page| match op {
-        "click" => {
-            let sel = selector(args, "click")?;
-            let r = page.evaluate(
-                &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.click(); return 'clicked'; }})()"),
-                ACTION_TIMEOUT,
-            )?;
-            matched(&r, "click")
+    tabs::with_work(session, |page: &Page| {
+        let _hook = page.end_on_stop(stop);
+        match op {
+            "click" => {
+                let sel = selector(args, "click")?;
+                let r = page.evaluate(
+                    &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.click(); return 'clicked'; }})()"),
+                    ACTION_TIMEOUT,
+                )?;
+                matched(&r, "click")
+            }
+            "fill" => {
+                let sel = selector(args, "fill")?;
+                let value = js_string(&text(args, "fill")?);
+                let r = page.evaluate(
+                    &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.focus(); el.value = {value}; el.dispatchEvent(new Event('input', {{bubbles: true}})); return 'filled'; }})()"),
+                    ACTION_TIMEOUT,
+                )?;
+                matched(&r, "fill")
+            }
+            "select" => {
+                let sel = selector(args, "select")?;
+                let value = js_string(&text(args, "select")?);
+                let r = page.evaluate(
+                    &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.value = {value}; el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'selected'; }})()"),
+                    ACTION_TIMEOUT,
+                )?;
+                matched(&r, "select")
+            }
+            "scroll" => {
+                let dy = args.value.as_ref().and_then(Value::as_i64).unwrap_or(600);
+                let r = page.evaluate(
+                    &format!("window.scrollBy(0, {dy}); 'scrolled'"),
+                    ACTION_TIMEOUT,
+                )?;
+                matched(&r, "scroll")
+            }
+            "eval" => {
+                let expr = text(args, "eval")?;
+                page.evaluate(&expr, ACTION_TIMEOUT)
+            }
+            other => Err(anyhow!(
+                "unknown op {other:?}; click|fill|select|scroll|eval"
+            )),
         }
-        "fill" => {
-            let sel = selector(args, "fill")?;
-            let value = js_string(&text(args, "fill")?);
-            let r = page.evaluate(
-                &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.focus(); el.value = {value}; el.dispatchEvent(new Event('input', {{bubbles: true}})); return 'filled'; }})()"),
-                ACTION_TIMEOUT,
-            )?;
-            matched(&r, "fill")
-        }
-        "select" => {
-            let sel = selector(args, "select")?;
-            let value = js_string(&text(args, "select")?);
-            let r = page.evaluate(
-                &format!("(() => {{ const el = document.querySelector({sel}); if (!el) return 'NOT_FOUND'; el.value = {value}; el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'selected'; }})()"),
-                ACTION_TIMEOUT,
-            )?;
-            matched(&r, "select")
-        }
-        "scroll" => {
-            let dy = args.value.as_ref().and_then(Value::as_i64).unwrap_or(600);
-            let r = page.evaluate(
-                &format!("window.scrollBy(0, {dy}); 'scrolled'"),
-                ACTION_TIMEOUT,
-            )?;
-            matched(&r, "scroll")
-        }
-        "eval" => {
-            let expr = text(args, "eval")?;
-            page.evaluate(&expr, ACTION_TIMEOUT)
-        }
-        other => Err(anyhow!(
-            "unknown op {other:?}; click|fill|select|scroll|eval"
-        )),
     })
 }

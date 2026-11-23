@@ -9,6 +9,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `mod.rs` | declares the modules; exports `WebArgs`, `run`, `close_session`, `shutdown`, `ENGINES` |
 | `args.rs` | `WebArgs`: the shared input shape of every operation |
 | `artifact.rs` | the files the model reads back: one writer, named for the site and numbered |
+| `halt.rs` | the stop as this domain says it: `Stopped`, and whether an error is it |
 | `seen.rs` | what each session last read: one record per session, its address and its prose |
 | `run.rs` | the two-operation permit, the in-flight count, and the `op` dispatch |
 | `url.rs` | URL normalisation, query encoding, percent and base64 decoding |
@@ -21,7 +22,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `browser/process/mod.rs` | one browser handle: owned or attached, port, `alive`, `stop`, and the profile's DevToolsActivePort lookup |
 | `browser/process/launch.rs` | launch argv, the fork, the DevTools port wait, and the one resident thread that performs the fork |
 | `browser/devtools/mod.rs` | `Client`: `/json/list`, `/json/new`, `/json/close`, port probing |
-| `browser/devtools/cdp.rs` | the CDP WebSocket transport: connect, send, receive |
+| `browser/devtools/cdp.rs` | the CDP WebSocket transport: connect, send, receive, and the `Knocker` a page's waits answer |
 | `browser/devtools/target.rs` | `Target`: id and socket URL |
 | `browser/page.rs` | one target: navigate, evaluate, DOM, wait, url, screenshot, bring-to-front |
 | `browser/lifecycle/mod.rs` | the process-wide state: lazy start, ownership, `port`, `existing_port`, `shutdown` |
@@ -29,7 +30,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `browser/lifecycle/timer.rs` | the one 30-second thread: idle sweep, then tab reap |
 | `browser/lifecycle/signal.rs` | INT/TERM/HUP registration |
 | `browser/tabs.rs` | the tab pool, per-tab slots, leases, launch-tab reclaim, idle reap, `close_session` |
-| `browser/verify.rs` | the human-verification poll: 30 seconds, five minutes, caller's predicate |
+| `browser/verify.rs` | the human-verification wait: 30 seconds between looks, five minutes at most |
 
 ### ops
 
@@ -62,17 +63,11 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 ## What it talks to
 
-- **`server::config`**: `Config::load()`, `BrowserOptions` and `bring_to_front()`, read inside
-  `lifecycle::port` and `lifecycle::bring_to_front`. This is the domain's only reach into the
-  backend, and it is why `Env` carries no browser settings.
-- **`server::platform`**: `env::data_dir` for the default profile root, and `proc::Process` for the
-  browser's tree: spawn, stop, wait.
-- **Crates**: `tungstenite` (WebSocket), `html-to-markdown-rs` (DOM to Markdown), `url`, `ureq`
-  (DevTools HTTP), `signal-hook` (exit signals).
-- **Who calls it**: `server::agent::tools::web` — `run` for every operation. `main` calls
-  `shutdown` once the IPC server returns. `close_session` is called by the loop's `unbook`: a
-  session that ends takes its tabs with it.
-- **Knows nothing about**: `Env`, tools, sessions' rows, the api doors, the front end.
+- **`server::config`**: `Config::load()`, `BrowserOptions` and `bring_to_front()`, read inside `lifecycle::port` and `lifecycle::bring_to_front`. This is the domain's only reach into the backend, and it is why `Env` carries no browser settings.
+- **`server::platform`**: `env::data_dir` for the default profile root, `proc::Process` for the browser's tree: spawn, stop, wait, and `stop::Stop` for the turn's stop signal, which ends the wait a call sits on rather than being polled.
+- **Crates**: `tungstenite` (WebSocket), `html-to-markdown-rs` (DOM to Markdown), `url`, `ureq` (DevTools HTTP), `signal-hook` (exit signals).
+- **Who calls it**: `server::agent::tools::web` — `run` for every operation. `main` calls `shutdown` once the IPC server returns. `close_session` is called by the loop's `unbook`: a session that ends takes its tabs with it.
+- **Knows nothing about**: the api doors, storage, the front end.
 
 ## Inside
 
@@ -91,42 +86,39 @@ lifecycle::timer → idle::sweep, tabs::reap
 lifecycle::signal → shutdown
 ```
 
-- `tabs` is the only owner of tab state. `page` does not know sessions. `process` does not know
-  tabs. An operation does not touch CDP directly.
-- `lifecycle` is the only owner of the browser handle: `port` launches or attaches, `existing_port`
-  never launches, `shutdown` closes and forgets. `tabs` asks it for a port and nothing else.
+- `tabs` is the only owner of tab state. `page` does not know sessions. `process` does not know tabs. An operation does not touch CDP directly.
+- `lifecycle` is the only owner of the browser handle: `port` launches or attaches, `existing_port` never launches, `shutdown` closes and forgets. `tabs` asks it for a port and nothing else.
 - `process::launch` is the only place that forks, and the only place that names a platform hook.
 - `devtools` only speaks protocol: it never decides when a browser exists.
 - `verify` knows a page and a predicate, not an engine.
+- `halt` is the one place the stop is named: an error downcasts to `Stopped`, so no layer reads text.
 - `idle` reads the permit count from `run`; the timer reads `idle` and `tabs`.
-- `html::control` scans the live page through `evaluate`, so its expression and `drive`'s selectors
-  meet at the same engine: what the scan names, `click` and `fill` can reach.
-- `html::control` applies a site rule once, in the page, and answers the kept HTML together with the
-  controls still inside it; the prose and the `operable` section come from that one answer.
-- `control.js` names a control once per chain: a widget beats the shells around it, a bare shell
-  answers by the innermost one, and a shell whose subtree holds a widget leaves it to that widget.
+- `html::control` scans the live page through `evaluate`, so its expression and `drive`'s selectors meet at the same engine: what the scan names, `click` and `fill` can reach.
+- `html::control` applies a site rule once, in the page, and answers the kept HTML together with the controls still inside it; the prose and the `operable` section come from that one answer.
+- `control.js` names a control once per chain: a widget beats the shells around it, a bare shell answers by the innermost one, and a shell whose subtree holds a widget leaves it to that widget.
+
+## Stopping
+
+The turn's stop reaches this domain as `platform::stop::Stop`, passed from the tool entry into `run` and down to whatever waits. No wait in here polls it: each one registers what ending it means, and wakes on that alone.
+
+- A page's CDP connection carries a `Knocker`; a stop aborts it, and the call waiting on the wire answers `halt::Stopped` at once instead of running to its timeout. The `Knocker` belongs to the page, not to one socket, so a stop outlives the reconnect that replaces it.
+- A pause — between result pages, between redirect lookups, waiting for a human to clear a verification, queuing for a permit — is `Stop::pause`.
+- A stopped call hands over what it already produced: the DOM on the tab becomes prose, the pages already fetched become the search answer, the settled hits stand.
+
+The front door turns the stop into the result's reason; this domain never writes that marker itself.
 
 ## Must stay in step
 
-1. `WebArgs` and `tools/web/mod.rs`: the tool maps the model's positional arguments into this shape,
-   so a field added here needs a parameter there.
-2. `BrowserOptions` and `lifecycle::port`: an owned browser caches the idle timeout and the
-   bring-to-front flag at launch; a rename in `server::config` is a rename here.
-3. `tabs::POOL` and `lifecycle::shutdown`: the browser is gone, so every tab id is stale;
-   `shutdown` clears the pool.
-4. `search::provider` and `search/providers/`: the static table is the only registry, and `run`
-   refuses a name it cannot find.
-5. `page::RENDER_WAIT` and the providers' parsers: a page that has not rendered yields no hits, and
-   the wait is what keeps the loop from reading a shell.
-6. `platform::proc::Process` and `process::launch`: the fork must happen on the resident
-   thread for the Linux parent-death signal to mean the server.
-7. `tabs::close_session` and `loop::session::book::unbook`: every way a session ends must pass
-   through `unbook`, or that session's two tabs outlive it until the 30-minute reap.
+1. `WebArgs` and `tools/web/mod.rs`: the tool maps the model's positional arguments into this shape, so a field added here needs a parameter there.
+2. `BrowserOptions` and `lifecycle::port`: an owned browser caches the idle timeout and the bring-to-front flag at launch; a rename in `server::config` is a rename here.
+3. `tabs::POOL` and `lifecycle::shutdown`: the browser is gone, so every tab id is stale; `shutdown` clears the pool.
+4. `search::provider` and `search/providers/`: the static table is the only registry, and `run` refuses a name it cannot find.
+5. `page::RENDER_WAIT` and the providers' parsers: a page that has not rendered yields no hits, and the wait is what keeps the loop from reading a shell.
+6. `platform::proc::Process` and `process::launch`: the fork must happen on the resident thread for the Linux parent-death signal to mean the server.
+7. `tabs::close_session` and `loop::session::book::unbook`: every way a session ends must pass through `unbook`, or that session's two tabs outlive it until the 30-minute reap.
 
 ## Not wired yet
 
-1. The three parsers are tuned against captured live pages, not guaranteed: the engines edit
-   their markup, and a parse that suddenly yields nothing is a selector problem, not a gate.
-2. Baidu's ads are not separated from organic results when they are visible: they are cards with
-   real destinations and no stable marker in the capture. Hidden ones are deleted before parsing.
+1. The three parsers are tuned against captured live pages, not guaranteed: the engines edit their markup, and a parse that suddenly yields nothing is a selector problem, not a gate.
+2. Baidu's ads are not separated from organic results when they are visible: they are cards with real destinations and no stable marker in the capture. Hidden ones are deleted before parsing.
 3. Windows has no Job Object yet; macOS has no parent-death equivalent.

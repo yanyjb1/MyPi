@@ -1,10 +1,6 @@
 # web
 
-A self-contained domain for reading pages, searching, and driving a browser.
-The tool layer maps a call's arguments into `WebArgs` and hands it over: `web` for the work tab, `search` for searches.
-Everything below that line — Chromium, CDP, tabs, providers, HTML conversion — belongs here and nowhere else.
-It is a cargo feature, on by default: a build without it has no `web`, no `search` and no site rules.
-It is not part of the tool layer, and it decides for itself when the browser starts and when it dies.
+A self-contained domain for reading pages, searching, and driving a browser. The tool layer maps a call's arguments into `WebArgs` and hands it over: `web` for the work tab, `search` for searches. Everything below that line — Chromium, CDP, tabs, providers, HTML conversion — belongs here and nowhere else. It is a cargo feature, on by default: a build without it has no `web`, no `search` and no site rules. It is not part of the tool layer, and it decides for itself when the browser starts and when it dies.
 
 ## 1. Design / Schema
 
@@ -75,6 +71,7 @@ baidu   https://www.baidu.com/s?wd=…&pn=10×(n-1)
 - An external host is not enough: ad gateways and the engines' own search paths are not destinations, but content hosts on an engine's own domain are kept.
 - Hiding is not removing: `DOM.getOuterHTML` serializes the DOM rather than what is drawn, so before parsing the search tab deletes every result container with no layout box and re-reads the document.
 - A gate is not diagnosed: `normal()` only answers whether the DOM is the engine's own results page, and anything else is something a human has to clear.
+- A stopped walk keeps what it already read: the pages fetched so far are rendered with a line saying the walk was cut short.
 
 ### Tabs
 

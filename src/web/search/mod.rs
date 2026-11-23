@@ -1,31 +1,30 @@
-//! One provider per call: pages 1..=N through the search tab, stopped as soon as a page adds
-//! nothing new.
+// One provider per call: pages 1..=N through the search tab, stopping at the first page that adds nothing new.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use std::collections::HashSet;
-use std::time::Duration;
 
 use self::hit::{Hit, dedup_key};
 use self::provider::SearchProvider;
 use super::browser::page::{Page, RENDER_WAIT};
 use super::browser::{tabs, verify};
+use super::halt;
+use crate::server::platform::stop::Stop;
 
 mod hit;
 mod pace;
 mod provider;
 mod providers;
 
-/// The engines, one list for the schema, the error text and the table.
+// The engines, one list for the schema, the error text and the table.
 pub(crate) const ENGINES: &[&str] = providers::NAMES;
 
-/// How long the tidy pass may take.
+// How long the tidy pass may take.
 const TIDY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A result the site or an ad blocker hides is still in the serialized DOM, so serialization
-/// alone cannot tell an ad card from a result. Ask the page which containers have no box, and
-/// delete them: what is left is what a human would see.
-///
-/// The container classes are the providers' own: rename one there and this list must follow.
+// A hidden result is still in the serialized DOM, so ask the page which containers have no box and delete them.
 const TIDY: &str = r#"(() => {
   let gone = 0;
   for (const el of document.querySelectorAll('div.c-container, div.MjjYud, li.b_algo')) {
@@ -38,7 +37,13 @@ const TIDY: &str = r#"(() => {
   return gone;
 })()"#;
 
-pub(crate) fn run(session: i64, query: &str, provider_name: &str, pages: u32) -> Result<String> {
+pub(crate) fn run(
+    session: i64,
+    query: &str,
+    provider_name: &str,
+    pages: u32,
+    stop: &Arc<Stop>,
+) -> Result<String> {
     let provider = provider::get(provider_name)
         .ok_or_else(|| anyhow!("unknown provider {provider_name:?}; {}", ENGINES.join("|")))?;
     let name = provider.name();
@@ -47,19 +52,42 @@ pub(crate) fn run(session: i64, query: &str, provider_name: &str, pages: u32) ->
     let mut seen = HashSet::new();
     let mut current = 1u32;
     let mut fetched = 0u32;
+    // Why the walk ended: a stop hands over the pages already read, every other reason reads as it always did.
+    let mut cut = false;
     while current <= pages {
-        if current > 1 {
-            pace::between_pages();
+        if current > 1 && !pace::between_pages(stop) {
+            cut = true;
+            break;
         }
         let url = provider.page_url(query, current);
-        let mut html = fetch(session, &url, provider)?;
+        // A stop interrupts the page in flight: this page is not read, the earlier ones stand.
+        let mut html = match fetch(session, &url, provider, stop) {
+            Ok(html) => html,
+            Err(e) if halt::is(&e) => {
+                cut = true;
+                break;
+            }
+            Err(e) => return Err(e),
+        };
 
-        // A gate — verification, consent, a script check — is a page whose result body is not
-        // there. Hand it to the human and poll until the engine's own page is back.
+        // A gate is a page whose result body is not there: hand it to the human and poll until the engine's own page is back.
         if !provider.normal(&html) {
-            verify::await_human(session, |_url, html| provider.normal(html))
-                .map_err(|e| anyhow!("{name}: {e}"))?;
-            html = fetch(session, &url, provider)?;
+            match verify::await_human(session, stop, |_url, html| provider.normal(html)) {
+                Ok(()) => {}
+                Err(_) if stop.is_stopped() => {
+                    cut = true;
+                    break;
+                }
+                Err(e) => return Err(anyhow!("{name}: {e}")),
+            }
+            html = match fetch(session, &url, provider, stop) {
+                Ok(html) => html,
+                Err(e) if halt::is(&e) => {
+                    cut = true;
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
             if !provider.normal(&html) {
                 bail!(
                     "{name}: the page is still a gate. Finish it in the browser window, then \
@@ -68,7 +96,7 @@ pub(crate) fn run(session: i64, query: &str, provider_name: &str, pages: u32) ->
             }
         }
 
-        let parsed = provider::settle(provider.parse(&html));
+        let parsed = provider::settle(provider.parse(&html), stop);
         if parsed.is_empty() {
             break;
         }
@@ -86,13 +114,21 @@ pub(crate) fn run(session: i64, query: &str, provider_name: &str, pages: u32) ->
         current += 1;
     }
 
-    Ok(render(name, fetched, &hits))
+    Ok(render(name, fetched, &hits, cut))
 }
 
-fn fetch(session: i64, url: &str, provider: &'static dyn SearchProvider) -> Result<String> {
+fn fetch(
+    session: i64,
+    url: &str,
+    provider: &'static dyn SearchProvider,
+    stop: &Arc<Stop>,
+) -> Result<String> {
     tabs::with_search(session, |page: &Page| {
+        let _hook = page.end_on_stop(stop);
         page.navigate(url)?;
-        let html = page.wait(RENDER_WAIT, |html| provider.normal(html).then_some(Ok(())))?;
+        let html = page.wait(RENDER_WAIT, stop, |html| {
+            provider.normal(html).then_some(Ok(()))
+        })?;
         if !provider.normal(&html) {
             return Ok(html);
         }
@@ -101,12 +137,15 @@ fn fetch(session: i64, url: &str, provider: &'static dyn SearchProvider) -> Resu
     })
 }
 
-fn render(name: &str, pages: u32, hits: &[Hit]) -> String {
+fn render(name: &str, pages: u32, hits: &[Hit], cut: bool) -> String {
     let mut out = match pages {
         0 => format!("{name}: no results\n"),
         1 => format!("{name}: page 1, {} results\n", hits.len()),
         n => format!("{name}: pages 1-{n}, {} results\n", hits.len()),
     };
+    if cut {
+        out.push_str("the walk was cut short: the results below are the pages already read\n");
+    }
     for (i, hit) in hits.iter().enumerate() {
         out.push_str(&format!("\n{}. {}\n   {}\n", i + 1, hit.title, hit.url));
         if !hit.snippet.is_empty() {

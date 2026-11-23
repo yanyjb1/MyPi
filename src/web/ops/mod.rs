@@ -1,8 +1,8 @@
-//! The web tool's operations: one file per verb family, each over a leased tab.
+// The web tool's operations: one file per verb family, each over a leased tab.
 
 use std::time::Duration;
 
-/// Ceiling for one evaluated action.
+// Ceiling for one evaluated action.
 pub(crate) const ACTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) mod drive;
