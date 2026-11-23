@@ -11,18 +11,20 @@ use crate::ipc::endpoint::Endpoint;
 use crate::ipc::line::{self, Lines};
 use crate::ipc::transport::{self, Stream};
 
-/// A front end's handle on a running server. Replies and pushes share one connection.
+// A front end's handle on a running server. Replies and pushes share one connection.
 pub struct Client {
     out: Mutex<BufWriter<Stream>>,
+    socket: Stream, // the same connection kept aside, so a reader asleep in `next` can be woken
     incoming: Mutex<Receiver<Frame>>,
     skipped: Mutex<Vec<Frame>>,
 }
 
 impl Client {
-    /// Connect, say hello, and keep reading from then on.
+    // Connect, say hello, and keep reading from then on.
     pub fn connect(endpoint: &Endpoint, viewer: &serde_json::Value) -> Result<Client> {
         let stream = transport::connect(endpoint).context("cannot reach the server")?;
         let reader = stream.clone();
+        let socket = stream.clone();
         let out = Mutex::new(BufWriter::new(stream));
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
@@ -31,6 +33,7 @@ impl Client {
             .context("cannot start the read thread")?;
         let client = Client {
             out,
+            socket,
             incoming: Mutex::new(rx),
             skipped: Mutex::new(Vec::new()),
         };
@@ -38,7 +41,7 @@ impl Client {
         Ok(client)
     }
 
-    /// Say something without waiting for anything.
+    // Say something without waiting for anything.
     pub fn send(&self, frame: Frame) -> Result<()> {
         let bytes = line::encode(&frame)?;
         let mut out = self.out.lock().unwrap_or_else(|e| e.into_inner());
@@ -47,7 +50,7 @@ impl Client {
         Ok(())
     }
 
-    /// Whether the read half still lives. A frame found while checking is kept for {@link drain}.
+    // Whether the read half still lives. A frame found while checking is kept for `drain`.
     pub fn alive(&self) -> bool {
         let incoming = self.incoming();
         match incoming.try_recv() {
@@ -60,7 +63,7 @@ impl Client {
         }
     }
 
-    /// Everything the server pushed that no question claimed.
+    // Everything the server pushed that no question claimed.
     pub fn drain(&self) -> Vec<Frame> {
         let mut out = std::mem::take(&mut *self.skipped());
         let incoming = self.incoming();
@@ -68,6 +71,21 @@ impl Client {
             out.push(frame);
         }
         out
+    }
+
+    // The next frame, waiting for it as long as the connection lives; `None` once it is gone.
+    pub fn next(&self) -> Option<Frame> {
+        let mut skipped = self.skipped();
+        if !skipped.is_empty() {
+            return Some(skipped.remove(0));
+        }
+        drop(skipped);
+        self.incoming().recv().ok()
+    }
+
+    // Close both directions: a reader asleep in `next` returns at once.
+    pub fn close(&self) {
+        self.socket.shutdown();
     }
 
     fn incoming(&self) -> MutexGuard<'_, Receiver<Frame>> {
@@ -79,7 +97,7 @@ impl Client {
     }
 }
 
-/// The read half: every frame goes to the channel.
+// The read half: every frame goes to the channel.
 fn read(mut lines: Lines<BufReader<Stream>>, tx: mpsc::Sender<Frame>) {
     loop {
         let raw = match lines.next_line() {

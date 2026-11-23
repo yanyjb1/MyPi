@@ -1,16 +1,19 @@
-//! CLI argument parsing — hand-rolled, no clap (dep policy). The four shapes a
-//! command line can take, and the flags, are spelled out in `USAGE` below.
+// CLI argument parsing, hand-rolled: the shapes a command line can take are `USAGE` below.
 
-/// Parsed command line.
+// Parsed command line.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Cli {
-    /// Run the server alone (--server).
+    // Run the server alone (--server).
     pub server: bool,
     pub attach: Option<i64>,
-    /// Open the resume picker immediately (--resume).
+    // Open the resume picker immediately (--resume).
     pub resume: bool,
-    /// Model override for this session (`provider:id`).
+    // Model override for this session (`provider:id`).
     pub model: Option<String>,
+    // Serve the HTTP door and the webui instead of the terminal (--bridge).
+    pub bridge: bool,
+    // Let that door be reached from the local network (--lan).
+    pub lan: bool,
 }
 
 const USAGE: &str = "\
@@ -22,20 +25,24 @@ Usage:
   mypi attach <id>           attach the front end to a stored session
   mypi --server              run the server alone (it exits when the last
                              front end is gone)
+  mypi --bridge [--lan]      run the HTTP door for other front ends: the
+                             webui is there the moment one connects
 
 Options:
   -h, --help        Print this help and exit
   -V, --version     Print version and exit
   --resume          Open the session-resume picker on startup
   --model <p:id>    Session model override (provider:id, not persisted)
+  --lan             With `--bridge`: listen on the local network, not just this machine
 
 Configuration: ~/.config/mypi/config.yaml (see models_example.yml in the repo).
 Sessions:      ~/.local/share/mypi/history.db
+Bridge:        ~/.config/mypi/adapters.yml lists the front ends the door serves
 Server socket: $XDG_RUNTIME_DIR/mypi-<hash>.sock (one per database)";
 
 impl Cli {
-    /// Parse argv (excluding argv[0]). Unknown flags and stray positionals
-    /// are errors — silent acceptance breeds typos like `--resune`.
+    // Parse argv (excluding argv[0]); an unknown flag or a stray word is an error, so a typo like
+    // `--resune` is said out loud instead of silently ignored.
     pub fn parse<I: IntoIterator<Item = String>>(args: I) -> anyhow::Result<Self> {
         let mut cli = Cli::default();
         let mut it = args.into_iter();
@@ -51,6 +58,8 @@ impl Cli {
                 }
                 "--server" => cli.server = true,
                 "--resume" => cli.resume = true,
+                "--lan" => cli.lan = true,
+                "--bridge" => cli.bridge = true,
                 "--model" => {
                     let v = it.next().ok_or_else(|| {
                         anyhow::anyhow!("--model needs a value: --model <provider:id>")

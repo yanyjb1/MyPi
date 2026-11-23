@@ -1,4 +1,4 @@
-// Where every binary mode fans out: the two processes, and the one-shot queries.
+// Where every binary mode fans out: the two processes, the HTTP door, and the one-shot queries.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -15,6 +15,7 @@ use mypi::server::config::{
 use mypi::server::platform::proc;
 use mypi::server::platform::time;
 use mypi::server::storage;
+use mypi::ui::bridge;
 use mypi::ui::tui;
 
 fn main() -> anyhow::Result<()> {
@@ -32,18 +33,30 @@ fn main() -> anyhow::Result<()> {
     init_time(&cfg);
     init_home(&cfg);
     let file = Endpoint::file_path(&db);
+    if cli.bridge {
+        return run_bridge(&cfg, &cli, &file);
+    }
     // A leftover endpoint file whose server is gone is no reason to refuse to start.
     if let Ok(running) = endpoint::read(&file)
         && let Ok(session) = mypi::ui::session::Session::open(running, None)
     {
         return run(session, &cli);
     }
-    let session = spawn_server(&file)?;
+    let endpoint = spawn_server(&file)?;
+    let session = mypi::ui::session::Session::open(endpoint, None)?;
     run(session, &cli)
 }
 
-// The server is a background child: it takes no terminal, prints nothing, and leaves with the last front end. This process waits for its socket, then owns the screen.
-fn spawn_server(file: &Path) -> anyhow::Result<mypi::ui::session::Session> {
+// The server this endpoint file names, started when nobody answers there yet.
+fn ensure_server(file: &Path) -> anyhow::Result<Endpoint> {
+    if let Ok(running) = endpoint::read(file) {
+        return Ok(running);
+    }
+    spawn_server(file)
+}
+
+// The server is a background child: it takes no terminal, prints nothing, and leaves with the last front end.
+fn spawn_server(file: &Path) -> anyhow::Result<Endpoint> {
     let mut cmd = std::process::Command::new(std::env::current_exe()?);
     cmd.arg("--server")
         .stdin(std::process::Stdio::null())
@@ -53,10 +66,8 @@ fn spawn_server(file: &Path) -> anyhow::Result<mypi::ui::session::Session> {
         .context("cannot start the server")?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(endpoint) = endpoint::read(file)
-            && let Ok(session) = mypi::ui::session::Session::open(endpoint, None)
-        {
-            return Ok(session);
+        if let Ok(endpoint) = endpoint::read(file) {
+            return Ok(endpoint);
         }
         if Instant::now() >= deadline {
             anyhow::bail!("the server did not answer at {}", file.display());
@@ -99,6 +110,27 @@ fn run_server(db: &Path) -> anyhow::Result<()> {
     #[cfg(feature = "web")]
     mypi::web::shutdown();
     served
+}
+
+// `mypi bridge [--lan]`: the HTTP door for every front end that is not this terminal. The list of
+// adapters is the global one and nothing else: a bridge with no list serves nobody, so it refuses
+// to start rather than guess.
+fn run_bridge(cfg: &Config, cli: &Cli, file: &Path) -> anyhow::Result<()> {
+    let root = cfg
+        .paths()
+        .global_root()
+        .context("no global config directory to read adapters.yml from")?
+        .to_path_buf();
+    let manifest =
+        bridge::Manifest::load(&root.join(bridge::FILE)).context("the bridge cannot start")?;
+    let webui = bridge::Webui::open(&root);
+    let endpoint = ensure_server(file)?;
+    bridge::run(bridge::Options {
+        endpoint,
+        manifest,
+        webui,
+        lan: cli.lan,
+    })
 }
 
 // The endpoint kind this process asks for.

@@ -62,6 +62,9 @@ mod architecture {
         ("ui::session", &["server", "ipc::server"]),
         // The client half is the front end's; it never names the backend or the server half.
         ("ipc::client", &["server", "ipc::server"]),
+        // The bridge is a front end too: it holds connections and never names the backend or the
+        // server half of ipc.
+        ("ui::bridge", &["server", "ipc::server", "ipc::transport"]),
         // The contract is shared vocabulary; it names neither end.
         (
             "ipc::contract",
