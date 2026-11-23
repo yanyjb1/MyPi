@@ -1,15 +1,16 @@
-//! The name list: scope, name, and the first line of the newest text.
+// The name list: scope, name, and the first line of the newest text.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::text::display_width;
 use crate::ui::tui::theme::{Accent, fixed};
 
 use super::super::grid::Grid;
-use super::{MemoHand, NARROW_LIST, clip, first_line, layout, window_start};
+use super::{MemoHand, clip, first_line, layout, window_start};
 
-/// The scope column: `current` and `global` are both seven cells.
+// The scope column: `current` and `global` are both seven cells.
 const SCOPE: usize = 7;
 
 const NAME_MIN: usize = 4;
@@ -21,10 +22,17 @@ pub(super) fn body(
     rows: usize,
     accent: &Accent,
 ) -> Vec<Line<'static>> {
+    if !hand.known {
+        return Vec::new();
+    }
     let width = usize::from(width);
-    let (block, lead) = layout(width, NARROW_LIST);
+    let (block, lead) = layout(width, hand.narrow());
     if block < SCOPE + NAME_MIN + 3 {
-        return vec![Line::from(clip("窗口太窄", width))];
+        let word = match hand.lang {
+            Lang::En => "window too narrow",
+            Lang::Zh => "窗口太窄",
+        };
+        return vec![Line::from(clip(word, width))];
     }
     let name_w = hand
         .items
@@ -49,8 +57,12 @@ pub(super) fn body(
     ]);
     let mut out = vec![head];
     if hand.items.is_empty() {
+        let word = match hand.lang {
+            Lang::En => "no memos",
+            Lang::Zh => "没有备忘录",
+        };
         out.push(Line::from(Span::styled(
-            format!("{}{}", " ".repeat(lead), "没有备忘录"),
+            format!("{}{word}", " ".repeat(lead)),
             Style::new().fg(fixed::MUTED),
         )));
         return out;

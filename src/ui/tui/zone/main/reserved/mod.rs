@@ -160,7 +160,7 @@ impl ReservedZone {
                     json!({"key": hands::usage::ALIGN_KEY}),
                 ));
             }
-            // The list comes first: the height is read off it, the ask lands after.
+            // The list comes first so the panel opens with names, then the ask that opened it.
             Hire::Memo(ask) => {
                 self.memo.ask(ask);
                 if !matches!(ask, MemoAsk::List) {

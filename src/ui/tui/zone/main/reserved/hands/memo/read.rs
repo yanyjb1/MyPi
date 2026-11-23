@@ -1,11 +1,11 @@
-//! One version, whole: every line, wrapped to the panel.
+// One version, whole: every line, wrapped to the panel.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::ui::tui::theme::{Accent, fixed};
 
-use super::{Face, MemoHand, NARROW_WIDE, clip, layout, window_start, wrap};
+use super::{Face, MemoHand, clip, layout, wrap};
 
 pub(super) fn body(
     hand: &MemoHand,
@@ -26,7 +26,7 @@ pub(super) fn body(
     let Some(version) = versions.iter().rev().nth(*selected) else {
         return Vec::new();
     };
-    let (block, lead) = layout(usize::from(width), NARROW_WIDE);
+    let (block, lead) = layout(usize::from(width), hand.narrow());
     let lead = " ".repeat(lead);
     let head = match &version.ts {
         Some(ts) => format!("{}/{} · {ts}", scope.as_str(), name),
@@ -47,8 +47,7 @@ pub(super) fn body(
             }
         }
     }
-    let first = visual.iter().position(|(at, _)| at == row).unwrap_or(0);
-    let start = window_start(visual.len(), visible, first);
+    let start = visual.iter().position(|(at, _)| at == row).unwrap_or(0);
     for (at, text) in visual.into_iter().skip(start).take(visible) {
         let line = format!("{lead}{text}");
         out.push(match at == *row {

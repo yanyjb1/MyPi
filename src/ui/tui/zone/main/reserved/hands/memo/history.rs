@@ -1,13 +1,14 @@
-//! One name's versions, newest on top, with the time each was written.
+// One name's versions, newest on top, with the time each was written.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::ui::tui::lang::Lang;
 use crate::ui::tui::text::display_width;
 use crate::ui::tui::theme::{Accent, fixed};
 
 use super::super::grid::Grid;
-use super::{Face, MemoHand, NARROW_WIDE, clip, first_line, layout, window_start};
+use super::{Face, MemoHand, clip, first_line, layout, window_start};
 
 pub(super) fn body(
     hand: &MemoHand,
@@ -16,7 +17,7 @@ pub(super) fn body(
     accent: &Accent,
 ) -> Vec<Line<'static>> {
     let width = usize::from(width);
-    let (block, lead) = layout(width, NARROW_WIDE);
+    let (block, lead) = layout(width, hand.narrow());
     let Face::History {
         scope,
         name,
@@ -27,19 +28,16 @@ pub(super) fn body(
     else {
         return Vec::new();
     };
-    let head = clip(
-        &format!("{}/{} · {} 版", scope.as_str(), name, versions.len()),
-        block,
-    );
+    let head = match hand.lang {
+        Lang::En => format!("{}/{} · {} versions", scope.as_str(), name, versions.len()),
+        Lang::Zh => format!("{}/{} · {} 版", scope.as_str(), name, versions.len()),
+    };
+    let head = clip(&head, block);
     let mut out = vec![Line::from(Span::styled(
         format!("{}{head}", " ".repeat(lead)),
         Style::new().fg(fixed::MUTED),
     ))];
     if !*loaded {
-        out.push(Line::from(Span::styled(
-            format!("{}正在读取…", " ".repeat(lead)),
-            Style::new().fg(fixed::MUTED),
-        )));
         return out;
     }
     let stamp_w = versions

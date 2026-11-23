@@ -1,22 +1,23 @@
-//! The `/memo` hand: the names of both scopes, one name's versions, and the writes.
+// The `/memo` hand: the names of both scopes, one name's versions, and the writes.
 
 mod history;
 mod keys;
 mod list;
 mod read;
 
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use serde_json::Value;
 
 use crate::ui::tui::action::{Key, KeyCode};
-use crate::ui::tui::theme::{Accent, fixed};
+use crate::ui::tui::lang::Lang;
+use crate::ui::tui::text::display_width;
+use crate::ui::tui::theme::Accent;
 use crate::ui::tui::zone::main::desk::Reply;
 use crate::ui::tui::zone::main::desk::{MemoAsk, MemoScope};
 
-use super::super::hand::{Hand, Report};
+use super::super::hand::{Hand, MAX_ROWS, Report};
 
-/// One row of the name list; `content` is its newest version.
+// One row of the name list; `content` is its newest version.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Item {
     pub(super) scope: MemoScope,
@@ -24,21 +25,21 @@ pub(super) struct Item {
     pub(super) content: String,
 }
 
-/// One saved version, newest last.
+// One saved version, newest last.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Version {
     pub(super) ts: Option<String>,
     pub(super) content: String,
 }
 
-/// What the hand asks the desk to carry out.
+// What the hand asks the desk to carry out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Out {
     Ask(MemoAsk),
     Copy(String),
 }
 
-/// The face the panel shows.
+// The face the panel shows.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Face {
     List,
@@ -58,11 +59,11 @@ pub(super) enum Face {
     },
 }
 
-/// The list keeps a narrow block; the version views take two thirds of the terminal.
+// The list keeps a narrow block; the version views take two thirds of the terminal.
 const NARROW_LIST: usize = 64;
 const NARROW_WIDE: usize = 84;
 
-/// The block width and its left margin: two thirds, a floor, never past the terminal.
+// The block width and its left margin: two thirds, a floor, never past the terminal.
 fn layout(width: usize, narrow: usize) -> (usize, usize) {
     let block = (width * 2 / 3).max(narrow).min(width);
     (block, width.saturating_sub(block) / 2)
@@ -70,21 +71,21 @@ fn layout(width: usize, narrow: usize) -> (usize, usize) {
 
 pub(super) use super::text::{clip, wrap};
 
-/// The panel's state.
+// The panel's state.
 #[derive(Debug)]
 pub struct MemoHand {
     open: bool,
-    /// Every name in both scopes; the list's height comes from here.
+    // Every name in both scopes, decoded from `call memo list`.
     pub(super) items: Vec<Item>,
-    /// The list answered once: the pane may freeze its height.
+    // The list answered once; before that the panel draws blank.
     known: bool,
-    /// The row the list has selected.
+    // The row the list has selected.
     pub(super) selected: usize,
     pub(super) face: Face,
     pub(super) note: Option<String>,
     out: Vec<Out>,
-    /// The language the notes are said in; `en` until the desk says otherwise.
-    lang: crate::ui::tui::lang::Lang,
+    // The language the notes are said in; `en` until the desk says otherwise.
+    lang: Lang,
 }
 
 impl Default for MemoHand {
@@ -97,13 +98,21 @@ impl Default for MemoHand {
             face: Face::List,
             note: None,
             out: Vec::new(),
-            lang: crate::ui::tui::lang::Lang::default(),
+            lang: Lang::default(),
         }
     }
 }
 
 impl MemoHand {
-    /// A new ask landed. A write leaves the face where it is.
+    // The block a face draws in: the list keeps a narrow one, the reads a wide one.
+    fn narrow(&self) -> usize {
+        match self.face {
+            Face::List => NARROW_LIST,
+            Face::History { .. } | Face::Read { .. } => NARROW_WIDE,
+        }
+    }
+
+    // A new ask landed. A write leaves the face where it is.
     pub fn ask(&mut self, ask: &MemoAsk) {
         self.note = None;
         match ask {
@@ -121,7 +130,7 @@ impl MemoHand {
         }
     }
 
-    /// One `call memo` answer: the list, or one name's versions.
+    // One `call memo` answer: the list, or one name's versions.
     pub fn read(&mut self, answer: &Value) {
         if let Some(error) = self.error_of(answer) {
             self.note = Some(error);
@@ -148,7 +157,7 @@ impl MemoHand {
         }
     }
 
-    /// One `post memo` answer: the note, and a fresh list.
+    // One `post memo` answer: the note, and a fresh list.
     pub fn wrote(&mut self, answer: &Value) {
         if let Some(error) = self.error_of(answer) {
             self.note = Some(error);
@@ -164,12 +173,12 @@ impl MemoHand {
             .unwrap_or_default();
         self.note = Some(
             match (self.lang, answer.get("removed").and_then(Value::as_u64)) {
-                (crate::ui::tui::lang::Lang::En, Some(0)) => format!("no {scope}/{name}"),
-                (crate::ui::tui::lang::Lang::En, Some(_)) => format!("removed {scope}/{name}"),
-                (crate::ui::tui::lang::Lang::En, None) => format!("written {scope}/{name}"),
-                (crate::ui::tui::lang::Lang::Zh, Some(0)) => format!("没有 {scope}/{name}"),
-                (crate::ui::tui::lang::Lang::Zh, Some(_)) => format!("已删除 {scope}/{name}"),
-                (crate::ui::tui::lang::Lang::Zh, None) => format!("已写入 {scope}/{name}"),
+                (Lang::En, Some(0)) => format!("no {scope}/{name}"),
+                (Lang::En, Some(_)) => format!("removed {scope}/{name}"),
+                (Lang::En, None) => format!("written {scope}/{name}"),
+                (Lang::Zh, Some(0)) => format!("没有 {scope}/{name}"),
+                (Lang::Zh, Some(_)) => format!("已删除 {scope}/{name}"),
+                (Lang::Zh, None) => format!("已写入 {scope}/{name}"),
             },
         );
         self.out.push(Out::Ask(MemoAsk::List));
@@ -179,22 +188,22 @@ impl MemoHand {
         std::mem::take(&mut self.out)
     }
 
-    /// The language the notes are said in.
-    pub fn set_lang(&mut self, lang: crate::ui::tui::lang::Lang) {
+    // The language the notes are said in.
+    pub fn set_lang(&mut self, lang: Lang) {
         self.lang = lang;
     }
 
-    /// The error a refused memo answer carries.
+    // The error a refused memo answer carries.
     fn error_of(&self, answer: &Value) -> Option<String> {
         crate::ui::tui::lang::refused(self.lang, answer)
     }
 
-    /// The list row under the cursor.
+    // The list row under the cursor.
     fn current(&self) -> Option<&Item> {
         self.items.get(self.selected)
     }
 
-    /// Move the selection of whichever face is showing, wrapping around.
+    // Move the selection of whichever face is showing, wrapping around.
     fn step(&mut self, delta: isize) {
         match &mut self.face {
             Face::List => {
@@ -231,7 +240,7 @@ impl MemoHand {
         }
     }
 
-    /// Open the selected name's versions, or the selected version in full.
+    // Open the selected name's versions, or the selected version in full.
     fn enter(&mut self) {
         match self.face.clone() {
             Face::List => {
@@ -267,7 +276,7 @@ impl MemoHand {
         }
     }
 
-    /// Back one face: the version list, or the list of names.
+    // Back one face: the version list, or the list of names.
     fn back(&mut self) {
         match self.face.clone() {
             Face::Read {
@@ -290,7 +299,7 @@ impl MemoHand {
         }
     }
 
-    /// The selected version goes to the clipboard, whole.
+    // The selected version goes to the clipboard, whole.
     fn copy_version(&mut self) {
         let Face::History {
             scope,
@@ -305,16 +314,19 @@ impl MemoHand {
         let Some(version) = versions.iter().rev().nth(*selected) else {
             return;
         };
-        self.note = Some(format!(
-            "已复制 {}/{} 第 {} 版",
-            scope.as_str(),
-            name,
-            *selected + 1
-        ));
+        self.note = Some(match self.lang {
+            Lang::En => format!(
+                "copied {}/{} version {}",
+                scope.as_str(),
+                name,
+                *selected + 1
+            ),
+            Lang::Zh => format!("已复制 {}/{} 第 {} 版", scope.as_str(), name, *selected + 1),
+        });
         self.out.push(Out::Copy(version.content.clone()));
     }
 
-    /// The selected line goes to the clipboard, on its own.
+    // The selected line goes to the clipboard, on its own.
     fn copy_line(&mut self) {
         let Face::Read {
             versions,
@@ -331,11 +343,14 @@ impl MemoHand {
         let Some(line) = version.content.lines().nth(*row) else {
             return;
         };
-        self.note = Some(format!("已复制第 {} 行", *row + 1));
+        self.note = Some(match self.lang {
+            Lang::En => format!("copied line {}", *row + 1),
+            Lang::Zh => format!("已复制第 {} 行", *row + 1),
+        });
         self.out.push(Out::Copy(line.to_string()));
     }
 
-    /// The selected name goes, every version with it.
+    // The selected name goes, every version with it.
     fn delete(&mut self) {
         if !matches!(self.face, Face::List) {
             return;
@@ -356,29 +371,11 @@ impl Hand for MemoHand {
     }
 
     fn report(&self) -> Report {
-        let rows = match &self.face {
-            Face::List => 1 + self.items.len() + 2,
-            Face::History { versions, .. } => 1 + versions.len() + 2,
-            Face::Read {
-                versions, selected, ..
-            } => {
-                let lines = versions
-                    .iter()
-                    .rev()
-                    .nth(*selected)
-                    .map(|version| version.content.lines().count())
-                    .unwrap_or(0);
-                1 + lines
-            }
-        };
+        // Eight rows whatever the face: the strip shows text, so its height never moves.
         Report {
-            rows: rows as u16,
+            rows: MAX_ROWS,
             keys: keys::PANEL,
         }
-    }
-
-    fn ready(&self) -> bool {
-        self.known
     }
 
     fn stays(&self) -> bool {
@@ -415,26 +412,14 @@ impl Hand for MemoHand {
     }
 
     fn draw(&self, width: u16, rows: u16, accent: &Accent) -> Vec<Line<'static>> {
-        let rows = usize::from(rows);
-        let body = rows.saturating_sub(2);
-        if body == 0 {
-            // Not frozen yet: one line while the list is on its way.
-            return vec![Line::from(Span::styled(
-                "正在读取…",
-                Style::new().fg(fixed::MUTED),
-            ))];
-        }
-        let mut out = vec![Line::default()];
-        out.extend(match self.face {
+        let body = usize::from(rows).saturating_sub(1);
+        let mut out = match self.face {
             Face::List => list::body(self, width, body, accent),
             Face::History { .. } => history::body(self, width, body, accent),
             Face::Read { .. } => read::body(self, width, body, accent),
-        });
-        out.resize(1 + body, Line::default());
-        out.push(match &self.note {
-            Some(text) => Line::from(accent.span(text.clone())),
-            None => Line::default(),
-        });
+        };
+        out.resize(body, Line::default());
+        out.push(note_row(&self.note, width, self.narrow(), accent));
         out
     }
 
@@ -442,6 +427,17 @@ impl Hand for MemoHand {
         self.open = false;
         self.out.clear();
     }
+}
+
+// The last row: the note centered in the panel's own block, blank when there is none.
+fn note_row(note: &Option<String>, width: u16, narrow: usize, accent: &Accent) -> Line<'static> {
+    let Some(text) = note else {
+        return Line::default();
+    };
+    let (block, lead) = layout(usize::from(width), narrow);
+    let text = clip(text, block);
+    let pad = lead + block.saturating_sub(display_width(&text)) / 2;
+    Line::from(accent.span(format!("{}{text}", " ".repeat(pad))))
 }
 
 fn item_of(row: &Value) -> Option<Item> {
@@ -475,7 +471,7 @@ fn scope_of(text: &str) -> Option<MemoScope> {
     }
 }
 
-/// The first line of one text, which is what a row shows.
+// The first line of one text, which is what a row shows.
 pub(super) fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or_default()
 }

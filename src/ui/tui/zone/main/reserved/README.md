@@ -107,11 +107,11 @@ the same row's total, so one row's four percentages add up to 100 whatever the o
 |---|---|
 | `List` | a head row and one row per name: scope (7 cells), name (4–24 cells), the newest text's first line |
 | `History { scope, name, versions, selected, loaded }` | the name and its versions, newest on top |
+| `Read { scope, name, versions, selected, row }` | one version whole, every line wrapped to the panel |
 
-The height is `3 + items` — a blank row, the head, one row per name, and the note row — frozen when
-the list first answers. A name or version that arrives later never resizes the strip; the faces
-scroll instead, and the window follows the selection. A write or a delete keeps the frozen height
-and leaves blank rows behind.
+The strip is eight rows whatever the face draws: no blank row above, seven rows of body, and one row
+at the bottom for the note, centered in the panel's own block. Until `call memo list` answers the body
+is blank; an answered empty list says so, and a history shows only its head until its versions land.
 
 Keys, borrowed while the panel is on duty: `↑↓` with `k`/`w`, `→` with `l`/`d`, `←` with `h`/`a`,
 `Enter`, `Shift+Enter`, `Esc`. In the list `Enter` and right open the selected name; `Shift+Enter`
@@ -123,14 +123,17 @@ sends `del` for it. In the history `Enter` copies the selected version and left 
   answer sets the note and asks for a fresh list; nothing lands in the transcript.
 - **Copy.** The hand puts `Local::Copy` in the desk's own list; the main zone carries it up, and the
   loop writes an OSC 52 sequence to the terminal.
-- **The note.** The last row of the strip: the result of a write, a delete or a copy, and the wording
-  of any refusal. It is cleared when the next ask arrives.
+- **The note.** The last row of the strip, centered in the panel's block: the result of a write, a
+  delete or a copy, and the wording of any refusal. It is cleared when the next ask arrives.
+- **Scrolling.** A list window follows the selection. In a read the selected line's first wrapped row
+  sits at the top of the body, so its continuation rows follow below it; the last lines leave blank
+  rows under them rather than pulling the line back up.
 
 ### Frames
 
 - Every completion hire asks `call pools`; the answer goes straight to the hand on duty.
 - Hiring the usage panel asks `call usage`; the panel decodes `groups` and keeps only what it draws.
-- Hiring the memo panel asks `call memo list` first — the height is read off it — then the ask that
+- Hiring the memo panel asks `call memo list` first so the body opens with names, then the ask that
   opened the panel. `("call", "memo")` and `("post", "memo")` both reach the hand.
 - The desk hears `cwd` from the bus and hands it to the hand on duty.
 - The desk hears `queue` (`{count}`) and keeps the number. Idle, that number is the one row it
@@ -143,7 +146,7 @@ sends `del` for it. In the history `Enter` copies the selected version and left 
   calls `arrived`, asks the hand's pools, and feeds it the workspace. A memo ask that arrives while
   the memo hand is on duty is handed to that hand instead: the seat and the height stay.
 - `settle()` drops a hand whose `stays()` is false and takes the report of a fresh hand once
-  `ready()` is true.
+  `ready()` is true; `MemoHand` never waits, its eight rows are fixed.
 - `pane::Pane`'s `request_height` returns `min(report.rows, MAX_ROWS)`, or `IDLE_ROWS` while no
   report is frozen.
 - `assign` records the allocated rows, at least `IDLE_ROWS`.

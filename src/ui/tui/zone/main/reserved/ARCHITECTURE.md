@@ -53,4 +53,5 @@ loop, the picker, and the tree.
 6. `ALIGN_KEY` with `config.ui.tui.zone.main.reserved.usageAlign` in the server's key table.
 7. `MemoAsk` with the two doors it names: `call memo`'s `list`/`history` and `post memo`'s
    `add`/`mod`/`del`, whose answers the hand decodes.
-8. Every hand's `report().rows` with what it draws: the desk clamps the body, never the hand.
+8. Every hand's `report().rows` with what it draws: the desk clamps the body, never the hand. The memo
+   hand alone reports a fixed `MAX_ROWS`, since the strip shows text and must not resize.
