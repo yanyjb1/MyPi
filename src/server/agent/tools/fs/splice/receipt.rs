@@ -371,7 +371,7 @@ pub(crate) fn row(
     };
     let error = match why {
         Why::Overlap => "OVERLAP".to_string(),
-        Why::Mismatch(why) => format!("MISMATCH: {why}"),
+        Why::Mismatch(why) => format!("{why}"),
     };
     Row {
         index: edit.index,
