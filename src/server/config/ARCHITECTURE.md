@@ -12,7 +12,7 @@
 | `profile/` | `types` (`ResolvedProfile`, the built-in table), `discover` (scan, precedence, duplicate names, the names on offer), `resolve` (prompts, tools, compaction) |
 | `paths.rs` | `ConfigPaths`: the project's `.mypi` and the global root, the files and folders under them, and `project_dir` |
 | `notice.rs` | `ConfigNotice` and the shared warning constructor |
-| `rules.rs` | the site-rule manifest, the sets it names, their installation and flattening |
+| `rules.rs` | the site-rule manifest, the sets it names, their installation and flattening (feature `web`) |
 | `web-rulesets/` | one set per site or site family: the rules the built-in manifest names |
 | `write.rs` | textual `write_key` for `config.yaml` |
 | `prompts/` | one folder per built-in profile, each holding `SYSTEM.md` and `COMPACTION.md` |

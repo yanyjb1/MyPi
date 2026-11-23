@@ -27,8 +27,8 @@ list, how a session enables one, the call's common path, and where each manual i
 | 10 | `task` | `subagent/task.rs` |
 | 11 | `final` | `subagent/final.rs` |
 | 12 | `mcp` | `mcp/mod.rs` |
-| 13 | `web` | `web/mod.rs` |
-| 14 | `search` | `search/mod.rs` |
+| 13 | `web` | `web/mod.rs` — feature `web` |
+| 14 | `search` | `search/mod.rs` — feature `web` |
 | 15 | `memo` | `memo/memo/tool.rs` |
 | 16 | `todo` | `memo/todo/tool.rs` |
 | 17 | `context` | `memo/context/tool.rs` |

@@ -66,7 +66,8 @@ error, never a default.
 
 When an artifact is missing, it is written next to `models.yml` in the global root: `config.yaml`
 from the table, one directory per built-in profile (`system.md` and `compact.md` from the compiled
-texts), and the site-rule manifest `web-rules.json` plus every `web-rulesets/` file it names.
+texts), and, in a build with the `web` feature, the site-rule manifest `web-rules.json` plus every
+`web-rulesets/` file it names.
 Nothing existing is overwritten, and a directory of a profile's name in any root stops that one
 write: the profile list is read per name, so one built-in profile present never hides another. A
 write that fails is a notice, not a failure — the compiled copy answers instead. Other profiles are

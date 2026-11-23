@@ -25,7 +25,7 @@ pub fn prepare(cmd: &mut Command, follow: Follow) {
             if setsid() == -1 {
                 return Err(io::Error::last_os_error());
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             if follow == Follow::Main && linux::die_with_parent() == -1 {
                 return Err(io::Error::last_os_error());
             }
@@ -114,7 +114,7 @@ pub fn stop(process: &Process) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux {
     const PR_SET_PDEATHSIG: i32 = 1;
     const SIGKILL: i32 = 9;

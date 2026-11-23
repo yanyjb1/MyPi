@@ -27,7 +27,7 @@ The browser keys are read by the web domain itself, not by the tool layer.
 
 - **A verb, not a browser.** The tool layer maps arguments; the domain decides when a browser
   starts, how many tabs exist and when they are reclaimed.
-- **The browser is optional at build time.** `web` is a feature, not a runtime switch, because the
+- **The browser is optional at build time.** `web` is the cargo feature `web`, on by default, because the
   browser stack is the largest dependency in the crate.
 - **The work tab is separate.** `web` drives the session's work tab; `search` owns the search tab,
   so two operations never steer one page.

@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use super::view::{Export, Source};
 use crate::server::agent::tools::workspace::Workspace;
+#[cfg(feature = "web")]
 use crate::server::config::rules::Rules;
 
 // What a tool reads: one session's conditions, built when it was booked.
@@ -39,6 +40,7 @@ pub struct Env {
     pub paths: Paths,
     pub source: Arc<dyn Source>,
     // The site rules `web` narrows a page with: one read, when the config was loaded.
+    #[cfg(feature = "web")]
     pub rules: Arc<Rules>,
     // What this conversation's reads have already shown the model.
     pub seen: Seen,
@@ -262,6 +264,7 @@ pub struct Defaults {
     pub export: Arc<dyn Export>,
     pub paths: Paths,
     pub source: Arc<dyn Source>,
+    #[cfg(feature = "web")]
     pub rules: Arc<Rules>,
 }
 
@@ -294,6 +297,7 @@ impl Defaults {
             export: self.export.clone(),
             paths: self.paths.clone(),
             source: self.source.clone(),
+            #[cfg(feature = "web")]
             rules: Arc::clone(&self.rules),
             seen: Seen::default(),
             batch: Vec::new(),

@@ -1,4 +1,4 @@
-// Unix sockets: Linux and macOS.
+// Unix sockets: every unix, Android included.
 
 use std::io;
 use std::path::Path;

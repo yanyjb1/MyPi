@@ -8,4 +8,6 @@ mod entry;
 mod source;
 mod types;
 
+#[cfg(feature = "web")]
+pub use types::BrowserOptions;
 pub use types::{Config, Effective};

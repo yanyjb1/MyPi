@@ -130,6 +130,11 @@ fn platform_dir() -> PathBuf {
     std::env::temp_dir().join("mypi")
 }
 
+#[cfg(target_os = "android")]
+fn platform_dir() -> PathBuf {
+    std::env::temp_dir().join("mypi")
+}
+
 #[cfg(windows)]
 fn platform_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")

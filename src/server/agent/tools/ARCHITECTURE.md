@@ -57,7 +57,7 @@ Each area's own files and relations are in its architecture document.
   stored-text path form), `proc` (process group spawn, group signal, tree teardown), `stop::Stop`
   (the session's stop signal and the actions a call registers on it).
 - **`request`**: `ToolCall`, `ToolDef`, `Message` for definitions and the context window.
-- **`web`**: `WebArgs`, `run` from the `web` and `search` tools; `shutdown` from `main`.
+- **`web`** (feature `web`): `WebArgs`, `run` from the `web` and `search` tools; `shutdown` from `main`.
 - **Who calls it**: `loop/turn` (one batch at a time, `Batch::run`), `loop/turn/cycle` (`roster`
   for the manuals, and the child list correction), `loop/session/book` (builds `Engine` from
   config), `loop/session/source` (builds a session's job service and MCP bridge on first use).
@@ -75,7 +75,7 @@ Engine::run
       kairos          ── Source::jobs (a JobHost) ── loop/job
       subagent/*      ── template, answer name ── Effect::Child
       mcp             ── mcp::sync ── mcp::stdio
-      web, search     ── crate::web
+      web, search     ── crate::web (feature `web`)
       memo/*          ── memo, todo, context
   → effect stamping → spill → ToolOutput
 ```

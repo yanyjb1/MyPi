@@ -65,7 +65,7 @@ not injected at all.
 ### The offset
 
 One fixed offset, written as `UTC+8`, `GMT-5` or `UTC+8:30`; the process keeps it for its lifetime.
-A missing or geographic name falls back to the machine's own zone, read once at startup and reduced to its offset. `TZ` is not consulted.
+A missing or geographic name falls back to the machine's own zone, read once at startup and reduced to its offset; on Android the runtime is asked for the offset in effect, so a `TZ` the user set counts.
 
 ### The directories
 

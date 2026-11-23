@@ -8,6 +8,7 @@ mod kairos;
 pub(crate) mod mcp;
 pub(crate) mod memo;
 pub(crate) mod registry;
+#[cfg(feature = "web")]
 pub(crate) mod search;
 mod shell;
 pub(crate) mod spec;
@@ -15,4 +16,5 @@ pub(crate) mod subagent;
 mod summary;
 pub(crate) mod workspace;
 
+#[cfg(feature = "web")]
 pub(crate) mod web;

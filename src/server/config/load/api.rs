@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "web")]
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -12,6 +13,7 @@ use super::super::notice::ConfigNotice;
 use super::super::paths::{self, ConfigPaths};
 use super::super::profile::{self, ResolvedProfile};
 use super::super::registry::{self, Value};
+#[cfg(feature = "web")]
 use super::super::rules::Rules;
 use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES,
@@ -20,10 +22,6 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_MEMO_FOLDER,
     KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_TASK_TIMEOUT_SECS,
     KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES,
-    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
-    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_IDLE_SECS, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT,
-    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PROFILE_DIR,
-    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_USER_AGENT,
     KEY_CONFIG_SERVER_AGENT_TOOLS_EDIT_FULL_ITEM_BUDGET,
     KEY_CONFIG_SERVER_AGENT_TOOLS_GREP_DEEP_MAX, KEY_CONFIG_SERVER_AGENT_TOOLS_GREP_FOLD_MAX,
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES, KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES,
@@ -31,7 +29,13 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_TOOLS_SHELL_TIMEOUT, KEY_CONFIG_SERVER_API_DEFAULT_MODEL,
     KEY_CONFIG_SERVER_PLATFORM_HOME, KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE,
     KEY_CONFIG_SERVER_REQUEST_COMPACT_RETAIN_TAIL, KEY_CONFIG_SERVER_REQUEST_STREAMING,
-    KEY_CONFIG_WEB_BRING_TO_FRONT,
+};
+#[cfg(feature = "web")]
+use super::super::schema::{
+    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
+    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_IDLE_SECS, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT,
+    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PROFILE_DIR,
+    KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_USER_AGENT, KEY_CONFIG_WEB_BRING_TO_FRONT,
 };
 use super::super::write;
 use super::aliases;
@@ -149,6 +153,7 @@ impl Config {
             .filter(|doc| !doc.is_empty())
             .collect()
     }
+    #[cfg(feature = "web")]
     // What the web tool launches with.
     pub fn browser(&self) -> crate::server::config::BrowserOptions {
         let effective = self.effective(None);
@@ -176,6 +181,7 @@ impl Config {
         }
     }
 
+    #[cfg(feature = "web")]
     // Whether a verification challenge should raise the browser window.
     pub fn bring_to_front(&self) -> bool {
         self.effective(None)
@@ -234,6 +240,7 @@ impl Config {
         self.inner.models.default_model(configured)
     }
 
+    #[cfg(feature = "web")]
     // The site rules the web tool narrows a page with: one read, at load.
     pub fn web_rules(&self) -> Arc<Rules> {
         Arc::clone(&self.inner.web_rules)

@@ -49,9 +49,15 @@ fn load_zone(name: Option<&str>) -> Option<Zone> {
 }
 
 // The machine's own zone: the zoneinfo file where there is one, the system call on windows.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "android")))]
 fn system_zone() -> Option<Zone> {
     parse_tzif(&std::fs::read("/etc/localtime").ok()?)
+}
+
+#[cfg(target_os = "android")]
+// Android's zone data sits in a system archive, so the platform's own offset answers for it as it does on windows.
+fn system_zone() -> Option<Zone> {
+    Some(Zone::fixed(android::current_offset()))
 }
 
 // Windows has no zoneinfo file; the offset in effect at startup becomes the process's zone.
@@ -333,5 +339,42 @@ mod win {
             info.standard_bias
         };
         (info.bias + extra).saturating_neg().saturating_mul(60)
+    }
+}
+
+#[cfg(target_os = "android")]
+mod android {
+    #[repr(C)]
+    struct Tm {
+        tm_sec: i32,
+        tm_min: i32,
+        tm_hour: i32,
+        tm_mday: i32,
+        tm_mon: i32,
+        tm_year: i32,
+        tm_wday: i32,
+        tm_yday: i32,
+        tm_isdst: i32,
+        tm_gmtoff: std::ffi::c_long,
+        tm_zone: *const std::ffi::c_char,
+    }
+
+    unsafe extern "C" {
+        fn tzset();
+        fn localtime_r(time: *const std::ffi::c_long, out: *mut Tm) -> *mut Tm;
+    }
+
+    // The seconds this device adds to UTC right now; bionic resolves the zone, including a `TZ` the user set.
+    pub(super) fn current_offset() -> i32 {
+        let now = super::unix_now() as std::ffi::c_long;
+        let mut out = std::mem::MaybeUninit::<Tm>::zeroed();
+        // SAFETY: `tzset` reads the environment once; `localtime_r` fills a value this frame owns. Both are plain libc calls.
+        unsafe {
+            tzset();
+            if localtime_r(&now, out.as_mut_ptr()).is_null() {
+                return 0;
+            }
+            out.assume_init().tm_gmtoff as i32
+        }
     }
 }

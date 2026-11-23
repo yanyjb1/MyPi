@@ -1,4 +1,4 @@
-// The table: seventeen tools, one line each. The roster and the front door both derive from it, so the two readers cannot disagree.
+// The table: every built-in tool, one line each. The roster and the front door both derive from it, so the two readers cannot disagree.
 
 use std::collections::BTreeSet;
 
@@ -7,12 +7,14 @@ use super::fs::{edit, grep, read, splice, write};
 use super::kairos::tool;
 use super::mcp;
 use super::memo::{context, memo as memo_tool, todo};
+#[cfg(feature = "web")]
 use super::search;
 use super::shell::{alias, tool as shell_tool};
 use super::spec::Tool;
 use super::subagent;
 use crate::server::agent::request::message::ToolDef;
 
+#[cfg(feature = "web")]
 use super::web;
 
 // Every built-in tool, in the order the model reads them.
@@ -29,7 +31,9 @@ pub const TOOLS: &[Tool] = &[
     subagent::TASK,
     subagent::FINAL,
     mcp::TOOL,
+    #[cfg(feature = "web")]
     web::TOOL,
+    #[cfg(feature = "web")]
     search::TOOL,
     memo_tool::TOOL,
     todo::TOOL,
