@@ -233,7 +233,7 @@ fn messages(messages: &[WireMessage]) -> Vec<Value> {
                     "tool_call_id": tool_call_id,
                     "content": content,
                 }))
-            } // mypi:splice:c9c47172bd39fcdd 0 close
+            }
         }
     }
     out
