@@ -149,12 +149,14 @@ fn walk(
         if !first && Instant::now() >= deadline {
             return false;
         }
-        if dir == skip {
+        // A unit that is one file names only that file: its neighbours are exactly who may point at it, so they are walked.
+        if unit.place.is_dir() && dir == skip {
             continue;
         }
         for entry in Loader::entries(&dir) {
             if entry.dir {
-                if entry.path != skip {
+                // The same unit rule one level down: a directory unit never walks into itself.
+                if entry.path != skip || !unit.place.is_dir() {
                     stack.push(entry.path);
                 }
                 continue;
