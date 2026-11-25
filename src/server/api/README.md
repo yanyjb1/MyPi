@@ -198,7 +198,9 @@ turn's first frame, always — not usually.
 A session is idle or busy. Idle: whoever submits first opens the turn and becomes the writer.
 Busy: the writer is fixed to the viewer that opened the turn; any other viewer's write answers
 `writer_required`. The slot is cleared when the round structure arrives, not when the connection
-goes away.
+goes away — but a session whose last watcher leaves keeps its turn and loses its name, so the next
+front end to write claims the slot. `interrupt` is not a write to the session and takes no slot: any
+front end watching the turn may stop it.
 
 ### Errors
 
@@ -212,8 +214,7 @@ answers the key `hello_required`.
   rounds, archives and tool results are the other halves' vocabulary, carried through untouched.
 - **One stream per session, not per connection.** A second front end on the same session sees the
   same turn; the buffer is what makes joining mid-turn possible.
-- **The writer is a turn, not a role.** It exists while a turn runs and only then, so it needs no
-  takeover, no demotion, and no bookkeeping across turns.
+- **The writer is a turn, not a role.** It exists while a turn runs and only then. The name on it is what keeps two front ends off one session, so a session nobody watches has no name on it and the next one to arrive takes it.
 - **A booking follows the watchers.** The loop holds a session's runtime — handle, threads, worker
   child, tabs — only while a connection follows it. The last watcher leaving unbooks it, and the
   next message books it again from its own rows, so nothing accumulates across a long server life.

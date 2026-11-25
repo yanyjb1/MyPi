@@ -52,7 +52,8 @@ Relay::start
   session row and its archive, takes the tool names out of the archive's manuals, and books.
 - `relay.rs` keeps the set of sessions some connection follows and hands back every session that
   has just lost its last watcher; `Api::open` wires that to `Loop::drop`. A session nobody follows
-  therefore leaves the table, its jobs and its browser tabs with it. A child session is never
+  therefore leaves the table, its jobs and its browser tabs with it, and its running turn loses the
+  name that held the writer slot, so the next front end to write takes it. A child session is never
   followed, so its booking stays with the sub-agent runner.
 - `watch` with no session stops following: it is how a front end says it left a conversation.
 - `submit` and `compact` share `submit::open`: the busy check, the booking, the delivery, and the

@@ -211,9 +211,14 @@ impl Relay {
         self.report(gone);
     }
 
-    // Only the viewer that opened the turn may change the session while it runs.
+    // The viewer holding the turn may change the session while it runs; a slot left empty by a session nobody watches is claimed by the first write to arrive.
     pub(crate) fn writes(&self, session: i64, viewer: &str) -> bool {
-        match self.state().active.get(&session) {
+        let mut state = self.state();
+        match state.active.get_mut(&session) {
+            Some(active) if active.viewer.is_empty() => {
+                active.viewer = viewer.to_string();
+                true
+            }
             Some(active) => active.viewer == viewer,
             None => true,
         }
@@ -488,7 +493,7 @@ fn bill(usage: Option<Usage>) -> Value {
     }
 }
 
-// A session with no watcher left keeps no buffer, and is handed back to be unbooked.
+// A session with no watcher left keeps no buffer, is handed back to be unbooked, and leaves its turn's slot for the next front end to claim.
 fn drop_unfollowed(state: &mut State) -> Vec<i64> {
     let followed: HashSet<i64> = state
         .conns
@@ -499,6 +504,11 @@ fn drop_unfollowed(state: &mut State) -> Vec<i64> {
     state
         .buffers
         .retain(|session, _| followed.contains(session));
+    for session in &gone {
+        if let Some(active) = state.active.get_mut(session) {
+            active.viewer.clear();
+        }
+    }
     state.watched = followed;
     gone
 }

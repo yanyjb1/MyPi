@@ -76,7 +76,7 @@ pub(crate) fn post(api: &Api, conn: u64, viewer: &str, frame: &Frame) -> Result<
         }
         "memo" => post::memo::apply(api, ask).map(|()| Reply::plain()),
         "default_model" => post::default_model::apply(api, ask).map(|()| Reply::plain()),
-        "interrupt" => post::interrupt::apply(api, viewer, ask).map(|()| Reply::plain()),
+        "interrupt" => post::interrupt::apply(api, ask).map(|()| Reply::plain()),
         "mailbox" => subscribe::mail::apply(api, conn, viewer, ask).map(|()| Reply::plain()),
         other => Err(Refuse::new("unknown_name").args(json!({"name": other}))),
     }
