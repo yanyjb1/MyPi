@@ -11,6 +11,16 @@ pub(crate) const SUFFIXES: &[&str] = &[
     "c", "h", "cc", "hh", "cpp", "hpp", "cxx", "hxx", "inl", "ipp",
 ];
 
+// The suffixes a compiler compiles on its own; every other suffix this language claims is a header.
+const UNITS: &[&str] = &["c", "cc", "cpp", "cxx"];
+
+// Whether a file is a translation unit rather than a header.
+pub(super) fn source(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| UNITS.contains(&ext))
+}
+
 // Words that open a piece of their own and name what it is.
 const HEADS: &[&str] = &[
     "namespace",

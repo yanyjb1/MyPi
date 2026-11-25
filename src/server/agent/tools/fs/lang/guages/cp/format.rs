@@ -52,8 +52,12 @@ fn judge(text: &str, path: &Path, half: &str, stop: &Arc<Stop>) -> Outcome {
     if half == "c++" {
         cmd.arg(STANDARD);
     }
-    // The project's own headers are the one thing of the project worth searching: a text that cannot reach one was never given a fair reading.
-    for dir in super::facts::include_dirs(path) {
+    // The project's own headers come from its compile database; stdin has no directory of its own, so a quoted include beside the file is searched for from that directory.
+    let mut dirs = super::facts::include_dirs(path);
+    if let Some(dir) = path.parent() {
+        dirs.push(dir.to_path_buf());
+    }
+    for dir in dirs {
         cmd.arg("-I").arg(dir);
     }
     cmd.arg("-");

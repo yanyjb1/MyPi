@@ -32,27 +32,16 @@ pub(super) fn unit(path: &Path) -> Option<PathBuf> {
 // The project root above a file: the nearest directory naming a project, or the file's own directory.
 fn nearest(dir: &Path) -> PathBuf {
     dir.ancestors()
-        .find(|at| {
-            [
-                "compile_commands.json",
-                "CMakeLists.txt",
-                "Makefile",
-                "meson.build",
-            ]
-            .iter()
-            .any(|mark| at.join(mark).is_file())
-        })
+        .find(|at| facts::MARKS.iter().any(|mark| at.join(mark).is_file()))
         .map_or_else(|| dir.to_path_buf(), Path::to_path_buf)
 }
 
-// What a report calls this project: the name of the root its database sits under.
+// What a report calls this project: the nearest directory that describes a build, and the database's own directory when none does.
 pub(super) fn title(root: &Path) -> String {
-    let at = if root.join("compile_commands.json").is_file() {
-        root
-    } else {
-        root.parent().unwrap_or(root)
-    };
-    at.file_name()
+    root.ancestors()
+        .find(|at| facts::BUILDS.iter().any(|mark| at.join(mark).is_file()))
+        .unwrap_or(root)
+        .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default()
 }

@@ -18,10 +18,11 @@ types and namespaces, C++ the half with them — so a header never has to say wh
 - Edges: every `#include`, resolved beside the including file first for a quoted name, then through
   the include directories the project's compile database names. An angled name never looks beside
   the file that wrote it.
-- Parser: `clang -fsyntax-only` over stdin, with the project's include directories and the standard
-  a lone text is read under. It is read for its verdict alone, so the written file keeps the lines
-  the model sent.
-- Checker: `clang-check -p` over the files a batch wrote, one translation unit each.
+- Parser: `clang -fsyntax-only` over stdin, with the project's include directories, the file's own
+  directory and the standard a lone text is read under. It is read for its verdict alone, so the
+  written file keeps the lines the model sent.
+- Checker: `clang-check -p` over the files a batch wrote, one translation unit each; a report names
+  the project by the directory that describes its build.
 - Tests: none. CP carries no test framework of its own.
 
 ### Relations output

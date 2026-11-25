@@ -21,12 +21,15 @@ pub(crate) static HUB: Hub = Hub {
 };
 
 // The files that name a project of this language.
-const MARKS: &[&str] = &[
+pub(super) const MARKS: &[&str] = &[
     "compile_commands.json",
     "CMakeLists.txt",
     "Makefile",
     "meson.build",
 ];
+
+// The files that describe a build, as opposed to one a build generated: a project is named after its build description.
+pub(super) const BUILDS: &[&str] = &["CMakeLists.txt", "Makefile", "meson.build"];
 
 // Names one interface line lists before the rest fold into a count.
 const LISTED: usize = 12;
@@ -114,7 +117,7 @@ fn territory(unit: &Unit, loader: &Loader) -> Vec<Decl> {
         if child.place == unit.place || out.iter().any(|held| held.unit.place == child.place) {
             continue;
         }
-        let tag = if target.extension().and_then(|e| e.to_str()) == Some("c") {
+        let tag = if super::table::source(target) {
             "source"
         } else {
             "header"
