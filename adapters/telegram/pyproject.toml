@@ -1,0 +1,9 @@
+[project]
+name = "mypi-telegram"
+version = "0.1.0"
+description = "A Telegram front end for mypi's bridge: no dependency, one script directory."
+requires-python = ">=3.8"
+dependencies = []
+
+[tool.ruff]
+line-length = 200
