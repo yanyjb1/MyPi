@@ -21,7 +21,6 @@ keys! {
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES = "config", "server.agent.tools", "outputMaxLines", Int, DefaultValue::Int(120), "Lines of one tool result kept inline.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES = "config", "server.agent.tools", "outputMaxBytes", Int, DefaultValue::Int(32768), "Bytes of one tool result kept inline.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES = "config", "server.agent.tools", "aliases", List, DefaultValue::List(NO_ARGS), "User aliases as `name=command`; fixed for every session.", true;
-    KEY_CONFIG_SERVER_AGENT_TOOLS_EDIT_FULL_ITEM_BUDGET = "config", "server.agent.tools.edit", "fullItembudget", Int, DefaultValue::Int(40), "Lines an edited item may take and still be handed over whole; a longer one hands over the window around the change.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_READ_PERSISTENT_DOCS = "config", "server.agent.tools.read", "persistentDocs", List, DefaultValue::List(&["DESIGN"]), "Documents the user keeps current: `.md` stems, upper-cased; no listing dates them.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_GREP_DEEP_MAX = "config", "server.agent.tools.grep", "deepMax", Int, DefaultValue::Int(6), "Items a grep answer expands whole, every line of them.", true;
     KEY_CONFIG_SERVER_AGENT_TOOLS_GREP_FOLD_MAX = "config", "server.agent.tools.grep", "foldMax", Int, DefaultValue::Int(25), "Items grep sketches; more than this folds to per-file counts.", true;

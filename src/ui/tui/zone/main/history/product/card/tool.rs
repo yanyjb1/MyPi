@@ -269,7 +269,7 @@ pub(crate) struct Excerpt {
     pub lines: Vec<String>,
 }
 
-// What a change leaves for the card to line up: the line it sits on, the text that went when the request cannot name it, the item around it, and the blocks above that item.
+// What a change leaves for the card to line up: the line it sits on, the text that went when the request cannot name it, and the item around it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ToolView {
     Plain {
@@ -278,7 +278,6 @@ pub(crate) enum ToolView {
     Diff {
         at: Option<usize>,
         old: Option<String>,
-        scope: Vec<String>,
         excerpt: Option<Excerpt>,
     },
 }
@@ -302,7 +301,6 @@ impl ToolView {
                 })
                 .unwrap_or_default()
         };
-        let scope = strings(d.get("scope"));
         let excerpt = d.get("excerpt").and_then(|e| {
             let from = e.get("from").and_then(Value::as_u64)? as usize;
             Some(Excerpt {
@@ -311,12 +309,7 @@ impl ToolView {
             })
         });
         if at.is_some() || old.is_some() || excerpt.is_some() {
-            return ToolView::Diff {
-                at,
-                old,
-                scope,
-                excerpt,
-            };
+            return ToolView::Diff { at, old, excerpt };
         }
         ToolView::Plain {
             text: text.to_string(),

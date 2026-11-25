@@ -37,16 +37,13 @@ written call could hold. A stop leaves the file untouched.
 ### The memo
 
 ```text
-excerpt: { "atLine": 12, "scope": ["impl Greeter"], "excerpt": { "from": 8, "lines": [...] } }
+excerpt: { "atLine": 12, "excerpt": { "from": 8, "lines": [...] } }
 ```
 
-The memo describes one change: `atLine` is the old-file line it starts on, `scope` the breadcrumb
-of the blocks above the item, `excerpt` the item as it stood before the change — its first
-old-file line and every line of it — or a window around the change: five lines above it and five
-below, counted over the lines the change covers. The window is taken when the item does not hold
-the whole change, and when the item is longer than `config.server.agent.tools.edit.fullItembudget`
-lines (default 40), because a card folds a long body and the fold would hide the change. A window
-is not the item, so the item's own declaration joins the breadcrumb.
+The memo describes one change: `atLine` is the old-file line it starts on, `excerpt` the item as it
+stood before the change — its first old-file line and every line of it — or a window of five lines
+above and below the change when no item holds it. The excerpt never reaches past the item the change
+sits in.
 
 The item is the nearest enclosing block that declares something; failing that, the nearest one
 that starts after a blank line, a comment or an attribute; failing that, the nearest block. Blank
@@ -67,9 +64,3 @@ excerpt, signs the changed lines, and paints the rest.
 ## 3. Unresolved
 
 None.
-
-## 4. Config fields
-
-| key | use |
-|---|---|
-| `config.server.agent.tools.edit.fullItembudget` | lines an edited item may take and still be handed over whole, default 40; a longer item hands over the window around the change |

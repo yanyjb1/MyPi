@@ -7,55 +7,23 @@ use super::lang::Table;
 // Lines a window keeps above and below the change.
 const WINDOW: usize = 5;
 
-// The context of one change: `{"scope": [...], "excerpt": {"from": n, "lines": [...]}}`. `at` is the first changed line, 1-based; `span` is how many old lines the change covers; `cap` is how long a piece may be and still be handed over whole. The excerpt is the piece holding the change, or a window around it when no piece holds it or the piece is longer than `cap`.
-pub(crate) fn context(table: &Table, text: &str, at: usize, span: usize, cap: usize) -> Value {
+// The context of one change: `{"excerpt": {"from": n, "lines": [...]}}`. `at` is the first changed line, 1-based; `span` is how many old lines the change covers. The excerpt is the piece holding the change, or a window around it when no piece holds it.
+pub(crate) fn context(table: &Table, text: &str, at: usize, span: usize) -> Value {
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
-        return json!({ "scope": [], "excerpt": { "from": 1, "lines": [] } });
+        return json!({ "excerpt": { "from": 1, "lines": [] } });
     }
     let at = at.clamp(1, lines.len());
     let end = (at + span.max(1) - 1).min(lines.len());
-    let piece = table.innermost(at - 1);
-    let holds = piece.is_some_and(|(first, line)| {
-        let last = line.mate.unwrap_or(first);
-        first < at && last + 1 >= end && last - first < cap.max(1)
-    });
-
-    // The breadcrumb, nearest first: the pieces holding the change, and the piece itself once a window stands in for it.
-    let mut scope: Vec<String> = match piece {
-        Some((first, _)) => {
-            let mut above = table.around(first);
-            above.pop();
-            above
-                .iter()
-                .rev()
-                .filter_map(|(_, line)| line.exact.clone())
-                .collect()
+    let (from, to) = match table.innermost(at - 1) {
+        // The piece stands in only for a change below its own first line; one on that line draws the window.
+        Some((first, line)) if first < at && line.mate.unwrap_or(first) + 1 >= end => {
+            (first, line.mate.unwrap_or(first))
         }
-        None => Vec::new(),
-    };
-    let (from, to) = match piece {
-        Some((first, line)) if holds => (first, line.mate.unwrap_or(first)),
-        Some((_, line)) => {
-            if let Some(exact) = &line.exact {
-                scope.insert(0, exact.clone());
-            }
-            window(at, end, lines.len())
-        }
-        None => window(at, end, lines.len()),
+        _ => window(at, end, lines.len()),
     };
 
-    let cut = scope.len() > 3;
-    scope.truncate(3);
-    scope.reverse();
-    if cut {
-        scope.insert(0, "…".to_string());
-    }
-
-    json!({
-        "scope": scope,
-        "excerpt": { "from": from + 1, "lines": lines[from..=to] },
-    })
+    json!({ "excerpt": { "from": from + 1, "lines": lines[from..=to] } })
 }
 
 // The window around a change: `WINDOW` lines above it and below it, 0-based and inclusive.

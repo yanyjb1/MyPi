@@ -1,4 +1,4 @@
-//! edit and splice: the call as it streams, then the item around the change with its diff.
+// edit and splice: the call as it streams, then the item around the change with its diff.
 
 use std::ops::Range;
 
@@ -11,7 +11,6 @@ use super::{
     Excerpt, GUTTER_MIN, Numbered, Section, ToolBlock, ToolOutcome, ToolRenderer, ToolView, gutter,
     indentation, output_lines, partial, path_of,
 };
-use crate::ui::tui::text::glyphs as g;
 use crate::ui::tui::theme::fixed;
 
 pub(crate) struct Edit;
@@ -27,11 +26,10 @@ impl ToolRenderer for Edit {
     }
 
     fn call_body(&self, b: &ToolBlock<'_>) -> Vec<Row> {
-        let mut out = breadcrumb(b);
         if b.result.is_none() {
-            out.extend(streaming(b));
+            return streaming(b);
         }
-        out
+        Vec::new()
     }
 
     fn result_sections(&self, b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Section> {
@@ -42,23 +40,7 @@ impl ToolRenderer for Edit {
     }
 }
 
-/// The blocks the changed item sits in: the call's own body, since the result is the diff.
-fn breadcrumb(b: &ToolBlock<'_>) -> Vec<Row> {
-    let Some(o) = b.result else {
-        return Vec::new();
-    };
-    let ToolView::Diff { scope, .. } = ToolView::from_details(o.details, o.text) else {
-        return Vec::new();
-    };
-    if scope.is_empty() {
-        return Vec::new();
-    }
-    let text = scope.join(&format!(" {} ", g::SEP));
-    vec![Row::of(Lead::None, vec![Run::fixed(text, fixed::DIM)])]
-}
-
-/// The call as it arrives: the text going, then the text coming. A `splice` call names its ranges
-/// as an array, so each one arrives whole and they are told apart by an ellipsis.
+// The call as it arrives: the text going, then the text coming; a `splice` call's ranges are told apart by an ellipsis.
 fn streaming(b: &ToolBlock<'_>) -> Vec<Row> {
     if b.name == "splice"
         && let rows = splice_streaming(b)
@@ -87,7 +69,7 @@ fn streaming(b: &ToolBlock<'_>) -> Vec<Row> {
     out
 }
 
-/// One `splice` call's ranges as they arrive, each with its own text.
+// One `splice` call's ranges as they arrive, each with its own text.
 fn splice_streaming(b: &ToolBlock<'_>) -> Vec<Row> {
     let mut out = Vec::new();
     for (at, item) in partial::items(b.args, "edits").iter().enumerate() {
@@ -219,7 +201,7 @@ fn run_rows(painter: &mut code::Painter, from: usize, lines: &[String], width: u
         .collect()
 }
 
-/// One number a segment carries; 0 when it carries none.
+// One number a segment carries; 0 when it carries none.
 fn number(seg: &Value, key: &str) -> usize {
     seg.get(key)
         .and_then(Value::as_u64)
@@ -227,7 +209,7 @@ fn number(seg: &Value, key: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// Text that arrived whole: every line signed, without a number.
+// Text that arrived whole: every line signed, without a number.
 fn push_text(out: &mut Vec<Row>, sign: char, text: &str, span: Option<Range<usize>>) {
     for (i, line) in text.lines().enumerate() {
         let span = if i == 0 { span.clone() } else { None };
@@ -235,7 +217,7 @@ fn push_text(out: &mut Vec<Row>, sign: char, text: &str, span: Option<Range<usiz
     }
 }
 
-/// One diff row: the sign and the number, the indentation, then the text.
+// One diff row: the sign and the number, the indentation, then the text.
 fn diff_row(
     sign: char,
     at: Option<usize>,
@@ -272,7 +254,7 @@ fn diff_row(
     Row::of(Lead::None, runs)
 }
 
-/// One unchanged line of the item: its old number, and the text painted by its language.
+// One unchanged line of the item: its old number, and the text painted by its language.
 fn context_row(painter: &mut code::Painter, at: usize, text: &str, width: usize) -> Row {
     let mut runs = vec![Run::fixed(
         gutter(' ', Some(at), width),
@@ -285,7 +267,7 @@ fn context_row(painter: &mut code::Painter, at: usize, text: &str, width: usize)
     Row::of(Lead::None, runs)
 }
 
-/// The two single lines' changed runs; the indentation is never part of them.
+// The two single lines' changed runs; the indentation is never part of them.
 fn pair_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
     if old.lines().count() != 1 || new.lines().count() != 1 {
         return None;
@@ -295,7 +277,7 @@ fn pair_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
     changed_spans(&old, &new)
 }
 
-/// The run one line has before and after its common prefix and suffix.
+// The run one line has before and after its common prefix and suffix.
 fn changed_spans(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
     if old == new {
         return None;
@@ -349,7 +331,7 @@ fn edit_result(b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Row> {
     }
 }
 
-/// The whole item, with only the changed lines signed: everything else is context.
+// The whole item, with only the changed lines signed: everything else is context.
 fn item_rows(
     b: &ToolBlock<'_>,
     at: Option<usize>,
@@ -439,7 +421,7 @@ fn item_rows(
     rows
 }
 
-/// The item's lines with one region replaced, as `splice` wrote them.
+// The item's lines with one region replaced, as `splice` wrote them.
 fn replaced(lines: &[String], start: usize, removed: usize, new: &str) -> String {
     let mut out: Vec<&str> = lines[..start].iter().map(String::as_str).collect();
     out.extend(new.lines());
@@ -448,20 +430,20 @@ fn replaced(lines: &[String], start: usize, removed: usize, new: &str) -> String
     out.join("\n")
 }
 
-/// A call that hands back no memo — `final`'s edit — draws the change from its own arguments.
+// A call that hands back no memo — `final`'s edit — draws the change from its own arguments.
 fn from_args(args: &str) -> Option<Vec<Row>> {
     let at = range_start(args);
     let old = partial::text(args, "old");
     (at.is_some() || old.is_some()).then(|| diff_rows(args, at, old))
 }
 
-/// The first line the call names.
+// The first line the call names.
 fn range_start(args: &str) -> Option<usize> {
     let range = partial::text(args, "range")?;
     range.trim().split('-').next()?.trim().parse().ok()
 }
 
-/// Removed lines, then added ones, each with the line it sat on.
+// Removed lines, then added ones, each with the line it sat on.
 fn diff_rows(args: &str, at: Option<usize>, old: Option<String>) -> Vec<Row> {
     let new = partial::text(args, "new").unwrap_or_default();
     let deletions = numbered(at, old.as_deref().unwrap_or_default());
@@ -516,7 +498,7 @@ fn diff_rows(args: &str, at: Option<usize>, old: Option<String>) -> Vec<Row> {
     out
 }
 
-/// A text's lines, numbered from `at`.
+// A text's lines, numbered from `at`.
 fn numbered(at: Option<usize>, text: &str) -> Vec<Numbered> {
     if text.is_empty() {
         return Vec::new();
@@ -535,7 +517,7 @@ fn numbered(at: Option<usize>, text: &str) -> Vec<Numbered> {
         .collect()
 }
 
-/// A row whose number goes when the line above already printed it.
+// A row whose number goes when the line above already printed it.
 fn push(
     out: &mut Vec<Row>,
     sign: char,
@@ -554,7 +536,7 @@ fn push(
     out.push(diff_row(sign, at, &line.text, span, width));
 }
 
-/// A jump in line numbers inside one side is a region boundary.
+// A jump in line numbers inside one side is a region boundary.
 fn gap(out: &mut Vec<Row>, prev: Option<usize>, next: Option<usize>) {
     if let (Some(above), Some(below)) = (prev, next)
         && below > above + 1

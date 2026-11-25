@@ -328,7 +328,6 @@ pub(crate) fn mass_text(
     from: usize,
     to: usize,
     new: &str,
-    cap: usize,
 ) -> Result<(String, Value, String)> {
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
@@ -349,7 +348,7 @@ pub(crate) fn mass_text(
     };
     let updated = spliced(text, &[&one]);
     let old_text = lines[from - 1..to].join("\n");
-    let mut memo = change::context(table, text, from, to - from + 1, cap);
+    let mut memo = change::context(table, text, from, to - from + 1);
     memo["atLine"] = json!(from);
     memo["old"] = json!(old_text);
     Ok((

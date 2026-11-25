@@ -7,7 +7,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | file | holds |
 |---|---|
 | `mod.rs` | module declarations, the tool export, and the two names `final` reuses |
-| `tool.rs` | the tool's face: the parameter table, the batch-aware run (authorisation, one merged write per file, one answer per call, the audit's later half), the merged snapshot and the flattening of every call's items |
+| `tool.rs` | the tool's face: the parameter table, the batch-aware run (authorisation, one merged write per file, one answer per call, the file's one item outcome, the audit's later half), the merged snapshot and the flattening of every call's items |
 | `edit.rs` | one range: its snapshot coordinates, its block, the macros it fills, the ranges it cuts, the anchor and overlap rules, the reverse-order splice and the whole-line write `final` reuses |
 | `fmt.rs` | the language's formatter through the gate: the merged text and each range's landing |
 | `receipt.rs` | the answer: the verdict line, one block per range, the word a refused range carries, the segment memo and the footer's shared report |

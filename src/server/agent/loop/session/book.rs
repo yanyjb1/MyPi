@@ -124,7 +124,6 @@ impl Loop {
                 })
                 .collect(),
             default_budget: cfg.subagent_budget(),
-            full_item_budget: cfg.full_item_budget(),
             persistent_docs: cfg.persistent_docs().into(),
             export,
             paths: crate::server::agent::tools::contract::env::Paths {

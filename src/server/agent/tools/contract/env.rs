@@ -30,8 +30,6 @@ pub struct Env {
     pub aliases: Aliases,
     // The budget a spawned sub-session gets when the call names none.
     pub default_budget: u32,
-    // Lines an edited item may take and still be handed over whole.
-    pub full_item_budget: usize,
     // Documents the user keeps current: `.md` stems, upper-cased; a listing never dates them.
     pub persistent_docs: Arc<[String]>,
     // Whether the session's model takes image parts on the wire.
@@ -86,6 +84,8 @@ pub struct Shell {
 pub struct Answer {
     pub text: String,
     pub memo: Option<serde_json::Value>,
+    // One outcome for the whole file: a single failed range makes it failed.
+    pub items: Vec<crate::server::agent::request::contract::ItemOk>,
     // Why the call was refused before any of its ranges could be read.
     pub refusal: Option<String>,
 }
@@ -259,7 +259,6 @@ pub struct Defaults {
     pub aliases: BTreeMap<String, String>,
     pub models: Models,
     pub default_budget: u32,
-    pub full_item_budget: usize,
     pub persistent_docs: Arc<[String]>,
     pub export: Arc<dyn Export>,
     pub paths: Paths,
@@ -291,7 +290,6 @@ impl Defaults {
             models: roster(&self.models, own),
             aliases: Aliases::new(self.aliases.clone(), self.source.aliases(session)?),
             default_budget: self.default_budget,
-            full_item_budget: self.full_item_budget,
             persistent_docs: Arc::clone(&self.persistent_docs),
             vision,
             export: self.export.clone(),

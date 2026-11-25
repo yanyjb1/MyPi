@@ -135,6 +135,10 @@ The verdict is `OK`, `PARTLY FAILED`, `FAILED, NOTHING WRITTEN`, `WRITTEN, NOT P
 
 A call that never reached its edits names the reason instead of a verdict.
 
+The file is the unit of outcome: the call answers one item, and one refused range fails it, so the
+card turns red for the whole file. A call that landed nothing keeps that item and carries `fail`
+besides.
+
 A written block opens with where it landed, names the item, and numbers its lines by the file's own numbers — the plus side as it now stands, the minus side as it stood before the write.
 
 A deletion has no plus side.
@@ -162,11 +166,7 @@ The check's counts cover every diagnostic the crate's check found, whether it ha
 One segment per range, in the order the call sent it: the lines it took and the lines that stand there now,
 numbered on both sides.
 
-A segment also carries the file around the change, taken from the file as it stood before the write. A
-change inside an item hands the item's own outermost lines above and below it; a change that covers
-one item whole hands the items beside it instead, as far as the file allows. A front end holding only
-the memo draws the change in full from these two sides, so they are sent even when the answer's own
-text shows less.
+A segment also carries the item around the change, taken from the file as it stood before the write: the change inside an item hands that item's own lines above and below it, with the change's own lines cut out. A change that covers an item whole, or that no item holds, carries no context at all — the memo never reaches past the item the change sits in.
 
 A range that was left out carries positions and a reason, never lines.
 

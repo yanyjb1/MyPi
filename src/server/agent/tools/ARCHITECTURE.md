@@ -23,7 +23,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `fs/gate.rs` | the process gate: one child run to its end under a deadline, its whole group killed by a stop or a deadline, its two streams read on threads of their own, and where a toolchain program is found; the caller waits on the child's exit alone, and a deadline thread kills the tree to end that wait |
 | `fs/skeleton.rs` | the report's skeleton over a line table: the gutter width and a numbered source line, the innermost piece holding a line, the seam drawn around a range |
 | `fs/fault.rs` | the batch's audit: one check per unit written into, by the language that owns it, every error and warning landing once — under the edit whose lines it hit, under the write that replaced the file whole, or in the unit's list on the last answer that can take it |
-| `fs/change.rs` | `context` (the piece around a changed line, its breadcrumb and excerpt), `receipt`, `line_of`, `lines_of` |
+| `fs/change.rs` | `context` (the piece around a changed line, its line numbers and the excerpt), `receipt`, `line_of`, `lines_of` |
 
 ## Tool areas
 

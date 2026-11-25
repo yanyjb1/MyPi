@@ -384,17 +384,10 @@ pub(crate) fn row(
     }
 }
 
-// The lines around one edit, taken from the file before the write.
-//
-// A change inside an item carries that item's outermost extent, with the change's own lines cut out. A change that
-// covers one item whole carries the items beside it instead: above and below, as far as the file allows.
+// The lines of the item around one edit, taken from the file before the write, with the change's own lines cut out.
 fn excerpt(edit: &Edit, base: &[String], table: &Table) -> Context {
     // `edit.end` is one past the last line taken, so the first line after the change is numbered `end + 1`.
     match outermost(table, edit.start) {
-        Some((open, end)) if is_whole(edit, open, end) => Context {
-            before: neighbour(table, base, open, true),
-            after: neighbour(table, base, end + 1, false),
-        },
         Some((open, end)) => Context {
             before: run_of(base, open + 1, edit.start),
             after: run_of(base, edit.end + 1, end + 1),
@@ -407,22 +400,6 @@ fn excerpt(edit: &Edit, base: &[String], table: &Table) -> Context {
 fn outermost(table: &Table, at: usize) -> Option<(usize, usize)> {
     let (open, line) = table.around(at).into_iter().next()?;
     Some((open, line.mate.unwrap_or(open)))
-}
-
-// Whether the change covers this piece whole: its range is exactly the piece's own lines.
-fn is_whole(edit: &Edit, open: usize, end: usize) -> bool {
-    edit.start == open && edit.end == end + 1
-}
-
-// The piece next to one edge of an item: the nearest one that starts above or below it.
-fn neighbour(table: &Table, base: &[String], at: usize, above: bool) -> Option<Run> {
-    let opens: Vec<usize> = table.heads().into_iter().map(|(open, _)| open).collect();
-    let split = match above {
-        true => opens.iter().rfind(|open| **open < at).copied()?,
-        false => opens.iter().find(|open| **open >= at).copied()?,
-    };
-    let end = table.end(split).unwrap_or(split);
-    run_of(base, split + 1, end + 1)
 }
 
 // One 1-based inclusive range of the file, when it holds any line.

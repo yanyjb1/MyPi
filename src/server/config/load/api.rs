@@ -22,7 +22,6 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_MEMO_FOLDER,
     KEY_CONFIG_SERVER_AGENT_LOOP_TOOLS_TASK_TIMEOUT_SECS,
     KEY_CONFIG_SERVER_AGENT_SUBAGENT_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_TOOLS_ALIASES,
-    KEY_CONFIG_SERVER_AGENT_TOOLS_EDIT_FULL_ITEM_BUDGET,
     KEY_CONFIG_SERVER_AGENT_TOOLS_GREP_DEEP_MAX, KEY_CONFIG_SERVER_AGENT_TOOLS_GREP_FOLD_MAX,
     KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES, KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES,
     KEY_CONFIG_SERVER_AGENT_TOOLS_READ_PERSISTENT_DOCS, KEY_CONFIG_SERVER_AGENT_TOOLS_SHELL,
@@ -62,16 +61,6 @@ impl Config {
             int(KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_LINES),
             int(KEY_CONFIG_SERVER_AGENT_TOOLS_OUTPUT_MAX_BYTES),
         )
-    }
-
-    // Lines an edited item may take and still be handed over whole.
-    pub fn full_item_budget(&self) -> usize {
-        self.effective(None)
-            .values
-            .get(KEY_CONFIG_SERVER_AGENT_TOOLS_EDIT_FULL_ITEM_BUDGET)
-            .and_then(Value::as_int)
-            .unwrap_or(40)
-            .max(1) as usize
     }
 
     // What `grep` expands and what it folds. Every count is a threshold, never a target.

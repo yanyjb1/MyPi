@@ -79,7 +79,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         let ending = eol::Eol::of(&raw);
         let text = ending.plain(&raw);
         let table = lang::table(&p, &text);
-        let mut edited = exact_text(&text, &table, &old, &new, env.full_item_budget)?;
+        let mut edited = exact_text(&text, &table, &old, &new)?;
         edited.text = ending.write(&edited.text);
         write_atomic(&p, &edited.text)?;
         Ok(edited)
@@ -118,13 +118,7 @@ pub(crate) struct Edited {
 }
 
 // Replace one unique run of text.
-pub(crate) fn exact_text(
-    text: &str,
-    table: &lang::Table,
-    old: &str,
-    new: &str,
-    cap: usize,
-) -> Result<Edited> {
+pub(crate) fn exact_text(text: &str, table: &lang::Table, old: &str, new: &str) -> Result<Edited> {
     anyhow::ensure!(!old.is_empty(), "`old` must not be empty");
 
     match text.matches(old).count() {
@@ -137,7 +131,7 @@ pub(crate) fn exact_text(
             let total = text.lines().count() + new_lines - old_lines;
             Ok(Edited {
                 text: text.replacen(old, new, 1),
-                memo: change::context(table, text, at, old_lines, cap),
+                memo: change::context(table, text, at, old_lines),
                 receipt: change::receipt(at, old_lines, new_lines, total),
                 at,
                 lines: new_lines,

@@ -122,7 +122,6 @@ loop only adds tool events to it.
 - `config.server.agent.loop.request.maxRetries` / `retryInterval` / `retryTimeout` — retries after the first attempt, seconds between them, and the response-head wait of one attempt.
 - `config.server.agent.tools.outputMaxLines` / `outputMaxBytes` — the inline budget handed to the tool layer.
 - `config.server.agent.tools.shellTimeout` — one command's wall-clock cap.
-- `config.server.agent.tools.edit.fullItembudget` — how long an edited item may be and still reach the card whole.
 - `config.server.agent.tools.browser.{bin,port,profileDir,idleSecs,userAgent,extraArgs}` — the web tool's launch values, and `config.web.bringToFront` for its challenge window.
 - `config.server.agent.tools.kairos.*` — `maxConcurrent`, `timeoutSecs`, `maxOutputBytes`, `maxRetained`: the job scheduler's numbers.
 - `config.server.agent.subagent.maxToolCalls` — the default budget for a sub-session.

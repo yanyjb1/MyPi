@@ -1,4 +1,4 @@
-//! The `final` tool: a child's draft, its edits, and the one submit.
+// The `final` tool: a child's draft, its edits, and the one submit.
 
 use anyhow::Result;
 
@@ -75,16 +75,10 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
                 Some(range) => {
                     let (from, to) = splice::parse_range(&range)?;
                     let block = args.str(NEW)?;
-                    splice::mass_text(&text, &table, from, to, &block, env.full_item_budget)?
+                    splice::mass_text(&text, &table, from, to, &block)?
                 }
-                None => edit::exact_text(
-                    &text,
-                    &table,
-                    &args.str(OLD)?,
-                    &args.str(NEW)?,
-                    env.full_item_budget,
-                )
-                .map(|edited| (edited.text, edited.memo, edited.receipt))?,
+                None => edit::exact_text(&text, &table, &args.str(OLD)?, &args.str(NEW)?)
+                    .map(|edited| (edited.text, edited.memo, edited.receipt))?,
             };
             draft.write(&updated)?;
             Ok(ToolOutput::text(message))
@@ -112,7 +106,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     }
 }
 
-/// One line for a history listing: the operation.
+// One line for a history listing: the operation.
 fn summary(call: &CallRecord) -> String {
     let op = summary::field(call, "type").unwrap_or_default();
     summary::flat(&op)

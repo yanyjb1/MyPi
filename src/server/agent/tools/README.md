@@ -103,7 +103,7 @@ ImagePart  { format: String, data: String }  // base64; empty images is the text
 ```
 
 - `text` is what the model reads; `memo` is the structured payload the front end renders.
-- `items` is what each item of the call answered, in the arguments' order, and it is the only source of the front end's status: the card draws one row per item and hangs that item's `error` under it. A single-item tool leaves it empty and the front door answers one entry.
+- `items` is what each item of the call answered, in the arguments' order, and it is the only source of the front end's status: the card draws one row per item and hangs that item's `error` under it. A single-item tool leaves it empty and the front door answers one entry; `splice` fills the one entry itself, because its ranges share a write and a verdict.
 - `fail` is why a call was cut short; any value fails the call. The front door moves it to `reason` and appends `[reason]` after the body and its artifact note, so the marker is the result's last line whatever the truncation did. A cut call states its reason in its one item.
 - `spill` is filled by the front door, never by a tool.
 - `effects` are side effects that must land with this tool result. A tool appends one; the front door stamps its `ts` before returning.

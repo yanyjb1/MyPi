@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::edit::{self, Edit, Why};
 use super::fmt::{self, Word};
 use super::receipt::{self, Fate};
-use crate::server::agent::request::contract::ToolCall;
+use crate::server::agent::request::contract::{ItemOk, ToolCall};
 use crate::server::agent::tools::contract::env::{Answer, Env, License, Shell, Slot};
 use crate::server::agent::tools::contract::halt::INTERRUPTED;
 use crate::server::agent::tools::contract::output::ToolOutput;
@@ -173,6 +173,7 @@ impl Answer {
             Some(memo) => ToolOutput::with_memo(self.text.clone(), memo.clone()),
             None => ToolOutput::text(self.text.clone()),
         };
+        out.items = self.items.clone();
         if let Some(reason) = &self.refusal {
             out = out.failure(reason.clone());
         }
@@ -266,6 +267,19 @@ impl Built {
         let base = change::lines_of(&self.base);
         let table = lang::table(path, &self.shown);
         let base_table = lang::table(path, &self.base);
+        // The file is the unit: one refused range fails every call of the batch on it.
+        let refused = !self.dropped.is_empty()
+            || self.unreadable.iter().any(Option::is_some)
+            || self
+                .pieces
+                .iter()
+                .flatten()
+                .any(|piece| piece.why.is_some());
+        let items = vec![if refused {
+            ItemOk::failed("some ranges were refused; the file is only partly written")
+        } else {
+            ItemOk::ok()
+        }];
         let spots = self.spots();
         let refusal: Vec<Option<Why>> = {
             let mut out: Vec<Option<Why>> = vec![None; self.edits.len()];
@@ -282,6 +296,7 @@ impl Built {
                         Answer {
                             text: receipt::refused(shown, why),
                             memo: None,
+                            items: items.clone(),
                             refusal: Some("the call's ranges could not be read".to_string()),
                         },
                         Vec::new(),
@@ -346,6 +361,7 @@ impl Built {
                     Answer {
                         text,
                         memo: Some(memo),
+                        items: items.clone(),
                         refusal: None,
                     },
                     slots,
