@@ -116,7 +116,6 @@ pub(crate) fn answer(
 }
 
 // The relations of each language this batch holds, with the indices of the files that language owns. One entry per language that names a relation index, in the languages' own order.
-// The relations of each language this batch holds, with the indices of the files that language owns. One entry per language that names a relation index, in the languages' own order.
 fn groups(files: &[scan::File]) -> Vec<(&'static Relations, Vec<usize>)> {
     let mut out: Vec<(&'static Relations, Vec<usize>)> = Vec::new();
     for (at, file) in files.iter().enumerate() {

@@ -1,4 +1,4 @@
-// The Python relations: `A.b` or `A::b` as a class member or a module member, and a name's own declarations.
+// The Python relations: `A.b` as a class member or a module member, and a name's own declarations.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::fs::lang::{self, Line, Relation, Relations, Row, Source, Table};
 
-// How Python's relations read: a module or a class, named either by a dot or by `::`.
+// How Python's relations read: a module or a class, named by a dot.
 pub(crate) const RELATIONS: Relations = Relations { scan };
 
 // Members one block lists.
@@ -332,11 +332,11 @@ fn names(table: &Table, line: &Line, word: &str) -> bool {
     name == word
 }
 
-// `A.b` or `A::b`, exactly two identifiers.
+// `A.b`, exactly two identifiers: Python's own separator is the dot, and `::` belongs to the languages that write it.
 fn two_segments(query: &str) -> Option<(String, String)> {
     let query = query.trim();
-    let (a, b) = query.split_once("::").or_else(|| query.split_once('.'))?;
-    if b.contains("::") || b.contains('.') {
+    let (a, b) = query.split_once('.')?;
+    if b.contains('.') {
         return None;
     }
     (ident(a) && ident(b)).then(|| (a.to_string(), b.to_string()))

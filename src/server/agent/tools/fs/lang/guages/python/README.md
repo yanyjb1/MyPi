@@ -14,7 +14,7 @@ Python's own declarations, registered in `mod.rs`: its suffixes, line table, gra
 - Parser: `ruff format`, read for its verdict alone: what it lays out is thrown away, so a written file keeps the lines the model sent.
 - Checker: `ty` types the whole project, `ruff check` lints the files a batch wrote.
 - Tests: `pytest`, each test asked for by its own node path.
-- Relations: `A.b` and `A::b` as a class member or a module member, and a lone name's declarations.
+- Relations: `A.b` as a class member or a module member, and a lone name's declarations.
 
 ### Relations output
 
