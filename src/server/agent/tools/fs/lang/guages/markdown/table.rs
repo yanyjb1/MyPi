@@ -2,24 +2,8 @@
 
 use std::path::Path;
 
-use crate::server::agent::tools::fs::lang::{Language, Line, Table};
-
-// The suffixes this sorter answers to.
-pub(crate) const SUFFIXES: &[&str] = &["md", "markdown"];
-
-// What this language owes the registry: the files that mark its projects, its suffixes, its table, and the two questions. Markdown names no project: a document is never the marker of a workspace tree.
-pub(crate) static LANGUAGE: Language = Language {
-    markers: &[],
-    suffixes: SUFFIXES,
-    table,
-    shape,
-    relations: None,
-    hub: None,
-    source: false,
-    format: None,
-    check: None,
-    test: None,
-};
+use super::LANGUAGE;
+use crate::server::agent::tools::fs::lang::{Line, Table};
 
 // One file's line table.
 pub(crate) fn table(_path: &Path, text: &str) -> Table {
@@ -67,7 +51,7 @@ fn front(raw: &[&str], table: &mut Table) -> usize {
 }
 
 // The fence this line opens: its mark, and how many marks it runs.
-fn fence(line: &str) -> Option<(char, usize)> {
+pub(super) fn fence(line: &str) -> Option<(char, usize)> {
     let text = line.trim_start();
     let Some(mark @ ('`' | '~')) = text.chars().next() else {
         return None;
@@ -77,7 +61,7 @@ fn fence(line: &str) -> Option<(char, usize)> {
 }
 
 // Whether this line closes a fence opened with `run` marks of `mark`, and carries nothing else.
-fn closes(line: &str, mark: char, run: usize) -> bool {
+pub(super) fn closes(line: &str, mark: char, run: usize) -> bool {
     let text = line.trim();
     let marks = text.chars().take_while(|one| *one == mark).count();
     marks >= run && marks == text.chars().count()

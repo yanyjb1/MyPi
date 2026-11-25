@@ -9,7 +9,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `mod.rs` | module declarations and the entries' re-exports |
 | `types.rs` | the shared shapes: units, declarations, edges, children and one neighbourhood |
 | `entry.rs` | the doors: the unit a file belongs to, its neighbourhood and the rows a view reads |
-| `loader.rs` | the one read-only disk door: a per-call cache, filtered directory entries and the text cap |
+| `loader.rs` | the one read-only disk door: a per-call cache, filtered directory entries, the text cap, and the per-root name index a language naming a file by its stem reads |
 | `index.rs` | turning facts into a neighbourhood: unit lookup, child expansion, size, incoming/outgoing and declared-by |
 | `walk.rs` | the upward search: the deadline, whole-level drops and the boundary |
 | `parts.rs` | the printing parts: relative paths, plurals, clipping, headings, node/edge/boundary lines and grouped importers |

@@ -15,7 +15,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `guages/rust/` | Rust's declaration and its own knowledge |
 | `guages/python/` | Python's declaration and its own knowledge |
 | `guages/web/` | the web's declaration and its own knowledge: one sorter per file kind, the page-rooted graph, the three-way anchor index, the biome parser and checker |
-| `guages/markdown.rs` | the Markdown sorter: headings, fences, lists, quotes, HTML blocks, front matter and how far a heading's section reaches |
+| `guages/markdown/` | Markdown's declaration and its own knowledge: the sorter, the reference scan, the note graph and the narration |
 
 ## Relations
 

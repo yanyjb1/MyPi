@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 // A file past this size is not read: the one cap every reader of the tree shares.
 pub(crate) const MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -14,15 +15,45 @@ pub(crate) struct Entry {
     pub(crate) dir: bool,
 }
 
+// Every file under one root, by file stem: a language that names a file by name alone reads this.
+pub(crate) struct Names {
+    root: PathBuf,
+    by_stem: HashMap<String, Vec<PathBuf>>,
+}
+
+impl Names {
+    // Every file under the root whose stem is `stem`, in path order; a name no file carries answers empty.
+    pub(crate) fn find(&self, stem: &str) -> &[PathBuf] {
+        self.by_stem.get(stem).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+fn gather(dir: &Path, into: &mut HashMap<String, Vec<PathBuf>>) {
+    for entry in entries(dir) {
+        if entry.dir {
+            gather(&entry.path, into);
+            continue;
+        }
+        if let Some(stem) = entry.path.file_stem() {
+            into.entry(stem.to_string_lossy().into_owned())
+                .or_default()
+                .push(entry.path);
+        }
+    }
+}
+
 // The only door to the disk the machine and the languages share. It never writes.
 pub(crate) struct Loader {
     cache: RefCell<HashMap<PathBuf, Option<String>>>,
+    // The one name index this loader built: a loader lives a single read call, so nothing written later can leave it stale.
+    names: RefCell<Option<Rc<Names>>>,
 }
 
 impl Loader {
     pub(crate) fn new() -> Self {
         Loader {
             cache: RefCell::new(HashMap::new()),
+            names: RefCell::new(None),
         }
     }
 
@@ -41,6 +72,25 @@ impl Loader {
     // One directory's entries, junk skipped, directories first, names case-insensitive.
     pub(crate) fn entries(dir: &Path) -> Vec<Entry> {
         entries(dir)
+    }
+
+    // The files under `root` by stem: walked once for this loader, and again only when a later call names another root.
+    pub(crate) fn named(&self, root: &Path) -> Rc<Names> {
+        if let Some(hit) = self.names.borrow().as_ref()
+            && hit.root == root
+        {
+            return Rc::clone(hit);
+        }
+        let built = Rc::new(Names {
+            root: root.to_path_buf(),
+            by_stem: {
+                let mut by_stem: HashMap<String, Vec<PathBuf>> = HashMap::new();
+                gather(root, &mut by_stem);
+                by_stem
+            },
+        });
+        *self.names.borrow_mut() = Some(Rc::clone(&built));
+        built
     }
 }
 
