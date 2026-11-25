@@ -1,0 +1,479 @@
+/* The middle column above the box: the head of a conversation and the transcript under it. */
+
+/* The middle head opens at the brand's own band, so the three columns break on one line. */
+#topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.75rem 0.5rem;
+  min-height: var(--head-h);
+  border-bottom: 1px solid rgb(var(--line));
+}
+
+/* A shrunk head hands its width to the title rather than to the two chevrons. */
+#rail-open,
+#panel-toggle {
+  flex: none;
+}
+
+/* The title takes the brand's own box at the middle of the bar, hung from the head's own top padding: a box of
+   type where the list has a box of image, opening on one line with it. Centring it would not do, because this
+   head pads 0.75rem above and 0.5rem below, and a centred box would sit 2px high in a band that is 56px tall. */
+#topbar .grow {
+  position: absolute;
+  left: 50%;
+  top: 0.75rem;
+  transform: translateX(-50%);
+  height: var(--brand-h);
+  max-width: 55%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+#topbar h1 {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#session-acts {
+  display: flex;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+#chat::-webkit-scrollbar {
+  display: none;
+}
+
+/* The transcript is the scroller, and it carries no bar: the dial beside it is where the place is read. */
+#chat {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 1rem;
+  scrollbar-width: none;
+}
+
+#hero {
+  max-width: var(--reading);
+  margin: 0 auto;
+  padding: 6rem 0;
+  text-align: center;
+  color: rgb(var(--ink-4));
+}
+
+#hero h1 {
+  font-family: var(--mono);
+  font-size: 20px;
+  color: rgb(var(--ink-2));
+}
+
+#main[data-empty="0"] #hero {
+  display: none;
+}
+
+#main[data-empty="1"] #sheet {
+  display: none;
+}
+
+/* A page shorter than the column sits at its foot, so the newest round stays against the box. */
+.sheet {
+  max-width: var(--reading);
+  width: 100%;
+  margin: auto auto 0;
+  padding: 1rem 0 2rem;
+}
+
+/* One round: its head, then the blocks it owns, and a hairline that says where it ends. */
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid rgb(var(--line));
+}
+
+.turn:last-child {
+  border-bottom: 0;
+}
+
+.who {
+  display: flex;
+  gap: 0.5rem;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  color: rgb(var(--ink-4));
+}
+
+.who .accent {
+  color: rgb(var(--accent));
+}
+
+/* What the reader said, set apart from what the model said. */
+.you {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-left: 0.75rem;
+  border-left: 2px solid rgb(var(--accent) / 0.5);
+  color: rgb(var(--ink));
+}
+
+.md {
+  overflow-wrap: anywhere;
+}
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p {
+  margin: 0.5rem 0;
+}
+
+/* A heading says how far it leads: the three levels step down in size, and a hairline above each one keeps a
+   long answer's parts apart without a second colour. */
+.md h1,
+.md h2,
+.md h3 {
+  margin: 1.1rem 0 0.45rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: rgb(var(--ink));
+}
+
+.md h1 {
+  font-size: 16px;
+}
+
+.md h2 {
+  font-size: 15px;
+}
+
+.md h3 {
+  font-size: 14px;
+  color: rgb(var(--ink-2));
+}
+
+/* A quote sits in the same margin as the reader's own line, so the two read as one voice set apart. */
+.md blockquote {
+  margin: 0.5rem 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid rgb(var(--line-2));
+  color: rgb(var(--ink-3));
+}
+
+/* The reset takes every marker away; a body puts its own back, in the accent the ring's ticks are drawn in. */
+.md ul,
+.md ol {
+  margin: 0.5rem 0;
+  padding-left: 1.35rem;
+}
+
+.md ul {
+  list-style: disc;
+}
+
+.md ol {
+  list-style: decimal;
+}
+
+.md li {
+  margin: 0.15rem 0;
+}
+
+.md li::marker {
+  color: rgb(var(--accent));
+}
+
+.md ul ul,
+.md ul ol,
+.md ol ul,
+.md ol ol {
+  margin: 0.15rem 0;
+}
+
+.md pre {
+  overflow-x: auto;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid rgb(var(--line));
+  border-radius: 8px;
+  background: rgb(var(--sink));
+}
+
+.md code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* Inline code sits in a box of its own, and a block's code gives that box back to its pre. */
+.md :not(pre) > code {
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  background: rgb(var(--sink));
+  color: rgb(var(--ink-2));
+}
+
+.md pre > code {
+  padding: 0;
+  background: none;
+  color: inherit;
+}
+
+.md a {
+  color: rgb(var(--accent));
+}
+
+.md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.md th,
+.md td {
+  border: 1px solid rgb(var(--line));
+  padding: 0.2rem 0.45rem;
+  text-align: left;
+}
+
+/* A table's head is the one row that says what the columns are: weight, and no second colour. */
+.md th {
+  font-weight: 600;
+  background: rgb(var(--sink) / 0.6);
+}
+
+/* A thinking block: one line while it is folded, the whole of it when it is opened. */
+details.think {
+  border-left: 2px solid rgb(var(--line-2));
+  padding: 0.25rem 0.6rem;
+  margin: 0.35rem 0;
+  background: transparent;
+}
+
+details.think summary.think-head {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: rgb(var(--ink-4));
+  list-style: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+details.think summary::-webkit-details-marker {
+  display: none;
+}
+
+details.think summary::before {
+  content: "▸ ";
+  color: rgb(var(--ink-4));
+  font-size: 10px;
+}
+
+details[open].think summary::before {
+  content: "▾ ";
+}
+
+details.think .think-body {
+  margin-top: 0.35rem;
+  color: rgb(var(--ink-4));
+  font-size: 12.5px;
+  line-height: 20px;
+}
+
+details.think .think-body p,
+details.think .think-body code {
+  color: rgb(var(--ink-4));
+}
+
+/* Tool card: structured two-part view ({name} : {intent}) with collapsible req & res */
+.tool-card {
+  border: 1px solid rgb(var(--line));
+  border-radius: 6px;
+  background: rgb(var(--card));
+  margin: 0.35rem 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+  user-select: none;
+  background: rgb(var(--hover) / 0.4);
+}
+
+.tool-head:hover {
+  background: rgb(var(--hover));
+}
+
+.tool-head .dot {
+  font-size: 8px;
+  line-height: 1;
+}
+
+.tool-card[data-state="running"] .dot {
+  color: rgb(var(--accent));
+}
+
+.tool-card[data-state="done"] .dot {
+  color: rgb(var(--success));
+}
+
+.tool-card[data-state="failed"] .dot {
+  color: rgb(var(--danger));
+}
+
+.tool-head .tool-name {
+  color: rgb(var(--ink-2));
+  font-weight: 500;
+}
+
+.tool-head .tool-intent {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgb(var(--ink-3));
+}
+
+.tool-head .tool-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: rgb(var(--ink-4));
+  font-size: 11px;
+}
+
+.tool-head .state-tag {
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: rgb(var(--sink));
+}
+
+.tool-head .tool-toggle {
+  background: none;
+  border: none;
+  color: rgb(var(--ink-4));
+  cursor: pointer;
+  padding: 0;
+  font-size: 10px;
+}
+
+.tool-detail {
+  padding: 0.4rem 0.55rem;
+  border-top: 1px solid rgb(var(--line));
+  background: rgb(var(--sink) / 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.tool-part .part-label {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgb(var(--ink-4));
+  margin-bottom: 0.2rem;
+}
+
+.tool-part .args {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.15rem 0.5rem;
+}
+
+.tool-part .args .k {
+  color: rgb(var(--ink-4));
+}
+
+/* An argument's value keeps its own lines: a JSON body laid out as JSON reads as JSON only while its newlines
+   survive, and the column scrolls sideways rather than wrapping a table into a paragraph. */
+.tool-part .args .v {
+  overflow-wrap: anywhere;
+  color: rgb(var(--ink-2));
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 17px;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+/* A whole result, the length the tool gave it: the box scrolls inside the card, nothing is cut out of it. */
+.tool-part .out {
+  margin: 0;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 17px;
+  color: rgb(var(--ink-3));
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 24rem;
+}
+
+.tool-part .out[data-tone="failed"] {
+  color: rgb(var(--danger));
+}
+
+hr {
+  border: 0;
+  border-top: 1px dashed rgb(var(--line-2));
+  margin: 0.2rem 0;
+}
+
+/* The one place a stream's last word stands: a cursor that says the round is still being said. */
+.cursor::after {
+  content: "▌";
+  color: rgb(var(--accent));
+}
+
+/* A round whose body has not been read: one quiet line, and a click reads it. */
+.turn.gap {
+  cursor: pointer;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid rgb(var(--line));
+  color: rgb(var(--ink-4));
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.turn.gap:hover {
+  color: rgb(var(--ink-2));
+}
+
+.note {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+  font-size: 12px;
+}
+
+.note .src {
+  font-family: var(--mono);
+  color: rgb(var(--ink-4));
+}

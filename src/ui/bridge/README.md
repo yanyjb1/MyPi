@@ -15,6 +15,8 @@ One TCP port and nothing behind it: no path, no query, no second address. What a
 
 A `POST` names its adapter in the `X-Bridge-Adapter` head; there is no other way to say it. A name the file does not carry is refused with `403`. The body is `{kind, name, payload}`, carried as it arrived: `call`, `post` and `subscribe` cross unchanged, and the answer is the payload the server wrote.
 
+One kind is the door's own: `host` / `list` answers the names one directory holds, plus the directory it read, and never crosses to the server. The page uses it for path completion, which a browser cannot take on its own.
+
 One frame is answered with a stream instead of a reply: `subscribe` / `watch`, which starts following a conversation. That connection then stays open and carries that conversation's frames, one per line, until the peer leaves. Which conversation it is comes from the frame's own `session`; the door adds nothing and asks for nothing else.
 
 An error is `{"error": {"code", "message"}}` when the door itself refused. A refusal the server made arrives as that server's own error payload, untouched.
@@ -65,7 +67,13 @@ adapters:
 
 The one front end that is written here rather than declared. Its files are seeded into `webui/` under the global config directory on the first start and served from disk afterwards, so a reader may edit the page without rebuilding anything; a deleted file falls back to the built-in copy and is written back on the next start.
 
-The page has no framework, no bundler and no third-party script: one HTML template, `css/` with one sheet per column, and `js/` with the plain modules the browser loads.
+The page has no framework, no bundler and no third-party script: one HTML template, `css/` with one sheet per region, and `js/` with the plain modules the browser loads.
+
+A running round is laid down a segment at a time. A block's body is cut into runs — prose, a fence, a table, a quote, a list — and only the open tail is ever cut again, so a settled run parses once and keeps the nodes it was given; a stream frame repaints that tail and nothing else on the page.
+
+The composer's bar carries the three facts a turn depends on, left to right: the directory, the model and the thinking effort. The model is a native select over `call pools`'s list. The effort is one capsule with a stop per rung `models.model.<address>` declares, `auto` first; a model that declares none shows `auto` alone. A draft keeps the same three slots, and its first message carries them into `post init`.
+
+A lap's bill rides the last piece it wrote, and a zeroed one is the provider stating a fact rather than a bill: the drawer's figures and the composer's ring are read again at every real quote, so both follow a running round instead of holding whatever the last entry left.
 
 ### The door's own switch
 

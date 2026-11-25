@@ -7,3 +7,9 @@ design/
 ABOUT*
 /mypi/
 .codeartsdoer/
+
+# An adapter's own secrets and caches
+adapters/*/token.txt
+adapters/*/telegram-bridge.json
+__pycache__/
+*.pyc

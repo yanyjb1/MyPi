@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="color-scheme" content="dark light" />
+		<script>
+			try {
+				const said = localStorage.getItem("mypi.theme");
+				if (said === "light") document.documentElement.dataset.theme = "light";
+			} catch {}
+		</script>
+		<meta name="theme-color" content="#151517" />
+		<title>mypi</title>
+		<link rel="stylesheet" href="/css/base/base.css" />
+		<link rel="stylesheet" href="/css/base/bits.css" />
+		<link rel="stylesheet" href="/css/base/layout.css" />
+		<link rel="stylesheet" href="/css/rail/rail.css" />
+		<link rel="stylesheet" href="/css/chat/sheet.css" />
+		<link rel="stylesheet" href="/css/chat/deck.css" />
+		<link rel="stylesheet" href="/css/chat/dial.css" />
+		<link rel="stylesheet" href="/css/panel/panel.css" />
+		<link rel="stylesheet" href="/css/panel/bill.css" />
+	</head>
+	<body data-rail="open" data-panel="closed">
+		<div id="backdrop"></div>
+
+		<aside id="rail">
+			<header class="rail-head">
+				<div class="brand-logo" title="mypi" aria-label="mypi">
+					<svg viewBox="0 0 80 28" fill="none" aria-hidden="true">
+						<path d="M3.5 12.5C5.3 9.5 7.7 8.8 8.5 11.2L7.0 18.5C8.8 13 12.0 9.2 14.2 9.2C15.8 9.2 16.0 11.2 15.0 14.8L14.2 18.5C16.1 13.2 19.1 9.2 21.2 9.2C22.7 9.2 22.8 11.2 21.8 14.5C21.1 17 22.0 18.6 24.1 18.6C26.4 18.6 29.0 16.2 30.8 12.2L32.0 9.2L28.7 21.5C27.7 25.2 25.0 26.8 22.8 26.2C21.0 25.7 20.8 23.8 22.7 22.2C24.8 20.3 29.8 18.2 35.8 16.8" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+						<path d="M38.2 11.0C39.2 8.4 41.6 7.7 45.0 8.1C48.8 8.6 53.0 8.7 57.5 6.6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+						<path d="M44.5 8.5C43.7 13.2 42.3 17.2 40.0 19.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+						<path d="M51.2 8.5L49.6 16.5C49.2 18.5 50.3 19.5 52.3 18.9C53.8 18.5 55.0 17.4 55.8 16.1" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+						<path d="M60.2 2.4L61.0 4.1L62.7 4.9L61.0 5.7L60.2 7.4L59.4 5.7L57.7 4.9L59.4 4.1Z" fill="rgb(var(--accent))" />
+					</svg>
+				</div>
+				<button class="icon" id="rail-close" title="collapse the session list" aria-label="collapse the session list">
+					<svg viewBox="0 0 16 16" aria-hidden="true">
+						<path d="M10 3.5L5.5 8l4.5 4.5" />
+					</svg>
+				</button>
+			</header>
+			<div class="rail-act">
+				<button class="btn-new-session" id="new-session" title="new session" aria-label="new session">
+					<svg viewBox="0 0 16 16" aria-hidden="true">
+						<path d="M8 3v10M3 8h10" />
+					</svg>
+					<span>New Session</span>
+				</button>
+			</div>
+			<ol id="session-list" class="sessions"></ol>
+			<footer class="rail-foot">
+				<button class="icon" id="settings" title="settings" aria-label="settings">
+					<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+						<path d="M7 1.2h2v1.4a5 5 0 0 1 1.4.6l1-1 1.4 1.4-1 1a5 5 0 0 1 .6 1.4h1.4v2h-1.4a5 5 0 0 1-.6 1.4l1 1-1.4 1.4-1-1a5 5 0 0 1-1.4.6v1.4H7v-1.4a5 5 0 0 1-1.4-.6l-1 1-1.4-1.4 1-1a5 5 0 0 1-.6-1.4H2.2v-2h1.4a5 5 0 0 1 .6-1.4l-1-1 1.4-1.4 1 1a5 5 0 0 1 1.4-.6V1.2z" />
+						<circle cx="8" cy="8" r="2.2" />
+					</svg>
+				</button>
+			</footer>
+		</aside>
+
+		<main id="main" data-empty="1">
+			<header id="topbar">
+				<button class="icon" id="rail-open" title="open the session list" aria-label="open the session list">
+					<svg viewBox="0 0 16 16" aria-hidden="true">
+						<path d="M6 3.5L10.5 8L6 12.5" />
+					</svg>
+				</button>
+				<div class="grow">
+					<h1></h1>
+					<span class="telemetry"></span>
+				</div>
+				<div id="session-acts"></div>
+				<button class="icon" id="jump-latest" title="back to the newest round" aria-label="back to the newest round">
+					<svg viewBox="0 0 16 16" aria-hidden="true">
+						<path d="M8 3v10M4 9l4 4 4-4" />
+					</svg>
+				</button>
+				<button class="icon" id="theme" title="switch the light" aria-label="switch the light">
+					<svg class="sun" viewBox="0 0 16 16" aria-hidden="true">
+						<circle cx="8" cy="8" r="3.2" />
+						<path d="M8 1.4v1.6M8 13v1.6M1.4 8H3M13 8h1.6M3.3 3.3l1.1 1.1M11.6 11.6l1.1 1.1M12.7 3.3l-1.1 1.1M4.4 11.6l-1.1 1.1" />
+					</svg>
+					<svg class="moon" viewBox="0 0 16 16" aria-hidden="true">
+						<path d="M11.4 9.8A5 5 0 0 1 6.2 4.6a5 5 0 1 0 5.2 5.2z" />
+					</svg>
+				</button>
+				<button class="icon" id="panel-toggle" title="open the panel" aria-label="open the panel">
+					<svg viewBox="0 0 16 16" aria-hidden="true">
+						<path d="M10 3.5L5.5 8L10 12.5" />
+					</svg>
+				</button>
+			</header>
+
+			<div id="chat-wrap">
+				<section id="chat">
+					<div id="hero">
+						<h1>mypi</h1>
+						<p>say something to start a session, or pick one on the left</p>
+					</div>
+					<div class="sheet" id="sheet"></div>
+				</section>
+				<div id="dial-wrap" data-state="inactive" data-on="0">
+					<svg id="dial" viewBox="0 0 100 200" role="navigation" aria-label="rounds of this session">
+						<path id="dial-track-outer" class="dial-arc outer" d="M99 4A96 96 0 0 0 99 196" vector-effect="non-scaling-stroke" />
+						<path id="dial-track-inner" class="dial-pie inner" d="M99 36A64 64 0 0 0 99 164Z" vector-effect="non-scaling-stroke" />
+						<g id="dial-ticks"></g>
+						<g id="dial-words"></g>
+						<circle id="dial-hub" cx="99" cy="100" r="2.4" vector-effect="non-scaling-stroke" />
+					</svg>
+				</div>
+			</div>
+
+			<section id="composer">
+				<div class="queue" id="queue"></div>
+				<div class="deck">
+					<div id="complete-menu" class="popover" hidden></div>
+					<div id="say" contenteditable="plaintext-only" role="textbox" aria-multiline="true" data-placeholder="say something…" spellcheck="false"></div>
+					<div class="deck-mods">
+						<div class="cwd-wrap">
+							<input id="cwd" class="mod mod-cwd" placeholder="launch directory" readonly spellcheck="false" autocomplete="off" title="double click to change the directory" aria-label="working directory" />
+							<span id="cwd-status" class="cwd-status" aria-live="polite"></span>
+						</div>
+						<span class="mod mod-git" id="git" title="branch and working tree">
+							<svg viewBox="0 0 16 16" aria-hidden="true">
+								<circle cx="4.5" cy="3.5" r="1.6" />
+								<circle cx="4.5" cy="12.5" r="1.6" />
+								<circle cx="11.5" cy="5" r="1.6" />
+								<path d="M4.5 5.1v5.8M11.5 6.6c0 2.6-2 4-5 4.6" />
+							</svg>
+							<span id="git-branch"></span>
+							<span class="dot" id="git-dirty"></span>
+						</span>
+						<button class="mod mod-context" id="context-ring" title="Context usage · Click to compact" aria-label="compact context">
+							<svg class="ring-svg" viewBox="0 0 24 24" aria-hidden="true">
+								<circle class="ring-bg" cx="12" cy="12" r="9" />
+								<circle class="ring-fg" id="context-arc" cx="12" cy="12" r="9" />
+							</svg>
+						</button>
+						<span class="mod mod-spend" id="spend" title="what this session has cost"></span>
+						<div class="engine-capsule" id="engine-capsule">
+							<svg class="model-sparkle" viewBox="0 0 16 16" aria-hidden="true">
+								<path d="M8 1.5c0 3.6-2.9 6.5-6.5 6.5 3.6 0 6.5 2.9 6.5 6.5 0-3.6 2.9-6.5 6.5-6.5-3.6 0-6.5-2.9-6.5-6.5z" />
+							</svg>
+							<select id="model" aria-label="model"></select>
+							<svg class="caret" viewBox="0 0 16 16" aria-hidden="true">
+								<path d="M4.5 6.5l3.5 3.5 3.5-3.5" />
+							</svg>
+							<div class="capsule-divider" id="capsule-divider" hidden></div>
+							<div class="capsule-effort" id="effort-btn" title="Thinking effort · Scroll or Click to cycle" role="button" tabindex="0" aria-label="thinking effort" hidden>
+								<span id="effort-text">auto</span>
+							</div>
+						</div>
+						<span class="deck-acts">
+							<button class="btn primary" id="send" aria-label="send">
+								<svg viewBox="0 0 16 16" aria-hidden="true">
+									<path d="M13.5 2.5L2.5 7.4l4.6 1.5 1.5 4.6z" />
+								</svg>
+							</button>
+							<button class="btn danger" id="stop" aria-label="stop" hidden>
+								<svg viewBox="0 0 16 16" aria-hidden="true">
+									<rect x="5" y="5" width="6" height="6" rx="1.2" />
+								</svg>
+							</button>
+						</span>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<aside id="panel" data-owner="">
+			<header class="panel-head">
+				<button class="icon" id="panel-close" title="collapse the panel" aria-label="collapse the panel">
+					<svg viewBox="0 0 16 16" aria-hidden="true">
+						<path d="M6 3.5L10.5 8L6 12.5" />
+					</svg>
+				</button>
+				<span class="panel-name" id="panel-name"></span>
+			</header>
+			<div class="panel-body" id="panel-body"></div>
+		</aside>
+
+		<script type="module" src="/js/main.js"></script>
+	</body>
+</html>

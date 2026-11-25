@@ -1,0 +1,42 @@
+# MyPi bridge adapters — who may knock on the door, and what each one is fed.
+#
+# The program never writes this file. Copy it where the bridge looks for it:
+#   $XDG_CONFIG_HOME/mypi/adapters.yml   (~/.config/mypi/adapters.yml)
+# `MYPI_CONFIG_DIR=/some/dir` moves the whole root there instead.
+#
+# The bridge reads it once, at startup. Missing, unreadable, badly shaped, or
+# naming no adapter at all: `mypi --bridge` does not start. A door with no
+# list of adapters serves nobody, so nothing is guessed on its behalf.
+#
+# Every adapter block says what that front end may send, and what it is fed.
+# `local-only`  refuse a client from anywhere but this machine
+# `thinking`    forward `thinking` and `boundary` pieces     (default true)
+# `tools`       forward `arguments` and `tool_*` pieces      (default true)
+# `chunk`       the most characters one text frame carries   (default 0: no limit)
+# `command`     a program the bridge starts beside itself and stops on the way out
+# `forbid`      what this adapter may NOT send: `kind` or `kind/name`
+#
+# The three kinds are `call`, `post` and `subscribe`. `post` closes the whole
+# kind; `post/delete` closes one name inside it. A rule names a kind and at
+# most one name, no deeper. Only what is refused is written, never what is
+# allowed: an adapter may say everything the server names except this.
+
+port: 8737
+
+adapters:
+  # The page written into this repository. Its files are seeded into
+  # `webui/` under the same config root on the first start and served from
+  # disk afterwards, so it may be edited without a rebuild.
+  webui:
+    forbid: [post/delete]
+
+  # `adapters/telegram/` in this repository: a bot that speaks to the door and
+  # forwards a conversation to Telegram. Put the bot token in
+  # `~/.config/mypi/telegram-bridge.json` (the bot writes it on first run) or
+  # export `TG_BOT_TOKEN`. Do not commit one.
+  telegram:
+    thinking: false
+    tools: true
+    chunk: 4000
+    local-only: true
+    command: "python3 ~/Projects/Utility/MyPi/adapters/telegram/app.py"

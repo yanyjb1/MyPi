@@ -1,0 +1,258 @@
+/* The right drawer: a head that names its owner, and a body that only its owner writes. */
+
+/* The right column, dressed as the left one is: the same tint, the same blur, one border facing the middle. */
+#panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-left: 1px solid rgb(var(--line));
+  background: rgb(var(--layer-1) / 0.45);
+  backdrop-filter: blur(12px);
+}
+
+body[data-panel="closed"] #panel {
+  display: none;
+}
+
+/* The head is the list's head, mirrored: the same padding, the same 2.25rem box a brand fills, the same band
+   height, so all three columns open on one line. Its chevron takes `#rail-close`'s place on the other side. */
+.panel-head {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0.75rem 0.75rem 0.5rem;
+  min-height: var(--head-h);
+  border-bottom: 1px solid rgb(var(--line));
+}
+
+.panel-head #panel-close {
+  position: absolute;
+  left: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* The name stands in the brand's own box, line-height and all: a line of type where the list has an image, so
+   the drawer's head carries its contents at the same height as the other two. */
+.panel-name {
+  min-width: 0;
+  max-width: 100%;
+  height: var(--brand-h);
+  line-height: var(--brand-h);
+  padding: 0 1.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  color: rgb(var(--ink-2));
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+/* A bill's own head stands a size taller than the other owners', and spells its name out in the caps the body's
+   words already wear. */
+#panel[data-owner="usage"] .panel-name {
+  text-transform: uppercase;
+  font-size: 14px;
+  letter-spacing: 0.1em;
+}
+
+
+/* A form's fields stack, each one over the write it feeds. */
+.panel-body .stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.panel-body .stack input,
+.panel-body .stack select,
+.panel-body .stack textarea {
+  width: 100%;
+  border: 1px solid rgb(var(--line-2));
+  border-radius: 6px;
+  background: rgb(var(--sink));
+  color: rgb(var(--ink-2));
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0.15rem 0.4rem;
+}
+
+.panel-body .stack textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.panel-body .stack input:focus,
+.panel-body .stack select:focus,
+.panel-body .stack textarea:focus {
+  outline: none;
+  border-color: rgb(var(--accent) / 0.6);
+}
+
+.panel-body .stack .btn {
+  align-self: flex-start;
+}
+
+/* The body is one scrolling column of whatever its owner laid out, and knows nothing of the content. */
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.6rem 0.75rem 1.5rem;
+  scrollbar-width: thin;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.panel-body > :first-child {
+  margin-top: 0;
+}
+
+.panel-body h2 {
+  margin: 0.9rem 0 0.15rem;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgb(var(--ink-4));
+}
+
+.panel-body h2:first-child {
+  margin-top: 0;
+}
+
+.panel-body dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.1rem 0.6rem;
+  align-items: baseline;
+}
+
+.panel-body dt {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: rgb(var(--ink-4));
+}
+
+.panel-body dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: rgb(var(--ink-2));
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.panel-body ul > li {
+  padding: 0.1rem 0;
+}
+
+/* One row of a list its owner wrote: a name, a number, and whatever else it thought to say. */
+.panel-body .pick {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.3rem 0.45rem;
+  margin-top: 0.2rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.panel-body .pick:hover {
+  background: rgb(var(--hover));
+  border-color: rgb(var(--line));
+}
+
+.panel-body .card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem 0.5rem;
+  margin-top: 0.3rem;
+  border: 1px solid rgb(var(--line));
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.panel-body .card:hover {
+  border-color: rgb(var(--line-2));
+}
+
+.panel-body .fill {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-body .dim {
+  color: rgb(var(--ink-4));
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.panel-body .row {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 0.3rem;
+}
+
+.panel-body .row input,
+.panel-body .row select,
+.panel-body .row textarea {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgb(var(--line-2));
+  border-radius: 6px;
+  background: rgb(var(--sink));
+  color: rgb(var(--ink-2));
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0.15rem 0.4rem;
+}
+
+.panel-body .row textarea {
+  min-height: 4rem;
+  resize: vertical;
+}
+
+.panel-body .row input:focus,
+.panel-body .row select:focus,
+.panel-body .row textarea:focus {
+  outline: none;
+  border-color: rgb(var(--accent) / 0.6);
+}
+
+/* The one destructive confirmation: a native modal, so a rewind cannot be a slip. */
+dialog {
+  border: 1px solid rgb(var(--line-2));
+  border-radius: 10px;
+  background: rgb(var(--layer-2));
+  color: rgb(var(--ink));
+  font-family: var(--font);
+  font-size: 13px;
+  max-width: 24rem;
+  padding: 0.9rem 1rem;
+}
+
+dialog p {
+  margin: 0 0 0.7rem;
+  line-height: 20px;
+}
+
+dialog::backdrop {
+  background: rgb(var(--veil));
+}
