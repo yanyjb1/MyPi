@@ -3,13 +3,12 @@
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
 
 use crate::server::platform::proc;
 use crate::server::platform::stop::Stop;
-
-// How often a waiting caller looks at its child.
-const TICK: Duration = Duration::from_millis(5);
 
 // How many bytes of one stream a child may hand back.
 const CAP: usize = 8 << 20;
@@ -26,13 +25,12 @@ pub(crate) struct Ran {
     pub(crate) stopped: bool,
 }
 
-// Every external call blocks its caller's thread until the child ends, its deadline passes, or the turn stops; nothing here runs in the background.
-// Run one child to its end, or kill its whole group when the deadline passes or the turn is stopped. Every tick looks at both: a stop must never wait out a deadlock in someone else's tree.
+// Run one child to its end, or kill its whole group when the deadline passes or the turn is stopped. The caller blocks on the child's exit alone; the deadline and the stop each end that wait by killing the tree, so nothing here looks twice.
 pub(crate) fn run(
     mut cmd: Command,
     input: Option<&[u8]>,
     limit: Option<Duration>,
-    stop: &Stop,
+    stop: &Arc<Stop>,
 ) -> std::io::Result<Ran> {
     cmd.stdin(if input.is_some() {
         Stdio::piped()
@@ -56,36 +54,44 @@ pub(crate) fn run(
     let out = drain(process.take_stdout().expect("stdout is piped"));
     let err = drain(process.take_stderr().expect("stderr is piped"));
 
-    let deadline = limit.map(|limit| Instant::now() + limit);
-    let mut timed_out = false;
-    let mut stopped = false;
-    let status = loop {
-        if stop.is_stopped() {
-            stopped = true;
+    // Which side ended the tree: `0` the child itself, `1` the deadline, `2` the turn's stop.
+    let killed = Arc::new(AtomicU8::new(0));
+    // A stop kills the tree; the blocked wait below returns the moment the leader has gone.
+    let hook = {
+        let process = process.clone();
+        let killed = killed.clone();
+        stop.on_stop(move || {
+            killed.store(2, Ordering::SeqCst);
+            process.stop();
+        })
+    };
+    // The deadline waits on its own bell: the channel goes quiet for good the moment the child ends first.
+    let (ended, left) = std::sync::mpsc::channel::<()>();
+    if let Some(limit) = limit {
+        let process = process.clone();
+        let killed = killed.clone();
+        let _ = std::thread::Builder::new()
+            .name("mypi-gate-deadline".into())
+            .spawn(move || {
+                if left.recv_timeout(limit) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                    killed.store(1, Ordering::SeqCst);
+                    process.stop();
+                }
+            });
+    }
+    // The one wait: the child's own exit. The deadline and the stop end it by killing the tree.
+    let status = match process.wait() {
+        Ok(status) => Some(status),
+        Err(e) => {
             process.stop();
             let _ = process.wait_timeout(proc::KILL_LIMIT);
-            break None;
-        }
-        let now = Instant::now();
-        if deadline.is_some_and(|at| now >= at) {
-            timed_out = true;
-            process.stop();
-            let _ = process.wait_timeout(proc::KILL_LIMIT);
-            break None;
-        }
-        let wait = deadline
-            .map_or(TICK, |at| at.saturating_duration_since(now))
-            .min(TICK);
-        match process.wait_timeout(wait) {
-            Err(e) => {
-                process.stop();
-                let _ = process.wait();
-                return Err(e);
-            }
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {}
+            return Err(e);
         }
     };
+    drop(ended);
+    drop(hook);
+    let timed_out = killed.load(Ordering::SeqCst) == 1;
+    let stopped = killed.load(Ordering::SeqCst) == 2;
     Ok(Ran {
         code: status.and_then(|status| status.code()),
         out: out.join().unwrap_or_default(),

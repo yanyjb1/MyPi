@@ -2,9 +2,10 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
+use std::path::Path;
+use std::sync::Arc;
 
 use super::edit::{self, Edit};
-use std::path::Path;
 
 use crate::server::agent::tools::fs::lang::Format;
 use crate::server::agent::tools::fs::lang::verdict::Outcome;
@@ -49,7 +50,7 @@ pub(crate) fn settle(
     edits: &[Edit],
     format: Format,
     path: &Path,
-    stop: &Stop,
+    stop: &Arc<Stop>,
 ) -> Option<Settled> {
     let tag = tag(base);
     let marked: Vec<Edit> = edits
@@ -108,7 +109,7 @@ fn blame(
     edits: &[Edit],
     format: Format,
     path: &Path,
-    stop: &Stop,
+    stop: &Arc<Stop>,
 ) -> Option<Vec<(usize, String)>> {
     let mut out = Vec::new();
     for (at, edit) in edits.iter().enumerate() {

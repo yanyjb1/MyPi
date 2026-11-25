@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use super::check::{cargo, diagnostics, title, unit};
 use super::table::shape;
@@ -103,7 +104,7 @@ fn name_of(exact: &str) -> Option<String> {
 }
 
 // Run exactly these tests in one unit: the compiler names its own tests, and each is asked for by its full path so nothing else runs.
-fn run(root: &Path, files: &[PathBuf], names: &[String], stop: &Stop) -> Verdict {
+fn run(root: &Path, files: &[PathBuf], names: &[String], stop: &Arc<Stop>) -> Verdict {
     let mut ran = 0usize;
     let mut faults: Vec<Fault> = Vec::new();
     let mut why: Vec<String> = Vec::new();
@@ -158,7 +159,7 @@ fn one(
     files: &[PathBuf],
     target: &[String],
     names: &[String],
-    stop: &Stop,
+    stop: &Arc<Stop>,
     hit: &mut Vec<String>,
 ) -> Verdict {
     let mut cmd = Command::new(cargo());

@@ -50,7 +50,9 @@ half's types, re-exported from this domain's root.
 - `Loop::write_mail` and `Loop::clear_mail` are the slot's only writers from outside.
 - `Loop::forget` reads a session's history again; the api calls it after a rewind.
 - The scheduler waits on `Mailbox::wait_any`; when idle it takes a wake text first, then the slot,
-  and opens a turn. A turn the slot opens is announced on the live line so the api can name it.
+  and opens a turn. A turn the slot opens is announced on the live line so the api can name it. A
+  letter the running turn has not taken parks the scheduler on the mailbox bell, which a turn's end
+  rings; a task waiting for a pool slot waits on the job bell a finished job rings.
 - `start_turn` appends the turn's opening message to the session's transcript; `turn::cycle::run`
   takes both boxes into the running turn at every blocking point (`take_mail`: wakes as `wake`
   blocks, a letter as a `user` block plus the take signal) and ends the turn only when the model

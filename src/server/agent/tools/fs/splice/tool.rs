@@ -1,6 +1,7 @@
 // The `splice` tool: replace whole lines by number, many ranges in one file.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
@@ -392,7 +393,7 @@ enum Run {
 }
 
 // The whole group: the snapshot, one write, and one answer per call. `Stopped` = the turn was stopped before the write, so the file is exactly as it was and no call has an answer.
-fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Stop) -> Result<Run> {
+fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Arc<Stop>) -> Result<Run> {
     let raw = std::fs::read_to_string(path).context("failed to read file")?;
     // The file's own line ending: the edits are read and laid out on plain lines, and the ending is put back once at the write.
     let ending = eol::Eol::of(&raw);

@@ -126,25 +126,26 @@ fn tick(
             lost = true;
         }
     }
-    // A job whose thread never started still owes a wake; one more tick delivers it.
+    // A job whose thread never started still owes a wake: retried after a second, so a spawner that keeps failing costs one pass a second rather than a spin.
     if lost {
-        return Next::At(Duration::ZERO);
+        return Next::At(Duration::from_secs(1));
     }
     if done {
         return Next::Done;
     }
+    // A pool slot freed by a job rings the bell, so a waiting task never becomes a deadline of its own.
     match next {
-        Some(at) => Next::At(Duration::from_secs((at - now).max(0) as u64)),
+        Some(at) => Next::At(Duration::from_secs((at - now).max(1) as u64)),
         None => Next::Idle,
     }
 }
 
-// The earliest point at which a scheduled task or a cron entry becomes due.
+// The earliest point at which a scheduled task or a cron entry becomes due. A task waiting for a pool slot is not one: it starts when the job holding the slot ends and rings the bell.
 fn deadline(st: &State) -> Option<i64> {
     let tasks = st
         .tasks
         .values()
-        .filter(|task| matches!(task.state, TaskState::Scheduled | TaskState::Waiting))
+        .filter(|task| matches!(task.state, TaskState::Scheduled))
         .filter_map(|task| task.start_at);
     let schedules = st.schedules.values().filter_map(|entry| entry.next);
     tasks.chain(schedules).min()

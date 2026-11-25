@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::server::platform::stop::Stop;
 
@@ -30,7 +31,7 @@ pub(crate) struct Hub {
 }
 
 // One text's turn through the formatter a language names.
-pub(crate) type Format = fn(&str, &Path, &Stop) -> Outcome;
+pub(crate) type Format = fn(&str, &Path, &Arc<Stop>) -> Outcome;
 
 // What every language owes the tools: the suffixes it answers to, its table, the answers about a piece, and the two external tools it knows how to drive.
 pub(crate) struct Language {
@@ -82,7 +83,7 @@ pub(crate) struct Checker {
     // How that unit names one of its files, so a diagnostic can be matched to a write.
     pub(crate) shown: fn(&Path, &Path) -> String,
     // Check one unit, given the files this batch wrote into it.
-    pub(crate) run: fn(&Path, &[PathBuf], &Stop) -> Check,
+    pub(crate) run: fn(&Path, &[PathBuf], &Arc<Stop>) -> Check,
 }
 
 // The tests one text declares inside these 1-based line ranges, by name.
@@ -97,7 +98,7 @@ pub(crate) struct Tests {
     // The tests this text declares inside these 1-based line ranges, by name.
     pub(crate) find: Find,
     // Run exactly these tests in that unit, given the files this batch wrote into it.
-    pub(crate) run: fn(&Path, &[PathBuf], &[String], &Stop) -> Verdict,
+    pub(crate) run: fn(&Path, &[PathBuf], &[String], &Arc<Stop>) -> Verdict,
 }
 
 // Every sorted language, in the order a suffix meets them.

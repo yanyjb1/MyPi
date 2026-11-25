@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use crate::server::agent::tools::fs::gate;
@@ -20,7 +20,7 @@ const CACHE: usize = 32 * 1024;
 const DEFAULT_EDITION: &str = "2021";
 
 // Format one text, or say what stopped it. Only a verdict rustfmt reached is remembered: a timeout or a missing binary says nothing about the text and must not outlive the moment.
-pub(crate) fn format(text: &str, path: &Path, stop: &Stop) -> Outcome {
+pub(crate) fn format(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
     let edition = edition(path);
     let key = (edition.clone(), hash(text));
     if let Some(hit) = remembered(&key) {
@@ -85,7 +85,7 @@ fn edition_of(manifest: &str) -> Option<String> {
 }
 
 // One formatter round trip.
-fn formatter(text: &str, edition: &str, stop: &Stop) -> Outcome {
+fn formatter(text: &str, edition: &str, stop: &Arc<Stop>) -> Outcome {
     let bin = rustfmt();
     let mut cmd = Command::new(&bin);
     cmd.args(["--edition", edition, "--emit", "stdout", "--quiet"]);

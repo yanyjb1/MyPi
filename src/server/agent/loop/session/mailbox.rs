@@ -1,10 +1,10 @@
-//! The session's inbound: one wake queue, and one user slot the front end owns.
+// The session's inbound: one wake queue, and one user slot the front end owns.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
-/// The one sentence a front end may leave in the slot.
+// The one sentence a front end may leave in the slot.
 #[derive(Debug, Clone)]
 pub struct Letter {
     pub prefix: Option<String>,
@@ -17,7 +17,7 @@ struct Inner {
     send: Option<Letter>,
 }
 
-/// The wake queue and the one user letter a front end may rewrite until it is taken.
+// The wake queue and the one user letter a front end may rewrite until it is taken.
 pub struct Mailbox {
     inner: Mutex<Inner>,
     cv: Condvar,
@@ -43,13 +43,13 @@ impl Mailbox {
         self.cv.notify_all();
     }
 
-    /// Overwrite the slot whole; a letter always carries a body.
+    // Overwrite the slot whole; a letter always carries a body.
     pub fn write(&self, letter: Letter) {
         self.lock().send = Some(letter);
         self.cv.notify_all();
     }
 
-    /// The front end takes its letter back.
+    // The front end takes its letter back.
     pub fn del(&self) {
         self.lock().send = None;
     }
@@ -58,17 +58,23 @@ impl Mailbox {
         self.lock().wake.pop_front()
     }
 
-    /// One letter; taking the slot is clearing it.
+    // One letter; taking the slot is clearing it.
     pub fn take(&self) -> Option<Letter> {
         self.lock().send.take()
     }
 
-    pub fn has_any(&self) -> bool {
-        let g = self.lock();
-        !g.wake.is_empty() || g.send.is_some()
+    // Park until the boxes are empty, the turn ends, or the session goes: a turn's end rings the same bell, so nothing here looks again.
+    pub fn wait_free(&self, gone: &AtomicBool, busy: &AtomicBool) {
+        let mut g = self.lock();
+        while (!g.wake.is_empty() || g.send.is_some())
+            && busy.load(Ordering::Acquire)
+            && !gone.load(Ordering::Acquire)
+        {
+            g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
     }
 
-    /// Wait until either the queue or the slot has something, or the session is gone.
+    // Wait until either the queue or the slot has something, or the session is gone.
     pub fn wait_any(&self, gone: &AtomicBool) {
         let mut g = self.lock();
         while g.wake.is_empty() && g.send.is_none() && !gone.load(Ordering::Acquire) {

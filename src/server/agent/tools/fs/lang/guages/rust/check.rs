@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use crate::server::agent::tools::fs::gate;
 use crate::server::agent::tools::fs::lang::Checker;
@@ -38,7 +38,7 @@ pub(super) fn title(root: &Path) -> String {
 }
 
 // Type-check one crate to completion, in the compiler's own order. No deadline: a batch checks once, and only the turn's stop ends it. Cargo has no per-file mode, so the files this batch wrote only say which unit to check, never which part of one.
-fn run(root: &Path, _touched: &[PathBuf], stop: &Stop) -> Check {
+fn run(root: &Path, _touched: &[PathBuf], stop: &Arc<Stop>) -> Check {
     let mut cmd = Command::new(cargo());
     cmd.args(["check", "--message-format=json", "--quiet"])
         .current_dir(root);

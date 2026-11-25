@@ -217,8 +217,12 @@ impl Loop {
         }
         let deadline = std::time::Instant::now() + wait;
         for handle in handles {
-            while handle.busy.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
-                handle.wait_idle_for(std::time::Duration::from_millis(20));
+            while handle.busy.load(Ordering::Acquire) {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                handle.wait_idle_for(left);
             }
         }
     }
@@ -365,11 +369,12 @@ fn schedule(weak: Weak<Inner>, handle: Arc<Handle>) {
         if handle.gone.load(Ordering::Acquire) {
             break;
         }
-        while handle.mailbox.has_any() && handle.busy.load(Ordering::Acquire) {
+        // A letter that arrives while a turn runs waits on the bell that turn rings when it ends.
+        if handle.busy.load(Ordering::Acquire) {
+            handle.mailbox.wait_free(&handle.gone, &handle.busy);
             if handle.gone.load(Ordering::Acquire) {
-                return;
+                break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let Some(next) = next_start(&handle) else {
             continue;

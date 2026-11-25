@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::change;
 use super::lang::graph::parts;
@@ -51,7 +52,7 @@ pub(crate) fn settle(env: &mut Env, results: &mut [ToolResult]) {
 }
 
 // One check per unit, in the order the writes named them: each unit's own checker, and the files this batch wrote into it.
-fn gather(shells: &[Shell], stop: &Stop) -> Vec<(PathBuf, Check, &'static Checker)> {
+fn gather(shells: &[Shell], stop: &Arc<Stop>) -> Vec<(PathBuf, Check, &'static Checker)> {
     let mut units: Vec<(PathBuf, &'static Checker, Vec<PathBuf>)> = Vec::new();
     for shell in shells {
         let Some(checker) = lang::checker(&shell.file) else {
@@ -75,7 +76,7 @@ fn gather(shells: &[Shell], stop: &Stop) -> Vec<(PathBuf, Check, &'static Checke
 fn gather_tests(
     shells: &[Shell],
     checks: &[(PathBuf, Check, &'static Checker)],
-    stop: &Stop,
+    stop: &Arc<Stop>,
 ) -> Vec<(PathBuf, &'static Tests, Verdict)> {
     let mut units: Vec<(PathBuf, &'static Tests, Vec<PathBuf>, Vec<String>)> = Vec::new();
     for shell in shells {
