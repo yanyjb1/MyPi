@@ -1,24 +1,14 @@
 # grep
 
-The `grep` tool: one query over the tree a language claims, answered as text.
+The `grep` tool: one query over every source tree the workspace's languages claim, answered as text.
 
 ## 1. Design / Schema
 
-- The tree is what the session's language answers: for Rust, the nearest `Cargo.toml` above the
-  session's directory and its `src/`; only files a sorter claims (`.rs`, `.md`) under it are read.
-  No ignore rules and no external binary, so the answer is the same on every platform, and
-  `target/` is out of reach by construction. Anything outside `src/` — `Cargo.toml`, `build.rs`, the
-  root documents — is one `read` away and never searched. Files are read in parallel; a file over
-  4 MiB is skipped.
+- The trees are what the session's languages answer: every project the workspace holds, each found by the marker file its language writes and narrowed to the directory that language calls its source. Rust answers the nearest `Cargo.toml` and its `src/`, Python its project and its package tree, and a directory holding a language's files with no marker above it is a tree of its own. Only files a sorter claims are read. No ignore rules and no external binary, so the answer is the same on every platform, and `target/` is out of reach by construction. Anything outside a tree — `Cargo.toml`, `build.rs`, the root documents — is one `read` away and never searched. Files are read in parallel; a file over 4 MiB is skipped.
 - Parameters, in index order:
-  - `query` — always; the literal text to find, or the pattern when `regex` is on. A pattern that
-    does not compile is refused with the regex engine's own position and a reminder that `regex` is
-    off by default.
+  - `query` — always; the literal text to find, or the pattern when `regex` is on. A pattern that does not compile is refused with the regex engine's own position and a reminder that `regex` is off by default.
   - `regex` — default false; parse `query` as a pattern instead of text.
-  - `scope` — paths named from the tree root and inside its source directory (`src/` for Rust): a
-    directory, or a `.rs` or `.md` file; omitted, the whole `src/`. An entry that is missing, names
-    no readable file, or stands outside `src/` is skipped while the rest still run, and the answer
-    ends with one `[scope]` line per such entry naming the reason.
+  - `scope` — paths named from the workspace root and inside one of its source trees: a directory, or a file a sorter claims; omitted, every tree. An entry that is missing, names no readable file, or stands outside every tree is skipped while the rest still run, and the answer ends with one `[scope]` line per such entry naming the reason.
   - `lavish` — default false; the whole answer is drawn one tier denser: tier 3 as 2, tier 2 as 1.
 - Structure comes from the language sorter (`fs/lang`), the same table `read`, `splice` and `edit`
   read: comments and literals blanked, braces paired, head words recognized. Each line carries a
@@ -30,10 +20,7 @@ The `grep` tool: one query over the tree a language claims, answered as text.
   joins it, and a later span that swallows it widens it to that outer piece. So an item is the
   smallest piece holding its run of nested hits, and pieces that merely stand side by side never
   merge. A hit no piece holds is its own one-line item. Every hit belongs to exactly one item.
-- The answer opens with two header lines: the counts, mode and tier, then what it searched —
-  `==> src/` by default (the named tree), or `==> N paths, M used: …` listing the scope as the call
-  wrote it with repeats dropped, so the footer's skips have a denominator. The sections the
-  language's own relation index fills follow, in that language's own words, then the items.
+- The answer opens with two header lines: the counts, mode and tier, then what it searched — the trees by name (`==> src/, adapters/telegram/`, or `==> 5 source trees` past three), or `==> N paths, M used: …` listing the scope as the call wrote it with repeats dropped, so the footer's skips have a denominator. The sections the language's own relation index fills follow, in that language's own words, then the items.
 - Tiers are judged by the answer's item count, against `deepMax` and `foldMax`:
   - Tier 1 — up to `deepMax` items: every line of every item, whole, whatever their length. Only
     key lines and hit lines carry a number; each block opens with `path:line` and an `in:`
@@ -59,8 +46,7 @@ The `grep` tool: one query over the tree a language claims, answered as text.
 
 ## 2. Design intent
 
-- **One query, the whole crate.** A search that names no scope answers the whole `src/` at once;
-  narrowing is the model's choice, never a prerequisite.
+- **One query, the whole workspace.** A search that names no scope answers every source tree at once; narrowing is the model's choice, never a prerequisite.
 - **The sorter answers the structure, the tool answers the showing.** All caps, folding and prose
   live here; `fs/lang` never learns how grep draws.
 - **A number is a line a splice may name.** Only key lines and hit lines are numbered, so a number

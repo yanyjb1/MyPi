@@ -7,12 +7,13 @@ What is here, what each file holds, who talks to whom. Current state only.
 | file | holds |
 |---|---|
 | `mod.rs` | module declarations and the registry's re-exports |
-| `registry.rs` | the registry: the language contract, the language list, the suffix lookup and the questions a tool asks |
+| `registry.rs` | the registry: the language contract, the language list, the suffix lookup, the workspace's source trees, and the questions a tool asks |
 | `graph/` | the graph machine: units, edges, the upward walk, the printing parts and the default narration; it names no language |
 | `table.rs` | one file's line table: stamps, paired lines, labels and the queries over them |
 | `verdict.rs` | what a formatter, a checker and a test run answer: the draft a formatter is handed, the place a written run lands on, and the verdicts |
 | `guages/mod.rs` | declares the languages |
 | `guages/rust/` | Rust's declaration and its own knowledge |
+| `guages/python/` | Python's declaration and its own knowledge |
 | `guages/markdown.rs` | the Markdown sorter: headings, fences, lists, quotes, HTML blocks, front matter and how far a heading's section reaches |
 
 ## Relations

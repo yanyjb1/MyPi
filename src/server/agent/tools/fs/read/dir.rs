@@ -14,17 +14,27 @@ use crate::server::platform::time;
 // Direct files at or past this count fold into counts.
 const FOLD_AT: usize = 10;
 
-// One directory's listing, as its own counts and its body. The root is special: the source tree its language claims becomes a section of its own. `docs` names the documents the user keeps current, which take no part in any level's verdict.
+// One directory's listing, as its own counts and its body. The root is special: every source tree a language claims becomes a section of its own. `docs` names the documents the user keeps current, which take no part in any level's verdict.
 pub(crate) fn listing(path: &Path, cwd: &Path, docs: &[String]) -> Result<(String, String)> {
     let root = canonicalize_lenient(cwd);
     let target = canonicalize_lenient(path);
+    let trees = lang::trees(&root);
     let mut list = List::new();
     if target == root {
-        let tree = lang::domain(&root)
-            .map(|held| held.tree)
-            .filter(|tree| tree.starts_with(&root));
-        fill(&mut list, &root, 1, false, tree.as_deref(), docs);
-        if let Some(tree) = tree {
+        // One tree that is the root itself needs no section of its own: the listing already is it.
+        let sections: Vec<&PathBuf> = trees
+            .iter()
+            .filter(|tree| tree.as_path() != root.as_path())
+            .collect();
+        fill(
+            &mut list,
+            &root,
+            1,
+            false,
+            sections.first().map(|tree| tree.as_path()),
+            docs,
+        );
+        for tree in &sections {
             if !list.out.is_empty() {
                 list.out.push('\n');
             }
@@ -32,12 +42,12 @@ pub(crate) fn listing(path: &Path, cwd: &Path, docs: &[String]) -> Result<(Strin
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            list.line(&format!("{name}/  {}", counts(&tree)));
-            fill(&mut list, &tree, 1, true, None, docs);
+            list.line(&format!("{name}/  {}", counts(tree)));
+            fill(&mut list, tree, 1, true, None, docs);
         }
         return Ok((counts(&root), list.finish()));
     }
-    if !lang::tree(&target) {
+    if !trees.iter().any(|tree| target.starts_with(tree)) {
         bail!("`read` lists directories at the session root and inside a source tree only");
     }
     fill(&mut list, &target, 1, true, None, docs);

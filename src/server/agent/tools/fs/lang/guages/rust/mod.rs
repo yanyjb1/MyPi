@@ -12,6 +12,7 @@ mod test;
 mod view;
 
 pub(crate) static LANGUAGE: Language = Language {
+    markers: &["Cargo.toml"],
     suffixes: table::SUFFIXES,
     table: table::table,
     shape: table::shape,

@@ -5,8 +5,9 @@ use crate::server::agent::tools::fs::lang::{Language, Line, Table};
 // The suffixes this sorter answers to.
 pub(crate) const SUFFIXES: &[&str] = &["md", "markdown"];
 
-// What this language owes the registry: its suffixes, its table, and the two questions.
+// What this language owes the registry: the files that mark its projects, its suffixes, its table, and the two questions. Markdown names no project: a document is never the marker of a workspace tree.
 pub(crate) static LANGUAGE: Language = Language {
+    markers: &[],
     suffixes: SUFFIXES,
     table,
     shape,

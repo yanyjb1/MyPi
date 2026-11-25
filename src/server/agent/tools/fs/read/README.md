@@ -76,9 +76,7 @@ since one line of it could still fill memory.
 
 A directory answers one level: `name  N lines` for a file, `name/  K files, F dirs` for a directory.
 Inside the source tree each child directory is opened one level too, folding to counts at ten files.
-The session root lists its own entries, then the source tree its language claims (`src/` for Rust) as
-a section of its own with that tree's children beneath it. Build junk — `target`, `node_modules`, dot
-entries — is named like anything else and never opened.
+The session root lists its own entries, then every source tree the workspace's languages claim (`src/` for Rust, `adapters/` for Python), each as a section of its own with that tree's children beneath it. Build junk — `target`, `node_modules`, dot entries — is named like anything else and never opened.
 
 A listing is never cut. Each level folds itself: a directory of ten files or more answers its counts
 and nothing inside, so the answer is bounded by the depth times ten lines however many entries the

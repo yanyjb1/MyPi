@@ -48,7 +48,16 @@ pub(crate) fn answer(
         parts::plural(touched, "file"),
     );
     if scope.is_empty() {
-        let _ = writeln!(out, "==> {}/", parts::rel(&zone.root, &zone.tree));
+        let label = if zone.trees.len() > 3 {
+            format!("{} source trees", zone.trees.len())
+        } else {
+            zone.trees
+                .iter()
+                .map(|tree| format!("{}/", parts::rel(&zone.root, tree)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let _ = writeln!(out, "==> {label}");
     } else {
         let _ = writeln!(
             out,

@@ -1,4 +1,4 @@
-// The walk: the source tree a language claims, the directories a call narrows it to, and the lines that match.
+// The walk: the source trees a language claims, the directories a call narrows them to, and the matching lines.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -17,26 +17,17 @@ fn readable(path: &Path) -> bool {
 // Threads one answer may read its files on.
 const THREADS: usize = 8;
 
-// Where the tree stands: its root, and the source directory a language claims under it.
+// Where the tree stands: the workspace root, and every source tree a language claims under it.
 pub(crate) struct Zone {
     pub(crate) root: PathBuf,
-    pub(crate) tree: PathBuf,
+    pub(crate) trees: Vec<PathBuf>,
 }
 
-// The tree the session stands in, as its language names it.
-pub(crate) fn zone(cwd: &Path) -> Result<Zone> {
-    for dir in cwd.ancestors() {
-        if let Some(held) = lang::domain(dir) {
-            return Ok(Zone {
-                root: held.root,
-                tree: held.tree,
-            });
-        }
-    }
-    Err(anyhow!(
-        "no source tree above {}; grep reads the tree a language claims",
-        cwd.display()
-    ))
+// The trees the session stands among.
+pub(crate) fn zone(cwd: &Path) -> Zone {
+    let root = canonicalize_lenient(cwd);
+    let trees = lang::trees(&root);
+    Zone { root, trees }
 }
 
 // The files and directories to read, and one line per scope entry that could not be used.
@@ -45,9 +36,13 @@ pub(crate) fn roots(
     scope: &mut Vec<String>,
 ) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<String>) {
     if scope.is_empty() {
-        return (vec![zone.tree.clone()], Vec::new(), Vec::new());
+        return (zone.trees.clone(), Vec::new(), Vec::new());
     }
-    let tree = canonicalize_lenient(&zone.tree);
+    let trees: Vec<PathBuf> = zone
+        .trees
+        .iter()
+        .map(|tree| canonicalize_lenient(tree))
+        .collect();
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
     let mut misses: Vec<String> = Vec::new();
@@ -74,7 +69,7 @@ pub(crate) fn roots(
         let real = canonicalize_lenient(&joined);
         if !real.exists() {
             misses.push(format!("[scope] {raw}: does not exist"));
-        } else if !real.starts_with(&tree) {
+        } else if !trees.iter().any(|tree| real.starts_with(tree)) {
             misses.push(format!("[scope] {raw}: is outside the source tree"));
         } else if real.is_dir() {
             if !dirs.contains(&real) {

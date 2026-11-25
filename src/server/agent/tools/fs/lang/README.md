@@ -10,9 +10,9 @@ A language answers one line table for one file and declares what else it can do.
 
 **The declarations.** A language says what a tool may ask it:
 
-- the suffixes it answers to;
+- the files that mark one of its projects in a directory, and the suffixes it answers to;
 - whether its pieces can index relations, and how;
-- whether it knows its units and edges: the unit a file belongs to, the units a unit declares, what a file exposes, where to look for importers, and how to narrate the result;
+- whether it knows its units and edges: the unit a file belongs to, the units a unit declares, what a file exposes, where to look for importers, the tree a directory owns when it holds no marker, and how to narrate the result;
 - whether its files are source, which decides how much of one a read shows;
 - whether it has a formatter, how to run it on a text and the runs a call wrote, and where each run landed;
 - whether it has a checker, and how to find and run the unit a file belongs to;

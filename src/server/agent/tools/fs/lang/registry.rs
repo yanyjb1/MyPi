@@ -18,14 +18,22 @@ type View = fn(&Around, &Loader, &BTreeSet<PathBuf>) -> Vec<Row>;
 pub(crate) struct Hub {
     // What one file reaches, already resolved to landing files.
     pub(crate) edges: fn(&Path, &str, &Loader) -> Vec<RawEdge>,
+
     // The unit a file belongs to.
     pub(crate) unit_of: Option<fn(&Path) -> Option<Unit>>,
+
     // The units one unit holds, and how the parent writes each.
     pub(crate) territory: Option<fn(&Unit, &Loader) -> Vec<Decl>>,
+
     // What a file exposes, one printable signature per line.
     pub(crate) interface: Option<fn(&Path, &str) -> Vec<String>>,
+
     // Where to look for whoever points at a unit.
     pub(crate) domain: Option<fn(&Path) -> Option<Domain>>,
+
+    // The tree one directory owns on its own, when it holds no marker and is still a project of this language.
+    pub(crate) loose: Option<fn(&Path) -> Option<PathBuf>>,
+
     // How to print one neighbourhood; the machine has a default.
     pub(crate) view: Option<View>,
 }
@@ -33,15 +41,20 @@ pub(crate) struct Hub {
 // One text's turn through the formatter a language names: the text with the runs a call just wrote, and the answer that names where each run landed.
 pub(crate) type Format = fn(&Draft, &Path, &Arc<Stop>) -> Outcome;
 
-// What every language owes the tools: the suffixes it answers to, its table, the answers about a piece, and the two external tools it knows how to drive.
+// What every language owes the tools: the files that mark its projects, the suffixes it answers to, its table, the answers about a piece, and the external tools it knows how to drive.
 pub(crate) struct Language {
+    // The files that mark a project of this language in one directory; a sweep of the workspace stops at one.
+    pub(crate) markers: &'static [&'static str],
     pub(crate) suffixes: &'static [&'static str],
     pub(crate) table: fn(&str) -> Table,
     pub(crate) shape: fn(&Line) -> Option<&str>,
+
     // The relations it can index: `A::b` members and a name's own declarations; `None` when it names nothing.
     pub(crate) relations: Option<&'static Relations>,
+
     // What it knows about units, edges and neighbourhoods; `None` when it has no module view.
     pub(crate) hub: Option<&'static Hub>,
+
     // Whether its files are source: they take the source budget and are read whole.
     pub(crate) source: bool,
     pub(crate) format: Option<Format>,
@@ -78,10 +91,13 @@ pub(crate) struct Row {
 pub(crate) struct Checker {
     // The unit a file belongs to; `None` when no unit holds it.
     pub(crate) unit: fn(&Path) -> Option<PathBuf>,
+
     // What a report calls that unit.
     pub(crate) title: fn(&Path) -> String,
+
     // How that unit names one of its files, so a diagnostic can be matched to a write.
     pub(crate) shown: fn(&Path, &Path) -> String,
+
     // Check one unit, given the files this batch wrote into it.
     pub(crate) run: fn(&Path, &[PathBuf], &Arc<Stop>) -> Check,
 }
@@ -102,7 +118,11 @@ pub(crate) struct Tests {
 }
 
 // Every sorted language, in the order a suffix meets them.
-static LANGUAGES: &[&Language] = &[&guages::rust::LANGUAGE, &guages::markdown::LANGUAGE];
+static LANGUAGES: &[&Language] = &[
+    &guages::rust::LANGUAGE,
+    &guages::python::LANGUAGE,
+    &guages::markdown::LANGUAGE,
+];
 
 // The language that claims this path, by its suffix.
 pub(crate) fn owner(path: &Path) -> Option<&'static Language> {
@@ -127,18 +147,72 @@ pub(crate) fn suffixes(hub: &Hub) -> Option<&'static [&'static str]> {
         .map(|one| one.suffixes)
 }
 
-// The domain one path belongs to, from the first language that knows one.
-pub(crate) fn domain(path: &Path) -> Option<Domain> {
-    LANGUAGES
-        .iter()
-        .filter_map(|one| one.hub)
-        .filter_map(|hub| hub.domain)
-        .find_map(|domain| domain(path))
+// The source trees the workspace holds, one entry per project of a language this build knows. A tree at or above the workspace root stands for the whole workspace, so a project whose root is the workspace root is dropped: what the workspace root already covers needs no claim. When nothing is left, the workspace root is the one tree.
+pub(crate) fn trees(workspace: &Path) -> Vec<PathBuf> {
+    let root = crate::server::agent::tools::workspace::canonicalize_lenient(workspace);
+    let mut found: Vec<PathBuf> = Vec::new();
+    let settled = vec![false; LANGUAGES.len()];
+    sweep_projects(&root, &mut found, &settled);
+    found.retain(|tree| tree.starts_with(&root) && tree != &root);
+    found.sort();
+    found.dedup();
+    // The outermost of two nested trees covers the inner one whole, so the inner one is dropped.
+    let mut out: Vec<PathBuf> = Vec::new();
+    for tree in found {
+        if out.iter().any(|held| tree.starts_with(held)) {
+            continue;
+        }
+        out.retain(|held| !held.starts_with(&tree));
+        out.push(tree);
+    }
+    if out.is_empty() {
+        out.push(root);
+    }
+    out
 }
 
-// Whether some language claims this directory as part of its source tree.
-pub(crate) fn tree(dir: &Path) -> bool {
-    domain(dir).is_some_and(|held| dir.starts_with(&held.tree))
+// One directory's turn in the sweep. A language's marker claims the project at this directory and stops that language's search below it; a language still unclaimed by any marker takes a directory that holds its files outright as one of its own trees. `settled` carries, as one flag per language, the languages whose project already stands above this directory.
+fn sweep_projects(dir: &Path, found: &mut Vec<PathBuf>, settled: &[bool]) {
+    if dir.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        name == "target" || name == "node_modules" || name.starts_with('.')
+    }) {
+        return;
+    }
+    let mut settled = settled.to_vec();
+    let mut claimed = false;
+    for (at, one) in LANGUAGES.iter().enumerate() {
+        if settled[at] || !one.markers.iter().any(|mark| dir.join(mark).is_file()) {
+            continue;
+        }
+        settled[at] = true;
+        claimed = true;
+        let Some(domain) = one.hub.and_then(|hub| hub.domain) else {
+            continue;
+        };
+        if let Some(held) = domain(dir) {
+            found.push(held.tree);
+        }
+    }
+    if !claimed {
+        for (at, one) in LANGUAGES.iter().enumerate() {
+            if settled[at] {
+                continue;
+            }
+            let Some(claim) = one.hub.and_then(|hub| hub.loose) else {
+                continue;
+            };
+            if let Some(tree) = claim(dir) {
+                found.push(tree);
+                settled[at] = true;
+            }
+        }
+    }
+    for entry in graph::loader::entries(dir) {
+        if entry.dir {
+            sweep_projects(&entry.path, found, &settled);
+        }
+    }
 }
 
 // Every file under one directory that some sorter claims, recursively; junk skipped.

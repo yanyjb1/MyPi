@@ -12,6 +12,7 @@ pub(crate) static HUB: Hub = Hub {
     territory: Some(territory),
     interface: Some(interface),
     domain: Some(domain),
+    loose: None,
     view: Some(super::view::view),
 };
 
