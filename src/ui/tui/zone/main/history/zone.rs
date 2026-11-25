@@ -11,7 +11,7 @@ use super::local::section::{Idx, Local};
 use super::local::slot::{Level, Life};
 use super::prefetch::{Range, Run, Start};
 use super::product::{Opts, Task, TodoPanel};
-use super::{display, keys, wire};
+use super::{banner, display, keys, wire};
 use crate::ui::tui::lang::Lang;
 
 use super::super::pane::Pane;
@@ -117,9 +117,11 @@ pub struct HistoryZone {
     pub(super) pending_focus: Option<Target>,
     // The post box, the palette and the draft every zone shares.
     pub(super) shared: Shared,
+    pub(super) banner: bool,
 
     // The conversation this zone follows; `None` = a draft.
     pub(super) session: Option<i64>,
+
     // What this frame owes the other zones.
     pub(super) shouts: Vec<Shout>,
     // Bumped whenever this zone's rows would differ.
@@ -167,6 +169,7 @@ impl Default for HistoryZone {
             pending_focus: None,
             shared: Shared::default(),
             session: None,
+            banner: true,
             shouts: Vec::new(),
             rev: 0,
         }
@@ -224,6 +227,12 @@ impl HistoryZone {
             local.set_reach(reach);
         });
         self.missing = spend.missing;
+        // A draft draws the wordmark instead of the rows it does not have.
+        if self.banner
+            && let Some(mark) = banner::screen(width, height)
+        {
+            return mark;
+        }
         display::lines(&spend.rows, accent)
     }
 
@@ -486,6 +495,7 @@ impl HistoryZone {
 
     pub(in crate::ui::tui::zone::main) fn attach(&mut self, session: i64, _size: TermSize) {
         self.session = Some(session);
+        self.banner = false;
         self.destroy();
         self.needs_layout = true;
         self.range.follow();
@@ -502,6 +512,7 @@ impl HistoryZone {
 
     pub(in crate::ui::tui::zone::main) fn detach(&mut self) {
         self.session = None;
+        self.banner = true;
         self.destroy();
         self.bump();
     }
@@ -525,6 +536,8 @@ impl HistoryZone {
                 }
             }
             name::ECHO => {
+                // The draft is over the moment this front end puts a message out.
+                self.banner = false;
                 if let Some(text) = content.get("text").and_then(Value::as_str) {
                     self.echo(text);
                 }
