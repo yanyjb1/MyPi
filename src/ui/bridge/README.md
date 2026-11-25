@@ -2,6 +2,8 @@
 
 An HTTP door onto the server, for every front end that is not this terminal: a browser page, a chat bot, a script. It holds several conversations at once, which the IPC wire does not.
 
+**`API.md`, beside this file, is the one a front end is written against: every frame and every name the door carries.**
+
 ## 1. Design / Schema
 
 ### The door
