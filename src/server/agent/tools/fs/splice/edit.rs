@@ -8,8 +8,7 @@ use crate::server::agent::tools::fs::lang::Table;
 use crate::server::agent::tools::spec::Item;
 use crate::server::agent::tools::summary;
 
-// One change's landing place: its first and last line, both 1-based, `last < first` when it left nothing there; `None` when the formatter's output could not be walked back to it.
-pub(crate) type Place = Option<(usize, usize)>;
+pub(crate) use crate::server::agent::tools::fs::lang::Place;
 
 // One change, measured in the snapshot it was written against.
 #[derive(Debug, Clone)]
@@ -86,17 +85,6 @@ impl Edit {
             });
         }
         Ok(out)
-    }
-
-    // The same change with a comment around its block, so the formatter's output can be walked back to it. `tag` names this run and `at` its position in the list handed to the formatter.
-    pub(crate) fn marked(&self, tag: &str, at: usize) -> Self {
-        let mut out = self.clone();
-        let mut block = Vec::with_capacity(self.block.len() + 2);
-        block.push(format!("// {tag} {at} open"));
-        block.extend(self.block.iter().cloned());
-        block.push(format!("// {tag} {at} close"));
-        out.block = block;
-        out
     }
 
     // The lines it takes, as the snapshot holds them.

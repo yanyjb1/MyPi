@@ -10,7 +10,7 @@ checker, tests and relation index.
   braces, and block heads inside long functions.
 - Relations: `A::b` as a type or module member, and a lone name's declarations.
 - Graph facts: the unit a file belongs to, the units an entry declares, exports, edges and the source domain.
-- Formatter: `rustfmt`, with the edition from the nearest `Cargo.toml`.
+- Formatter: `rustfmt`, with the edition from the nearest `Cargo.toml`. Each written block is wrapped in a pair of marker comments before the text goes out, and read back from the laid-out text afterwards.
 - Checker: `cargo check` over the unit a file belongs to.
 - Tests: the tests a written line range declares, run alone.
 

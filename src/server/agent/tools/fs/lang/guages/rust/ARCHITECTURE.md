@@ -14,7 +14,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `view.rs` | the module view's narration |
 | `test.rs` | the test support: the tests a line range declares, their full paths and one run |
 | `check.rs` | the checker: the build unit, its diagnostics and their placement |
-| `format.rs` | the formatter: the edition from the nearest manifest and the text it returns |
+| `format.rs` | the formatter: the edition from the nearest manifest, the wrapper comments around each written block, and where each block landed after `rustfmt` laid the text out |
 
 ## Relations
 

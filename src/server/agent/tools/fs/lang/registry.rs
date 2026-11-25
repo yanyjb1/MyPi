@@ -9,7 +9,7 @@ use crate::server::platform::stop::Stop;
 use super::graph::{self, Around, Decl, Domain, Loader, RawEdge, Unit};
 use super::guages;
 use super::table::{Line, Table};
-use super::verdict::{Check, Outcome, Verdict};
+use super::verdict::{Check, Draft, Outcome, Verdict};
 
 // How one neighbourhood reads on screen.
 type View = fn(&Around, &Loader, &BTreeSet<PathBuf>) -> Vec<Row>;
@@ -30,8 +30,8 @@ pub(crate) struct Hub {
     pub(crate) view: Option<View>,
 }
 
-// One text's turn through the formatter a language names.
-pub(crate) type Format = fn(&str, &Path, &Arc<Stop>) -> Outcome;
+// One text's turn through the formatter a language names: the text with the runs a call just wrote, and the answer that names where each run landed.
+pub(crate) type Format = fn(&Draft, &Path, &Arc<Stop>) -> Outcome;
 
 // What every language owes the tools: the suffixes it answers to, its table, the answers about a piece, and the two external tools it knows how to drive.
 pub(crate) struct Language {

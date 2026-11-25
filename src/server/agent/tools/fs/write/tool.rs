@@ -10,7 +10,7 @@ use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::fs::eol;
 use crate::server::agent::tools::fs::fault;
 use crate::server::agent::tools::fs::lang;
-use crate::server::agent::tools::fs::lang::verdict::Outcome;
+use crate::server::agent::tools::fs::lang::verdict::{Draft, Outcome};
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
 use crate::server::agent::tools::workspace::write_atomic;
@@ -68,8 +68,12 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     let mut undecided = None;
     let stop = &env.stop;
     let written = if let Some(format) = formatter {
-        match format(&content, &p, stop) {
-            Outcome::Formatted(text) => text,
+        let draft = Draft {
+            text: &content,
+            runs: &[],
+        };
+        match format(&draft, &p, stop) {
+            Outcome::Formatted { text, .. } => text,
             // A text the formatter cannot parse is written as it stands, and said so.
             Outcome::Unparsed(why) => {
                 unparsed = Some(why);

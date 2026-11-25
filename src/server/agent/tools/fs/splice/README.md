@@ -95,17 +95,17 @@ Both are the file's language's own; a language that names no formatter writes th
 | one whose formatter does not finish or cannot run | the text lands as it stands and the answer says it was not formatted |
 | one without a formatter | the text is spliced from its lines and nothing else |
 
-The formatter's output decides where each block lands.
+The text goes to the formatter as one draft: the merged lines, and where each written block sits in them.
 
-A landing the formatter's output cannot be walked back to falls to the position the plain splice would give it.
+The language answers the laid-out text and where each block landed in it; a landing the answer leaves out falls to the position the plain splice would give it.
 
-Every parse is one `rustfmt` run.
+Each language settles its own draft: Rust wraps every block in wrapper comments and reads them back after `rustfmt` has laid the text out.
 
-Its edition comes from the nearest `Cargo.toml` above the file.
+The formatter's default pass carries no draft: a whole-file write asks only for the text.
 
 A timeout or a missing binary says nothing about the text, so the text lands as it stands.
 
-When the merged text does not parse, the answer names the block the parser blames: a missing brace points below the change, never at it.
+When the merged text does not parse, the answer names the block the parser blames: an unclosed piece points below the change, never at it.
 
 Nothing is filtered out by that report.
 

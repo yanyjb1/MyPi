@@ -10,11 +10,22 @@ pub(crate) struct Unparsed {
     pub message: String,
 }
 
+// One run of text a call just wrote, read in the answer's own coordinates: its first and last line, both 1-based; `first > last` when it left no line, `None` when the formatter left no trace of it.
+pub(crate) type Place = Option<(usize, usize)>;
+
+// One text on its way to a formatter: the whole text, and where the runs a call just wrote sit inside it.
+pub(crate) struct Draft<'a> {
+    // The text handed over, every written run already in place.
+    pub(crate) text: &'a str,
+    // One entry per written run, 1-based inclusive, in the order the caller handed them over; `first > last` when the run left no line of its own.
+    pub(crate) runs: &'a [(usize, usize)],
+}
+
 // One text's turn through a formatter.
 #[derive(Debug, Clone)]
 pub(crate) enum Outcome {
-    // The text as the formatter left it.
-    Formatted(String),
+    // The text as the formatter left it, and where each run of the draft sits in it, in the draft's own order.
+    Formatted { text: String, runs: Vec<Place> },
 
     // The formatter ran and said the text does not parse.
     Unparsed(Unparsed),
