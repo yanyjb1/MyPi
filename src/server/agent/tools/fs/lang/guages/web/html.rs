@@ -311,23 +311,3 @@ pub(super) fn refs(tags: &[Tag]) -> Vec<(usize, String)> {
     }
     out
 }
-
-// The elements whose content is code rather than markup: the line their tag ends on, the line their close stands on, and their own word.
-pub(super) fn blocks(tags: &[Tag]) -> Vec<(usize, usize, &'static str)> {
-    let mut out = Vec::new();
-    for (at, tag) in tags.iter().enumerate() {
-        if tag.close {
-            continue;
-        }
-        let Some(word) = RAW.iter().copied().find(|word| tag.name.as_str() == *word) else {
-            continue;
-        };
-        let close = tags[at + 1..]
-            .iter()
-            .find(|next| next.close && next.name == tag.name);
-        if let Some(close) = close {
-            out.push((tag.end, close.line, word));
-        }
-    }
-    out
-}

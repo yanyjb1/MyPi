@@ -10,18 +10,18 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `registry.rs` | the registry: the language contract, the language list, the suffix lookup, the workspace's source trees, and the questions a tool asks |
 | `graph/` | the graph machine: units, edges, the upward walk, the printing parts and the default narration; it names no language |
 | `table.rs` | one file's line table: stamps, paired lines, labels and the queries over them |
-| `verdict.rs` | what a formatter, a checker and a test run answer: the draft a formatter is handed, the place a written run lands on, and the verdicts |
+| `verdict.rs` | what a parser, a checker and a test run answer: whether a text parses, the line a parser names when it does not, and the verdicts |
 | `guages/mod.rs` | declares the languages |
 | `guages/rust/` | Rust's declaration and its own knowledge |
 | `guages/python/` | Python's declaration and its own knowledge |
-| `guages/web/` | the web's declaration and its own knowledge: one sorter per file kind, the page-rooted graph, the three-way anchor index, the biome formatter and checker |
+| `guages/web/` | the web's declaration and its own knowledge: one sorter per file kind, the page-rooted graph, the three-way anchor index, the biome parser and checker |
 | `guages/markdown.rs` | the Markdown sorter: headings, fences, lists, quotes, HTML blocks, front matter and how far a heading's section reaches |
 
 ## Relations
 
-- **`gate`**: the process machine a formatter, a checker or a test run puts its child through; the language supplies the command line and reads the answer.
+- **`gate`**: the process machine a parser, a checker or a test run puts its child through; the language supplies the command line and reads the answer.
 - **Nothing else in this crate but `summary`** through its consumers: a sorter answers text, never I/O.
-- **Who calls it**: `read` (line numbers, budget, graph facts, source tree), `splice` (receipt anchors, the formatter, the check), `edit`, `fault` (the check and the tests), `change`, `skeleton`, `grep` (its scan, its outline, its relation sections), `write` (the formatter, the check).
+- **Who calls it**: `read` (line numbers, budget, graph facts, source tree), `splice` (receipt anchors, the parser, the check), `edit`, `fault` (the check and the tests), `change`, `skeleton`, `grep` (its scan, its outline, its relation sections), `write` (the parser, the check).
 - **Knows nothing about**: the workspace, the compiler's own vocabulary, any tool's caps or prose.
 
 ## Must stay in step

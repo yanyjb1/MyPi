@@ -18,7 +18,7 @@ use crate::server::platform::stop::Stop;
 // How many diagnostics one folded report lists.
 const FAULTS: usize = 12;
 
-// A file that did not parse: the formatter's verdict is the whole report.
+// A file that did not parse: the parser's verdict is the whole report.
 pub(crate) fn unparsed(why: &Unparsed) -> String {
     let at = match why.line {
         Some(line) => format!(" line {line}:"),

@@ -14,7 +14,7 @@ A language answers one line table for one file and declares what else it can do.
 - whether its pieces can index relations, and how;
 - whether it knows its units and edges: the unit a file belongs to, the units a unit declares, what a file exposes, where to look for importers, the tree a directory owns when it holds no marker, and how to narrate the result;
 - whether its files are source, which decides how much of one a read shows;
-- whether it has a formatter, how to run it on a text and the runs a call wrote, and where each run landed;
+- whether it has a parser, and how to ask it whether a text parses; the parser judges and never lays a text out;
 - whether it has a checker, and how to find and run the unit a file belongs to;
 - whether it has tests, how to find the tests a change wrote, and how to run those alone.
 
@@ -28,7 +28,7 @@ Suffixes point at languages. A file whose suffix meets none is a table where eve
 
 **One answer, many readers.** `read` numbers lines by it, `splice` anchors its receipt on it, `edit` and `change` find the piece around a change, `fault` draws its seam, `grep` builds its outline and its relation sections.
 
-**One language, one file.** Every fact about a language — its structure, its formatter, its checker — lives in that language's own file. A tool asks the declarations; it never names a language, a suffix or a toolchain.
+**One language, one file.** Every fact about a language — its structure, its parser, its checker — lives in that language's own file. A tool asks the declarations; it never names a language, a suffix or a toolchain.
 
 **One language may own several file kinds.** The web is one language over pages, stylesheets and scripts together, because a DOM anchor is only worth looking up when one query reaches a page, a stylesheet and a script at once. Its sorter dispatches on the suffix it is handed.
 

@@ -11,7 +11,7 @@ The web as one language: pages, stylesheets and scripts, read and edited togethe
 - Graph facts: a page is the hub. Its `<link rel="stylesheet" href>` and `<script src>` are its out edges, a stylesheet's `@import` and a script's `import … from` likewise. A path opening with `/` is read from the page root, anything else from the referring file's own directory; a target that is not on disk lands nowhere and the edge keeps the path it wrote. A named file that exists is an asset of the unit naming it.
 - Exports: a page's ids, a stylesheet's selectors, a script's `export`. Past twelve names the rest fold into a count.
 - Relations: `#id` and `.class` answered from all three kinds at once — the page's tags, the stylesheet's rules, the script's `getElementById`, `querySelector(All)` and class-list calls; `Class.method` and a lone name answered inside scripts.
-- Formatter: `biome format`, driven on stdin, with biome's own defaults and no tuning; a page is always handed over with `--html-formatter-enabled=true`, since biome leaves the HTML formatter off until asked. Each written run is wrapped in a pair of marker comments so its lines can be found again after layout — `//` or `/* */` inside a page's own `<script>` and `<style>`, `<!-- -->` in its markup.
+- Parser: `biome format`, driven on stdin, and read for its verdict alone: a page is always handed over with `--html-formatter-enabled=true`, since biome leaves the HTML formatter off until asked. What it lays out is thrown away, so a written file keeps the lines the model sent.
 - Checker: `biome lint --reporter=json`, over the files a batch wrote; a `.htm` page, a name biome does not know, is handed over on stdin as `.html`. Every finding is a warning, never an error.
 - Tests: none.
 
@@ -20,7 +20,7 @@ The web as one language: pages, stylesheets and scripts, read and edited togethe
 - **Four suffixes, one language.** A DOM anchor is the seam where editing goes wrong: a renamed id breaks a page, a stylesheet and a script in one move. Three languages could not answer that with one query, because a relation index only sees the files of its own language.
 - **The page is the hub.** The graph follows what a page pulls in, and the relation index reads all three kinds together, so a stylesheet or a script is never read alone.
 - **A missing target is said, not raised.** A `<link>` pointing at a file that is not there is a fact about the page, shown in the module view; the checker stays what it is — a report on the files a batch just wrote.
-- **The formatter is not tuned.** biome's defaults reflow a file the first time it is touched and stay quiet afterwards. Neither indentation nor line width is negotiated per repository.
+- **The parser is not tuned.** It answers one question — does this parse — and biome's defaults are the rule it answers by. Neither indentation nor line width is negotiated per repository.
 - **A broken tag chain stays readable.** A page that never closes an element still yields the elements around it: an unclosed tag owns the rest of the file rather than swallowing the whole table.
 
 ## 3. Unresolved

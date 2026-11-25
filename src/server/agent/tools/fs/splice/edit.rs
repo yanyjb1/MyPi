@@ -1,14 +1,12 @@
 // One change: the lines it takes, the lines it puts in their place, and the snapshot it lands on.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
 use crate::server::agent::tools::fs::change;
 use crate::server::agent::tools::fs::lang::Table;
 use crate::server::agent::tools::spec::Item;
 use crate::server::agent::tools::summary;
-
-pub(crate) use crate::server::agent::tools::fs::lang::Place;
 
 // One change, measured in the snapshot it was written against.
 #[derive(Debug, Clone)]
@@ -19,13 +17,13 @@ pub(crate) struct Edit {
     // The first line it takes, 0-based.
     pub start: usize,
 
-    // One past the last line it takes, 0-based; `start` itself when it inserts.
+    // One past the last line it takes, 0-based; always above `start`, since a range replaces at least one line.
     pub end: usize,
 
     // The lines that stand in the range's place.
     pub block: Vec<String>,
 
-    // A range a `@@CUT(a..b)@@` asked to be removed; carries no `new` of its own.
+    // A range a cut macro asked to be removed; carries no `new` of its own.
     pub cut: bool,
 
     // The words the `start` line must open with, if the model gave them: a drift check.
@@ -36,20 +34,14 @@ pub(crate) struct Edit {
 }
 
 impl Edit {
-    // One `edits[k]` of one call, read against a snapshot of `base` lines. A `@@COPY(a..b)@@` in `new` becomes the snapshot's own lines; a `@@CUT(a..b)@@` does the same and adds the change that takes those lines away.
+    // One `edits[k]` of one call, read against a snapshot of `base` lines. A copy macro in `new` becomes the snapshot's own lines; a cut macro does the same and adds the change that takes those lines away.
     pub(crate) fn read(item: &Item, index: usize, base: &[&str]) -> Result<Vec<Self>> {
         let total = base.len();
         let (start, expect_start) = item.axis("start")?;
         let (end, expect_end) = item.axis("end")?;
         anyhow::ensure!(
-            start <= total + 1,
+            start <= total,
             "`{}.start` is {start}, past the last line: the file has {total} lines",
-            item.label()
-        );
-        anyhow::ensure!(
-            end + 1 >= start,
-            "`{}.end` is {end}, above its own `start` ({start}); `end = start - 1` inserts \
-             before `start`",
             item.label()
         );
         anyhow::ensure!(
@@ -57,7 +49,13 @@ impl Edit {
             "`{}.end` is {end}, past the last line: the file has {total} lines",
             item.label()
         );
-        let (text, cuts) = rewritten(&item.text("new")?, base, item)?;
+        // A range replaces whole lines, so it always takes at least one: there is no position between two lines.
+        anyhow::ensure!(
+            start <= end,
+            "`{}.end` is {end}, above its own `start` ({start}): a range names the lines it replaces",
+            item.label()
+        );
+        let (text, cuts) = rewritten(&item.text("new")?, base);
         let mut out = vec![Self {
             index,
             start: start - 1,
@@ -124,83 +122,72 @@ pub(crate) fn call_edits(items: &[Item], base: &[&str]) -> Vec<Result<Vec<Edit>>
         .collect()
 }
 
-// A `new` string with its macros filled in, and the 0-based ranges it wants cut away. `@@COPY(a..b)@@` and `@@CUT(a..b)@@` name lines of the snapshot, 1-based inclusive, and are filled with those lines as they stand. Filling is one pass: a token inside the copied lines is copied, never followed.
-fn rewritten(new: &str, base: &[&str], item: &Item) -> Result<(String, Vec<(usize, usize)>)> {
-    let label = item.label();
+// A `new` string with its macros filled in, and the 0-based ranges it wants cut away. A copy macro stands for lines a..b of the snapshot, 1-based inclusive; a cut macro stands for the same lines and asks for them to be removed from where they were. The marks around a range are two `@`; marks that carry no range of this file are text, kept as written. Filling is one pass, so a macro inside the copied lines is copied, never followed.
+fn rewritten(new: &str, base: &[&str]) -> (String, Vec<(usize, usize)>) {
     let mut text = String::with_capacity(new.len());
     let mut cuts: Vec<(usize, usize)> = Vec::new();
     let mut at = 0usize;
-    while let Some(found) = new[at..].find("@@") {
+    while let Some(found) = new[at..].find(MARKS) {
         let from = at + found;
-        let tail = &new[from + 2..];
-        let (cut, kind, body_start) = if tail.starts_with("COPY(") {
-            (false, "COPY", from + 2 + "COPY(".len())
-        } else if tail.starts_with("CUT(") {
-            (true, "CUT", from + 2 + "CUT(".len())
-        } else {
-            bail!(
-                "`{label}.new` holds `@@` at byte {from} that starts no `@@COPY(a..b)@@` or \
-                 `@@CUT(a..b)@@`"
-            );
+        let Some((cut, first, last, width)) = token(&new[from..], base) else {
+            // No range behind the marks: the text stands as it was written, and the scan reads past them.
+            text.push_str(&new[at..from + MARKS.len()]);
+            at = from + MARKS.len();
+            continue;
         };
-        let rest = &new[body_start..];
-        let closing = rest.find(")@@").ok_or_else(|| {
-            anyhow!("`{label}.new` opens a macro at byte {from} with no closing `)@@`")
-        })?;
-        let body = &rest[..closing];
-        let (first, last) = body.split_once("..").ok_or_else(|| {
-            anyhow!("`{label}.new` has `@@{kind}({body})@@` at byte {from}; a range reads `a..b`")
-        })?;
-        let number = |raw: &str| -> Result<usize> {
-            raw.trim()
-                .parse::<usize>()
-                .map_err(|_| anyhow!("`{label}.new` names `{body}`; a range reads `a..b`"))
-        };
-        let first = number(first)?;
-        let last = number(last)?;
-        anyhow::ensure!(
-            first >= 1 && last >= first,
-            "`{label}.new` names `{body}`; a range counts upwards from 1"
-        );
-        anyhow::ensure!(
-            last <= base.len(),
-            "`{label}.new` names `{body}`, past the last line: the file has {} lines",
-            base.len()
-        );
         text.push_str(&new[at..from]);
         text.push_str(&base[first - 1..last].join("\n"));
         if cut {
             cuts.push((first - 1, last));
         }
-        at = body_start + closing + 3;
+        at = from + width;
     }
     text.push_str(&new[at..]);
-    Ok((text, cuts))
+    (text, cuts)
 }
 
-// Why one edit was left out: it lost to an accepted edit, or its own anchor reads otherwise.
+// The two marks that open and close a macro.
+const MARKS: &str = concat!("@", "@");
+
+// One macro at the head of `rest`: which kind, the 1-based lines it names, and how many bytes it takes. `None` when the marks name no range of this file, which makes them text.
+fn token(rest: &str, base: &[&str]) -> Option<(bool, usize, usize, usize)> {
+    let (cut, head, body) = match rest.strip_prefix(COPY) {
+        Some(body) => (false, COPY, body),
+        None => (true, CUT, rest.strip_prefix(CUT)?),
+    };
+    let closing = body.find(END)?;
+    let (first, last) = body[..closing].split_once("..")?;
+    let first = first.trim().parse::<usize>().ok()?;
+    let last = last.trim().parse::<usize>().ok()?;
+    if first < 1 || last < first || last > base.len() {
+        return None;
+    }
+    Some((cut, first, last, head.len() + closing + END.len()))
+}
+
+// A macro's own words, each mark written apart so no source line reads as one.
+const COPY: &str = concat!("@", "@COPY(");
+const CUT: &str = concat!("@", "@CUT(");
+const END: &str = concat!(")", "@", "@");
+
+// Why one edit was left out: it lost to an accepted edit, its own anchor reads otherwise, or its block does not parse.
 #[derive(Clone)]
 pub(crate) enum Why {
     Overlap,
     Mismatch(String),
+    Unparsed(String),
 }
 
-// Whether two changes fight over the same lines. A point (an insertion) collides with the range that holds it strictly inside, and with another point on the same line.
+// Whether two changes fight over the same lines. A range owns every line it names, so two ranges fight when their spans overlap at all.
 pub(crate) fn collide(a: &Edit, b: &Edit) -> bool {
-    match (a.start == a.end, b.start == b.end) {
-        (true, true) => a.start == b.start,
-        (true, false) => b.start < a.start && a.start < b.end,
-        (false, true) => a.start < b.start && b.start < a.end,
-        (false, false) => a.start < b.end && b.start < a.end,
-    }
+    a.start < b.end && b.start < a.end
 }
 
 // The snapshot with every change in place, applied from the bottom up so the lines above keep their numbers while they are still being used.
 pub(crate) fn spliced(text: &str, edits: &[&Edit]) -> String {
     let mut out = change::lines_of(text);
     let mut ordered: Vec<&&Edit> = edits.iter().collect();
-    // Ranges first among equal starts: an insertion on a range's own first line lands above it.
-    ordered.sort_by_key(|edit| (edit.start, edit.start != edit.end));
+    ordered.sort_by_key(|edit| edit.start);
     for edit in ordered.iter().rev() {
         out.splice(edit.start..edit.end, edit.block.iter().cloned());
     }
@@ -212,15 +199,15 @@ pub(crate) fn spliced(text: &str, edits: &[&Edit]) -> String {
 }
 
 // Each change's shift sums the deltas above it; places are written back in handed-over order.
-pub(crate) fn shifted(edits: &[Edit]) -> Vec<Place> {
+pub(crate) fn shifted(edits: &[Edit]) -> Vec<(usize, usize)> {
     let mut order: Vec<usize> = (0..edits.len()).collect();
-    order.sort_by_key(|at| (edits[*at].start, edits[*at].start != edits[*at].end));
-    let mut out = vec![None; edits.len()];
+    order.sort_by_key(|at| edits[*at].start);
+    let mut out = vec![(0, 0); edits.len()];
     let mut shift: isize = 0;
     for at in order {
         let edit = &edits[at];
         let first = (edit.start as isize + shift).max(0) as usize + 1;
-        out[at] = Some((first, first + edit.block.len() - 1));
+        out[at] = (first, first + edit.block.len() - 1);
         shift += edit.block.len() as isize - (edit.end - edit.start) as isize;
     }
     out
@@ -260,11 +247,7 @@ pub(crate) fn drift(edit: &Edit, base: &[impl AsRef<str>]) -> Option<String> {
 
 // The line one anchor names, refused: what it actually reads, against what the model gave.
 fn miss_at(idx: usize, expect: &str, base: &[impl AsRef<str>]) -> Option<String> {
-    // A bare number one past the last line appends; with words, there is no line to confirm.
     let Some(actual) = base.get(idx).map(AsRef::as_ref) else {
-        if expect.is_empty() {
-            return None;
-        }
         return Some(format!(
             "MISMATCH: line {} does not exist: the file has {} lines",
             idx + 1,
@@ -272,6 +255,7 @@ fn miss_at(idx: usize, expect: &str, base: &[impl AsRef<str>]) -> Option<String>
         ));
     };
     let shown: String = actual.trim().chars().take(120).collect();
+
     if expect.is_empty() {
         // A blank line has no words to give, so a bare number may name it and nothing else.
         if shown.is_empty() {

@@ -1,6 +1,6 @@
 # rust
 
-Rust's own declarations, registered in `mod.rs`: its suffixes, line table, graph facts, formatter,
+Rust's own declarations, registered in `mod.rs`: its suffixes, line table, graph facts, parser,
 checker, tests and relation index.
 
 ## 1. Design / Schema
@@ -10,7 +10,7 @@ checker, tests and relation index.
   braces, and block heads inside long functions.
 - Relations: `A::b` as a type or module member, and a lone name's declarations.
 - Graph facts: the unit a file belongs to, the units an entry declares, exports, edges and the source domain.
-- Formatter: `rustfmt`, with the edition from the nearest `Cargo.toml`. Each written block is wrapped in a pair of marker comments before the text goes out, and read back from the laid-out text afterwards.
+- Parser: `rustfmt`, with the edition from the nearest `Cargo.toml`. It is read for its verdict alone, so the text it lays out is thrown away and the written file keeps the lines the model sent.
 - Checker: `cargo check` over the unit a file belongs to.
 - Tests: the tests a written line range declares, run alone.
 
@@ -27,7 +27,7 @@ At most 12 members are listed per block, and at most 8 `impl` blocks per type's 
 ## 2. Design intent
 
 - Rust knows what an `impl` block is, so the relation limits live here, not in the tool.
-- A formatter, checker and test run are the language's own; the shared side only schedules them.
+- A parser, checker and test run are the language's own; the shared side only schedules them.
 - The graph facts speak files; the machine above speaks units.
 
 ## 3. Unresolved

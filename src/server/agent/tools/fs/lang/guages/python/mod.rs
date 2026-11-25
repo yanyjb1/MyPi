@@ -1,4 +1,4 @@
-// The Python language: its sorter, its own scan, its relations, its module graph, its formatter, its checker and its tests.
+// The Python language: its sorter, its own scan, its relations, its module graph, its parser, its checker and its tests.
 
 use crate::server::agent::tools::fs::lang::Language;
 

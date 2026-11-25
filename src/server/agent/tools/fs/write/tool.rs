@@ -1,6 +1,4 @@
-// The `write` tool: overwrite a whole file. The batch's audit type-checks it after the batch's last write; this call only formats, writes, and hands the file's shell to the audit.
-use std::fmt::Write as _;
-
+// The `write` tool: overwrite a whole file. The batch's audit type-checks it after the batch's last write; this call judges the text, writes it as it came, and hands the file's shell to the audit.
 use anyhow::Result;
 
 use crate::server::agent::tools::contract::env::{Env, Shell, Slot};
@@ -10,7 +8,7 @@ use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::fs::eol;
 use crate::server::agent::tools::fs::fault;
 use crate::server::agent::tools::fs::lang;
-use crate::server::agent::tools::fs::lang::verdict::{Draft, Outcome};
+use crate::server::agent::tools::fs::lang::verdict::Outcome;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
 use crate::server::agent::tools::workspace::write_atomic;
@@ -62,34 +60,20 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     }
     let existed = p.exists();
 
-    // The formatter runs first: the caller's content is what it meant, not what it lays out.
-    let formatter = lang::format(&p);
+    // The parser judges the text and leaves it whole: the caller's content is what lands.
+    let parser = lang::format(&p);
     let mut unparsed = None;
-    let mut undecided = None;
     let stop = &env.stop;
-    let written = if let Some(format) = formatter {
-        let draft = Draft {
-            text: &content,
-            runs: &[],
-        };
-        match format(&draft, &p, stop) {
-            Outcome::Formatted { text, .. } => text,
-            // A text the formatter cannot parse is written as it stands, and said so.
-            Outcome::Unparsed(why) => {
-                unparsed = Some(why);
-                content.clone()
-            }
-            // The formatter decided nothing about the text: it is written as it stands, and the batch's check is left to say what it makes of it.
-            Outcome::Undecided(why) => {
-                undecided = Some(why);
-                content.clone()
-            }
-            // The formatter was killed: the file is untouched, and the answer says why.
+    if let Some(format) = parser {
+        match format(&content, &p, stop) {
+            Outcome::Parsed => {}
+            // A text that does not parse still lands as it came, and the answer names the line: the batch's check is the real verdict.
+            Outcome::Unparsed(why) => unparsed = Some(why),
+            // The parser was killed: the file is untouched, and the answer says why.
             Outcome::Stopped => return Ok(stopped(&p)),
         }
-    } else {
-        content.clone()
-    };
+    }
+    let written = content.clone();
 
     // The line ending is the file's own: a file that already ended its lines in CRLF keeps doing so, and a new one is LF.
     let ending = std::fs::read_to_string(&p)
@@ -108,10 +92,6 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     if let Some(why) = &unparsed {
         text.push('\n');
         text.push_str(&fault::unparsed(why));
-    }
-    if let Some(why) = &undecided {
-        text.push('\n');
-        let _ = write!(text, "[i] not formatted, written as it stands: {why}");
     }
 
     // The compiler answers for the file as it now stands, after the batch's last write; the seam stands under this answer at its end. A file whose language names a checker joins the batch's check.

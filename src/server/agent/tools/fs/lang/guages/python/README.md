@@ -1,6 +1,6 @@
 # python
 
-Python's own declarations, registered in `mod.rs`: its suffixes, line table, graph facts, formatter, checker, tests and relation index.
+Python's own declarations, registered in `mod.rs`: its suffixes, line table, graph facts, parser, checker, tests and relation index.
 
 ## 1. Design / Schema
 
@@ -11,7 +11,7 @@ Python's own declarations, registered in `mod.rs`: its suffixes, line table, gra
 - Graph facts: the unit a file belongs to, the units a package holds, exports, edges and the source domain.
 - Exports: a written-out `__all__` when one exists, the public top-level definitions and constants otherwise.
 - Edges: top-level imports and the ones an `if TYPE_CHECKING:` guard holds, resolved against the file's own package. A name forwarded through `__init__.py` files is followed up to three hops.
-- Formatter: `ruff format`, with each written block wrapped in a pair of marker comments that take the indentation of the line beside them.
+- Parser: `ruff format`, read for its verdict alone: what it lays out is thrown away, so a written file keeps the lines the model sent.
 - Checker: `ty` types the whole project, `ruff check` lints the files a batch wrote.
 - Tests: `pytest`, each test asked for by its own node path.
 - Relations: `A.b` and `A::b` as a class member or a module member, and a lone name's declarations.

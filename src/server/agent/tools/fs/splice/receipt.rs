@@ -3,7 +3,6 @@
 use serde_json::{Value, json};
 
 use super::edit::{Edit, Why};
-use super::fmt::Word;
 use crate::server::agent::tools::fs::lang::Table;
 use crate::server::agent::tools::fs::skeleton;
 
@@ -64,9 +63,6 @@ pub(crate) enum State {
 
         // The item holding it, innermost two, outermost first: `impl X for Y > fn z`.
         item: Option<String>,
-
-        // The parser's words, when its block does not parse on its own.
-        blame: Option<String>,
     },
 
     // It lost to an edit the batch had already accepted.
@@ -78,30 +74,36 @@ pub(crate) enum State {
         now: (usize, usize),
     },
 
+    // Its block does not parse: the range it asked for, and the parser's words.
+    Unparsed {
+        sent: (usize, usize),
+        why: String,
+    },
+
     // The item could not be read at all: no range to name.
     Broken,
 }
 
-// The answer's fixed points: the file it writes and the formatter's verdict on the merged text.
+// The answer's fixed points: the file it writes and how many lines it holds now.
 pub(crate) struct Sheet<'a> {
     pub path: &'a str,
+
     // How many lines the file holds now: the one gutter width every block numbers by.
     pub lines: usize,
-    pub word: &'a Word,
 }
 
 // The answer's text, the memo a front end draws from, and where each edit's audit lines hang.
 pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usize>) {
     let path = sheet.path;
-    let lines = sheet.lines;
-    let word = sheet.word;
-    let width = skeleton::width(lines);
+    let width = skeleton::width(sheet.lines);
     let landed = rows
         .iter()
         .filter(|row| matches!(row.state, State::Applied { .. }))
         .count();
+
     // A call that landed whole has nothing to show: the model's next move rests on the file itself, not on a diff it already knows it sent.
-    let head = head(path, word, landed, rows.len());
+    let head = head(path, landed, rows.len());
+
     if landed == rows.len() && !rows.is_empty() && head.ends_with(": OK") {
         return (head, memo(rows), Vec::new());
     }
@@ -110,12 +112,7 @@ pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usiz
     for row in rows {
         out.push(String::new());
         match &row.state {
-            State::Applied {
-                first,
-                last,
-                item,
-                blame,
-            } => {
+            State::Applied { first, last, item } => {
                 out.push(format!("{path}:{}", span(*first, *last)));
                 if let Some(item) = item {
                     out.push(format!("  in: {item}"));
@@ -124,9 +121,6 @@ pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usiz
                     out.extend(side(&row.old, *first, '-', width));
                 } else {
                     out.extend(side(&row.new, *first, '+', width));
-                }
-                if let Some(blame) = blame {
-                    out.push(format!("  ! {blame}"));
                 }
             }
             State::Overlap => out.push("OVERLAP".to_string()),
@@ -144,6 +138,13 @@ pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usiz
                     out.push(format!("  ! {error}"));
                 }
             }
+            State::Unparsed { sent, why } => {
+                out.push(format!(
+                    "{}; the block does not parse, left out and nothing written",
+                    span(sent.0, sent.1)
+                ));
+                out.push(format!("  ! {why}"));
+            }
             State::Broken => {
                 if let Some(error) = &row.error {
                     out.push(format!("  ! {error}"));
@@ -151,20 +152,6 @@ pub(crate) fn build(sheet: &Sheet<'_>, rows: &[Row]) -> (String, Value, Vec<usiz
             }
         }
         marks.push(out.len());
-        marks.push(out.len());
-    }
-    if landed > 0 {
-        let note = match word {
-            Word::Unparsed(why) => Some(format!(
-                "[i] fmt · {path} does not parse, written as it stands: {why}"
-            )),
-            Word::Undecided(why) => Some(format!("[i] fmt · {path} not formatted: {why}")),
-            _ => None,
-        };
-        if let Some(note) = note {
-            out.push(String::new());
-            out.push(note);
-        }
     }
     (out.join("\n"), memo(rows), marks)
 }
@@ -179,18 +166,14 @@ pub(crate) fn interrupted(path: &str) -> String {
     format!("splice {path}: FAILED, NOTHING WRITTEN\n\n! interrupted: the user stopped the turn")
 }
 
-// The verdict line: the file, what became of it, and the formatter's say when all of it landed.
-fn head(path: &str, word: &Word, landed: usize, total: usize) -> String {
+// The verdict line: the file, and what became of it.
+fn head(path: &str, landed: usize, total: usize) -> String {
     let verdict = if landed == 0 {
         "FAILED, NOTHING WRITTEN"
     } else if landed < total {
         "PARTLY FAILED"
     } else {
-        match word {
-            Word::Plain | Word::Formatted => "OK",
-            Word::Unparsed(_) => "WRITTEN, NOT PARSED",
-            Word::Undecided(_) => "WRITTEN, UNFORMATTED",
-        }
+        "OK"
     };
     format!("splice {path}: {verdict}")
 }
@@ -242,6 +225,7 @@ fn memo(rows: &[Row]) -> Value {
         let place = match &row.state {
             State::Applied { first, .. } => *first,
             State::Mismatch { now, .. } => now.0,
+            State::Unparsed { sent, .. } => sent.0,
             _ => row.from,
         };
         segments.push(json!({
@@ -322,9 +306,6 @@ pub(crate) struct Fate {
     // Written: where it landed. Refused: where its own lines sit now.
     pub at: (usize, usize),
 
-    // The parser's words, when its block does not parse on its own.
-    pub blame: Option<String>,
-
     // Why it was left out; `None` means it was written.
     pub why: Option<Why>,
 }
@@ -339,6 +320,7 @@ pub(crate) fn row(
     base_table: &Table,
 ) -> Row {
     let from = edit.start + 1;
+    let sent = (from, edit.end);
     let context = excerpt(edit, base, base_table);
     let Some(why) = &fate.why else {
         let (first, last) = fate.at;
@@ -354,24 +336,19 @@ pub(crate) fn row(
             new: take(lines, first, last),
             error: None,
             context,
-            state: State::Applied {
-                first,
-                last,
-                item,
-                blame: fate.blame.clone(),
-            },
+            state: State::Applied { first, last, item },
         };
     };
-    let state = match why {
-        Why::Overlap => State::Overlap,
-        Why::Mismatch(_) => State::Mismatch {
-            sent: (from, edit.end.max(from)),
-            now: fate.at,
-        },
-    };
-    let error = match why {
-        Why::Overlap => "OVERLAP".to_string(),
-        Why::Mismatch(why) => format!("{why}"),
+    let (state, error) = match why {
+        Why::Overlap => (State::Overlap, "OVERLAP".to_string()),
+        Why::Mismatch(why) => (State::Mismatch { sent, now: fate.at }, why.clone()),
+        Why::Unparsed(why) => (
+            State::Unparsed {
+                sent,
+                why: why.clone(),
+            },
+            why.clone(),
+        ),
     };
     Row {
         index: edit.index,

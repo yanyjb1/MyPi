@@ -11,4 +11,3 @@ pub(crate) use registry::{
     format, hub, owner, shape, suffixes, table, tests, trees,
 };
 pub(crate) use table::{Line, Table};
-pub(crate) use verdict::Place;

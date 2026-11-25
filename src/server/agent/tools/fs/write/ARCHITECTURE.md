@@ -5,19 +5,19 @@
 | file | holds |
 |---|---|
 | `mod.rs` | module declarations and the tool export |
-| `tool.rs` | the tool's face: its parameters, the formatter pass, the write and the compiler's report |
+| `tool.rs` | the tool's face: its parameters, the parser's verdict, the write and the compiler's report |
 
 ## Relations
 
-- Depends on `fs/lang` for the formatter and checker the file's language answers.
-- Depends on `fs/gate` for the formatter and checker processes, their deadlines and the group a stop kills.
+- Depends on `fs/lang` for the parser and checker the file's language answers.
+- Depends on `fs/gate` for the parser and checker processes, their deadlines and the group a stop kills.
 - Depends on `workspace` for the licensed zones, the per-path write lock and atomic writes.
 - Hands its written shell to the batch's audit like every written call; the diagnostics land under the answer as a source seam, once.
 - Consumed by the engine and the registry like every tool.
-- Kept in step with `fs/splice`: both read a file's formatter outcome and the language's own answer, and never rebuild them here.
+- Kept in step with `fs/splice`: both read a file's parser verdict and the language's own answer, and never rebuild them here.
 
 ## Must stay in step
 
-1. The formatter outcome and the language's answer are one answer; a change to what a language reports reaches both `write` and `splice`.
+1. The parser verdict and the language's answer are one answer; a change to what a language reports reaches both `write` and `splice`.
 2. The audit's unit and the written file: the file is checked inside the crate that holds it, and one batch gives one check per crate.
 3. The write lock and the atomic rename belong to the workspace; `write` never opens the target directly.

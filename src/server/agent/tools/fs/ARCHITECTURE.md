@@ -24,7 +24,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 - The five tools are consumed by the engine and the registry like every tool.
 - Every written tool hands its report to the shared audit; the audit runs one check per unit after
   the batch's last write.
-- The formatter, checker and test run are the file's language's own, run through the shared process
+- The parser, checker and test run are the file's language's own, run through the shared process
   gate.
 - `edit` and `splice` share the change context; `read`, `grep` and every report share the skeleton.
 - `read`, `grep`, `edit` and `splice` read the same language table.

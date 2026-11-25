@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result};
 use serde_json::Value;
 
 use super::edit::{self, Edit, Why};
-use super::fmt::{self, Word};
+use super::fmt;
 use super::receipt::{self, Fate};
 use crate::server::agent::request::contract::{ItemOk, ToolCall};
 use crate::server::agent::tools::contract::env::{Answer, Env, License, Shell, Slot};
@@ -38,8 +38,9 @@ const EDIT_FIELDS: &[Param] = &[
         "end",
         Kind::Axis,
         "Last line of the range, inclusive, in the shape `start` reads: `N the words that line \
-         opens with`, checked when the range covers more than one line. `start - 1` inserts \
-         instead of replacing, and names no line.",
+         opens with`, then only the first few words of it, never the whole line. Its words are \
+         checked when the range covers more than one line, and it is refused when it sits above \
+         `start`.",
     ),
     Param::new(
         "new",
@@ -69,20 +70,24 @@ const PARAMS: &[Param] = &[
 pub(crate) const TOOL: Tool = Tool {
     name: "splice",
     about: "Batch 1-based inclusive line edits in one file. Supports `@@COPY(a..b)@@` / \
-            `@@CUT(a..b)@@` line macros. Auto-formats through the file's own language \
-            (writes and warns on syntax error). By matched text → `edit`. One check per batch, \
-            reported on the last write. The file must have been read or grepped in this \
-            conversation; any splice that does not end `OK` takes that authorisation away.",
+            `@@CUT(a..b)@@` line macros. The file's own parser judges the text and leaves out a \
+            block that does not parse; the text lands exactly as it was sent, never reformatted. \
+            By matched text → `edit`. One check per batch, reported on the last write. The file \
+            must have been read or grepped in this conversation; any splice that does not end `OK` \
+            takes that authorisation away.",
     fields: "Requires `path` and `edits` (`{start, end, new}`). \
-             `start` and `end` read `N the words that line opens with`, e.g. `12 pub fn run`; the \
-             words confirm the line, and a line that reads otherwise is refused. `end = start - 1` \
-             inserts before `start` and names no line. `new: \"\"` deletes the range. \
-             `@@COPY(a..b)@@` copies lines `a..b`; `@@CUT(a..b)@@` moves them (auto-deletes `a..b`).\n\
+             `start` and `end` read `N the words that line opens with`, e.g. `12 pub fn run`: the \
+             line number, then only the first few words of that line, never the whole line. The \
+             words confirm the line, and a line that reads otherwise is refused. `start` must not \
+             sit above `end`, and both must stand inside the file: a range replaces at least one \
+             line. `new: \"\"` deletes the range. `@@COPY(a..b)@@` copies lines `a..b`; \
+             `@@CUT(a..b)@@` moves them (auto-deletes `a..b`).\n\
              Edits land in the order sent: one that overlaps an edit already accepted answers \
              `OVERLAP` and the rest of the batch still lands.\n\
-             Answer: `splice <path>: <verdict>`, one block per edit, then the batch's check, test \
-             and formatting reports. A refused edit says where its own lines sit now and that the \
-             file must be read or grepped again.\n\
+             Answer: `splice <path>: <verdict>`, one block per edit, then the batch's check and \
+             test reports. A refused edit says where its own lines sit now and that the file must \
+             be read or grepped again: a splice that does not end `OK` leaves nothing authorised, \
+             so read or grep the file again before the next one.\n\
              `unfold` lists every fault of the batch's check and tests instead of folding it.",
     params: PARAMS,
     run,
@@ -123,8 +128,11 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     } else {
         env.seen.revoke(&path);
     }
+
     // Every written call hands its shell to the audit: its faults hang under its edits when the batch's check has run, and the crate's report rides on the last written answer.
-    let audit = (built.written.is_some() && !matches!(built.word, Word::Plain))
+    let audit = built
+        .written
+        .is_some()
         .then(|| lang::checker(&path))
         .flatten()
         .and_then(|checker| {
@@ -227,27 +235,29 @@ struct Piece {
 struct Built {
     // The file before the write.
     base: String,
+
     // The file as it now stands: what was written, or the base when nothing was.
     shown: String,
+
     // Every edit of the batch, in arrival order, and each call's items.
     edits: Vec<Edit>,
     pieces: Vec<Vec<Piece>>,
+
     // The edits that were written, as positions into `edits`, and where each one landed.
     held: Vec<usize>,
     landings: Vec<(usize, usize)>,
+
     // The edits that were left out, as positions into `edits`, each with what stopped it.
     dropped: Vec<(usize, Why)>,
+
     // The calls whose arguments could not be read at all.
     unreadable: Vec<Option<String>>,
-    // What the formatter made of the merged text.
-    word: Word,
-    // The edits whose block does not parse on its own, with the parser's words.
-    blamed: Vec<(usize, String)>,
+
     written: Option<String>,
 }
 
 impl Built {
-    // A formatter that never ran says nothing about the text, so it leaves the licence alone.
+    // A parser that never ran says nothing about the text, so it leaves the licence alone.
     fn clean(&self) -> bool {
         self.dropped.is_empty()
             && self.unreadable.iter().all(Option::is_none)
@@ -256,7 +266,6 @@ impl Built {
                 .iter()
                 .flatten()
                 .all(|piece| piece.why.is_none())
-            && !matches!(self.word, Word::Unparsed(_))
     }
 
     // One answer per call of the batch: its own edits, its own verdict, and where the audit's check lines will hang.
@@ -317,11 +326,6 @@ impl Built {
                         let why = refusal[index].clone();
                         let fate = Fate {
                             at: spots[index],
-                            blame: self
-                                .blamed
-                                .iter()
-                                .find(|(held, _)| *held == index)
-                                .map(|(_, why)| why.clone()),
                             why: why.clone(),
                         };
                         rows.push(receipt::row(
@@ -342,7 +346,6 @@ impl Built {
                     &receipt::Sheet {
                         path: shown,
                         lines: self.shown.lines().count(),
-                        word: &self.word,
                     },
                     &rows,
                 );
@@ -415,6 +418,7 @@ fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Arc<Sto
     let ending = eol::Eol::of(&raw);
     let text = ending.plain(&raw).into_owned();
     let base: Vec<&str> = text.lines().collect();
+
     let Some(license) = license else {
         return Ok(Run::Refused(format!(
             "`{}` is unauthorized: it has not been read in this conversation",
@@ -434,54 +438,47 @@ fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Arc<Sto
         )));
     }
     let (edits, pieces, unreadable) = flatten(plans, &base);
-    let (kept, dropped) = edit::settle_overlaps(&edits, &base);
-    let formatter = lang::format(path);
+    let (mut kept, mut dropped) = edit::settle_overlaps(&edits, &base);
+    let parser = lang::format(path);
 
     let mut held: Vec<usize> = Vec::new();
     let mut landings: Vec<(usize, usize)> = Vec::new();
-    let mut word = Word::Plain;
-    let mut blamed: Vec<(usize, String)> = Vec::new();
     let mut written: Option<String> = None;
 
     if !kept.is_empty() {
-        let picked: Vec<Edit> = kept.iter().map(|at| edits[*at].clone()).collect();
-        let plain = edit::shifted(&picked);
-        let now = if let Some(format) = formatter {
+        let mut picked: Vec<Edit> = kept.iter().map(|at| edits[*at].clone()).collect();
+        if let Some(format) = parser {
             let Some(settled) = fmt::settle(&text, &picked, format, path, stop) else {
                 return Ok(Run::Stopped);
             };
-            blamed = settled
-                .blamed
-                .iter()
-                .map(|(at, why)| (kept[*at], why.clone()))
-                .collect();
-            word = settled.word;
-            // Every held edit gets one, in the order they were handed over: a marker the formatter lost falls back to the plain splice's own arithmetic.
-            landings = plain
-                .into_iter()
-                .enumerate()
-                .map(|(at, plain)| {
-                    settled
-                        .landings
-                        .get(at)
-                        .copied()
-                        .flatten()
-                        .or(plain)
-                        .unwrap_or((1, 0))
-                })
-                .collect();
-            settled.text
-        } else {
-            let refs: Vec<&Edit> = picked.iter().collect();
-            landings = plain.into_iter().flatten().collect();
-            edit::spliced(&text, &refs)
-        };
-        held = kept;
-        if stop.is_stopped() {
-            return Ok(Run::Stopped);
+            // A block the parser cannot parse is left out whole; the rest of the batch still lands.
+            if !settled.blamed.is_empty() {
+                let mut blames: Vec<Option<String>> = vec![None; picked.len()];
+                for (at, why) in settled.blamed {
+                    blames[at] = Some(why);
+                }
+                let mut survivors: Vec<usize> = Vec::with_capacity(picked.len());
+                for (at, why) in blames.into_iter().enumerate() {
+                    match why {
+                        Some(why) => dropped.push((kept[at], Why::Unparsed(why))),
+                        None => survivors.push(kept[at]),
+                    }
+                }
+                kept = survivors;
+                picked = kept.iter().map(|at| edits[*at].clone()).collect();
+            }
         }
-        if !held.is_empty() && now != text {
-            written = Some(now);
+        if !kept.is_empty() {
+            landings = edit::shifted(&picked);
+            let refs: Vec<&Edit> = picked.iter().collect();
+            let now = edit::spliced(&text, &refs);
+            held = kept;
+            if stop.is_stopped() {
+                return Ok(Run::Stopped);
+            }
+            if now != text {
+                written = Some(now);
+            }
         }
     }
 
@@ -502,8 +499,6 @@ fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Arc<Sto
         landings,
         dropped,
         unreadable,
-        word,
-        blamed,
         written,
     })))
 }
@@ -515,6 +510,7 @@ fn flatten(plans: &[Plan], base: &[&str]) -> Flattened {
     let mut edits = Vec::new();
     let mut pieces: Vec<Vec<Piece>> = Vec::with_capacity(plans.len());
     let mut unreadable: Vec<Option<String>> = vec![None; plans.len()];
+
     for (at, plan) in plans.iter().enumerate() {
         let mine = match &plan.args {
             Ok(args) => match args.objects(EDITS) {
@@ -534,6 +530,7 @@ fn flatten(plans: &[Plan], base: &[&str]) -> Flattened {
             }
         };
         let mut rows: Vec<Piece> = Vec::with_capacity(mine.len());
+
         for (index, read) in edit::call_edits(&mine, base).into_iter().enumerate() {
             let from = edits.len();
             let mut why = None;

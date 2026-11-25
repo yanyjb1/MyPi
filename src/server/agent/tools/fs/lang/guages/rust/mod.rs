@@ -1,4 +1,4 @@
-// The Rust language: its sorter, its own scan, its formatter and its checker.
+// The Rust language: its sorter, its own scan, its parser and its checker.
 
 use crate::server::agent::tools::fs::lang::Language;
 
