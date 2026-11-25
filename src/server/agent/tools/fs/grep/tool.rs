@@ -17,8 +17,7 @@ const PARAMS: &[Param] = &[
     Param::new(
         "query",
         Kind::Text,
-        "Exact literal string (or regex if `regex: true`). Beyond a literal, it may name a member \
-         of a type/trait/module, or a name's own declarations (Rust: `A::b`, Python: `A.b`).",
+        "Exact literal string (or regex if `regex: true`). Beyond a literal it may name a member or a name's own declarations: Rust `A::b`, Python `A.b`, web `#id` and `.class` across a page, a stylesheet and a script, web `Class.method`, or a bare name inside scripts.",
     ),
     Param::df("regex", Kind::Flag, "Parse `query` as regex", "false"),
     Param::new(
@@ -32,11 +31,9 @@ const PARAMS: &[Param] = &[
 
 pub(crate) const TOOL: Tool = Tool {
     name: "grep",
-    about: "Structural search across the workspace's source trees, the source files and Markdown in \
-            them. Returns hits with the enclosing piece's hierarchy and line numbers. Also locates a \
-            member inside a type/trait/module (Rust: `A::b`, Python: `A.b`).",
+    about: "Structural search across the workspace's source trees, the source files and Markdown in them. Returns hits with the enclosing piece's hierarchy and line numbers. Also locates a member (Rust: `A::b`, Python: `A.b`, web: `#id`, `.class`, `Class.method`).",
     fields: "Requires `query`; `regex`, `scope` and `lavish` are optional.\n\
-             - Relations: besides literal matches, the query may name a member of a type/trait/module, or a name's own declarations (Rust: `A::b`, Python: `A.b`).\n\
+             - Relations: besides literal matches, the query may name a member or a name's own declarations (Rust: `A::b`, Python `A.b`, web `#id` and `.class` across page, stylesheet and script, or `Class.method`).\n\
              - Header: the counts and the tier, then the scope entries and how many of them were\n\
                used.\n\
              - Footer: `DOWNSHIFTED` while the answer is coarser than tier 1 — `lavish` raises it\n\

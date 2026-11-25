@@ -1,5 +1,7 @@
 // The Markdown sorter: which lines are key, what each piece is, and how far it reaches.
 
+use std::path::Path;
+
 use crate::server::agent::tools::fs::lang::{Language, Line, Table};
 
 // The suffixes this sorter answers to.
@@ -20,7 +22,7 @@ pub(crate) static LANGUAGE: Language = Language {
 };
 
 // One file's line table.
-pub(crate) fn table(text: &str) -> Table {
+pub(crate) fn table(_path: &Path, text: &str) -> Table {
     let raw: Vec<&str> = text.lines().collect();
     let mut out = Table::new(raw.len(), &LANGUAGE);
     let mut headings: Vec<(usize, usize)> = Vec::new();

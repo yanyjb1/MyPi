@@ -8,7 +8,7 @@ pub(crate) mod verdict;
 
 pub(crate) use registry::{
     Checker, Format, Hub, Language, Relation, Relations, Row, Source, Tests, checker, files,
-    format, hub, owner, relations, shape, suffixes, table, tests, trees,
+    format, hub, owner, shape, suffixes, table, tests, trees,
 };
 pub(crate) use table::{Line, Table};
 pub(crate) use verdict::Place;

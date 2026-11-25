@@ -1,5 +1,7 @@
 // The Rust sorter: which lines are key, what each piece is, and where it ends.
 
+use std::path::Path;
+
 use super::LANGUAGE;
 use super::scan::{self, Blank};
 use crate::server::agent::tools::fs::lang::{Line, Table};
@@ -34,7 +36,7 @@ const MODIFIERS: &[&str] = &[
 const LONG: usize = 15;
 
 // One file's line table.
-pub(crate) fn table(text: &str) -> Table {
+pub(crate) fn table(_path: &Path, text: &str) -> Table {
     let raw: Vec<&str> = text.lines().collect();
     let code = scan::strip(text, token);
     let ends = scan::ends(&code, '{', '}');

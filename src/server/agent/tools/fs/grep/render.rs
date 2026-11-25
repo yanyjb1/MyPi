@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use crate::server::agent::tools::contract::env::{GrepLimits, Seen};
 use crate::server::agent::tools::fs::lang::graph::parts;
-use crate::server::agent::tools::fs::lang::{self, Relation, Source};
+use crate::server::agent::tools::fs::lang::{Relation, Relations, Source};
 use crate::server::agent::tools::fs::skeleton;
 
 use super::scan;
@@ -70,20 +70,27 @@ pub(crate) fn answer(
 
     let mut shown: BTreeSet<usize> = BTreeSet::new();
 
-    // The three sections ask a language's own relation index; a language that names none skips them.
-    let relations = files.iter().find_map(|file| lang::relations(&file.table));
-    if let Some(relations) = relations {
-        let sources: Vec<Source> = files
+    // The three sections ask each language's own relation index, over the files that language owns: a workspace mixing Rust, Python and the web answers all of them, never the first one alone.
+    let groups = groups(files);
+    let many = groups.len() > 1;
+    for (relations, members) in groups {
+        let sources: Vec<Source> = members
             .iter()
-            .map(|file| Source {
-                path: &file.path,
-                text: &file.text,
-                table: &file.table,
+            .map(|at| Source {
+                path: &files[*at].path,
+                text: &files[*at].text,
+                table: &files[*at].table,
             })
             .collect();
         let relation = (relations.scan)(&sources, &zone.root, query);
+        // One language alone keeps its own way of saying nothing was found; several together only speak when one of them has something to show.
+        if many && relation.used.is_empty() {
+            continue;
+        }
         for &index in &relation.used {
-            shown.insert(index);
+            if let Some(at) = members.get(index) {
+                shown.insert(*at);
+            }
         }
         let block = paint(&relation);
         if !block.is_empty() {
@@ -106,6 +113,25 @@ pub(crate) fn answer(
         out.push_str(&tail);
     }
     (out, shown)
+}
+
+// The relations of each language this batch holds, with the indices of the files that language owns. One entry per language that names a relation index, in the languages' own order.
+// The relations of each language this batch holds, with the indices of the files that language owns. One entry per language that names a relation index, in the languages' own order.
+fn groups(files: &[scan::File]) -> Vec<(&'static Relations, Vec<usize>)> {
+    let mut out: Vec<(&'static Relations, Vec<usize>)> = Vec::new();
+    for (at, file) in files.iter().enumerate() {
+        let Some(relations) = file.table.language().and_then(|one| one.relations) else {
+            continue;
+        };
+        match out
+            .iter_mut()
+            .find(|(held, _)| std::ptr::eq(*held, relations))
+        {
+            Some((_, members)) => members.push(at),
+            None => out.push((relations, vec![at])),
+        }
+    }
+    out
 }
 
 // What the answer did not give, then the one move that would give more of it.

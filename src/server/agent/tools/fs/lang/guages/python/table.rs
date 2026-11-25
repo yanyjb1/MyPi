@@ -1,5 +1,7 @@
 // The Python sorter: which lines are key, what each piece is, and where its block ends.
 
+use std::path::Path;
+
 use super::LANGUAGE;
 use super::scan;
 use crate::server::agent::tools::fs::lang::{Line, Table};
@@ -19,7 +21,7 @@ const CONTROL: &[&str] = &[
 const LONG: usize = 15;
 
 // One file's line table.
-pub(crate) fn table(text: &str) -> Table {
+pub(crate) fn table(_path: &Path, text: &str) -> Table {
     let scanned = scan::strip(text);
     let mut table = Table::new(scanned.code.len(), &LANGUAGE);
     let indent = indents(&scanned);

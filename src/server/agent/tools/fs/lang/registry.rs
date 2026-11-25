@@ -46,7 +46,8 @@ pub(crate) struct Language {
     // The files that mark a project of this language in one directory; a sweep of the workspace stops at one.
     pub(crate) markers: &'static [&'static str],
     pub(crate) suffixes: &'static [&'static str],
-    pub(crate) table: fn(&str) -> Table,
+    // The sorter, handed the path with the text: a language covering several file kinds reads the kind from the name.
+    pub(crate) table: fn(&Path, &str) -> Table,
     pub(crate) shape: fn(&Line) -> Option<&str>,
 
     // The relations it can index: `A::b` members and a name's own declarations; `None` when it names nothing.
@@ -121,6 +122,7 @@ pub(crate) struct Tests {
 static LANGUAGES: &[&Language] = &[
     &guages::rust::LANGUAGE,
     &guages::python::LANGUAGE,
+    &guages::web::LANGUAGE,
     &guages::markdown::LANGUAGE,
 ];
 
@@ -236,7 +238,7 @@ fn sweep(dir: &Path, out: &mut Vec<PathBuf>) {
 // One file's line table: the sorter its suffix names, or every line as its own piece.
 pub(crate) fn table(path: &Path, text: &str) -> Table {
     match owner(path) {
-        Some(one) => (one.table)(text),
+        Some(one) => (one.table)(path, text),
         None => Table::plain(text),
     }
 }
@@ -259,9 +261,4 @@ pub(crate) fn tests(path: &Path) -> Option<&'static Tests> {
 // The kind of piece this line opens, in its own language's word: `fn`, `impl`, `heading`, `fence`.
 pub(crate) fn shape<'a>(table: &Table, line: &'a Line) -> Option<&'a str> {
     (table.language()?.shape)(line)
-}
-
-// The relations this table's language indexes, if it names any.
-pub(crate) fn relations(table: &Table) -> Option<&'static Relations> {
-    table.language()?.relations
 }

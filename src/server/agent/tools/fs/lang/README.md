@@ -4,7 +4,7 @@ One language, one file; every file tool reads the same table and asks the same q
 
 ## 1. Design
 
-A language answers one line table for one file and declares what else it can do. Every sorted language is one file under `guages/`.
+A language answers one line table for one file and declares what else it can do. Every sorted language is one file under `guages/`, and a language covering several file kinds — the web's pages, stylesheets and scripts — is handed the file's own path so its sorter reads the kind from the name.
 
 **The table.** For every line: what that line is, the line it pairs with, the label its head reads by, and the head's own text. An opening line and its closing line pair into one piece.
 
@@ -26,11 +26,15 @@ Suffixes point at languages. A file whose suffix meets none is a table where eve
 
 ## 2. Design intent
 
-**One answer, many readers.** `read` numbers lines by it, `splice` anchors its receipt on it, `edit` and `change` find the piece around a change, `fault` draws its seam, `grep` builds its outline and its three sections.
+**One answer, many readers.** `read` numbers lines by it, `splice` anchors its receipt on it, `edit` and `change` find the piece around a change, `fault` draws its seam, `grep` builds its outline and its relation sections.
 
 **One language, one file.** Every fact about a language — its structure, its formatter, its checker — lives in that language's own file. A tool asks the declarations; it never names a language, a suffix or a toolchain.
 
-**The checker knows its own unit.** A build unit is whatever the language says it is: a crate, a module, a package. The shared side groups the batch's writes by unit, runs the language's checker once per unit after the last write, and hangs every diagnostic under the edit whose lines it hit. A language with no checker takes no part.
+**One language may own several file kinds.** The web is one language over pages, stylesheets and scripts together, because a DOM anchor is only worth looking up when one query reaches a page, a stylesheet and a script at once. Its sorter dispatches on the suffix it is handed.
+
+**Every language in scope answers its own part.** A relation query is asked of each language the batch holds, over that language's own files. One language alone keeps its own way of saying nothing was found; several together print only those that found something, so a workspace-wide search never carries a list of "not here" from every other language.
+
+**The checker knows its own unit.** A build unit is whatever the language says it is: a crate, a module, a package, a page root. The shared side groups the batch's writes by unit, runs the language's checker once per unit after the last write, and hangs every diagnostic under the edit whose lines it hit. A language with no checker takes no part.
 
 **A batch tests only what it wrote.** The language names the tests a line range declares; the shared side asks the checker's own list for their full paths and runs those alone, and a name that list does not carry is reported, never counted as a pass.
 
