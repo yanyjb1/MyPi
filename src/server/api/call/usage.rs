@@ -72,6 +72,12 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
     // One stamped block bills one lap, priced at the turn found by interval coverage.
     let mut stamps: Vec<estimate::Stamp> = Vec::new();
     for (turn, span) in spans(&turns) {
+        // A round that recorded no model never asked: a compaction's borrowed round only re-lists
+        // intervals a kept round already billed, so counting it doubles their tokens.
+        let Some((provider, model)) = pair_of(turn) else {
+            continue;
+        };
+        let address = format!("{provider}:{model}");
         for block in reader.blocks(&[span])? {
             let Some(prompt) = block["usage_prompt"].as_i64() else {
                 continue;
@@ -83,10 +89,7 @@ pub(crate) fn answer(api: &Api, session: i64) -> Result<Value, Refuse> {
                 prompt,
                 completion,
             });
-            let address = pair_of(turn)
-                .map(|(provider, model)| format!("{provider}:{model}"))
-                .unwrap_or_default();
-            let tally = groups.entry(address).or_default();
+            let tally = groups.entry(address.clone()).or_default();
             tally.prompt += prompt as i64;
             tally.completion += completion as i64;
             tally.cached += block["usage_cached"].as_i64().unwrap_or(0);
@@ -245,14 +248,16 @@ fn collect_subagents(reader: &Reader, session: i64) -> Result<BTreeMap<String, T
             }
         }
         for (turn, span) in spans(&turns) {
+            // The same rule as the session's own bill: a round with no model is a borrowed one.
+            let Some((provider, model)) = pair_of(turn) else {
+                continue;
+            };
+            let address = format!("{provider}:{model}");
             for block in reader.blocks(&[span])? {
                 let Some(prompt) = block["usage_prompt"].as_i64() else {
                     continue;
                 };
-                let address = pair_of(turn)
-                    .map(|(provider, model)| format!("{provider}:{model}"))
-                    .unwrap_or_default();
-                let tally = out.entry(address).or_default();
+                let tally = out.entry(address.clone()).or_default();
                 tally.prompt += prompt.max(0);
                 tally.completion += block["usage_completion"].as_i64().unwrap_or(0).max(0);
                 tally.cached += block["usage_cached"].as_i64().unwrap_or(0);

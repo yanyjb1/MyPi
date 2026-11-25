@@ -57,7 +57,9 @@ Subscribe: `watch`, `submit`, `compact`.
   one with `models.yml`'s price in its own currency plus both display currencies. The bill is the
   stored stamps and nothing else: a lap counts once, when the block carrying its usage lands. A
   running turn therefore shows up one lap late and settles the moment it closes, so the answer only
-  ever grows inside a session. One answer serves the cost pill, the usage panel and the gauge.
+  ever grows inside a session. A round that recorded no model asked nothing of its own — a
+  compaction's borrowed round re-lists intervals a kept round already paid for — so it joins no
+  group and bills nothing. One answer serves the cost pill, the usage panel and the gauge.
 
 - `usage` also bills the session's subagents: one pool, every session this conversation spawned
   (its child rows hang on blocks the session's own ranges hold), each child billed at the model its
