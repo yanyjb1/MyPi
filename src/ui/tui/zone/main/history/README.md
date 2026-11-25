@@ -12,6 +12,10 @@ any of it runs.
 | display | nothing | screen lines | nothing |
 | frame | the revision the last draw showed | `None` while nothing changed | nothing |
 
+A draft draws none of the four: with no session attached, and until this front end puts a message
+out, the zone answers the wordmark instead — a fixed pixel grid drawn as half-blocks, centered, and
+only when the terminal holds it whole. A smaller terminal draws the ordinary empty screen.
+
 ### Local section
 
 A position is either `Fixed(i64)` or `Turn(u32)`.

@@ -15,6 +15,7 @@ What each file holds, who calls it, and what it depends on. Current state only.
 | `row.rs` | `Row`, `Run`, `Ink`, `Lead`, and how a color slot becomes a terminal style | private |
 | `markdown.rs` | markdown to runs: headings, lists, quotes, inline emphasis | private |
 | `display.rs` | laid rows to screen lines | private |
+| `banner.rs` | the wordmark a draft draws: a pixel grid rendered as half-blocks, and the gradient its body runs through | private |
 | `local/` | `section` (`Local`, `Idx`), `slot` (`Slot`, `SlotKind`, `Held`, `Level`, `Life`), `content` (`Block`, `ItemOk`, `Kind`), `mutable`, `immutable`, `handover`, `fetch` | private |
 | `product/` | `products` (`Product`, `Shape`, `Phase`, the derivation), `segment` (source to segments), `text` (a text block's closed segments and its open tail), `compact` (a compaction's banners, its folded summary and what the round measured), `natural`, `fold`, `opts`, `notice`, `user`, `table`, `todo`, `pin`, `card` | private |
 | `product/pin/` | `esc` (the running label's row), `sweep` (the accent band over that label) | private |
@@ -51,6 +52,7 @@ HistoryZone
  ├── before / after / ask / awaiting ── the gauge's two figures and what was asked for
  ├── lang: Lang                 ── the language the banners' numbers read in
  ├── rev: u64                   ── what the app compares to decide on a draw
+ ├── banner: bool               ── a draft draws the wordmark instead of rows; cleared on attach or echo
  └── thinking / tool / fold / scroll_height / focus_line / placeholder / cwd / pending
 ```
 
