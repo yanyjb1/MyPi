@@ -33,10 +33,11 @@ The program's name is the one the door knows it by: `adapters.yml` must call it
 
 ## One block is one message
 
-The stream says a piece at a time and marks the end of each block with a
-`boundary` frame. The bot sends the block that just ended, then forgets it, so
-two blocks are two messages even inside one round, and a long block is the only
-thing that is ever cut again.
+The stream says a piece at a time. The bot sends a block when a `boundary` frame
+ends it, when the next call opens, or when the round's own receipt lands: an
+adapter fed no `boundary` still gets its prose out. A block is forgotten once
+sent, so two blocks are two messages even inside one round, and a long block is
+the only thing that is ever cut again.
 
 A hosted session is different: while nobody is talking to it, nothing of its
 round is forwarded. Its round ends with one line —

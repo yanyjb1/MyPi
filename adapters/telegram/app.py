@@ -88,6 +88,8 @@ class Hosted:
         elif kind == "boundary":
             self.close_block()
         elif kind == "tool_start":
+            # A call opening ends the prose before it: an adapter fed no `boundary` has no other end.
+            self.close_block()
             self.turn.start(payload.get("call_id"), payload.get("name"))
         elif kind == "tool_end":
             self.turn.end(payload.get("call_id"), payload.get("ok"))
