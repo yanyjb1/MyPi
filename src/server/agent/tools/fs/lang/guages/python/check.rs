@@ -62,11 +62,9 @@ fn run(root: &Path, touched: &[PathBuf], stop: &Arc<Stop>) -> Check {
     let ty = typed(root, stop);
     let lint = linted(root, touched, stop);
     match (ty, lint) {
-        (Ran::Absent, Ran::Absent) => {
-            return Check::Unchecked(
-                "neither ty nor ruff was found beside this executable or on PATH".to_string(),
-            );
-        }
+        (Ran::Absent, Ran::Absent) => Check::Unchecked(
+            "neither ty nor ruff was found beside this executable or on PATH".to_string(),
+        ),
         (typed, linted) => {
             let mut faults = Vec::new();
             let mut warns = Vec::new();

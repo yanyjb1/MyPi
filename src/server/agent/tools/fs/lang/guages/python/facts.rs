@@ -335,15 +335,11 @@ fn fold(scanned: &scan::Scanned, at: usize) -> String {
 // The name a `def` or a `class` binds, and the word that opens it.
 fn defined(folded: &str) -> Option<(String, &'static str)> {
     let folded = folded.trim();
-    let (rest, kind) = if let Some(rest) = folded.strip_prefix("async def ") {
-        (rest, "async def")
-    } else if let Some(rest) = folded.strip_prefix("def ") {
-        (rest, "def")
-    } else if let Some(rest) = folded.strip_prefix("class ") {
-        (rest, "class")
-    } else {
-        return None;
-    };
+    let (rest, kind) = folded
+        .strip_prefix("async def ")
+        .map(|rest| (rest, "async def"))
+        .or_else(|| folded.strip_prefix("def ").map(|rest| (rest, "def")))
+        .or_else(|| folded.strip_prefix("class ").map(|rest| (rest, "class")))?;
     let name: String = rest
         .chars()
         .take_while(|c| c.is_alphanumeric() || *c == '_')
@@ -356,7 +352,6 @@ fn signature(folded: &str) -> String {
     folded
         .trim()
         .trim_end_matches(':')
-        .trim_end()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")

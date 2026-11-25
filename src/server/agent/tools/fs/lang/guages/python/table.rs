@@ -160,11 +160,11 @@ fn control(scanned: &scan::Scanned, indent: &[Option<usize>], table: &mut Table)
         let Some(body) = body else {
             continue;
         };
-        for n in at + 1..=end {
+        for (n, code) in scanned.code.iter().enumerate().take(end + 1).skip(at + 1) {
             if indent.get(n).copied().flatten() != Some(body) || table.key(n) {
                 continue;
             }
-            if !control_head(scanned.code[n].trim_start()) {
+            if !control_head(code.trim_start()) {
                 continue;
             }
             let stop = end_of(&(n..=end).collect::<Vec<_>>(), n, body, indent);
