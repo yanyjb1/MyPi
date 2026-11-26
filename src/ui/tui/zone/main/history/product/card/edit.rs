@@ -99,10 +99,16 @@ fn segments(b: &ToolBlock<'_>, details: &Value) -> Option<Vec<Row>> {
         .flat_map(|seg| [number(seg, "fromLine"), number(seg, "atLine")])
         .chain(
             list.iter()
-                .flat_map(|seg| [run(seg, "before"), run(seg, "after")])
-                .flatten()
-                .flatten()
-                .map(|(at, _)| at),
+                .flat_map(|seg| {
+                    [
+                        run(seg, "before"),
+                        run(seg, "after"),
+                        Some(change(seg, "old")),
+                        Some(change(seg, "new")),
+                    ]
+                })
+                .flat_map(Option::unwrap_or_default)
+                .map(|line| line.at.unwrap_or(0)),
         )
         .max()
         .unwrap_or(0)
@@ -118,85 +124,92 @@ fn segments(b: &ToolBlock<'_>, details: &Value) -> Option<Vec<Row>> {
         }
         let mut next = None;
         if let Some(lines) = run(seg, "before") {
-            next = lines.last().map(|(at, _)| at + 1);
-            rows.extend(run_rows(&mut painter, &lines, width));
+            next = lines.last().and_then(|line| line.at).map(|at| at + 1);
+            rows.extend(context_rows(&mut painter, &lines, width));
         }
-        let old = seg.get("old").and_then(Value::as_str).unwrap_or_default();
-        let new = seg.get("new").and_then(Value::as_str).unwrap_or_default();
+        let deletions = change(seg, "old");
+        let insertions = change(seg, "new");
         let first = number(seg, "fromLine");
         if first > 0 && next.is_some_and(|after| first > after) {
             rows.push(seam());
         }
-        let deletions = numbered(Some(first), old);
-        let insertions = numbered(Some(number(seg, "atLine")), new);
-        let paired = deletions.len() == insertions.len();
-        for (i, line) in deletions.iter().enumerate() {
-            let span = paired
-                .then(|| {
-                    changed_spans(
-                        &indentation(&line.text).1,
-                        &indentation(&insertions[i].text).1,
-                    )
-                })
-                .flatten()
-                .map(|(removed, _)| removed);
-            rows.push(diff_row('-', line.at, &line.text, span, width));
-        }
-        if let Some(error) = seg.get("error").and_then(Value::as_str) {
-            rows.push(Row::of(
-                Lead::None,
-                vec![Run::fixed(error.to_string(), fixed::ERR)],
-            ));
-        }
-        for (i, line) in insertions.iter().enumerate() {
-            let span = paired
-                .then(|| {
-                    changed_spans(
-                        &indentation(&deletions[i].text).1,
-                        &indentation(&line.text).1,
-                    )
-                })
-                .flatten()
-                .map(|(_, added)| added);
-            rows.push(diff_row('+', line.at, &line.text, span, width));
+        let both = deletions.len() == insertions.len();
+        for (gone, lines) in [('-', &deletions), ('+', &insertions)] {
+            for (i, line) in lines.iter().enumerate() {
+                let span = both
+                    .then(|| {
+                        changed_spans(
+                            &indentation(&deletions[i].text).1,
+                            &indentation(&insertions[i].text).1,
+                        )
+                    })
+                    .flatten()
+                    .map(|(removed, added)| if gone == '-' { removed } else { added });
+                rows.push(diff_row(gone, line.at, &line.text, span, width));
+            }
+            if gone == '-'
+                && let Some(error) = seg.get("error").and_then(Value::as_str)
+            {
+                rows.push(Row::of(
+                    Lead::None,
+                    vec![Run::fixed(error.to_string(), fixed::ERR)],
+                ));
+            }
         }
         if let Some(lines) = run(seg, "after") {
-            let last = number(seg, "atLine") + new.lines().count();
-            if lines.first().is_some_and(|(at, _)| *at > last) {
+            let last = insertions
+                .last()
+                .map_or(number(seg, "atLine"), |line| line.at.unwrap_or(0));
+            if lines
+                .first()
+                .is_some_and(|line| line.at.is_some_and(|at| at > last))
+            {
                 rows.push(seam());
             }
-            rows.extend(run_rows(&mut painter, &lines, width));
+            rows.extend(context_rows(&mut painter, &lines, width));
         }
     }
     Some(rows)
 }
 
-// One side of a segment's excerpt: its lines, each with the file line it stands on.
-fn run(seg: &Value, key: &str) -> Option<Vec<(usize, String)>> {
+// One side of the file around a segment, each line with the place it stands on; `None` when the segment carries no such side.
+fn run(seg: &Value, key: &str) -> Option<Vec<Numbered>> {
     let held = seg.get(key).filter(|v| !v.is_null())?;
-    held.get("lines")?
-        .as_array()?
-        .iter()
+    paired(held.get("lines")?.as_array()?)
+}
+
+// One side of the change itself, each line with the place it stands on.
+fn change(seg: &Value, key: &str) -> Vec<Numbered> {
+    seg.get(key)
+        .and_then(Value::as_array)
+        .and_then(|list| paired(list))
+        .unwrap_or_default()
+}
+
+// Lines as the memo carries them: `[place, text]` pairs, in file order.
+fn paired(list: &[Value]) -> Option<Vec<Numbered>> {
+    list.iter()
         .map(|pair| {
             let pair = pair.as_array()?;
-            let at = pair.first()?.as_u64()? as usize;
-            let text = pair.get(1)?.as_str()?.to_string();
-            Some((at, text))
+            Some(Numbered {
+                at: usize::try_from(pair.first()?.as_u64()?).ok(),
+                text: pair.get(1)?.as_str()?.to_string(),
+            })
         })
         .collect()
 }
 
 // The lines around a change: numbered by their own place, painted by the file's language.
-fn run_rows(painter: &mut code::Painter, lines: &[(usize, String)], width: usize) -> Vec<Row> {
+fn context_rows(painter: &mut code::Painter, lines: &[Numbered], width: usize) -> Vec<Row> {
     lines
         .iter()
-        .map(|(at, text)| {
-            let mut runs = vec![Run::fixed(gutter(' ', Some(*at), width), fixed::DIM)];
-            for run in painter.runs(text) {
+        .map(|line| {
+            let mut runs = vec![Run::fixed(gutter(' ', line.at, width), fixed::DIM)];
+            for run in painter.runs(&line.text) {
                 runs.push(run);
             }
             if runs.len() == 1 {
-                runs.push(Run::plain(text.clone()));
+                runs.push(Run::plain(line.text.clone()));
             }
             Row::of(Lead::None, runs)
         })

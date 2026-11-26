@@ -237,8 +237,8 @@ fn memo(rows: &[Row]) -> Value {
             },
             "fromLine": row.from,
             "atLine": place,
-            "old": masked(&row.old),
-            "new": masked(&row.new),
+            "old": masked(row.from, &row.old),
+            "new": masked(place, &row.new),
             "error": row.error,
             "before": run_json(&context[at].before),
             "after": run_json(&context[at].after),
@@ -302,13 +302,21 @@ fn run_json(run: &Option<Run>) -> Value {
     }
 }
 
-// Some lines as a memo carries them: every base64 payload stood down to its size, and a folded run of it as the one line that speaks for all of it.
-fn masked(lines: &[String]) -> Vec<String> {
-    let raw: Vec<&str> = lines.iter().map(String::as_str).collect();
-    mask::block(&raw)
+// One side as a memo carries it: each line with the file line it stands on, every base64 payload stood down to its size, and a folded run of it as the one line that speaks for all of it. A fold spends its run's lines, so the place is what numbers a line, never its turn in the list.
+fn masked(first: usize, lines: &[String]) -> Vec<(usize, String)> {
+    shown(
+        first,
+        mask::block(&lines.iter().map(String::as_str).collect::<Vec<_>>()),
+    )
+}
+
+// The drawn lines of a masked run, each with the place it stands on.
+fn shown(first: usize, drawn: Vec<mask::Shown<'_>>) -> Vec<(usize, String)> {
+    drawn
         .into_iter()
-        .filter_map(|held| match held {
-            mask::Shown::Line(text) => Some(text.into_owned()),
+        .enumerate()
+        .filter_map(|(back, held)| match held {
+            mask::Shown::Line(text) => Some((first + back, text.into_owned())),
             mask::Shown::Skip => None,
         })
         .collect()
@@ -402,21 +410,15 @@ fn run_of(base: &[String], first: usize, last: usize) -> Option<Run> {
     if last < first {
         return None;
     }
-    // A run of payload is drawn as the one line that speaks for it, its own place kept.
-    let drawn = mask::block(
-        &base[first - 1..last]
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
+    let lines = shown(
+        first,
+        mask::block(
+            &base[first - 1..last]
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ),
     );
-    let lines = drawn
-        .into_iter()
-        .enumerate()
-        .filter_map(|(back, held)| match held {
-            mask::Shown::Line(text) => Some((first + back, text.into_owned())),
-            mask::Shown::Skip => None,
-        })
-        .collect();
     Some(Run { lines })
 }
 
