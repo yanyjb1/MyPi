@@ -103,8 +103,8 @@ pub(crate) struct Checker {
     pub(crate) run: fn(&Path, &[PathBuf], &Arc<Stop>) -> Check,
 }
 
-// The tests one text declares inside these 1-based line ranges, by name.
-type Find = fn(&str, &Table, &[(usize, usize)]) -> Vec<String>;
+// The tests one file declares inside these 1-based line ranges, by name; the file's path is handed over, since a language whose tests live in files of their own reads the name.
+type Find = fn(&Path, &str, &Table, &[(usize, usize)]) -> Vec<String>;
 
 // How one language finds the tests a batch just wrote and runs those alone.
 pub(crate) struct Tests {
@@ -112,7 +112,7 @@ pub(crate) struct Tests {
     pub(crate) unit: fn(&Path) -> Option<PathBuf>,
     // What a report calls that unit.
     pub(crate) title: fn(&Path) -> String,
-    // The tests this text declares inside these 1-based line ranges, by name.
+    // The tests this file declares inside these 1-based line ranges, by name.
     pub(crate) find: Find,
     // Run exactly these tests in that unit, given the files this batch wrote into it.
     pub(crate) run: fn(&Path, &[PathBuf], &[String], &Arc<Stop>) -> Verdict,
@@ -127,6 +127,7 @@ static LANGUAGES: &[&Language] = &[
     &guages::markdown::LANGUAGE,
     &guages::cp::LANGUAGE,
     &guages::go::LANGUAGE,
+    &guages::r::LANGUAGE,
 ];
 
 // The language that claims this path, by its suffix.

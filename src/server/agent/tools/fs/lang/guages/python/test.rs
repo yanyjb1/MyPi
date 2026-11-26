@@ -20,7 +20,7 @@ pub(crate) const TESTS: Tests = Tests {
 };
 
 // The tests this text declares on the given 1-based line ranges, by the node name pytest gives them.
-fn find(_text: &str, table: &Table, ranges: &[(usize, usize)]) -> Vec<String> {
+fn find(_path: &Path, _text: &str, table: &Table, ranges: &[(usize, usize)]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for (at, line) in table.pieces() {
         let Some(called) = test_name(line, shape(table, line)) else {
@@ -102,7 +102,7 @@ fn run(root: &Path, files: &[PathBuf], names: &[String], stop: &Arc<Stop>) -> Ve
             continue;
         };
         let table = crate::server::agent::tools::fs::lang::table(file, &text);
-        let known = find(&text, &table, &[(1, text.lines().count().max(1))]);
+        let known = find(file, &text, &table, &[(1, text.lines().count().max(1))]);
         let rel = parts::rel(root, file);
         for name in names {
             if known.iter().any(|held| held == name) {

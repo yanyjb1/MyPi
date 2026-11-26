@@ -17,6 +17,7 @@ use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::fs::change;
 use crate::server::agent::tools::fs::eol;
 use crate::server::agent::tools::fs::lang;
+use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
 use crate::server::agent::tools::workspace::write_atomic;
@@ -129,15 +130,22 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         env.seen.revoke(&path);
     }
 
-    // Every written call hands its shell to the audit: its faults hang under its edits when the batch's check has run, and the crate's report rides on the last written answer.
+    // Every written call hands its shell to the audit: its faults hang under its edits when the batch's check has run, and the crate's report rides on the last written answer. A language that names only tests still enters, so its tests run.
     let audit = built
         .written
         .is_some()
         .then(|| lang::checker(&path))
-        .flatten()
+        .flatten();
+    let audit = audit
         .and_then(|checker| {
             let root = (checker.unit)(&path)?;
             let shown = (checker.shown)(&root, &path);
+            Some((root, shown))
+        })
+        .or_else(|| {
+            let support = lang::tests(&path)?;
+            let root = (support.unit)(&path)?;
+            let shown = parts::rel(&root, &path);
             Some((root, shown))
         });
     let mut mine = None;

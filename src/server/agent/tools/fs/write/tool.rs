@@ -8,6 +8,7 @@ use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::fs::eol;
 use crate::server::agent::tools::fs::fault;
 use crate::server::agent::tools::fs::lang;
+use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::fs::lang::verdict::Outcome;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
@@ -94,13 +95,23 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         text.push_str(&fault::unparsed(why));
     }
 
-    // The compiler answers for the file as it now stands, after the batch's last write; the seam stands under this answer at its end. A file whose language names a checker joins the batch's check.
-    if let Some(checker) = lang::checker(&p)
-        && let Some(root) = (checker.unit)(&p)
-    {
+    // The compiler answers for the file as it now stands, after the batch's last write; the seam stands under this answer at its end. A file whose language names a checker, or tests alone, joins the batch's audit.
+    let home = lang::checker(&p)
+        .and_then(|checker| {
+            let root = (checker.unit)(&p)?;
+            let shown = (checker.shown)(&root, &p);
+            Some((root, shown))
+        })
+        .or_else(|| {
+            let support = lang::tests(&p)?;
+            let root = (support.unit)(&p)?;
+            let shown = parts::rel(&root, &p);
+            Some((root, shown))
+        });
+    if let Some((root, shown)) = home {
         env.shells.push(Shell {
             call_id: env.current.clone(),
-            mine: (checker.shown)(&root, &p),
+            mine: shown,
             root,
             file: p.clone(),
             unfold,

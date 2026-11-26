@@ -21,7 +21,7 @@ pub(crate) const TESTS: Tests = Tests {
 };
 
 // The tests this text declares on the given 1-based line ranges, by function name.
-fn find(text: &str, table: &Table, ranges: &[(usize, usize)]) -> Vec<String> {
+fn find(_path: &Path, text: &str, table: &Table, ranges: &[(usize, usize)]) -> Vec<String> {
     let raw: Vec<&str> = text.lines().collect();
     let mut names: Vec<String> = Vec::new();
     for at in 0..raw.len() {

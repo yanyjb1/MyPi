@@ -18,6 +18,8 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `guages/web/` | the web's declaration and its own knowledge: one sorter per file kind, the page-rooted graph, the three-way anchor index, the biome parser and checker |
 | `guages/markdown/` | Markdown's declaration and its own knowledge: the sorter, the reference scan, the note graph and the narration |
 | `guages/cp/` | CP's declaration and its own knowledge: one domain for both halves, the file-per-unit graph, includes resolved through the compile database, and the clang parser and checker |
+| `guages/go/` | Go's declaration and its own knowledge: one package per directory, the module-rooted graph, the brace-paired sorter, and the gofmt parser, the build and vet checker, and the test run |
+| `guages/r/` | R's declaration and its own knowledge: the file's own level as pieces, a lone name's declarations, the air parser and the testthat run; no graph and no checker |
 
 ## Relations
 

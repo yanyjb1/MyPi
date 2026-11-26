@@ -99,7 +99,7 @@ fn gather_tests(
             }
             ranges.push((1, text.lines().count().max(1)));
         }
-        let found = (support.find)(&text, &table, &ranges);
+        let found = (support.find)(&shell.file, &text, &table, &ranges);
         if found.is_empty() {
             continue;
         }

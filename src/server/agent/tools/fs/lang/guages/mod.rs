@@ -5,5 +5,6 @@ pub(crate) mod go;
 pub(crate) mod markdown;
 pub(crate) mod notebook;
 pub(crate) mod python;
+pub(crate) mod r;
 pub(crate) mod rust;
 pub(crate) mod web;
