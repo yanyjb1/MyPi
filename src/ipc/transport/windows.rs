@@ -170,6 +170,9 @@ struct Overlapped {
 // One slot belongs to one thread at a time; only its owner moves.
 unsafe impl Send for Overlapped {}
 
+// Every use that writes the slot takes `&mut`, so a shared reference reaches nothing that can change under it.
+unsafe impl Sync for Overlapped {}
+
 impl Overlapped {
     fn new() -> io::Result<Overlapped> {
         let event = Event::new(false)?;
