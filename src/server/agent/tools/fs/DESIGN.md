@@ -50,6 +50,8 @@
 
 提交、删除、格式化、以上支持仅在仅启用四件套时提供，其余时候由模型通过shell命令完成。
 
+> [!note] 删除、commit这些暂时还没有实现。等需要搓一个仅四件套的场景时删除此标记。
+
 ## 语言支持矩阵
 
 ### 支持原则
@@ -64,8 +66,8 @@
 
 ### 支持矩阵与路线
 
-> 现已纳入FS全家桶套餐：Rust Python Web Markdown
-> 预备支持计划：C/CPP -> Kotlin/Java/Smali -> Go
+> 现已纳入FS全家桶套餐：Rust Python Web Markdown CP（C/CPP） JupyterNotebook
+> 预备支持计划：Go  -> R  -> Kotlin/Java/Smali
 
 理论上，任何一门文件只要有确定的后缀、结构切片规则以及对应的校验能力，即可由四件套接管。依据文件在仓库中的语义角色与交互深度，纳入支持的语言划分为以下三类：
 
@@ -79,7 +81,7 @@
 4. T3（特定条件下可以做）：
     1. Python
     2. Web 三件套（html/htm css 原生JS）。
-    3. C / C++（合并为同一语言域以规避 .h 归属冲突；要求仓库采用现代 CMake 或 Ninja 构建并生成 compile_commands.json 编译数据库，以此驱动 clang-format 与 clang-check）。
+    3. C / CPP
 5. T4（不太可能，不抱希望）：Ruby、Lua（动态元编程过重，静态结构与依赖图收益极低）。
 6. T5（死一边去，本项目永远不支持）：现代重型前端框架与重型动态 Web 生态（如 TS、React、Vue、PHP 等）。
 
@@ -90,9 +92,12 @@
 1. JSON
 2. TOML
 3. YAML
+4. XML
+5. JSONC/JSON5
 
 #### 3. 文档语言
 
 文档语言面向人类阅读的散文与知识库，不存在需要阻断写入的语法错误（格式化、静态检查与单测全部置空），核心价值在于长文档的结构导航与知识网络联动：
 
-孤例：Markdown
+1. Markdown
+2. Typst
