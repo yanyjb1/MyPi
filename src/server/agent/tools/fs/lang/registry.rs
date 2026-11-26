@@ -134,6 +134,10 @@ static LANGUAGES: &[&Language] = &[
     &guages::cp::LANGUAGE,
     &guages::go::LANGUAGE,
     &guages::r::LANGUAGE,
+    &guages::json::LANGUAGE,
+    &guages::toml::LANGUAGE,
+    &guages::yaml::LANGUAGE,
+    &guages::xml::LANGUAGE,
 ];
 
 // The language that claims this path, by its suffix.

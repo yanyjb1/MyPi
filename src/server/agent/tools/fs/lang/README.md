@@ -25,6 +25,8 @@ A piece's last line may be a key line of its own — Rust's `}`, a fence's secon
 
 Suffixes point at languages. A file whose suffix meets none is a table where every line is its own piece, and no declaration is there to read.
 
+**Data and config languages declare less and still carry a table.** JSON, TOML, YAML and XML are shapes a model navigates by: a container, a table, a key, an element. They carry no graph, no relations, no checker, no tests and no layout, because a document has no units to build, and a rewrite would cost the comments and the quoting the user wrote.
+
 ## 2. Design intent
 
 **One answer, many readers.** `read` numbers lines by it, `splice` anchors its receipt on it, `edit` and `change` find the piece around a change, `fault` draws its seam, `grep` builds its outline and its relation sections.
@@ -41,7 +43,7 @@ Suffixes point at languages. A file whose suffix meets none is a table where eve
 
 **A batch tests only what it wrote.** The language names the tests a line range declares; the shared side asks the checker's own list for their full paths and runs those alone, and a name that list does not carry is reported, never counted as a pass.
 
-**The process machine belongs to no language.** Starting a child, its deadline, its tree and the turn's stop are the gate's; a language supplies the command line and reads what came back.
+**The process machine belongs to no language.** Starting a child, its deadline, its tree and the turn's stop are the gate's; a language supplies the command line and reads what came back. A parser that reads in process asks the gate for nothing at all.
 
 **A formatter is asked once, at a commit.** A language that has one sets its own files in the project's style when the batch commits; a language without one leaves them exactly as the model wrote them. The parser still never lays a text out, so no line number moves while the model is editing.
 

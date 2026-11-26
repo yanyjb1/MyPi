@@ -20,7 +20,10 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `guages/cp/` | CP's declaration and its own knowledge: one domain for both halves, the file-per-unit graph, includes resolved through the compile database, and the clang parser and checker |
 | `guages/go/` | Go's declaration and its own knowledge: one package per directory, the module-rooted graph, the brace-paired sorter, and the gofmt parser, the build and vet checker, and the test run |
 | `guages/r/` | R's declaration and its own knowledge: the file's own level as pieces, a lone name's declarations, the air parser and the testthat run; no graph and no checker |
-
+| `guages/json/` | JSON's declaration and its own knowledge: the bracket scan, one piece per container, and the `serde_json` parser; no graph, no checker, no layout |
+| `guages/toml/` | TOML's declaration and its own knowledge: the table scan, one piece per table, and the `toml` parser; no graph, no checker, no layout |
+| `guages/yaml/` | YAML's declaration and its own knowledge: the indentation scan, one piece per key and item, the `saphyr` parser, and the scalar bodies it steps over; no graph, no checker, no layout |
+| `guages/xml/` | XML's declaration and its own knowledge: the tag scan, one piece per element, and the `quick-xml` parser; no graph, no checker, no layout |
 ## Relations
 
 - **`gate`**: the process machine a parser, a checker or a test run puts its child through; the language supplies the command line and reads the answer.

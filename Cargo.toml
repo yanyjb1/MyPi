@@ -39,3 +39,9 @@ base64 = "0.22"
 regex = "1"
 # URL 解析（fetch 的 scheme 校验）
 url = { version = "2", optional = true }
+# ---- 数据与配置语言：fs 的语法门禁，只判语法不排版 ----
+# XML：标签配对与元素大纲。它本来经 syntect 的 plist 间接进来，这里显式声明自用
+quick-xml = "0.42"
+# TOML、YAML：只解析不改写，提交时保持模型写的原样
+toml = "1"
+saphyr = "0.4"
