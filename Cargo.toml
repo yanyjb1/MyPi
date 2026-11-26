@@ -6,7 +6,7 @@ edition = "2024"
 [features]
 default = ["web"]
 # 浏览器工具族：CDP 客户端、HTML 转 Markdown、URL 解析。没有浏览器的机器用 --no-default-features 编。
-web = ["dep:tungstenite", "dep:html-to-markdown-rs", "dep:url"]
+web = ["dep:html-to-markdown-rs", "dep:url"]
 
 [dependencies]
 # 同步 HTTP 客户端：极轻、无异步运行时依赖。rustls = 纯 Rust 的 TLS，不依赖系统 OpenSSL
@@ -29,9 +29,8 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm"]
 # 停止信号（TERM/QUIT/INT/HUP）：还屏后退出。crossterm 已经带着它，这里只是显式声明
 signal-hook = "0.3"
 # ---- web 工具（feature `web`）----
-# WebSocket（CDP 用）：同步、无 tokio，与 ureq 的风格一致。只做帧协议，
-# CDP 的会话/配对逻辑在 src/web/browser/devtools/cdp.rs 里手写
-tungstenite = { version = "0.30", optional = true }
+# WebSocket：同步、无 tokio，与 ureq 风格一致。用于 CDP 客户端与 UI bridge。
+tungstenite = "0.30"
 # HTML→Markdown：omp 同款 crate（纯 Rust，带 Aggressive 预处理去 nav/footer/form）
 html-to-markdown-rs = { version = "3.14", default-features = false, optional = true }
 # base64: tool-result 图片的编码,纯 Rust 零传递依赖

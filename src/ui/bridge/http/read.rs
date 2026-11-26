@@ -10,6 +10,7 @@ const MAX_BODY: usize = 8 * 1024 * 1024;
 pub struct Request {
     pub method: String,
     pub path: String,
+    pub query: Option<String>,
     heads: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
@@ -22,11 +23,22 @@ impl Request {
             .find(|(held, _)| held == name)
             .map(|(_, value)| value.as_str())
     }
+
+    // Whether this request asked to keep the connection open.
+    pub fn keep_alive(&self) -> bool {
+        !matches!(self.head("connection"), Some(v) if v.eq_ignore_ascii_case("close"))
+    }
+
+    // Whether this request asks to upgrade to WebSocket.
+    pub fn is_websocket(&self) -> bool {
+        self.head("upgrade")
+            .map(|v| v.eq_ignore_ascii_case("websocket"))
+            .unwrap_or(false)
+    }
 }
 
-// Read one request head and its body; a peer that says nothing is not an error worth a reply.
-pub fn read(stream: &TcpStream) -> std::io::Result<Request> {
-    let mut reader = BufReader::new(stream.try_clone()?);
+// Read one request off the existing buffered reader.
+pub fn read_from(reader: &mut BufReader<TcpStream>) -> std::io::Result<Request> {
     let mut start = String::new();
     if reader.read_line(&mut start)? == 0 {
         return Err(std::io::Error::new(
@@ -37,7 +49,10 @@ pub fn read(stream: &TcpStream) -> std::io::Result<Request> {
     let mut parts = start.trim_end().split(' ');
     let method = parts.next().unwrap_or_default().to_string();
     let target = parts.next().unwrap_or_default().to_string();
-    let path = target.split('?').next().unwrap_or_default().to_string();
+    let (path, query) = match target.split_once('?') {
+        Some((p, q)) => (p.to_string(), Some(q.to_string())),
+        None => (target, None),
+    };
     let mut heads = Vec::new();
     let mut length = 0usize;
     loop {
@@ -70,6 +85,7 @@ pub fn read(stream: &TcpStream) -> std::io::Result<Request> {
     Ok(Request {
         method,
         path,
+        query,
         heads,
         body,
     })

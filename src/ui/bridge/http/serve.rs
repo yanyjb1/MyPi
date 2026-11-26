@@ -1,105 +1,159 @@
 // One connection answered: its file, one frame and its answer, or one conversation's stream.
 
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use crate::ipc::contract::Frame;
 
 use super::host;
-use super::read;
+use super::read::{self, Request};
 use super::respond;
 use super::route;
 use super::rpc;
+use super::ws;
 use crate::ui::bridge::adapter::events;
 use crate::ui::bridge::adapter::manifest::Adapter;
 use crate::ui::bridge::manager::Hub;
 use crate::ui::bridge::run::Options;
 
-pub fn serve(mut stream: TcpStream, options: &Options, hub: &Hub) -> std::io::Result<()> {
+pub fn serve(stream: TcpStream, options: &Options, hub: &Hub) -> std::io::Result<()> {
     let peer = stream.peer_addr()?;
-    let request = match read::read(&stream) {
+    let mut reader = BufReader::new(stream);
+
+    let first = match read::read_from(&mut reader) {
         Ok(request) => request,
         Err(e) => {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                return Ok(());
+            }
             let answer = respond::error("bad_request", &e.to_string());
-            return respond::respond_json(&mut stream, "400 Bad Request", &answer);
+            return respond::respond_json(reader.get_mut(), "400 Bad Request", &answer, false);
         }
     };
+
+    if first.is_websocket() {
+        let part = reader.buffer().to_vec();
+        let raw = reader.into_inner();
+        return ws::serve_ws(raw, peer, &first, part, options, hub);
+    }
+
+    let mut request = first;
+    loop {
+        let keep_alive = request.keep_alive();
+        let is_stream = handle_request(reader.get_mut(), peer, &request, options, hub, keep_alive)?;
+        if is_stream || !keep_alive {
+            break;
+        }
+
+        // Keep-alive idle timeout waiting for subsequent requests from the same client.
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(15)))?;
+        request = match read::read_from(&mut reader) {
+            Ok(req) => req,
+            Err(_) => break,
+        };
+        reader.get_ref().set_read_timeout(None)?;
+    }
+    Ok(())
+}
+
+// Answer one request on the wire; returns true when the connection transitioned into a stream.
+fn handle_request(
+    stream: &mut TcpStream,
+    peer: std::net::SocketAddr,
+    request: &Request,
+    options: &Options,
+    hub: &Hub,
+    keep_alive: bool,
+) -> std::io::Result<bool> {
     if request.method == "GET" {
         let name = request.path.trim_start_matches('/');
-        return match options.webui.file(name) {
-            Some((kind, body)) => respond::respond(&mut stream, "200 OK", kind, &body),
+        match options.webui.file(name) {
+            Some((kind, body)) => respond::respond(stream, "200 OK", kind, &body, keep_alive)?,
             None => respond::respond_json(
-                &mut stream,
+                stream,
                 "404 Not Found",
                 &respond::error("no_route", "no file of that name in the webui directory"),
-            ),
+                keep_alive,
+            )?,
         };
+        return Ok(false);
     }
     if request.method != "POST" {
-        return respond::respond_json(
-            &mut stream,
+        respond::respond_json(
+            stream,
             "405 Method Not Allowed",
             &respond::error(
                 "no_route",
                 "the bridge takes GET for a file and POST for a frame",
             ),
-        );
+            false,
+        )?;
+        return Ok(false);
     }
     let Some(named) = request.head(route::HEADER) else {
         let answer = respond::error(
             "unknown_adapter",
             "no X-Bridge-Adapter head names this request",
         );
-        return respond::respond_json(&mut stream, "403 Forbidden", &answer);
+        respond::respond_json(stream, "403 Forbidden", &answer, false)?;
+        return Ok(false);
     };
     let Some(adapter) = options.manifest.adapter(named) else {
         let answer = respond::error("unknown_adapter", "no adapter of that name in adapters.yml");
-        return respond::respond_json(&mut stream, "403 Forbidden", &answer);
+        respond::respond_json(stream, "403 Forbidden", &answer, false)?;
+        return Ok(false);
     };
     if let Err(why) = route::admitted(adapter, peer) {
         let answer = respond::error("remote_refused", why);
-        return respond::respond_json(&mut stream, "403 Forbidden", &answer);
+        respond::respond_json(stream, "403 Forbidden", &answer, false)?;
+        return Ok(false);
     }
     let body: serde_json::Value = match serde_json::from_slice(&request.body) {
         Ok(body) => body,
         Err(e) => {
             let answer = respond::error("bad_request", &e.to_string());
-            return respond::respond_json(&mut stream, "400 Bad Request", &answer);
+            respond::respond_json(stream, "400 Bad Request", &answer, false)?;
+            return Ok(false);
         }
     };
     let frame = match rpc::frame_of(adapter, &body) {
         Ok(frame) => frame,
         Err((status, answer)) => {
-            return respond::respond_json(&mut stream, &status_line(status), &answer);
+            respond::respond_json(stream, &status_line(status), &answer, keep_alive)?;
+            return Ok(false);
         }
     };
-    // The door's own kind: this machine's directories, answered here and never sent upstream.
     if frame.kind == "host" {
         if frame.name != "list" {
             let answer = respond::error("bad_request", "the door answers one host frame: `list`");
-            return respond::respond_json(&mut stream, "400 Bad Request", &answer);
+            respond::respond_json(stream, "400 Bad Request", &answer, keep_alive)?;
+            return Ok(false);
         }
-        return respond::respond_json(&mut stream, "200 OK", &host::list(&frame.payload));
+        respond::respond_json(stream, "200 OK", &host::list(&frame.payload), keep_alive)?;
+        return Ok(false);
     }
-    // A frame that follows a conversation turns this connection into that conversation's stream.
     if rpc::is_watch(&frame) {
-        return follow(stream, adapter, hub, &frame);
+        follow(stream, adapter, hub, &frame)?;
+        return Ok(true);
     }
-    // Following nothing is leaving, and leaving is closing the connection: this frame is no question.
     if frame.kind == "subscribe" && frame.name == "watch" {
         let answer = respond::error(
             "bad_request",
             "a frame that follows a conversation names `session`; close the connection to stop",
         );
-        return respond::respond_json(&mut stream, "400 Bad Request", &answer);
+        respond::respond_json(stream, "400 Bad Request", &answer, keep_alive)?;
+        return Ok(false);
     }
-    ask(stream, hub, frame)
+    ask(stream, hub, frame, keep_alive)?;
+    Ok(false)
 }
 
-// One frame to the server, its answer back. The adapter's own rules are read before anything leaves.
-fn ask(mut stream: TcpStream, hub: &Hub, frame: Frame) -> std::io::Result<()> {
+fn ask(stream: &mut TcpStream, hub: &Hub, frame: Frame, keep_alive: bool) -> std::io::Result<()> {
     let held = match rpc::session_of(&frame) {
         Some(session) => hub.get(session),
         None => hub.bare(),
@@ -108,21 +162,20 @@ fn ask(mut stream: TcpStream, hub: &Hub, frame: Frame) -> std::io::Result<()> {
         Ok(held) => held,
         Err(e) => {
             let answer = respond::error("upstream_closed", &e);
-            return respond::respond_json(&mut stream, "502 Bad Gateway", &answer);
+            return respond::respond_json(stream, "502 Bad Gateway", &answer, keep_alive);
         }
     };
     match held.ask(frame) {
-        Ok(answer) => respond::respond_json(&mut stream, "200 OK", &rpc::answer(&answer)),
+        Ok(answer) => respond::respond_json(stream, "200 OK", &rpc::answer(&answer), keep_alive),
         Err(e) => {
             let answer = respond::error("upstream_silent", &e);
-            respond::respond_json(&mut stream, "504 Gateway Timeout", &answer)
+            respond::respond_json(stream, "504 Gateway Timeout", &answer, keep_alive)
         }
     }
 }
 
-// One conversation's frames, shaped by what this adapter said it wants, until the peer leaves.
 fn follow(
-    mut stream: TcpStream,
+    stream: &mut TcpStream,
     adapter: &Adapter,
     hub: &Hub,
     frame: &Frame,
@@ -132,21 +185,20 @@ fn follow(
             "bad_request",
             "a frame that follows a conversation names `session`",
         );
-        return respond::respond_json(&mut stream, "400 Bad Request", &answer);
+        return respond::respond_json(stream, "400 Bad Request", &answer, false);
     };
     let held = match hub.get(session) {
         Ok(held) => held,
         Err(e) => {
             let answer = respond::error("upstream_closed", &e);
-            return respond::respond_json(&mut stream, "502 Bad Gateway", &answer);
+            return respond::respond_json(stream, "502 Bad Gateway", &answer, false);
         }
     };
     let (tx, frames) = mpsc::channel();
-    respond::begin_stream(&mut stream)?;
+    respond::begin_stream(stream)?;
     let Some(id) = held.listen(tx) else {
         return Ok(());
     };
-    // A peer that leaves just ends its socket: one read that blocks is the only way to hear it, and only it.
     {
         let held = Arc::clone(&held);
         let mut watch = stream.try_clone()?;
@@ -161,7 +213,7 @@ fn follow(
     }
     for frame in frames {
         for piece in events::take(adapter, frame) {
-            if respond::event(&mut stream, &piece).is_err() {
+            if respond::event(stream, &piece).is_err() {
                 return Ok(());
             }
         }

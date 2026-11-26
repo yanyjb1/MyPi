@@ -3,4 +3,5 @@
 mod held;
 mod hub;
 
+pub use held::Held;
 pub use hub::Hub;

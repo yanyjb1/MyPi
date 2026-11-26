@@ -14,6 +14,7 @@ One TCP port and nothing behind it: no path, no query, no second address. What a
 |---|---|
 | `GET /<file>` | one file of the webui directory; `/` is the page itself |
 | `POST /` | one frame, and the server's answer as the reply |
+| `GET /` (Upgrade: websocket) | full-duplex WebSocket frame stream for rich clients |
 
 A `POST` names its adapter in the `X-Bridge-Adapter` head; there is no other way to say it. A name the file does not carry is refused with `403`. The body is `{kind, name, payload}`, carried as it arrived: `call`, `post` and `subscribe` cross unchanged, and the answer is the payload the server wrote.
 

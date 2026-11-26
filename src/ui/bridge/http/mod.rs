@@ -6,3 +6,4 @@ pub(super) mod respond;
 pub(super) mod route;
 pub(super) mod rpc;
 pub(super) mod serve;
+pub(super) mod ws;
