@@ -10,6 +10,7 @@ mod facts;
 mod format;
 mod html;
 mod js;
+mod layout;
 mod relations;
 mod view;
 
@@ -26,6 +27,7 @@ pub(crate) static LANGUAGE: Language = Language {
     hub: Some(&facts::HUB),
     source: true,
     format: Some(format::format),
+    layout: Some(layout::layout),
     check: Some(check::CHECKER),
     test: None,
 };

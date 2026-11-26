@@ -1,5 +1,7 @@
 // The `write` tool: overwrite a whole file. The batch's audit type-checks it after the batch's last write; this call judges the text, writes it as it came, and hands the file's shell to the audit.
-use anyhow::Result;
+use std::path::Path;
+
+use anyhow::{Context as _, Result};
 
 use crate::server::agent::tools::contract::env::{Env, Shell, Slot};
 use crate::server::agent::tools::contract::halt::stopped;
@@ -17,6 +19,12 @@ use crate::server::agent::tools::workspace::write_atomic;
 const PATH: usize = 0;
 const CONTENT: usize = 1;
 const UNFOLD: usize = 2;
+
+// What `content` says instead of a file's text: the file is deleted.
+const DELETE_FILE: &str = "__DELETE_FILE__";
+
+// The name a commit message is written to, at the workspace root.
+const COMMIT_MESSAGE: &str = ".commitmessage";
 
 const PARAMS: &[Param] = &[
     Param::new("path", Kind::Text, "File path."),
@@ -59,6 +67,15 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
             parent.display()
         );
     }
+    // The commit message is a word to the session, not a file: it lands in the environment, and nothing touches the disk.
+    if is_commit_message(env, &p) {
+        return Ok(commit_message(env, &p, content.trim()));
+    }
+    // The delete sentinel is read before the text is judged: nothing lands in the file, and no parser has anything to say about a file about to go.
+    // It needs the same hands as the commit message: with a shell the model deletes by itself, and this word is only a literal file's text.
+    if env.bare_hands() && content.trim() == DELETE_FILE {
+        return delete(env, &p);
+    }
     let existed = p.exists();
 
     // The parser judges the text and leaves it whole: the caller's content is what lands.
@@ -81,9 +98,12 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         .map(|old| eol::Eol::of(&old))
         .unwrap_or(eol::Eol::Lf);
     let written = ending.write(&written);
+    // What git knew of the file before this call touches it: the row a commit reads.
+    let git = crate::git::facts(&p);
     env.workspace
         .with_write(&p, || write_atomic(&p, &written))?;
     env.seen.stamp(p.clone(), &written);
+    env.ledger.note(p.clone(), git);
     let bytes = written.len();
     let mut text = format!(
         "{} {} ({bytes} bytes)",
@@ -123,4 +143,62 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         });
     }
     Ok(ToolOutput::text(text))
+}
+
+// The commit message is the workspace root's own name and nothing else, and only where no shell could have committed on its own.
+fn is_commit_message(env: &Env, path: &Path) -> bool {
+    env.bare_hands()
+        && path.file_name().is_some_and(|name| name == COMMIT_MESSAGE)
+        && path.parent() == Some(env.workspace.cwd().as_path())
+}
+
+// Hand the message to the audit, which commits once its check has passed. Two writes in one batch keep the last word, and nothing lands on disk.
+fn commit_message(env: &mut Env, path: &Path, message: &str) -> ToolOutput {
+    env.pending = Some(message.to_string());
+    ToolOutput::text(format!(
+        "commit queued for {}: {} (commits once this batch's check passes)",
+        path.display(),
+        message.lines().next().unwrap_or("")
+    ))
+}
+
+// Delete one file the model asked to remove. The file must have been read, and must still hold what was read: a file the user changed since is theirs again, and the model reads it first.
+fn delete(env: &mut Env, path: &Path) -> Result<ToolOutput> {
+    let Some(license) = env
+        .seen
+        .files
+        .get(path)
+        .cloned()
+        .filter(|held| held.approval)
+    else {
+        env.seen.revoke(path);
+        anyhow::bail!(
+            "`{}` is unauthorized: read it before deleting it",
+            path.display()
+        );
+    };
+    let text = std::fs::read_to_string(path).context("failed to read file")?;
+    anyhow::ensure!(
+        license.matches(&text),
+        "`{}` changed on disk since it was read: read it again before deleting it",
+        path.display()
+    );
+    let root = crate::git::root(&env.workspace.cwd());
+    let tracked = root.as_ref().is_some_and(|root| {
+        crate::git::relative(root, path).is_some_and(|name| crate::git::tracked(root, &name))
+    });
+    env.workspace.with_write(path, || {
+        std::fs::remove_file(path).context("failed to delete it")
+    })?;
+    env.seen.files.remove(path);
+    env.ledger.gone(path.to_path_buf(), tracked);
+    Ok(ToolOutput::text(format!(
+        "deleted {}{}",
+        path.display(),
+        if tracked {
+            " (tracked: it joins this batch's commit)"
+        } else {
+            " (untracked: git holds no version of it)"
+        }
+    )))
 }

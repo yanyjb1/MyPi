@@ -50,6 +50,12 @@ pub struct Env {
     pub handed: BTreeMap<String, Answer>,
     // One written call per shell: the audit hangs the batch's check lines there.
     pub shells: Vec<Shell>,
+
+    // What this session has written, committed, or deleted: the files a commit may name.
+    pub ledger: Ledger,
+
+    // The commit message a batch asked for; the audit commits once its check has passed.
+    pub pending: Option<String>,
 }
 
 // Where the batch's audit hangs one written call's check lines.
@@ -99,6 +105,61 @@ pub struct Seen {
     pub files: BTreeMap<PathBuf, License>,
 }
 
+// Every file this session touched, and what git knew of it before the model did: the record a commit reads to name its paths and to keep the user's own work out of them.
+#[derive(Debug, Default)]
+pub struct Ledger {
+    // One row per file the session wrote, created or deleted, in the order it first touched them.
+    pub files: Vec<Written>,
+}
+
+// One file's turn in the session: what it was before the model reached it, and whether it has changed since.
+#[derive(Debug, Clone)]
+pub struct Written {
+    // The file's real path.
+    // The file's real path.
+    pub path: PathBuf,
+
+    // Whether git tracked it when the session first touched it.
+    pub tracked: bool,
+
+    // Whether git already held an uncommitted change of the user's when the session first touched it: a commit then must not name the file, or their work rides under the model's message.
+    pub dirty: bool,
+
+    // Whether the model deleted it.
+    pub deleted: bool,
+}
+
+impl Ledger {
+    // The row for one file, made on first sight with whether git tracked it and whether it already carried the user's own change.
+    pub fn open(&mut self, path: PathBuf, git: (bool, bool)) -> &mut Written {
+        let at = match self.files.iter().position(|held| held.path == path) {
+            Some(at) => at,
+            None => {
+                let (tracked, dirty) = git;
+                self.files.push(Written {
+                    path,
+                    tracked,
+                    dirty,
+                    deleted: false,
+                });
+                self.files.len() - 1
+            }
+        };
+        &mut self.files[at]
+    }
+
+    // Record one file one tool just wrote.
+    pub fn note(&mut self, path: PathBuf, git: (bool, bool)) {
+        let row = self.open(path, git);
+        row.deleted = false;
+    }
+
+    pub fn gone(&mut self, path: PathBuf, tracked: bool) {
+        let row = self.open(path, (tracked, false));
+        row.deleted = true;
+    }
+}
+
 impl Seen {
     // Record one file's text as the version this conversation has seen.
     pub(crate) fn stamp(&mut self, path: PathBuf, text: &str) {
@@ -132,12 +193,32 @@ impl License {
             hash: format!("{:016x}", hasher.finish()),
         }
     }
+
+    // The text's own fingerprint, as one hex word: what a commit and a deletion both compare against.
+    pub fn hash_of(&self) -> &str {
+        &self.hash
+    }
+
+    // Does this text still stand where the licence was granted?
+    pub fn matches(&self, text: &str) -> bool {
+        self.hash == License::of(text).hash
+    }
 }
 
 impl Env {
     // Is this tool in the session's list? The profile gate reads the same list.
     pub fn allows(&self, name: &str) -> bool {
         self.tools.contains(name)
+    }
+
+    // Does this session hold the four file tools and nothing that could run a command? Only then may `write` commit, delete, and read `.commitmessage` as a trigger: with no shell those are the only hands it has.
+    pub fn bare_hands(&self) -> bool {
+        const WANTED: [&str; 5] = ["read", "grep", "edit", "splice", "write"];
+        self.tools.len() <= WANTED.len()
+            && self
+                .tools
+                .iter()
+                .all(|name| WANTED.contains(&name.as_str()))
     }
 }
 
@@ -302,6 +383,8 @@ impl Defaults {
             current: String::new(),
             handed: BTreeMap::new(),
             shells: Vec::new(),
+            ledger: Ledger::default(),
+            pending: None,
         })
     }
 }

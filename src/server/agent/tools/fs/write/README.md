@@ -17,6 +17,20 @@ content lands with nothing to report.
 `write` takes no array: its payload is large enough that a batch would move the same bytes into one
 argument.
 
+### Two names that are not files
+
+In a session holding only the file tools — `read`, `grep`, `edit` or `splice`, and `write`, with
+nothing that could run a command — two words mean something else:
+
+- `content: __DELETE_FILE__` deletes `path`. The file joins the batch's commit if git tracks it, and
+the answer says which. Nothing joins the batch's audit.
+- `path: .commitmessage` at the workspace root queues a commit instead of writing a file: the
+text is the message, and the batch commits once its check has passed. A second write in the same
+batch replaces the first message, and nothing touches the disk.
+
+Both need the session to hold no shell: with one, a model deletes and commits by itself, and these
+names mean the literal file they spell.
+
 ### The batch's audit
 
 A written file joins the batch's audit: each of its errors and warnings stands under the answer as

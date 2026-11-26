@@ -14,6 +14,8 @@
 - Depends on `workspace` for the licensed zones, the per-path write lock and atomic writes.
 - Hands its written shell to the batch's audit like every written call; the diagnostics land under the answer as a source seam, once.
 - Consumed by the engine and the registry like every tool.
+- Depends on `git` for the two questions its ledger keeps: whether a file is tracked, and whether the user's own uncommitted work already sat in it.
+- Reads the session's ledger to record what a file was before this call, and the pending commit its `.commitmessage` word sets; `fault` commits from there once the check has passed.
 - Kept in step with `fs/splice`: both read a file's parser verdict and the language's own answer, and never rebuild them here.
 
 ## Must stay in step

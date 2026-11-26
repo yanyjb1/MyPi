@@ -10,6 +10,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `mask.rs` | text as a report prints it: a base64 payload stands replaced by its decoded size, and a run of folded payload lines becomes one line whose number the lines under it skip |
 | `sniff.rs` | an image's format from the bytes that open it |
 | `change.rs` | one line-addressed change: the context around it, its receipt and its line arithmetic |
+| `commit.rs` | the commit a batch carries: its files set in their own language's style, the user's own work kept out, and the survivors handed to git by path |
 | `fault.rs` | the batch's audit: checks and tests after the last write, and where each fault lands |
 | `gate.rs` | the process gate: one child, its deadline, the turn's stop and its own group |
 | `eol.rs` | the line ending a written text keeps: read as plain lines, written back in the file's own ending |
@@ -25,7 +26,9 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 - The five tools are consumed by the engine and the registry like every tool.
 - Every written tool hands its report to the shared audit; the audit runs one check per unit after
-  the batch's last write.
+  the batch's last write, and then commits if the batch asked for one and the check passed.
+
+- The session's ledger holds whether git tracked each file and whether it already carried the user's own change; `commit.rs` reads it to name the paths and to keep that work out of them.
 - The parser, checker and test run are the file's language's own, run through the shared process
   gate.
 - `edit` and `splice` share the change context; `read`, `grep` and every report share the skeleton.

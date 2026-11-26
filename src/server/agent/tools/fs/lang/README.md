@@ -15,6 +15,7 @@ A language answers one line table for one file and declares what else it can do.
 - whether it knows its units and edges: the unit a file belongs to, the units a unit declares, what a file exposes, where to look for importers, the tree a directory owns when it holds no marker, and how to narrate the result;
 - whether its files are source, which decides how much of one a read shows;
 - whether it has a parser, and how to ask it whether a text parses; the parser judges and never lays a text out;
+- whether it has a formatter, and how to ask it for a text set in the project's own style; only a commit asks, and a language without one keeps its files as the model wrote them;
 - whether it has a checker, and how to find and run the unit a file belongs to;
 - whether it has tests, how to find the tests a change wrote, and how to run those alone.
 
@@ -42,7 +43,9 @@ Suffixes point at languages. A file whose suffix meets none is a table where eve
 
 **The process machine belongs to no language.** Starting a child, its deadline, its tree and the turn's stop are the gate's; a language supplies the command line and reads what came back.
 
-**Structure, not layout.** A sorter says what the pieces are and where they end. It never says how they should look: clipping, indentation, folding and prose stay in the tool that shows them.
+**A formatter is asked once, at a commit.** A language that has one sets its own files in the project's style when the batch commits; a language without one leaves them exactly as the model wrote them. The parser still never lays a text out, so no line number moves while the model is editing.
+
+**Structure, not layout.**
 
 ## 3. Unresolved
 

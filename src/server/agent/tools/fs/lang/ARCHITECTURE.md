@@ -25,7 +25,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 
 - **`gate`**: the process machine a parser, a checker or a test run puts its child through; the language supplies the command line and reads the answer.
 - **Nothing else in this crate but `summary`** through its consumers: a sorter answers text, never I/O.
-- **Who calls it**: `read` (line numbers, budget, graph facts, source tree), `splice` (receipt anchors, the parser, the check), `edit`, `fault` (the check and the tests), `change`, `skeleton`, `grep` (its scan, its outline, its relation sections), `write` (the parser, the check).
+- **Who calls it**: `read` (line numbers, budget, graph facts, source tree), `splice` (receipt anchors, the parser, the check), `edit`, `fault` (the check and the tests), `commit` (the formatter), `change`, `skeleton`, `grep` (its scan, its outline, its relation sections), `write` (the parser, the check).
 - **Knows nothing about**: the workspace, the compiler's own vocabulary, any tool's caps or prose.
 
 ## Must stay in step

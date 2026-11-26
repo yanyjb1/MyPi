@@ -31,7 +31,9 @@ pub(crate) fn unparsed(why: &Unparsed) -> String {
 pub(crate) fn settle(env: &mut Env, results: &mut [ToolResult]) {
     let stop = env.stop.clone();
     let shells = std::mem::take(&mut env.shells);
+    // No shell means this batch wrote nothing a checker reads, but it may still have asked for a commit: the commit waits for the check, and there is none to wait for.
     if shells.is_empty() {
+        settle_commit(env, results, &[], &[]);
         return;
     }
     if stop.is_stopped() {
@@ -44,11 +46,66 @@ pub(crate) fn settle(env: &mut Env, results: &mut [ToolResult]) {
                 append(results, &shell.call_id, &note);
             }
         }
+        // A commit this batch queued dies with it: a stopped turn wrote nothing a check could pass.
+        env.pending = None;
         return;
     }
     let checks = gather(&shells, &stop);
     let tests = gather_tests(&shells, &checks, &stop);
     finish(&shells, &checks, &tests, results);
+    settle_commit(env, results, &shells, &checks);
+}
+
+// The commit a batch asked for, once its check has had its say: a check that found an error holds the commit back, and the batch's answer says why. The commit's own lines ride on the answer that queued it.
+fn settle_commit(
+    env: &mut Env,
+    results: &mut [ToolResult],
+    shells: &[Shell],
+    checks: &[(PathBuf, Check, &'static Checker)],
+) {
+    if env.pending.is_none() {
+        return;
+    }
+    let broken: Vec<String> = checks
+        .iter()
+        .filter_map(|(root, check, checker)| match check {
+            Check::Faults { faults, .. } if !faults.is_empty() => {
+                Some(format!(
+                    "[i] commit · not committed: {} has {} error(s); fix them, then write `.commitmessage` again",
+                    (checker.title)(root),
+                    faults.len()
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    if !broken.is_empty() {
+        env.pending = None;
+        let holder = shells
+            .iter()
+            .rev()
+            .find(|shell| wrote(shell) && holds(results, &shell.call_id));
+        match holder {
+            Some(shell) => append(results, &shell.call_id, &broken),
+            // No written call can hold the words: the answer that queued the commit takes them.
+            None => {
+                if let Some(open) = results.iter().rev().find(|one| one.reason.is_none()) {
+                    let call = open.call_id.clone();
+                    append(results, &call, &broken);
+                }
+            }
+        }
+        return;
+    }
+    let lines = super::commit::commit(env);
+    if lines.is_empty() {
+        return;
+    }
+    // The last answer of the batch carries them, the way the check's own report does.
+    if let Some(result) = results.iter_mut().rev().find(|one| one.reason.is_none()) {
+        let call = result.call_id.clone();
+        append(results, &call, &lines);
+    }
 }
 
 // One check per unit, in the order the writes named them: each unit's own checker, and the files this batch wrote into it.

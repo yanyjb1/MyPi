@@ -104,6 +104,8 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
     let path = env.workspace.resolve(&raw, true)?;
     let plans = plans(env, &path);
     let license = env.seen.files.get(&path).cloned();
+    // What git knew of the file before this batch touches it: a commit that follows must not take the user's own work along.
+    let git = crate::git::facts(&path);
     let current = env.current.clone();
 
     let stop = env.stop.clone();
@@ -128,6 +130,17 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         env.seen.stamp(path.clone(), &built.shown);
     } else {
         env.seen.revoke(&path);
+    }
+
+    // The session's ledger holds the file for a commit that follows, with what git knew of it before this batch first touched it.
+    if built.written.is_some() {
+        let git = env
+            .ledger
+            .files
+            .iter()
+            .find(|one| one.path == path)
+            .map_or(git, |one| (one.tracked, one.dirty));
+        env.ledger.note(path.clone(), git);
     }
 
     // Every written call hands its shell to the audit: its faults hang under its edits when the batch's check has run, and the crate's report rides on the last written answer. A language that names only tests still enters, so its tests run.
@@ -511,7 +524,7 @@ fn compute(path: &Path, license: Option<License>, plans: &[Plan], stop: &Arc<Sto
     })))
 }
 
-// The batch's edits in arrival order, each call's items, and the calls whose arguments could not be read at all.
+// The batch's edits in arrival order
 type Flattened = (Vec<Edit>, Vec<Vec<Piece>>, Vec<Option<String>>);
 
 fn flatten(plans: &[Plan], base: &[&str]) -> Flattened {

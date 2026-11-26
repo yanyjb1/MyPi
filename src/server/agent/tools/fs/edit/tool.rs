@@ -85,6 +85,8 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         Ok(edited)
     })?;
     env.seen.stamp(p.clone(), &edited.text);
+    // What git knew of the file before this call touched it: the ledger keeps it for a commit that follows.
+    env.ledger.note(p.clone(), crate::git::facts(&p));
     let last = (edited.at + edited.lines).saturating_sub(1);
     let text = format!("{}: {}", edited.receipt, p.display());
 
@@ -117,7 +119,7 @@ pub(crate) struct Edited {
     pub(crate) lines: usize,
 }
 
-// Replace one unique run of text.
+// Replace one unique run
 pub(crate) fn exact_text(text: &str, table: &lang::Table, old: &str, new: &str) -> Result<Edited> {
     anyhow::ensure!(!old.is_empty(), "`old` must not be empty");
 

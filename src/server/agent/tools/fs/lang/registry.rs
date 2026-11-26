@@ -41,6 +41,9 @@ pub(crate) struct Hub {
 // One text's turn through the parser a language names: whether it parses, and what the parser said when it does not. The text is never rewritten.
 pub(crate) type Format = fn(&str, &Path, &Arc<Stop>) -> Outcome;
 
+// One file's turn through the layout a language names: the text as its own formatter would set it, or `None` when the formatter refused or was never found. Called once, at a commit.
+pub(crate) type Layout = fn(&str, &Path, &Arc<Stop>) -> Option<String>;
+
 // What every language owes the tools: the files that mark its projects, the suffixes it answers to, its table, the answers about a piece, and the external tools it knows how to drive.
 pub(crate) struct Language {
     // The files that mark a project of this language in one directory; a sweep of the workspace stops at one.
@@ -59,6 +62,9 @@ pub(crate) struct Language {
     // Whether its files are source: they take the source budget and are read whole.
     pub(crate) source: bool,
     pub(crate) format: Option<Format>,
+
+    // How it sets a text in its own style; `None` when it has no formatter, and a commit leaves its files alone.
+    pub(crate) layout: Option<Layout>,
     pub(crate) check: Option<Checker>,
     pub(crate) test: Option<Tests>,
 }
@@ -250,6 +256,11 @@ pub(crate) fn table(path: &Path, text: &str) -> Table {
 // The parser this path's language names, if it names one.
 pub(crate) fn format(path: &Path) -> Option<Format> {
     owner(path)?.format
+}
+
+// The layout this path's language names, if it names one: the one call a commit makes on a file's own text.
+pub(crate) fn layout(path: &Path) -> Option<Layout> {
+    owner(path)?.layout
 }
 
 // The checker this path's language names, if it names one.

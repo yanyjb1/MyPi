@@ -7,6 +7,7 @@
 )]
 
 pub(crate) mod change;
+pub(crate) mod commit;
 pub(crate) mod edit;
 pub(crate) mod eol;
 pub(crate) mod fault;

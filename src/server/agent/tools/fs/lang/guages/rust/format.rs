@@ -34,7 +34,7 @@ pub(crate) fn format(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
 }
 
 // The crate's edition, from the nearest `Cargo.toml` above the file. Read once per directory.
-fn edition(path: &Path) -> String {
+pub(super) fn edition(path: &Path) -> String {
     static EDITIONS: LazyLock<Mutex<HashMap<PathBuf, String>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
     let Some(dir) = path.parent() else {

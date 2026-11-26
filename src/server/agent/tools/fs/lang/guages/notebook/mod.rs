@@ -17,6 +17,7 @@ pub(crate) static LANGUAGE: Language = Language {
     hub: None,
     source: true,
     format: Some(format::format),
+    layout: None,
     check: Some(check::CHECKER),
     test: None,
 };

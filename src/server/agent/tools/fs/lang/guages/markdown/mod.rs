@@ -20,6 +20,7 @@ pub(crate) static LANGUAGE: Language = Language {
     hub: Some(&facts::HUB),
     source: false,
     format: None,
+    layout: None,
     check: None,
     test: None,
 };

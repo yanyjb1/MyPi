@@ -5,6 +5,7 @@ use crate::server::agent::tools::fs::lang::Language;
 mod check;
 mod facts;
 mod format;
+mod layout;
 mod relations;
 mod scan;
 mod table;
@@ -20,6 +21,7 @@ pub(crate) static LANGUAGE: Language = Language {
     hub: Some(&facts::HUB),
     source: true,
     format: Some(format::format),
+    layout: Some(layout::layout),
     check: Some(check::CHECKER),
     test: Some(test::TESTS),
 };
