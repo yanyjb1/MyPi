@@ -25,7 +25,7 @@ const STRONG: &[&str] = &["pyproject.toml", "setup.cfg", "setup.py"];
 // A marker that hints at a project without claiming one.
 const WEAK: &[&str] = &["requirements.txt"];
 
-// The project this file belongs to: the nearest strongly marked directory, then a weakly marked one, then the repository, then its own folder.
+// The project this file belongs to: the nearest strongly marked directory, then a weakly marked one, then the repository, then its own folder. A script no project claims is a project of its own, so a check never walks up into an unrelated tree.
 pub(super) fn unit(path: &Path) -> Option<PathBuf> {
     let start = path.parent()?;
     let marked = |marks: &[&str]| {
@@ -42,7 +42,7 @@ pub(super) fn unit(path: &Path) -> Option<PathBuf> {
                 .find(|dir| dir.join(".git").exists())
                 .map(Path::to_path_buf)
         })
-        .or_else(|| start.parent().map(Path::to_path_buf))
+        .or_else(|| Some(start.to_path_buf()))
 }
 
 // The project's own name, from `[project]` or `[tool.poetry]`; the folder when unnamed.
