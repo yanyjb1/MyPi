@@ -31,65 +31,46 @@ const EDIT_FIELDS: &[Param] = &[
     Param::new(
         "start",
         Kind::Axis,
-        "First line of the range, 1-based: `N the words that line opens with`, e.g. `12 pub fn \
-         run`. A bare `N` names a blank line and nothing else; on any other line it is refused and \
-         nothing is written.",
+        "First line to replace: `N <first few words>` (bare `N` for blank lines only).",
     ),
     Param::new(
         "end",
         Kind::Axis,
-        "Last line of the range, inclusive, in the shape `start` reads: `N the words that line \
-         opens with`, then only the first few words of it, never the whole line. Its words are \
-         checked when the range covers more than one line, and it is refused when it sits above \
-         `start`.",
+        "Last line to replace (inclusive), in the same `N <first few words>` format.",
     ),
     Param::new(
         "new",
         Kind::Text,
-        "The replacement; any number of lines. Empty deletes the range. `@@COPY(a..b)@@` fills \
-         in lines a..b of the file as it stands before this message; `@@CUT(a..b)@@` fills them \
-         in and also removes them from where they were.",
+        "Replacement text (`\"\"` deletes the range). Supports `@@COPY(a..b)@@` and `@@CUT(a..b)@@`.",
     ),
 ];
 
 const PARAMS: &[Param] = &[
-    Param::new("path", Kind::Text, "File path."),
+    Param::new(
+        "path",
+        Kind::Text,
+        "Target file path (must already be read or grepped in this conversation).",
+    ),
     Param::new(
         "edits",
         Kind::Objects(EDIT_FIELDS),
-        "The ranges to replace, one item each; they may not overlap. Every call on one file in \
-         one message runs as one write.",
+        "Non-overlapping `{start, end, new}` ranges to replace in order. Multiple `splice` calls on one file in the same message merge into one atomic write.",
     ),
     Param::df(
         "unfold",
         Kind::Flag,
-        "List every fault of the batch's shared check instead of folding it.",
+        "Expand all diagnostics and test output for this batch instead of folding.",
         "false",
     ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "splice",
-    about: "Batch 1-based inclusive line edits in one file. Supports `@@COPY(a..b)@@` / \
-            `@@CUT(a..b)@@` line macros. The file's own parser judges the text and leaves out a \
-            block that does not parse; the text lands exactly as it was sent, never reformatted. \
-            By matched text → `edit`. One check per batch, reported on the last write. The file \
-            must have been read or grepped in this conversation; any splice that does not end `OK` \
-            takes that authorisation away.",
-    fields: "Requires `path` and `edits` (`{start, end, new}`). \
-             `start` and `end` read `N the words that line opens with`, e.g. `12 pub fn run`: the \
-             line number, then only the first few words of that line, never the whole line. The \
-             words confirm the line, and a line that reads otherwise is refused. `start` must not \
-             sit above `end`, and both must stand inside the file: a range replaces at least one \
-             line. `new: \"\"` deletes the range. `@@COPY(a..b)@@` copies lines `a..b`; \
-             `@@CUT(a..b)@@` moves them (auto-deletes `a..b`).\n\
-             Edits land in the order sent: one that overlaps an edit already accepted answers \
-             `OVERLAP` and the rest of the batch still lands.\n\
-             Answer: `splice <path>: <verdict>`, one block per edit, then the batch's check and \
-             test reports. A refused edit says where its own lines sit now and that the file must \
-             be read or grepped again: a splice that does not end `OK` leaves nothing authorised, \
-             so read or grep the file again before the next one.\n\
-             `unfold` lists every fault of the batch's check and tests instead of folding it.",
+    about: "Part of the FS family (`read`, `grep`, `splice`, `write`). Batch 1-based inclusive line editor requiring prior `read` or `grep` authorization. Static checks (`Rust`, `Python`, `Go`, `HTML/CSS/JS`, `C/C++`, `Notebook`) and targeted unit tests (`Rust`, `Python`, `Go`, `R`) run once per message and appear at the end of the last `splice`/`write` call.",
+    fields: "- Choosing coordinates: Use `read`'s structural opening and closing line numbers to replace a whole function, method, or block. For a single line, comment, or pinpoint edit inside a larger block, run `grep` (which returns exact hit line numbers with enclosing structure and authorizes the file) or `read` with `item` rather than counting unnumbered lines by hand.\n\
+             - Anchors: `start` and `end` verify the line by its opening words (`12 pub fn run`; bare `N` only for blank lines). `start <= end`, within file bounds, applied in order (`OVERLAP` rejects only the overlapping edit while the rest still apply).\n\
+             - Syntax gate & authorization: Supported parsers validate edited blocks and reject unparseable ones. Any `splice` outcome other than `OK` revokes authorization for that file—re-`read` or `grep` it before editing again.\n\
+             - Macros: `@@COPY(a..b)@@` inserts 1-based lines `a..b` from the file's pre-message state; `@@CUT(a..b)@@` moves them and deletes the original lines.",
     params: PARAMS,
     run,
     summary: summary::path,

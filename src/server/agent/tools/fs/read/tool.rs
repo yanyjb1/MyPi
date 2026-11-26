@@ -40,44 +40,37 @@ const MAX_STREAM_BYTES: u64 = 16 * 1024 * 1024;
 
 const FILE_FIELDS: &[Param] = &[
     Param::new("path", Kind::Text, "File or directory path."),
-    Param::df("offset", Kind::Line, "First line to read (1-based).", "1"),
+    Param::df(
+        "offset",
+        Kind::Line,
+        "1-based starting line (default: 1). Ignored in `item` mode.",
+        "1",
+    ),
     Param::new(
         "limit",
         Kind::Number,
-        "Max lines this file may take; a source file answers 800 when this is left out, anything else 200, and neither cap moves.",
+        "Max lines to return (capped at 800 for source files, 200 otherwise). Ignored in `item` mode.",
     ),
     Param::new(
         "item",
         Kind::Text,
-        "A piece's own header, exactly as an earlier answer opened it (`impl Shout for Dumb`): every \
-         piece under this path whose header equals it answers whole, every line numbered. It turns \
-         the path into a scope, so `offset` and `limit` do not apply.",
+        "Exact block header from an earlier output (e.g. `impl Shout for Dumb`). Returns every matching block whole with all lines numbered.",
     ),
 ];
 
 const PARAMS: &[Param] = &[Param::new(
     "files",
     Kind::Objects(FILE_FIELDS),
-    "One item per path, answered in this order. One item's failure never stops the ones after it.",
+    "List of targets to read in order. Each item's failure is isolated and does not abort the rest.",
 )];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "read",
-    about: "Read files or directories; a source file answers with key line numbers under `splice`, an 800-line budget and a module view when its language has one; Markdown with key line numbers under `splice`; anything else 200.",
-    fields: "Every answer opens with `==> path` — a directory adds its counts to that line — and \
-             anything left out comes last as one line.\n\
-             `files` takes one item per path, with `offset` (1-based, default 1), `limit` (default: \
-             800 for a source file, 200 otherwise, never above that file's own cap) and `item`. \
-             Without `item`, a file answers its lines and a directory its entries. A directory \
-             answers its immediate children, files with their line counts and directories by name, \
-             then opens each child one level further, folding a directory of ten files or more into \
-             counts. A level whose upper-case `.md` documents are newer than every file beside it \
-             drops the stamps and marks them `(latest)`; a document the user keeps current is \
-             marked `(persistent)` and never dated. Any other level stamps every file of it. The \
-             session root carries a bonus. With `item`, the path is a scope instead: every piece \
-             under it whose own header equals that text exactly answers whole, every line numbered, \
-             in line order; a directory names each answer's file, and `offset` and `limit` are \
-             ignored. An image answers no text at all, only its bytes.",
+    about: "Part of the FS family (`read`, `grep`, `splice`/`edit`, `write`). Reads files or directories and grants edit/delete authorization for every file read. Under `splice`, registered languages return structural key line numbers (use `item` for full line-numbered blocks, or `grep` to pinpoint an interior line); read a directory to inspect layout and module dependencies.",
+    fields: "Output opens each entry with `==> <path>` (directories include entry counts), and any truncation footer appears at the end.\n\
+             - File mode: Supported source files (`Rust`, `Python`, `Go`, `C/C++`, `HTML/CSS/JS`, `R`, `Jupyter Notebook`, `JSON`, `TOML`, `YAML`, `XML`) default to an 800-line / 256 KiB cap; `Markdown` and all other files cap at 200 lines / 64 KiB. When a language supports module graphs (`Rust`, `Python`, `Go`, `C/C++`, `HTML/CSS/JS`, `Markdown`), a neighbourhood view (`exports`, dependencies, callers) is appended once per module or on entry files. Images return raw image data only (<= 4 MiB, requires vision).\n\
+             - Directory mode: Lists immediate children (files with line counts) plus one level deeper, collapsing folders with 10+ files into counts. Up-to-date uppercase docs show `(latest)`; user-maintained docs show `(persistent)`.\n\
+             - Item mode: When `item` is set, `path` acts as a scope (file or directory). Every block whose header matches `item` is returned in full with every line numbered, ignoring `offset` and `limit`.",
     params: PARAMS,
     run,
     summary,

@@ -17,28 +17,32 @@ const PARAMS: &[Param] = &[
     Param::new(
         "query",
         Kind::Text,
-        "Exact literal string (or regex if `regex: true`). Beyond a literal it may name a member or a name's own declarations: Rust `A::b`, Python `A.b`, web `#id` and `.class` across a page, a stylesheet and a script, web `Class.method`, or a bare name inside scripts.",
+        "Literal text, regex (`regex: true`), or relation query (`A::b`, `A.b`, `#id`, `.class`, `Class.method`, or symbol name).",
     ),
-    Param::df("regex", Kind::Flag, "Parse `query` as regex", "false"),
+    Param::df(
+        "regex",
+        Kind::Flag,
+        "Treat `query` as a regular expression.",
+        "false",
+    ),
     Param::new(
         "scope",
         Kind::TextList,
-        "Source files or dirs under the workspace's source trees (defaults to every tree; invalid \
-         entries skipped).",
+        "Optional file or directory paths within the workspace's source trees (defaults to all detected trees; invalid paths are skipped).",
     ),
-    Param::df("lavish", Kind::Flag, "Raise the answer one tier", "false"),
+    Param::df(
+        "lavish",
+        Kind::Flag,
+        "Raise output detail by one tier to reduce folding.",
+        "false",
+    ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "grep",
-    about: "Structural search across the workspace's source trees, the source files and Markdown in them. Returns hits with the enclosing piece's hierarchy and line numbers. Also locates a member (Rust: `A::b`, Python: `A.b`, web: `#id`, `.class`, `Class.method`).",
-    fields: "Requires `query`; `regex`, `scope` and `lavish` are optional.\n\
-             - Relations: besides literal matches, the query may name a member or a name's own declarations (Rust: `A::b`, Python `A.b`, web `#id` and `.class` across page, stylesheet and script, or `Class.method`).\n\
-             - Header: the counts and the tier, then the scope entries and how many of them were\n\
-               used.\n\
-             - Footer: `DOWNSHIFTED` while the answer is coarser than tier 1 — `lavish` raises it\n\
-               one tier, a narrower `scope` drops items — then every piece the answer left out.\n\
-             - Output: 1-based line numbers + surrounding item scopes.",
+    about: "Part of the FS family (`read`, `grep`, `splice`/`edit`, `write`). Structural and text search across the workspace's source trees (`Rust`, `Python`, `Go`, `C/C++`, `HTML/CSS/JS`, `R`, `Jupyter Notebook`, `Markdown`, `JSON`, `TOML`, `YAML`, `XML`). Returns exact 1-based hit line numbers inside enclosing item hierarchies and authorizes displayed files for editing.",
+    fields: "- Relation queries: Beyond literal/regex hits, `query` triggers cross-file symbol/declaration lookup for `Rust` and `C/C++` (`A::b` or bare name), `Python` and `Go` (`A.b` or bare name), `Web` (`#id` and `.class` across HTML/CSS/JS, `Class.method`, or bare script name), and `R` (bare function name).\n\
+             - Output & tiers: Header reports hit/item/file counts, density tier (`1`-`3`), and active `scope` paths. If the footer reports `DOWNSHIFTED` (tier 2 or 3), pass `lavish: true` for denser output or narrow `scope`. Any omitted items are listed at the bottom.",
     params: PARAMS,
     run,
     summary,

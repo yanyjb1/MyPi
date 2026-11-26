@@ -19,33 +19,33 @@ const NEW: usize = 2;
 const UNFOLD: usize = 3;
 
 const PARAMS: &[Param] = &[
-    Param::new("path", Kind::Text, "File path."),
+    Param::new(
+        "path",
+        Kind::Text,
+        "Target file path (must already be read in this conversation).",
+    ),
     Param::new(
         "old",
         Kind::Text,
-        "The text to replace. MUST match the file character for character, exactly once.",
+        "Exact text to replace; must appear character-for-character once in the file.",
     ),
     Param::new(
         "new",
         Kind::Text,
-        "The replacement; any number of lines. Empty deletes the target.",
+        "Replacement text (`\"\"` deletes `old`).",
     ),
     Param::df(
         "unfold",
         Kind::Flag,
-        "List every fault of the batch's shared check instead of folding it.",
+        "Expand all diagnostics for this batch instead of folding.",
         "false",
     ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "edit",
-    about: "Replace one unique run of text in one file. MUST read the file first; NEVER guess its \
-            text. New file → `write`; by line number → `splice`. Type-checked with the batch, \
-            reported on the last write.",
-    fields: "path, old and new are always needed: the file, the text that must appear exactly \
-             once, and what stands in its place.\n\
-             `unfold` lifts the shared check's fold for every written file of the batch.",
+    about: "Part of the FS family (`read`, `grep`, `edit`, `write`). Replaces one unique exact text span in a previously read file (use `write` for new files or full rewrites). Batch static checks (`Rust`, `Python`, `Go`, `HTML/CSS/JS`, `C/C++`, `Notebook`) run once per message and appear at the end of the last `edit`/`write` call.",
+    fields: "Fails if the file has not been read in this conversation, or if `old` matches 0 times or more than once (include more surrounding lines to make `old` unique). Preserves the file's existing line endings (`LF` / `CRLF`).",
     params: PARAMS,
     run,
     summary: summary::path,

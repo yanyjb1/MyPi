@@ -27,27 +27,29 @@ const DELETE_FILE: &str = "__DELETE_FILE__";
 const COMMIT_MESSAGE: &str = ".commitmessage";
 
 const PARAMS: &[Param] = &[
-    Param::new("path", Kind::Text, "File path."),
+    Param::new(
+        "path",
+        Kind::Text,
+        "Target file path (parent directory must exist).",
+    ),
     Param::new(
         "content",
         Kind::Text,
-        "The file's full content, written verbatim.",
+        "Full file content to write verbatim.",
     ),
     Param::df(
         "unfold",
         Kind::Flag,
-        "List every fault of the batch's shared check instead of folding it.",
+        "Expand all diagnostics and test output for this batch instead of folding.",
         "false",
     ),
 ];
 
 pub(crate) const TOOL: Tool = Tool {
     name: "write",
-    about: "Write the whole file, **overwriting** any existing one. A small change → `edit`. \
-            Type-checked with the batch, reported on the last write.",
-    fields: "both fields are always needed: the path, and the whole content. The parent folder \
-             must already exist.\n\
-             `unfold` lifts the shared check's fold for every written file of the batch.",
+    about: "Part of the FS family (`read`, `grep`, `splice`/`edit`, `write`). Creates a new file or **overwrites** an existing one verbatim (prefer `edit`/`splice` for targeted changes). Joins the batch's shared static check and targeted test audit reported at the end of the last file-modifying call in the message.",
+    fields: "Parent directory must already exist. Preserves existing `CRLF`/`LF` line endings when overwriting. If the file's language has a parser, syntax errors are reported as `[unparsed]` with line details while still writing the file; wait for the batch's check output for the full compiler/linter verdict.\n\
+             - No-shell sessions only (treated as literal text when a shell tool is available): writing `.commitmessage` at the workspace root formats all modified files with their language formatters (revoking read authorization for reformatted files) and creates a git commit; writing `content: \"__DELETE_FILE__\"` deletes an already-read, unmodified file.",
     params: PARAMS,
     run,
     summary: summary::path,
