@@ -86,6 +86,7 @@ fn fixed_offset(name: &str) -> Option<i32> {
     (h <= 24 && m < 60).then(|| mult * (h * 3600 + m * 60))
 }
 
+#[cfg(all(unix, not(target_os = "android")))]
 // Parse one TZif (zoneinfo) file into a transition table: the 64-bit block when the version has one, both DST entries, and no POSIX footer (that describes "after the last transition").
 fn parse_tzif(data: &[u8]) -> Option<Zone> {
     if data.len() < 44 || &data[0..4] != b"TZif" {
