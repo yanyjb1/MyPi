@@ -254,16 +254,18 @@ fn scan_line(around: &Around, loader: &Loader) -> String {
             None => "stopped".to_string(),
         }
     };
-    let by_name = around
+    let declared = around
         .unit
         .entry
         .as_ref()
         .and_then(|entry| loader.read(entry))
-        .is_some_and(|text| !declares_modules(&text));
-    let down = if by_name {
-        "this directory (by file name)"
+        .is_some_and(|text| declares_modules(&text));
+    let down = if around.children.is_empty() {
+        "nothing deeper"
+    } else if declared {
+        "declared here"
     } else {
-        "this directory (nothing deeper)"
+        "by file name"
     };
     format!(
         "[scan: up→{up} | down→{down} | {}, {} files]",

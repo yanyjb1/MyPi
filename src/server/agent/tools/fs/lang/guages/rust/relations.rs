@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use super::facts::{strip_attrs, strip_vis};
 use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::fs::lang::{self, Line, Relation, Relations, Row, Source, Table};
 
@@ -351,7 +352,7 @@ fn member_row(table: &Table, at: usize) -> String {
 fn members(raw: &[&str], from: usize, to: usize, name: &str) -> Vec<usize> {
     let mut out = Vec::new();
     for (at, text) in raw.iter().enumerate().take(to.min(raw.len())).skip(from) {
-        let line = text.trim();
+        let line = strip_vis(strip_attrs(text));
         let Some(rest) = line.strip_prefix(name) else {
             continue;
         };

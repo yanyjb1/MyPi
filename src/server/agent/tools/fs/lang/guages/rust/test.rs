@@ -54,13 +54,13 @@ fn test_at(table: &Table, raw: &[&str], at: usize) -> Option<String> {
     name_of(line.exact.as_deref()?)
 }
 
-// The first line of the attributes standing directly above this one; the line itself when none do.
+// The first line of the attributes above this one, blank and comment lines stepped over; the line itself when none do.
 fn block_start(raw: &[&str], at: usize) -> usize {
     let mut first = at;
     let mut probe = at;
     while probe > 0 {
         let above = raw[probe - 1].trim();
-        if above.is_empty() {
+        if above.is_empty() || above.starts_with("//") {
             probe -= 1;
             continue;
         }

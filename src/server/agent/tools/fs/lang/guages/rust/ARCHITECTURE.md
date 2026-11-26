@@ -22,3 +22,4 @@ What is here, what each file holds, who talks to whom. Current state only.
 - Uses the shared process gate for its parser, checker and test run.
 - Answers the registry's contract: the line table, the language's own shape, relations, graph facts, parser, checker and tests.
 - The graph facts feed the module graph; the narration is the language's own.
+- A dual-track unit is its directory: the file lookup and a parent's declaration agree on that, so the view prints it as a hub and reads its references from the files under it.

@@ -246,12 +246,17 @@ fn hub_of(dir: &Path, src: &Path) -> Option<PathBuf> {
 }
 
 fn resolve_child(dir: &Path, name: &str) -> Option<(PathBuf, bool)> {
-    let module = dir.join(name).join("mod.rs");
+    let place = dir.join(name);
+    let module = place.join("mod.rs");
     if module.is_file() {
         return Some((module, true));
     }
     let file = dir.join(format!("{name}.rs"));
-    file.is_file().then_some((file, false))
+    if !file.is_file() {
+        return None;
+    }
+    // A dual-track hub: `x.rs` beside an `x/` directory owns that directory, as `unit_of` reads it.
+    Some((file, place.is_dir()))
 }
 
 // Does this text declare a module that lives in its own file? An inline `mod x { … }` and a `#[cfg]`-hidden declaration both stay out: the first has no file, the second no answer.
@@ -654,8 +659,8 @@ fn module_files(segs: &[String], src: &Path) -> Option<Vec<PathBuf>> {
     (!out.is_empty()).then_some(out)
 }
 
-// The words before an item, dropped: `pub(crate) ` and consecutive `#[…]` hats.
-fn strip_vis(line: &str) -> &str {
+// The `pub` prefix of an item, dropped: `pub(crate) mod x` → `mod x`.
+pub(super) fn strip_vis(line: &str) -> &str {
     let line = line.trim_start();
     let Some(rest) = line.strip_prefix("pub") else {
         return line;
@@ -669,15 +674,34 @@ fn strip_vis(line: &str) -> &str {
     rest
 }
 
+// The consecutive `#[…]` hats before an item, dropped.
 pub(super) fn strip_attrs(mut line: &str) -> &str {
     loop {
         let line_trimmed = line.trim_start();
         if !line_trimmed.starts_with("#[") && !line_trimmed.starts_with("#![") {
             return line_trimmed;
         }
-        match line_trimmed.find(']') {
-            Some(end) => line = &line_trimmed[end + 1..],
+        match attrs_end(line_trimmed) {
+            Some(end) => line = &line_trimmed[end..],
             None => return line_trimmed,
         }
     }
+}
+
+// The index just past one attribute; brackets are counted, so a nested `[` never ends it early.
+fn attrs_end(line: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (at, ch) in line.char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
