@@ -10,7 +10,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `registry.rs` | the registry: the language contract, the language list, the suffix lookup, the workspace's source trees, and the questions a tool asks |
 | `graph/` | the graph machine: units, edges, the upward walk, the printing parts and the default narration; it names no language |
 | `table.rs` | one file's line table: stamps, paired lines, labels and the queries over them |
-| `verdict.rs` | what a parser, a checker and a test run answer: whether a text parses, the line a parser names when it does not, and the verdicts |
+| `verdict.rs` | what a parser, a checker and a test run answer: whether a text parses, the line and column a parser names when it does not, and the verdicts |
 | `guages/mod.rs` | declares the languages |
 | `guages/rust/` | Rust's declaration and its own knowledge |
 | `guages/python/` | Python's declaration and its own knowledge |

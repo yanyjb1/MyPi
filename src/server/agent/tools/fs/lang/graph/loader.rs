@@ -146,6 +146,7 @@ fn entries_where(dir: &Path, all: bool) -> Vec<Entry> {
     out
 }
 
-fn junk(name: &str) -> bool {
+// A name no reader opens: a build output, a dependency tree, or anything hidden.
+pub(crate) fn junk(name: &str) -> bool {
     matches!(name, "target" | "node_modules") || name.starts_with('.')
 }

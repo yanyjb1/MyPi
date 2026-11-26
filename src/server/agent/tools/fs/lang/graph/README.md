@@ -8,7 +8,7 @@ A language supplies its module facts. This layer asks for units, declarations, e
 
 The language resolves text to files. A raw edge carries its landing candidates, the symbols it brings, the forwarding entries it passed, and whether it is itself a forwarding declaration. This layer takes the first candidate that exists, maps it to its unit, drops forwarding edges from `incoming`, normalizes incoming targets to the unit itself, and merges per writing file.
 
-`up` is a walk: it climbs one directory at a time and scans that level's tree. The first level always finishes; later levels share a deadline and a level that overruns is dropped whole. Files a language does not claim are never read.
+`up` is a walk: it climbs one directory at a time and scans that level's tree. The first level always finishes; later levels share a deadline and a level that overruns is dropped whole. A unit whose own directory is the domain root has no level above it, so that directory is the one level read. Files a language does not claim are never read.
 
 Pairing: a **unit** is a file, a directory, or a named thing with no entry; a **decl** is one unit a parent declares, with the line and the parent's tags for it; a **child** adds size, whether it declares units of its own, its exports, and the edges that land inside the viewed unit; an **edge** is one reference, at a file and line, to a unit or to nothing.
 

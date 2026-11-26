@@ -20,14 +20,17 @@ pub(crate) fn format(text: &str, _path: &Path, _stop: &Arc<Stop>) -> Outcome {
     outcome
 }
 
-// One parse of a whole document: `toml::from_str` reads a document, where a `Value`'s own `parse` reads one bare value and refuses a document. The crate reports a byte span, and the line is counted up to its start.
+// One parse of a whole document: `toml::from_str` reads a document, where a `Value`'s own `parse` reads one bare value and refuses a document. The crate reports a byte span, and the line and the column are counted up to its start.
 fn judge(text: &str) -> Outcome {
     match toml::from_str::<toml::Table>(text) {
         Ok(_) => Outcome::Parsed,
         Err(e) => {
             let start = e.span().map_or(0, |span| span.start).min(text.len());
+            let head = &text[..start];
+            let tail = head.rsplit('\n').next().unwrap_or("");
             Outcome::Unparsed(Unparsed {
-                line: Some(text[..start].matches('\n').count() + 1),
+                line: Some(head.matches('\n').count() + 1),
+                column: Some(tail.chars().count() + 1),
                 message: e.message().to_string(),
             })
         }

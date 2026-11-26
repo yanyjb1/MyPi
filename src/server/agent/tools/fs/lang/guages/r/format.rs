@@ -45,17 +45,17 @@ fn judge(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
     }
 }
 
-// air's stderr, cut to the one line and the line number a model can act on. Its first row reads `a.R:2:13 parse ━━━`.
+// air's stderr, cut to the position a model can act on. Its first row reads `a.R:2:13 parse ━━━`.
 fn parse(stderr: &str) -> Unparsed {
     let mut message: Option<String> = None;
-    let mut line = None;
+    let mut place = None;
     for raw in stderr.lines() {
         let trimmed = raw.trim();
         if trimmed.is_empty() || trimmed.starts_with('━') {
             continue;
         }
-        if line.is_none() {
-            line = spot(trimmed);
+        if place.is_none() {
+            place = spot(trimmed);
         }
         if message.is_some() {
             continue;
@@ -67,13 +67,14 @@ fn parse(stderr: &str) -> Unparsed {
         }
     }
     Unparsed {
-        line,
+        line: place.map(|(line, _)| line),
+        column: place.and_then(|(_, column)| column),
         message: message.unwrap_or_else(|| "air refused the text".to_string()),
     }
 }
 
-// The line number inside a `a.R:2:13` position, when the sentence carries one.
-fn spot(said: &str) -> Option<usize> {
+// The line and the column inside a `a.R:2:13` position, when the sentence carries them.
+fn spot(said: &str) -> Option<(usize, Option<usize>)> {
     let bytes: Vec<char> = said.chars().collect();
     for at in 0..bytes.len() {
         if bytes[at] != ':' {
@@ -83,10 +84,18 @@ fn spot(said: &str) -> Option<usize> {
             .iter()
             .take_while(|c| c.is_ascii_digit())
             .collect();
-        if digits.is_empty() || bytes.get(at + 1 + digits.len()) != Some(&':') {
+        let after = at + 1 + digits.len();
+        if digits.is_empty() || bytes.get(after) != Some(&':') {
             continue;
         }
-        return digits.parse().ok();
+        let Ok(line) = digits.parse::<usize>() else {
+            continue;
+        };
+        let column: String = bytes[after + 1..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        return Some((line, column.parse().ok()));
     }
     None
 }

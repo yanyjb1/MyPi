@@ -50,17 +50,17 @@ fn judge(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
     }
 }
 
-// biome's stderr, cut to the one line and the position a model can act on.
+// biome's stderr, cut to the position a model can act on.
 fn parse(stderr: &str) -> Unparsed {
     let mut message: Option<String> = None;
-    let mut line = None;
+    let mut place = None;
     for raw in stderr.lines() {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             continue;
         }
-        if line.is_none() {
-            line = spot(trimmed);
+        if place.is_none() {
+            place = spot(trimmed);
         }
         if message.is_some() {
             continue;
@@ -78,13 +78,14 @@ fn parse(stderr: &str) -> Unparsed {
         }
     }
     Unparsed {
-        line,
+        line: place.map(|(line, _)| line),
+        column: place.and_then(|(_, column)| column),
         message: message.unwrap_or_else(|| "biome refused the text".to_string()),
     }
 }
 
-// The line number inside a `stdin:1:7` position, when the sentence carries one.
-fn spot(said: &str) -> Option<usize> {
+// The line and the column inside a `stdin:1:7` position, when the sentence carries them.
+fn spot(said: &str) -> Option<(usize, Option<usize>)> {
     let chars: Vec<char> = said.chars().collect();
     for at in 0..chars.len() {
         if chars[at] != ':' {
@@ -94,10 +95,18 @@ fn spot(said: &str) -> Option<usize> {
             .iter()
             .take_while(|c| c.is_ascii_digit())
             .collect();
-        if digits.is_empty() || chars.get(at + 1 + digits.len()) != Some(&':') {
+        let after = at + 1 + digits.len();
+        if digits.is_empty() || chars.get(after) != Some(&':') {
             continue;
         }
-        return digits.parse().ok();
+        let Ok(line) = digits.parse::<usize>() else {
+            continue;
+        };
+        let column: String = chars[after + 1..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        return Some((line, column.parse().ok()));
     }
     None
 }

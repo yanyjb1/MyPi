@@ -20,9 +20,10 @@ const FAULTS: usize = 12;
 
 // A file that did not parse: the parser's verdict is the whole report.
 pub(crate) fn unparsed(why: &Unparsed) -> String {
-    let at = match why.line {
-        Some(line) => format!(" line {line}:"),
-        None => String::new(),
+    let at = match (why.line, why.column) {
+        (Some(line), Some(column)) => format!(" line {line}:{column}:"),
+        (Some(line), None) => format!(" line {line}:"),
+        _ => String::new(),
     };
     format!("[i] fmt · not parsed:{at} {}", why.message)
 }

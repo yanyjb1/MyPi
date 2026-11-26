@@ -59,6 +59,14 @@ fn levels(
     let mut stop = None;
     let mut complete = false;
     let mut level = 1;
+    // A unit whose own directory is the domain root has no level above it: that directory is the one level there is to read.
+    if dir == domain.root {
+        walk(
+            facts, loader, unit, &dir, seen, &mut found, &mut files, true, deadline,
+        );
+        levels = 1;
+        complete = true;
+    }
     while let Some(base) = dir.ancestors().nth(level) {
         if !base.starts_with(&domain.root) {
             break;

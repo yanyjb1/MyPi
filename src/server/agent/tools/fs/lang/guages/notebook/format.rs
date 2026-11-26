@@ -85,8 +85,10 @@ fn parse(stderr: &str, path: &Path, text: &str) -> Unparsed {
         }
     }
     let message = message.unwrap_or_else(|| "ruff refused the text".to_string());
+    // The position a notebook's checker gives is the cell's own column, which no line of the file stands on.
     Unparsed {
         line,
+        column: None,
         message: match named {
             Some(word) => format!("{word}: {message}"),
             None => message,

@@ -67,8 +67,12 @@ fn judge(text: &str, path: &Path, half: &str, stop: &Arc<Stop>) -> Outcome {
         Ok(ran) if ran.code == Some(0) => Outcome::Parsed,
         Ok(ran) => match first(&ran.err) {
             // A text that cannot reach a header was never given a fair reading: the parser says nothing about the text itself.
-            Some((_, message)) if environmental(&message) => Outcome::Parsed,
-            Some((line, message)) => Outcome::Unparsed(Unparsed { line, message }),
+            Some((_, _, message)) if environmental(&message) => Outcome::Parsed,
+            Some((line, column, message)) => Outcome::Unparsed(Unparsed {
+                line,
+                column,
+                message,
+            }),
             None => Outcome::Parsed,
         },
         Err(_) => Outcome::Parsed,
@@ -82,8 +86,8 @@ fn environmental(message: &str) -> bool {
         || message.contains("unknown argument")
 }
 
-// The first diagnostic clang reported, cut to its line and its sentence.
-fn first(err: &str) -> Option<(Option<usize>, String)> {
+// The first diagnostic clang reported, cut to its line, its column and its sentence.
+fn first(err: &str) -> Option<(Option<usize>, Option<usize>, String)> {
     for raw in err.lines() {
         // Every diagnostic starts with the file, then the line: `<stdin>:` for a text handed over on a pipe.
         let raw = raw.strip_prefix("<stdin>:").unwrap_or(raw);
@@ -93,13 +97,15 @@ fn first(err: &str) -> Option<(Option<usize>, String)> {
         let Ok(line) = place.parse::<usize>() else {
             continue;
         };
-        let rest = rest.split_once(':').map_or(rest, |(_, tail)| tail);
+        let (head, tail) = rest.split_once(':').unwrap_or((rest, ""));
+        let column = head.trim().parse::<usize>().ok();
+        let rest = if tail.is_empty() { rest } else { tail };
         let said = rest.trim_start();
         let message = said
             .strip_prefix("fatal error: ")
             .or_else(|| said.strip_prefix("error: "));
         if let Some(message) = message {
-            return Some((Some(line), message.trim().to_string()));
+            return Some((Some(line), column, message.trim().to_string()));
         }
     }
     None

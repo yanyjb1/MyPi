@@ -46,17 +46,17 @@ fn judge(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
     }
 }
 
-// ruff's stderr, cut to the one line and the line number a model can act on.
+// ruff's stderr, cut to the position a model can act on.
 fn parse(stderr: &str) -> Unparsed {
     let mut message: Option<String> = None;
-    let mut line = None;
+    let mut place = None;
     for raw in stderr.lines() {
         let trimmed = raw.trim();
         let trimmed = trimmed
             .strip_prefix("[stderr]")
             .map_or(trimmed, str::trim_start);
-        if line.is_none() {
-            line = spot(trimmed);
+        if place.is_none() {
+            place = spot(trimmed);
         }
         if message.is_some() {
             continue;
@@ -71,13 +71,14 @@ fn parse(stderr: &str) -> Unparsed {
         }
     }
     Unparsed {
-        line,
+        line: place.map(|(line, _)| line),
+        column: place.and_then(|(_, column)| column),
         message: message.unwrap_or_else(|| "ruff refused the text".to_string()),
     }
 }
 
-// The line number inside a `bad.py:1:7:` position, when the sentence carries one.
-fn spot(said: &str) -> Option<usize> {
+// The line and the column inside a `bad.py:1:7:` position, when the sentence carries them.
+fn spot(said: &str) -> Option<(usize, Option<usize>)> {
     let bytes: Vec<char> = said.chars().collect();
     for at in 0..bytes.len() {
         if bytes[at] != ':' {
@@ -87,10 +88,18 @@ fn spot(said: &str) -> Option<usize> {
             .iter()
             .take_while(|c| c.is_ascii_digit())
             .collect();
-        if digits.is_empty() || bytes.get(at + 1 + digits.len()) != Some(&':') {
+        let after = at + 1 + digits.len();
+        if digits.is_empty() || bytes.get(after) != Some(&':') {
             continue;
         }
-        return digits.parse().ok();
+        let Ok(line) = digits.parse::<usize>() else {
+            continue;
+        };
+        let column: String = bytes[after + 1..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        return Some((line, column.parse().ok()));
     }
     None
 }

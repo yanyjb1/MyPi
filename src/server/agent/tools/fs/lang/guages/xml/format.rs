@@ -36,6 +36,7 @@ fn judge(text: &str) -> Outcome {
                 };
                 return Outcome::Unparsed(Unparsed {
                     line: None,
+                    column: None,
                     message: format!("unclosed element `<{last}>` at the document's end"),
                 });
             }
@@ -47,9 +48,11 @@ fn judge(text: &str) -> Outcome {
             }
             Ok(_) => {}
             Err(e) => {
-                let at = at.min(text.len());
+                let head = &text[..at.min(text.len())];
+                let tail = head.rsplit('\n').next().unwrap_or("");
                 return Outcome::Unparsed(Unparsed {
-                    line: Some(text[..at].matches('\n').count() + 1),
+                    line: Some(head.matches('\n').count() + 1),
+                    column: Some(tail.chars().count() + 1),
                     message: e.to_string(),
                 });
             }

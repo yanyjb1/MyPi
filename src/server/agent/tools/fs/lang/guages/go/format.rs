@@ -59,6 +59,9 @@ fn parse(stderr: &str) -> Unparsed {
         let Ok(line) = line.trim().parse::<usize>() else {
             continue;
         };
+        let column = said
+            .split_once(':')
+            .and_then(|(col, _)| col.trim().parse::<usize>().ok());
         let message = rest
             .split_once(": ")
             .map_or(trimmed, |(_, tail)| tail)
@@ -66,6 +69,7 @@ fn parse(stderr: &str) -> Unparsed {
             .to_string();
         return Unparsed {
             line: Some(line),
+            column,
             message: if message.is_empty() {
                 format!("gofmt refused the text: {said}")
             } else {
@@ -75,6 +79,7 @@ fn parse(stderr: &str) -> Unparsed {
     }
     Unparsed {
         line: None,
+        column: None,
         message: "gofmt refused the text".to_string(),
     }
 }

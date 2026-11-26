@@ -26,6 +26,7 @@ fn judge(text: &str) -> Outcome {
         Ok(_) => Outcome::Parsed,
         Err(e) => Outcome::Unparsed(Unparsed {
             line: Some(e.line()),
+            column: Some(e.column()),
             message: e.to_string(),
         }),
     }

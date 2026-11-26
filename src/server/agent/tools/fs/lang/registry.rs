@@ -189,10 +189,10 @@ pub(crate) fn trees(workspace: &Path) -> Vec<PathBuf> {
 
 // One directory's turn in the sweep. A language's marker claims the project at this directory and stops that language's search below it; a language still unclaimed by any marker takes a directory that holds its files outright as one of its own trees. `settled` carries, as one flag per language, the languages whose project already stands above this directory.
 fn sweep_projects(dir: &Path, found: &mut Vec<PathBuf>, settled: &[bool]) {
-    if dir.file_name().is_some_and(|name| {
-        let name = name.to_string_lossy();
-        name == "target" || name == "node_modules" || name.starts_with('.')
-    }) {
+    if dir
+        .file_name()
+        .is_some_and(|name| graph::loader::junk(&name.to_string_lossy()))
+    {
         return;
     }
     let mut settled = settled.to_vec();

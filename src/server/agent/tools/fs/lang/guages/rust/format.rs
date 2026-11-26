@@ -99,14 +99,14 @@ fn judge(text: &str, edition: &str, stop: &Arc<Stop>) -> Outcome {
     }
 }
 
-// rustfmt's stderr, cut to the one line and the line number a model can act on.
+// rustfmt's stderr, cut to the position a model can act on. Its `--> a.rs:3:14` names both.
 fn parse(stderr: &str) -> Unparsed {
     let mut message: Option<String> = None;
-    let mut line = None;
+    let mut place = None;
     for raw in stderr.lines() {
         let trimmed = raw.trim();
         if let Some(rest) = trimmed.strip_prefix("--> ") {
-            line = rest.split(':').nth(1).and_then(|spot| spot.parse().ok());
+            place = position(rest);
             continue;
         }
         if message.is_some() {
@@ -122,9 +122,19 @@ fn parse(stderr: &str) -> Unparsed {
         }
     }
     Unparsed {
-        line,
+        line: place.map(|(line, _)| line),
+        column: place.and_then(|(_, column)| column),
         message: message.unwrap_or_else(|| "rustfmt refused the text".to_string()),
     }
+}
+
+// The line and the column of one `a.rs:3:14` position; a position closing at the line keeps no column.
+fn position(rest: &str) -> Option<(usize, Option<usize>)> {
+    let mut parts = rest.split(':');
+    parts.next()?;
+    let line = parts.next()?.trim().parse().ok()?;
+    let column = parts.next().and_then(|col| col.trim().parse().ok());
+    Some((line, column))
 }
 
 type Key = (String, u64);

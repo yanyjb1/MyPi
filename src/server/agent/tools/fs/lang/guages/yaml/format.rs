@@ -20,13 +20,14 @@ pub(crate) fn format(text: &str, _path: &Path, _stop: &Arc<Stop>) -> Outcome {
     outcome
 }
 
-// One parse, every document of it. saphyr gives the line and the column of the character it refused; the line is the one a model acts on.
+// One parse, every document of it. saphyr gives the line and the column of the character it refused, both counted from one when a model reads them.
 fn judge(text: &str) -> Outcome {
     use saphyr::{LoadableYamlNode, Yaml};
     match <Yaml<'_> as LoadableYamlNode>::load_from_str(text) {
         Ok(_) => Outcome::Parsed,
         Err(e) => Outcome::Unparsed(Unparsed {
             line: Some(e.marker().line()),
+            column: Some(e.marker().col() + 1),
             message: e.info().to_string(),
         }),
     }

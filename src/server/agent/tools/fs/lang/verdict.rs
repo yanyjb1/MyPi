@@ -6,6 +6,9 @@ pub(crate) struct Unparsed {
     // The line it pointed at, 1-based, in the text it was given.
     pub line: Option<usize>,
 
+    // The column it pointed at, 1-based, when the parser gives one.
+    pub column: Option<usize>,
+
     // What it said, in one line.
     pub message: String,
 }
