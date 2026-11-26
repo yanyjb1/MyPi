@@ -27,7 +27,6 @@ A note is a unit, and the notes it names are what hangs under it.
 
 ## 3. Unresolved
 
-- The upward walk steps around the unit's own directory, so a note is never listed as the importer of a note in the same directory; only notes above it are.
 - Front matter's `tags` and `aliases` are read as lines, not as names this language exposes.
 
 ## 4. Config fields
