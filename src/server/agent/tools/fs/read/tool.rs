@@ -362,6 +362,8 @@ fn assemble<'a>(
     let mut bytes = 0usize;
     let mut shown = 0usize;
     let mut by_bytes = false;
+    // The file line this window reaches last: a fold spends lines without drawing them, and the next offset counts the file, not the page.
+    let mut last = first.saturating_sub(1);
     let file: Vec<&str> = lines.collect();
     let drawn = mask::block(&file);
     for (index, held) in drawn.iter().enumerate() {
@@ -369,8 +371,9 @@ fn assemble<'a>(
             break;
         }
         let at = first + index;
-        // A folded run draws its own first line and spends the rest: the numbers it skips are the point.
+        // A folded run draws its own first line and spends the rest: the numbers it skips are the point, and they lie behind the window all the same.
         let mask::Shown::Line(line) = held else {
+            last = at;
             continue;
         };
         let line = line.as_ref();
@@ -390,8 +393,8 @@ fn assemble<'a>(
         push(&mut text, at, line, number, numbers.on(), width);
         bytes += gutter + line.len() + 1;
         shown += 1;
+        last = at;
     }
-    let last = first.saturating_sub(1) + shown;
     let status = (last < total).then(|| {
         let cap = if by_bytes {
             format!("{} KiB cap; ", max_bytes / 1024)

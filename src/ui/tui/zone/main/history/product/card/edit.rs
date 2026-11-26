@@ -101,7 +101,8 @@ fn segments(b: &ToolBlock<'_>, details: &Value) -> Option<Vec<Row>> {
             list.iter()
                 .flat_map(|seg| [run(seg, "before"), run(seg, "after")])
                 .flatten()
-                .map(|run| run.0),
+                .flatten()
+                .map(|(at, _)| at),
         )
         .max()
         .unwrap_or(0)
@@ -116,9 +117,9 @@ fn segments(b: &ToolBlock<'_>, details: &Value) -> Option<Vec<Row>> {
             rows.push(seam());
         }
         let mut next = None;
-        if let Some((from, lines)) = run(seg, "before") {
-            rows.extend(run_rows(&mut painter, from, &lines, width));
-            next = Some(from + lines.len());
+        if let Some(lines) = run(seg, "before") {
+            next = lines.last().map(|(at, _)| at + 1);
+            rows.extend(run_rows(&mut painter, &lines, width));
         }
         let old = seg.get("old").and_then(Value::as_str).unwrap_or_default();
         let new = seg.get("new").and_then(Value::as_str).unwrap_or_default();
@@ -159,37 +160,38 @@ fn segments(b: &ToolBlock<'_>, details: &Value) -> Option<Vec<Row>> {
                 .map(|(_, added)| added);
             rows.push(diff_row('+', line.at, &line.text, span, width));
         }
-        if let Some((from, lines)) = run(seg, "after") {
+        if let Some(lines) = run(seg, "after") {
             let last = number(seg, "atLine") + new.lines().count();
-            if from > last {
+            if lines.first().is_some_and(|(at, _)| *at > last) {
                 rows.push(seam());
             }
-            rows.extend(run_rows(&mut painter, from, &lines, width));
+            rows.extend(run_rows(&mut painter, &lines, width));
         }
     }
     Some(rows)
 }
 
-// One side of a segment's excerpt: where it starts, and its lines.
-fn run(seg: &Value, key: &str) -> Option<(usize, Vec<String>)> {
+// One side of a segment's excerpt: its lines, each with the file line it stands on.
+fn run(seg: &Value, key: &str) -> Option<Vec<(usize, String)>> {
     let held = seg.get(key).filter(|v| !v.is_null())?;
-    let from = number(held, "from");
-    let lines = held
-        .get("lines")?
+    held.get("lines")?
         .as_array()?
         .iter()
-        .map(|line| line.as_str().unwrap_or_default().to_string())
-        .collect();
-    Some((from, lines))
+        .map(|pair| {
+            let pair = pair.as_array()?;
+            let at = pair.first()?.as_u64()? as usize;
+            let text = pair.get(1)?.as_str()?.to_string();
+            Some((at, text))
+        })
+        .collect()
 }
 
 // The lines around a change: numbered by their own place, painted by the file's language.
-fn run_rows(painter: &mut code::Painter, from: usize, lines: &[String], width: usize) -> Vec<Row> {
+fn run_rows(painter: &mut code::Painter, lines: &[(usize, String)], width: usize) -> Vec<Row> {
     lines
         .iter()
-        .enumerate()
         .map(|(at, text)| {
-            let mut runs = vec![Run::fixed(gutter(' ', Some(from + at), width), fixed::DIM)];
+            let mut runs = vec![Run::fixed(gutter(' ', Some(*at), width), fixed::DIM)];
             for run in painter.runs(text) {
                 runs.push(run);
             }
@@ -331,7 +333,7 @@ fn edit_result(b: &ToolBlock<'_>, o: ToolOutcome<'_>) -> Vec<Row> {
     }
 }
 
-// The whole item, with only the changed lines signed: everything else is context.
+// The whole item, with only the changed lines signed: everything else is context. Every line carries its own file line, because a line the mask folded stands for a run and no longer stands beside its neighbour.
 fn item_rows(
     b: &ToolBlock<'_>,
     at: Option<usize>,
@@ -339,77 +341,92 @@ fn item_rows(
     excerpt: Excerpt,
 ) -> Vec<Row> {
     let new = partial::text(b.args, "new").unwrap_or_default();
-    let before = excerpt.lines.join("\n");
+    let before: Vec<(usize, String)> = excerpt
+        .lines
+        .iter()
+        .cloned()
+        .zip(excerpt.at.iter().copied())
+        .map(|(text, at)| (at, text))
+        .collect();
+    let flat: String = before
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let after = match b.name {
         "splice" => {
-            let at = at.or_else(|| range_start(b.args)).unwrap_or(excerpt.from);
-            let start = at.saturating_sub(excerpt.from).min(excerpt.lines.len());
+            let at = at
+                .or_else(|| range_start(b.args))
+                .unwrap_or(excerpt.at.first().copied().unwrap_or(1));
+            let start = before
+                .iter()
+                .position(|(line, _)| *line >= at)
+                .unwrap_or(before.len());
             let removed = old.as_deref().map(|text| text.lines().count()).unwrap_or(0);
-            replaced(&excerpt.lines, start, removed, &new)
+            let texts: Vec<String> = before.iter().map(|(_, text)| text.clone()).collect();
+            let replaced_text = replaced(&texts, start, removed, &new);
+            merged(&before, start, removed, replaced_text)
         }
         _ => match old.as_deref() {
-            Some(old) => before.replacen(old, &new, 1),
+            Some(old) => match flat.replacen(old, &new, 1) {
+                text if text != flat => renumber(&before, &text),
+                _ => before.clone(),
+            },
             None => before.clone(),
         },
     };
 
-    let old_lines: Vec<&str> = before.lines().collect();
-    let new_lines: Vec<&str> = after.lines().collect();
     let mut pre = 0;
-    while pre < old_lines.len() && pre < new_lines.len() && old_lines[pre] == new_lines[pre] {
+    while pre < before.len() && pre < after.len() && before[pre].1 == after[pre].1 {
         pre += 1;
     }
     let mut suf = 0;
-    while suf < old_lines.len().saturating_sub(pre)
-        && suf < new_lines.len().saturating_sub(pre)
-        && old_lines[old_lines.len() - 1 - suf] == new_lines[new_lines.len() - 1 - suf]
+    while suf < before.len().saturating_sub(pre)
+        && suf < after.len().saturating_sub(pre)
+        && before[before.len() - 1 - suf].1 == after[after.len() - 1 - suf].1
     {
         suf += 1;
     }
 
     let lang = path_of(b).as_deref().and_then(code::language_for_path);
     let mut painter = code::Painter::new(lang);
-    let width = (excerpt.from + old_lines.len()).to_string().len().max(3);
-    let mut rows: Vec<Row> = Vec::with_capacity(old_lines.len() + new_lines.len());
+    let width = before
+        .iter()
+        .chain(after.iter())
+        .map(|(at, _)| *at)
+        .max()
+        .unwrap_or(0)
+        .to_string()
+        .len()
+        .max(3);
+    let mut rows: Vec<Row> = Vec::with_capacity(before.len() + after.len());
 
-    for (i, line) in old_lines[..pre].iter().enumerate() {
-        rows.push(context_row(&mut painter, excerpt.from + i, line, width));
+    for (at, line) in &before[..pre] {
+        rows.push(context_row(&mut painter, *at, line, width));
     }
 
-    let removed = &old_lines[pre..old_lines.len() - suf];
-    let added = &new_lines[pre..new_lines.len() - suf];
+    let removed = &before[pre..before.len() - suf];
+    let added = &after[pre..after.len() - suf];
     let paired = removed.len() == added.len();
-    for (i, line) in removed.iter().enumerate() {
+    for (i, (at, line)) in removed.iter().enumerate() {
         let span = paired
-            .then(|| changed_spans(&indentation(line).1, &indentation(added[i]).1))
+            .then(|| changed_spans(&indentation(line).1, &indentation(&added[i].1).1))
             .flatten()
             .map(|(gone, _)| gone);
-        rows.push(diff_row(
-            '-',
-            Some(excerpt.from + pre + i),
-            line,
-            span,
-            width,
-        ));
+        rows.push(diff_row('-', Some(*at), line, span, width));
     }
-    for (i, line) in added.iter().enumerate() {
+    let delta = after.len() as isize - before.len() as isize;
+    for (i, (at, line)) in added.iter().enumerate() {
         let span = paired
-            .then(|| changed_spans(&indentation(&removed[i]).1, &indentation(line).1))
+            .then(|| changed_spans(&indentation(&removed[i].1).1, &indentation(line).1))
             .flatten()
             .map(|(_, came)| came);
-        rows.push(diff_row(
-            '+',
-            Some(excerpt.from + pre + i),
-            line,
-            span,
-            width,
-        ));
+        rows.push(diff_row('+', Some(*at), line, span, width));
     }
 
-    let delta = new_lines.len() as isize - old_lines.len() as isize;
-    for (i, line) in old_lines[old_lines.len() - suf..].iter().enumerate() {
-        let number = excerpt.from as isize + (old_lines.len() - suf + i) as isize + delta;
-        rows.push(context_row(&mut painter, number as usize, line, width));
+    for (at, line) in &before[before.len() - suf..] {
+        let number = (*at as isize + delta).max(1) as usize;
+        rows.push(context_row(&mut painter, number, line, width));
     }
     if rows.is_empty() {
         rows.push(Row::text(
@@ -421,7 +438,36 @@ fn item_rows(
     rows
 }
 
-// The item's lines with one region replaced, as `splice` wrote them.
+// The item after a block was cut out of it: the lines above keep their place, the block that came takes the first removed line's place, and the lines below move by as many as were added.
+fn merged(
+    before: &[(usize, String)],
+    start: usize,
+    removed: usize,
+    text: String,
+) -> Vec<(usize, String)> {
+    let opens = before.get(start).map_or(1, |(at, _)| *at);
+    let mut out: Vec<(usize, String)> = before[..start].to_vec();
+    for (back, line) in text.lines().enumerate() {
+        out.push((opens + back, line.to_string()));
+    }
+    let below = start + removed;
+    let shift = text.lines().count() as isize - removed as isize;
+    for (at, line) in &before[below.min(before.len())..] {
+        let moved = (*at as isize + shift).max(1) as usize;
+        out.push((moved, line.clone()));
+    }
+    out
+}
+
+// The item after one run of text was swapped for another, its lines keeping the place the walk gives them.
+fn renumber(before: &[(usize, String)], text: &str) -> Vec<(usize, String)> {
+    let opens = before.first().map_or(1, |(at, _)| *at);
+    text.lines()
+        .enumerate()
+        .map(|(back, line)| (opens + back, line.to_string()))
+        .collect()
+}
+
 fn replaced(lines: &[String], start: usize, removed: usize, new: &str) -> String {
     let mut out: Vec<&str> = lines[..start].iter().map(String::as_str).collect();
     out.extend(new.lines());
@@ -497,7 +543,6 @@ fn diff_rows(args: &str, at: Option<usize>, old: Option<String>) -> Vec<Row> {
     }
     out
 }
-
 // A text's lines, numbered from `at`.
 fn numbered(at: Option<usize>, text: &str) -> Vec<Numbered> {
     if text.is_empty() {

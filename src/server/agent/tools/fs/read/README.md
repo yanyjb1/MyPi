@@ -57,7 +57,9 @@ The footer carries the status line when the file continues: `[800 of 900 lines; 
 `[256 KiB cap; 161 of 200 lines; next offset 162]` when bytes ran out first. The numbers are the
 file's own budget, 800/256 KiB for a source file and 200/64 KiB for anything else. A line longer than
 the room left is cut at a character boundary and not counted, so the next read starts at that same
-line. A file that ended, and a window that starts past its end, answer no status line at all.
+line. A file that ended, and a window that starts past its end, answer no status line at all. The
+count is the file's own lines, not the page's: a fold spends lines without drawing them, and the
+offset it reports resumes past everything the fold stood for.
 
 A file whose head names a known image format (PNG, JPEG, GIF, WEBP; the bytes decide, never the
 name) answers no text at all: its bytes go as an image part and nothing else. The gate is the

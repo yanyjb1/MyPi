@@ -149,7 +149,7 @@ The check's counts cover every diagnostic the crate's check found, whether it ha
 
 One segment per range, in the order the call sent it: the lines it took and the lines that stand there now, numbered on both sides.
 
-A segment also carries the item around the change, taken from the file as it stood before the write: the change inside an item hands that item's own lines above and below it, with the change's own lines cut out. A change that covers an item whole, or that no item holds, carries no context at all — the memo never reaches past the item the change sits in.
+A segment also carries the item around the change, taken from the file as it stood before the write: the change inside an item hands that item's own lines above and below it, with the change's own lines cut out. Each of those lines carries the file line it stands on, and a folded payload stands as the one line that speaks for its run. A change that covers an item whole, or that no item holds, carries no context at all — the memo never reaches past the item the change sits in.
 
 A range that was left out carries positions and a reason, never lines.
 

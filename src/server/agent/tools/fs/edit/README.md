@@ -37,13 +37,13 @@ written call could hold. A stop leaves the file untouched.
 ### The memo
 
 ```text
-excerpt: { "atLine": 12, "excerpt": { "from": 8, "lines": [...] } }
+excerpt: { "atLine": 12, "excerpt": { "from": 8, "lines": [...], "gap": [8, 9, ...] } }
 ```
 
 The memo describes one change: `atLine` is the old-file line it starts on, `excerpt` the item as it
-stood before the change — its first old-file line and every line of it — or a window of five lines
-above and below the change when no item holds it. The excerpt never reaches past the item the change
-sits in.
+stood before the change — its lines, and the old-file line each of them stands on — or a window of
+five lines above and below the change when no item holds it. The excerpt never reaches past the item
+the change sits in, and a folded payload inside it is one line standing for its whole run.
 
 The item is the nearest enclosing block that declares something; failing that, the nearest one
 that starts after a blank line, a comment or an attribute; failing that, the nearest block. Blank

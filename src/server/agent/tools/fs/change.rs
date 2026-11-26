@@ -8,11 +8,11 @@ use super::mask;
 // Lines a window keeps above and below the change.
 const WINDOW: usize = 5;
 
-// The context of one change: `{"excerpt": {"from": n, "lines": [...]}}`. `at` is the first changed line, 1-based; `span` is how many old lines the change covers. The excerpt is the piece holding the change, or a window around it when no piece holds it.
+// The context of one change: `{"excerpt": {"from": n, "lines": [...], "gap": [...]}}`. `at` is the first changed line, 1-based; `span` is how many old lines the change covers. The excerpt is the piece holding the change, or a window around it when no piece holds it.
 pub(crate) fn context(table: &Table, text: &str, at: usize, span: usize) -> Value {
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
-        return json!({ "excerpt": { "from": 1, "lines": [] } });
+        return json!({ "excerpt": { "from": 1, "lines": [], "gap": [] } });
     }
     let at = at.clamp(1, lines.len());
     let end = (at + span.max(1) - 1).min(lines.len());
@@ -24,12 +24,27 @@ pub(crate) fn context(table: &Table, text: &str, at: usize, span: usize) -> Valu
         _ => window(at, end, lines.len()),
     };
 
-    // Masked where it is drawn: a payload a batch carried through rides in no answer.
-    let shown: Vec<String> = lines[from..=to]
+    // Masked where it is drawn: a payload a batch carried through rides in no answer, and a folded run of it stands as the one line that speaks for all of it, which a piece reaching from a changed line up past a fold would otherwise carry whole.
+    let drawn = mask::block(&lines);
+    let (from, to) = mask::around(&drawn, from, at - 1, to).unwrap_or((from, from));
+    let shown: Vec<String> = drawn[from..=to]
         .iter()
-        .map(|line| mask::line(line).into_owned())
+        .filter_map(|held| match held {
+            mask::Shown::Line(line) => Some(line.to_string()),
+            mask::Shown::Skip => None,
+        })
         .collect();
-    json!({ "excerpt": { "from": from + 1, "lines": shown } })
+    json!({ "excerpt": { "from": from + 1, "lines": shown, "gap": stood(&drawn, from, to) } })
+}
+
+// Where the drawn lines of a range stand, 1-based, so a card that draws them numbers each by its own place in the file rather than by its turn in the list.
+fn stood(drawn: &[mask::Shown<'_>], from: usize, to: usize) -> Vec<usize> {
+    drawn[from..=to]
+        .iter()
+        .enumerate()
+        .filter(|(_, held)| matches!(held, mask::Shown::Line(_)))
+        .map(|(back, _)| from + back + 1)
+        .collect()
 }
 
 // The window around a change: `WINDOW` lines above it and below it, 0-based and inclusive.

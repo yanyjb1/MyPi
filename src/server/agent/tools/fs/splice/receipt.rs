@@ -9,10 +9,10 @@ use crate::server::agent::tools::fs::{mask, skeleton};
 // How many lines one side of a diff shows before its middle is folded away.
 const SIDE: usize = 12;
 
-// What one side of the excerpt holds: its first line, 1-based, and the lines themselves.
+// What one side of the excerpt holds: its lines, each with the file line it stands on, 1-based.
+#[derive(Default)]
 pub(crate) struct Run {
-    pub from: usize,
-    pub lines: Vec<String>,
+    pub lines: Vec<(usize, String)>,
 }
 
 // The lines around one edit, taken from the file as it stood before the write.
@@ -252,6 +252,7 @@ fn trimmed(rows: &[Row]) -> Vec<Context> {
     let mut out: Vec<Context> = (0..rows.len()).map(|_| Context::default()).collect();
     let mut order: Vec<usize> = (0..rows.len()).collect();
     order.sort_by_key(|at| rows[*at].from);
+
     // The last line of the file as it stood that the edit just walked has drawn.
     let mut shown = 0usize;
     for (place, at) in order.iter().enumerate() {
@@ -271,42 +272,45 @@ fn trimmed(rows: &[Row]) -> Vec<Context> {
             .after
             .as_ref()
             .and_then(|run| between(run, shown, below));
-        if let Some(run) = &out[*at].after {
-            shown = shown.max(run.from + run.lines.len() - 1);
+        if let Some(run) = &out[*at].after
+            && let Some((last, _)) = run.lines.last()
+        {
+            shown = shown.max(*last);
         }
     }
     out
 }
 
-// One side of an excerpt, cut to the lines `above + 1` through `below`; `None` when it holds none of them.
+// One side of an excerpt, cut to the lines `above + 1` through `below`; `None` when it holds none of them. A fold inside that range is drawn as the one line that speaks for it, and the lines it spent are not drawn again.
 fn between(run: &Run, above: usize, below: usize) -> Option<Run> {
-    if run.lines.is_empty() {
-        return None;
-    }
-    let first = run.from.max(above + 1);
-    let last = (run.from + run.lines.len() - 1).min(below);
-    if last < first {
-        return None;
-    }
-    Some(Run {
-        from: first,
-        lines: run.lines[first - run.from..=last - run.from].to_vec(),
-    })
+    let kept: Vec<(usize, String)> = run
+        .lines
+        .iter()
+        .filter(|(at, _)| *at > above && *at <= below)
+        .cloned()
+        .collect();
+    (!kept.is_empty()).then_some(Run { lines: kept })
 }
 
-// One side of an excerpt, as the memo carries it; `null` when the edit stands at that edge.
+// One side of an excerpt, as the memo carries it; `null` when the edit stands at that edge. Each line carries its own place, so a card that draws them numbers each by its file line rather than by its turn in the list.
 fn run_json(run: &Option<Run>) -> Value {
     match run {
-        Some(run) => json!({"from": run.from, "lines": masked(&run.lines)}),
+        Some(run) => json!({
+            "lines": run.lines.iter().map(|(at, text)| json!([at, mask::line(text)])).collect::<Vec<_>>(),
+        }),
         None => Value::Null,
     }
 }
 
-// Some lines as a memo carries them: every base64 payload stood down to its size.
+// Some lines as a memo carries them: every base64 payload stood down to its size, and a folded run of it as the one line that speaks for all of it.
 fn masked(lines: &[String]) -> Vec<String> {
-    lines
-        .iter()
-        .map(|line| mask::line(line).into_owned())
+    let raw: Vec<&str> = lines.iter().map(String::as_str).collect();
+    mask::block(&raw)
+        .into_iter()
+        .filter_map(|held| match held {
+            mask::Shown::Line(text) => Some(text.into_owned()),
+            mask::Shown::Skip => None,
+        })
         .collect()
 }
 
@@ -388,7 +392,7 @@ fn outermost(table: &Table, at: usize) -> Option<(usize, usize)> {
     Some((open, line.mate.unwrap_or(open)))
 }
 
-// One 1-based inclusive range of the file, when it holds any line.
+// One 1-based inclusive range of the file, when it holds any line: each line with its own place, masked where it is drawn.
 fn run_of(base: &[String], first: usize, last: usize) -> Option<Run> {
     if base.is_empty() || last < first {
         return None;
@@ -398,10 +402,22 @@ fn run_of(base: &[String], first: usize, last: usize) -> Option<Run> {
     if last < first {
         return None;
     }
-    Some(Run {
-        from: first,
-        lines: base[first - 1..last].to_vec(),
-    })
+    // A run of payload is drawn as the one line that speaks for it, its own place kept.
+    let drawn = mask::block(
+        &base[first - 1..last]
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
+    let lines = drawn
+        .into_iter()
+        .enumerate()
+        .filter_map(|(back, held)| match held {
+            mask::Shown::Line(text) => Some((first + back, text.into_owned())),
+            mask::Shown::Skip => None,
+        })
+        .collect();
+    Some(Run { lines })
 }
 
 // The lines one 1-based inclusive range holds, owned.

@@ -105,15 +105,50 @@ fn joined(lines: &[&str], from: usize, to: usize) -> usize {
         .sum()
 }
 
-// One folded run's own line.
+// One folded run's own line: the first line's own indentation, so it still reads as part of what holds it, and how many lines it spent.
 fn folded(lines: &[&str], from: usize, to: usize) -> String {
-    format!("base64: {} KiB masked", size_of(joined(lines, from, to)))
+    let indent: String = lines[from]
+        .chars()
+        .take_while(|one| one.is_whitespace())
+        .collect();
+    format!(
+        "{indent}base64: {} KiB masked ({} lines)",
+        size_of(joined(lines, from, to)),
+        to - from
+    )
 }
 
-// One line's own payload, when the line holds nothing else.
+// One line's own payload, when what the line holds is base64 letters and nothing else. JSON's own decoration around it — the indentation, the quotes a notebook wraps every payload chunk in, the comma that ends all but the last — is not part of the payload.
 fn payload(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    (!trimmed.is_empty() && trimmed.bytes().all(payload_char)).then_some(trimmed)
+    let bare = text.trim();
+    let bare = bare.strip_prefix('"').unwrap_or(bare).trim_end();
+    let bare = bare.strip_suffix(',').unwrap_or(bare).trim_end();
+    let bare = bare.strip_suffix('"').unwrap_or(bare);
+    (!bare.is_empty() && bare.bytes().all(payload_char)).then_some(bare)
+}
+
+// The widest drawn run around one line, inside `first..=last`, 0-based and inclusive. A folded run is not context: the run stops where a fold begins, and a change inside a fold is drawn as the one line that stands for the run it fell in.
+pub(crate) fn around(
+    drawn: &[Shown<'_>],
+    first: usize,
+    at: usize,
+    last: usize,
+) -> Option<(usize, usize)> {
+    let drawn_at = |n: usize| matches!(drawn.get(n), Some(Shown::Line(_)));
+    let last = last.min(drawn.len().saturating_sub(1));
+    let at = at.clamp(first, last);
+    // A change inside a fold is drawn as the line that stands for the run it fell in, never as nothing.
+    let at = (first..=at).rev().find(|n| drawn_at(*n))?;
+    let from = (first..=at)
+        .rev()
+        .take_while(|n| drawn_at(*n))
+        .min()
+        .unwrap_or(at);
+    let to = (at..=last)
+        .take_while(|n| drawn_at(*n))
+        .last()
+        .unwrap_or(at);
+    Some((from, to))
 }
 
 // What one run of base64 characters hides, in KiB, when it opens with an image's magic. A run of some other bytes, or one short enough to read, hides nothing.

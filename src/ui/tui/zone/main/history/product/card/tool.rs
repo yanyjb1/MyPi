@@ -262,11 +262,11 @@ pub(crate) struct Numbered {
     pub text: String,
 }
 
-// The item a change sits in, as the tool found it: its first old-file line and its text.
+// The item a change sits in, as the tool found it: its text, and the file line each of those lines stands on. A payload the mask folded is one line here standing for a whole run, so its place is what numbers it, never its turn in the list.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Excerpt {
-    pub from: usize,
     pub lines: Vec<String>,
+    pub at: Vec<usize>,
 }
 
 // What a change leaves for the card to line up: the line it sits on, the text that went when the request cannot name it, and the item around it.
@@ -302,10 +302,15 @@ impl ToolView {
                 .unwrap_or_default()
         };
         let excerpt = d.get("excerpt").and_then(|e| {
-            let from = e.get("from").and_then(Value::as_u64)? as usize;
+            let at = e
+                .get("gap")?
+                .as_array()?
+                .iter()
+                .map(|one| one.as_u64().map(|n| n as usize))
+                .collect::<Option<Vec<_>>>()?;
             Some(Excerpt {
-                from,
                 lines: strings(e.get("lines")),
+                at,
             })
         });
         if at.is_some() || old.is_some() || excerpt.is_some() {
