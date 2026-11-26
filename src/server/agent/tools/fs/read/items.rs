@@ -9,6 +9,7 @@ use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::fs::lang::graph::loader;
 use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::fs::lang::{self, Line, Table};
+use crate::server::agent::tools::fs::mask;
 use crate::server::agent::tools::fs::skeleton;
 use crate::server::agent::tools::summary;
 use crate::server::agent::tools::workspace::canonicalize_lenient;
@@ -46,6 +47,7 @@ fn render(path: &Path, cwd: &Path, wanted: &str) -> Result<(String, Vec<(PathBuf
         }
         let raw: Vec<&str> = text.lines().collect();
         let width = skeleton::width(raw.len());
+        let drawn = mask::block(&raw);
 
         // A directory names the file, because one header may stand in several of them.
         if path.is_dir() {
@@ -55,7 +57,7 @@ fn render(path: &Path, cwd: &Path, wanted: &str) -> Result<(String, Vec<(PathBuf
             out.push_str(&header(&parts::rel(cwd, &file)));
         }
         for at in hits {
-            out.push_str(&block(&raw, &table, at, width));
+            out.push_str(&block(&raw, &drawn, &table, at, width));
         }
         seen.push((file, text));
     }
@@ -76,7 +78,13 @@ fn scope(path: &Path) -> Vec<PathBuf> {
 }
 
 // One piece whole: its own header with the piece above it, its span, and every line numbered.
-fn block(raw: &[&str], table: &Table, at: usize, width: usize) -> String {
+fn block(
+    raw: &[&str],
+    drawn: &[mask::Shown<'_>],
+    table: &Table,
+    at: usize,
+    width: usize,
+) -> String {
     let end = table.end(at).unwrap_or(at).min(raw.len().saturating_sub(1));
     let exact = table
         .line(at)
@@ -87,7 +95,11 @@ fn block(raw: &[&str], table: &Table, at: usize, width: usize) -> String {
         Some(outer) => format!("{exact} ({outer})  {}..{}\n", at + 1, end + 1),
         None => format!("{exact}  {}..{}\n", at + 1, end + 1),
     };
-    for (index, line) in raw.iter().enumerate().take(end + 1).skip(at) {
+    for index in at..=end {
+        let Some(mask::Shown::Line(line)) = drawn.get(index) else {
+            continue;
+        };
+        let line = line.as_ref();
         if line.trim().is_empty() {
             out.push('\n');
         } else {

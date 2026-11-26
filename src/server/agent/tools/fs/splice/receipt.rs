@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::edit::{Edit, Why};
 use crate::server::agent::tools::fs::lang::Table;
-use crate::server::agent::tools::fs::skeleton;
+use crate::server::agent::tools::fs::{mask, skeleton};
 
 // How many lines one side of a diff shows before its middle is folded away.
 const SIDE: usize = 12;
@@ -199,7 +199,8 @@ fn side(lines: &[String], first: usize, sign: char, width: usize) -> Vec<String>
 
 // A side of the diff, its middle folded away once it grows past what one answer may take.
 fn fold(rows: &[(usize, &str)], width: usize, sign: char) -> Vec<String> {
-    let draw = |at: usize, text: &str| format!("{sign} {at:>width$}|{text}");
+    // Masked where it is drawn: a payload a batch carried through rides in no answer.
+    let draw = |at: usize, text: &str| format!("{sign} {at:>width$}|{}", mask::line(text));
     if rows.len() <= SIDE {
         return rows.iter().map(|(at, text)| draw(*at, text)).collect();
     }
@@ -236,8 +237,8 @@ fn memo(rows: &[Row]) -> Value {
             },
             "fromLine": row.from,
             "atLine": place,
-            "old": row.old.join("\n"),
-            "new": row.new.join("\n"),
+            "old": masked(&row.old),
+            "new": masked(&row.new),
             "error": row.error,
             "before": run_json(&context[at].before),
             "after": run_json(&context[at].after),
@@ -296,9 +297,17 @@ fn between(run: &Run, above: usize, below: usize) -> Option<Run> {
 // One side of an excerpt, as the memo carries it; `null` when the edit stands at that edge.
 fn run_json(run: &Option<Run>) -> Value {
     match run {
-        Some(run) => json!({"from": run.from, "lines": run.lines}),
+        Some(run) => json!({"from": run.from, "lines": masked(&run.lines)}),
         None => Value::Null,
     }
+}
+
+// Some lines as a memo carries them: every base64 payload stood down to its size.
+fn masked(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| mask::line(line).into_owned())
+        .collect()
 }
 
 // What the batch knows about one edit before its row is drawn.

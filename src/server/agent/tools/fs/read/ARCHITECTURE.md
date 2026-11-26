@@ -10,7 +10,6 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `tool.rs` | the tool's face: the path array, the per-kind budgets and the per-item limit under them, one path's answer and the module view that follows a source body |
 | `dir.rs` | directory listings: one level per directory, each level's stamp verdict, entry counts and the per-level fold |
 | `items.rs` | the item mode: the pieces whose own header equals the one the model named, under one file or a whole directory |
-| `sniff.rs` | an image's format from its first bytes |
 
 ## What it talks to
 

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow};
 
-use super::{dir, items, sniff};
+use super::{dir, items};
 use crate::server::agent::request::contract::ItemOk;
 use crate::server::agent::request::message::ImagePart;
 use crate::server::agent::tools::contract::env::Env;
@@ -14,7 +14,9 @@ use crate::server::agent::tools::contract::output::ToolOutput;
 use crate::server::agent::tools::contract::view::CallRecord;
 use crate::server::agent::tools::fs::lang::graph::{self, Loader};
 use crate::server::agent::tools::fs::lang::{self, Table};
+use crate::server::agent::tools::fs::mask;
 use crate::server::agent::tools::fs::skeleton;
+use crate::server::agent::tools::fs::sniff;
 use crate::server::agent::tools::fs::splice::TOOL as SPLICE;
 use crate::server::agent::tools::spec::{Args, Item, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
@@ -360,11 +362,18 @@ fn assemble<'a>(
     let mut bytes = 0usize;
     let mut shown = 0usize;
     let mut by_bytes = false;
-    for (index, line) in lines.enumerate() {
+    let file: Vec<&str> = lines.collect();
+    let drawn = mask::block(&file);
+    for (index, held) in drawn.iter().enumerate() {
         if shown >= limit {
             break;
         }
         let at = first + index;
+        // A folded run draws its own first line and spends the rest: the numbers it skips are the point.
+        let mask::Shown::Line(line) = held else {
+            continue;
+        };
+        let line = line.as_ref();
         let blank = line.trim().is_empty();
         let number = numbers.numbered(at);
         let gutter = if blank || !numbers.on() { 0 } else { width + 1 };

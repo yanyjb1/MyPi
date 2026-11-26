@@ -122,6 +122,7 @@ pub(crate) struct Tests {
 static LANGUAGES: &[&Language] = &[
     &guages::rust::LANGUAGE,
     &guages::python::LANGUAGE,
+    &guages::notebook::LANGUAGE,
     &guages::web::LANGUAGE,
     &guages::markdown::LANGUAGE,
     &guages::cp::LANGUAGE,

@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use crate::server::agent::tools::contract::env::{GrepLimits, Seen};
 use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::fs::lang::{Relation, Relations, Source};
+use crate::server::agent::tools::fs::mask;
 use crate::server::agent::tools::fs::skeleton;
 
 use super::scan;
@@ -179,7 +180,8 @@ fn draw(
         if file.items.is_empty() {
             continue;
         }
-        let raw: Vec<&str> = file.text.lines().collect();
+        // Masked before drawing, never in the stamp: a base64 image payload would otherwise ride into a tier-1 answer whole.
+        let raw = mask::block(&file.text.lines().collect::<Vec<_>>());
         let width = skeleton::width(raw.len());
         let label = parts::rel(&zone.root, &file.path);
         let block = if tier == 1 {
@@ -193,7 +195,7 @@ fn draw(
 }
 
 // Tier 1: every line of every item; only key lines and hit lines carry a number.
-fn whole(file: &scan::File, raw: &[&str], width: usize, label: &str) -> String {
+fn whole(file: &scan::File, raw: &[mask::Shown<'_>], width: usize, label: &str) -> String {
     let mut out = String::new();
     for item in &file.items {
         let _ = writeln!(out, "{label}:{}", item.open + 1);
@@ -211,9 +213,12 @@ fn whole(file: &scan::File, raw: &[&str], width: usize, label: &str) -> String {
         if !above.is_empty() {
             let _ = writeln!(out, "  in: {}", above.join(" > "));
         }
-        for (index, text) in raw.iter().enumerate().take(item.close + 1).skip(item.open) {
+        for index in item.open..=item.close {
+            let Some(mask::Shown::Line(text)) = raw.get(index) else {
+                continue;
+            };
             let mark = (item.hits.contains(&index) || file.table.key(index)).then_some(index + 1);
-            out.push_str(&skeleton::numbered(width, mark, text));
+            out.push_str(&skeleton::numbered(width, mark, text.as_ref()));
             out.push('\n');
         }
     }
@@ -221,21 +226,27 @@ fn whole(file: &scan::File, raw: &[&str], width: usize, label: &str) -> String {
 }
 
 // Tier 2: the outline of every item — its ancestors' head lines once per file, then its key lines and hit lines, the item's own head row carrying where the piece closes.
-fn outline(file: &scan::File, raw: &[&str], width: usize, label: &str) -> String {
+fn outline(file: &scan::File, raw: &[mask::Shown<'_>], width: usize, label: &str) -> String {
     let mut out = format!("{label}\n");
     let mut heads: BTreeSet<usize> = BTreeSet::new();
     for item in &file.items {
         for (at, _) in file.table.around(item.open) {
             if at != item.open && heads.insert(at) {
-                out.push_str(&skeleton::numbered(width, Some(at + 1), raw[at]));
+                if let Some(mask::Shown::Line(text)) = raw.get(at) {
+                    out.push_str(&skeleton::numbered(width, Some(at + 1), text.as_ref()));
+                    out.push('\n');
+                }
                 out.push('\n');
             }
         }
-        for (index, text) in raw.iter().enumerate().take(item.close + 1).skip(item.open) {
+        for index in item.open..=item.close {
             if !file.table.key(index) && !item.hits.contains(&index) {
                 continue;
             }
-            out.push_str(&skeleton::numbered(width, Some(index + 1), text));
+            let Some(mask::Shown::Line(text)) = raw.get(index) else {
+                continue;
+            };
+            out.push_str(&skeleton::numbered(width, Some(index + 1), text.as_ref()));
             out.push('\n');
         }
     }

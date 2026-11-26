@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 
 use super::lang::Table;
+use super::mask;
 
 // Lines a window keeps above and below the change.
 const WINDOW: usize = 5;
@@ -23,7 +24,12 @@ pub(crate) fn context(table: &Table, text: &str, at: usize, span: usize) -> Valu
         _ => window(at, end, lines.len()),
     };
 
-    json!({ "excerpt": { "from": from + 1, "lines": lines[from..=to] } })
+    // Masked where it is drawn: a payload a batch carried through rides in no answer.
+    let shown: Vec<String> = lines[from..=to]
+        .iter()
+        .map(|line| mask::line(line).into_owned())
+        .collect();
+    json!({ "excerpt": { "from": from + 1, "lines": shown } })
 }
 
 // The window around a change: `WINDOW` lines above it and below it, 0-based and inclusive.

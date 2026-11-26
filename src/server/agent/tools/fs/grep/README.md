@@ -16,7 +16,12 @@ The `grep` tool: one query over every source tree the workspace's languages clai
   grammar: headings, fences, lists, quotes. Nothing here knows a language's own words.
 - A hit is a line. Every matching line counts once, whatever it holds — comment, literal, prose —
   and several matches inside one line are still one hit.
-- An item is the drawn unit. A hit takes its innermost piece; a span that lands inside an item
+- A drawn line goes through the same mask `read` uses: a base64 image payload past 512 characters
+  with an image's magic prints as `base64: N KiB masked`, and the line's other text stays. A run of
+  equal-width payload lines folds into one line and the lines under it are not drawn, so a payload a
+  notebook carries shows as the gap it occupies. It is a printing fact alone — the stamp keeps the
+  file's own text, so `splice` still holds its licence.
+- An item is the drawn unit.
   joins it, and a later span that swallows it widens it to that outer piece. So an item is the
   smallest piece holding its run of nested hits, and pieces that merely stand side by side never
   merge. A hit no piece holds is its own one-line item. Every hit belongs to exactly one item.

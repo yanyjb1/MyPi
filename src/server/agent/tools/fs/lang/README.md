@@ -32,6 +32,8 @@ Suffixes point at languages. A file whose suffix meets none is a table where eve
 
 **One language may own several file kinds.** The web is one language over pages, stylesheets and scripts together, because a DOM anchor is only worth looking up when one query reaches a page, a stylesheet and a script at once. Its sorter dispatches on the suffix it is handed.
 
+**A language declares as much as it can answer for.** The notebook answers a table and a toolchain and nothing else: it has no graph of its own, so it carries no unit, no edges and no territory, and a directory of notebooks is no source tree. A language that declares less narrows what a tool asks it, never what a tool shows.
+
 **Every language in scope answers its own part.** A relation query is asked of each language the batch holds, over that language's own files. One language alone keeps its own way of saying nothing was found; several together print only those that found something, so a workspace-wide search never carries a list of "not here" from every other language.
 
 **The checker knows its own unit.** A build unit is whatever the language says it is: a crate, a module, a package, a page root. The shared side groups the batch's writes by unit, runs the language's checker once per unit after the last write, and hangs every diagnostic under the edit whose lines it hit. A language with no checker takes no part.
@@ -46,6 +48,7 @@ Suffixes point at languages. A file whose suffix meets none is a table where eve
 
 - A heading's section is remembered by its heading line, so its end is a line no tool may name.
 - A language is chosen by suffix alone: two languages sharing one suffix cannot be told apart.
+- A language's parser reads one text, so a file format whose structure is not its own text — a notebook, whose cells are Python written inside JSON — has a position that its own scan must translate back.
 - A diagnostic reaches the write it belongs to by the name its checker gives that file; a checker that names files unlike its own cannot be placed.
 - A test's full path comes from the toolchain's own list, so a name two modules share runs in both.
 

@@ -68,6 +68,16 @@ as before when it is not UTF-8.
 A file no sorter claims is streamed: only the window is held, so its whole text never lands in
 memory, and for the same reason it grants no write licence — `splice` cannot write it.
 
+A base64 payload that opens with an image's magic and runs past 512 characters prints as
+`base64: N KiB masked`, its decoded size, while the rest of the line stays as it read, so a notebook
+keeps its `"image/png"`. The mask is a printing fact alone: `splice` still addresses the line by
+number, and the stamp keeps the bytes on disk.
+
+A payload written one line per 76 characters — how Jupyter stores an image — folds instead: the run
+becomes one line reading `base64: N KiB masked (M lines)`, and the lines under it are spent rather
+than drawn. Every line keeps its own number, so a fold shows as a gap and the count of what it hid
+is on the page; `splice` anchors, the stamp and the byte budget are all as they were.
+
 A file a sorter claims is read whole only up to 4 MiB; past that it is streamed the same way, with
 every line numbered, and it too grants no write licence. Any file past 16 MiB is refused outright,
 since one line of it could still fill memory.

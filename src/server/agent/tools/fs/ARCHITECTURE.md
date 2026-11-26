@@ -7,6 +7,8 @@ What is here, what each file holds, who talks to whom. Current state only.
 | file | holds |
 |---|---|
 | `mod.rs` | module declarations |
+| `mask.rs` | text as a report prints it: a base64 payload stands replaced by its decoded size, and a run of folded payload lines becomes one line whose number the lines under it skip |
+| `sniff.rs` | an image's format from the bytes that open it |
 | `change.rs` | one line-addressed change: the context around it, its receipt and its line arithmetic |
 | `fault.rs` | the batch's audit: checks and tests after the last write, and where each fault lands |
 | `gate.rs` | the process gate: one child, its deadline, the turn's stop and its own group |
@@ -28,4 +30,5 @@ What is here, what each file holds, who talks to whom. Current state only.
   gate.
 - `edit` and `splice` share the change context; `read`, `grep` and every report share the skeleton.
 - `read`, `grep`, `edit` and `splice` read the same language table.
+- `read`, `grep`, `edit` and `splice` print every line through `mask`, and both `read` and `mask` take an image's format from `sniff`.
 - `lang` names no tool; a tool asks the registry, never a language.

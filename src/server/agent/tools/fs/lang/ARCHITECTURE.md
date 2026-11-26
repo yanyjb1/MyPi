@@ -14,6 +14,7 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `guages/mod.rs` | declares the languages |
 | `guages/rust/` | Rust's declaration and its own knowledge |
 | `guages/python/` | Python's declaration and its own knowledge |
+| `guages/notebook/` | the notebook's declaration and its own knowledge: the cell scan, one piece per cell, the ruff parser and checker, and no graph |
 | `guages/web/` | the web's declaration and its own knowledge: one sorter per file kind, the page-rooted graph, the three-way anchor index, the biome parser and checker |
 | `guages/markdown/` | Markdown's declaration and its own knowledge: the sorter, the reference scan, the note graph and the narration |
 | `guages/cp/` | CP's declaration and its own knowledge: one domain for both halves, the file-per-unit graph, includes resolved through the compile database, and the clang parser and checker |
