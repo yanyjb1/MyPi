@@ -126,6 +126,7 @@ static LANGUAGES: &[&Language] = &[
     &guages::web::LANGUAGE,
     &guages::markdown::LANGUAGE,
     &guages::cp::LANGUAGE,
+    &guages::go::LANGUAGE,
 ];
 
 // The language that claims this path, by its suffix.
