@@ -20,7 +20,7 @@ A `POST` names its adapter in the `X-Bridge-Adapter` head; there is no other way
 
 One kind is the door's own: `host` / `list` answers the names one directory holds, plus the directory it read, and never crosses to the server. The page uses it for path completion, which a browser cannot take on its own.
 
-One frame is answered with a stream instead of a reply: `subscribe` / `watch`, which starts following a conversation. That connection then stays open and carries that conversation's frames, one per line, until the peer leaves. Which conversation it is comes from the frame's own `session`; the door adds nothing and asks for nothing else.
+One frame is answered with a stream instead of a reply: `subscribe` / `watch`, which starts following a conversation. Over HTTP, that connection stays open and carries that conversation's frames, one per line, until the peer leaves. Over WebSocket, the client may include an optional `"id"` field on any request JSON; the door echoes that `"id"` on the matching reply (including `subscribe` / `watch`, which answers `{"ok": true}` or `{"error": ...}`), while pushed conversation frames arrive without `"id"`. Which conversation it is comes from the frame's own `session`; the door adds nothing and asks for nothing else.
 
 An error is `{"error": {"code", "message"}}` when the door itself refused. A refusal the server made arrives as that server's own error payload, untouched.
 
