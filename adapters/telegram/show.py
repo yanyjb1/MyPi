@@ -21,10 +21,10 @@ def size(count):
     for unit in ("", "K", "M", "G"):
         if count < 1024 or unit == "G":
             if unit == "":
-                return "%d" % count
-            return "%.1f%s" % (count, unit)
+                return f"{count:.0f}"
+            return f"{count:.1f}{unit}"
         count /= 1024.0
-    return "%d" % count
+    return f"{count:.0f}"
 
 
 def stamp(unix):
@@ -51,7 +51,7 @@ def address(meta):
     provider = (meta or {}).get("provider") or ""
     model = (meta or {}).get("model") or ""
     if provider and model:
-        return "%s:%s" % (provider, model)
+        return f"{provider}:{model}"
     return model or ""
 
 

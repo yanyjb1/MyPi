@@ -9,10 +9,12 @@ import threading
 import time
 
 import commands
+import read
+import words
+from bot import Bot, BotError
 from bridge import CLOSED, IDLE, Door, Refused, said
 from show import address, now, shorten, split_address, stamp
 from state import State
-from telegram import Bot, BotError
 from turn import Turn, counts
 
 # How many sessions the bot may hold at once; a fourth is refused, never bought at another's cost.
@@ -23,6 +25,9 @@ PATIENCE = 60
 
 # How often the bot says it is typing in the session being talked to.
 TYPING = 4.0
+
+# How long the bot waits before asking for a dropped stream again.
+RECONNECT = 2
 
 HOST = os.environ.get("TG_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TG_BRIDGE_PORT", "8737"))
@@ -43,14 +48,22 @@ class Hosted:
         self.turn = Turn()
         self.dropped = False
         self.typing = 0.0
-        self.thread = threading.Thread(target=self.run, name="watch-%d" % session, daemon=True)
+        self.thread = threading.Thread(target=self.run, name=f"watch-{session}", daemon=True)
         self.thread.start()
 
+    # A held session outlives its stream: a bridge restart or an idle sweep only means asking again.
     def run(self):
         while True:
             frame = self.feed.take(0.5)
-            if frame is CLOSED or self.dropped:
+            if self.dropped:
                 return
+            if frame is CLOSED:
+                self.app.log(words.t("stream_lost", session=self.session))
+                time.sleep(RECONNECT)
+                if self.dropped:
+                    return
+                self.feed = self.app.door.watch(self.session)
+                continue
             if frame is IDLE:
                 self.quiet()
                 continue
@@ -70,12 +83,14 @@ class Hosted:
     def absorb(self, frame):
         name = frame.get("name")
         payload = frame.get("payload") or {}
+
         if name == "notice":
             text = payload.get("text")
-            self.app.say("%s%s" % (self.prefix(), said(text) if isinstance(text, dict) else str(text)))
+            self.app.say(f"{self.prefix()}{said(text) if isinstance(text, dict) else str(text)}")
             return
         if name == "signal":
             return
+        # The receipt closes the round whether or not a single piece of it was forwarded.
         if payload.get("ranges") is not None:
             self.close_round(payload.get("turn"))
             return
@@ -105,17 +120,17 @@ class Hosted:
         closed = self.turn.close(round_id)
         if closed is None:
             return
-        unsaid, words = closed
+        unsaid, said_words = closed
         if self.app.current() == self.session:
             if unsaid:
                 self.app.say(unsaid)
             return
-        line = "会话#%d结束了，正文消息：%s" % (self.session, shorten(words, PREVIEW) or "（没有正文）")
-        self.app.say("%s%s" % (self.prefix(), line))
+        line = words.t("round_ended", session=self.session, words=shorten(said_words, PREVIEW) or words.t("no_words"))
+        self.app.say(f"{self.prefix()}{line}")
 
     # What tells a background session's lines from the one being talked to.
     def prefix(self):
-        return "" if self.app.current() == self.session else "[%d] " % self.session
+        return "" if self.app.current() == self.session else f"[{self.session}] "
 
     def stop(self):
         self.dropped = True
@@ -145,10 +160,19 @@ class App:
                 token = f.read().strip()
             if token:
                 return token
-        raise SystemExit("没有 bot token：放一个 token.txt 在旁边，或者设 TG_BOT_TOKEN")
+        raise SystemExit(words.t("no_token"))
+
+    # The language the whole bot speaks, read from the server once at startup.
+    def speak(self):
+        try:
+            answer = self.door.call("config", {"key": "config.ui.lang"})
+        except Refused as e:
+            self.log(f"cannot read config.ui.lang: {e.message}")
+            return
+        words.choose(answer.get("value"))
 
     def log(self, line):
-        print("%s %s" % (time.strftime("%H:%M:%S"), line), flush=True)
+        print(f"{time.strftime('%H:%M:%S')} {line}", flush=True)
 
     def say(self, text):
         if not self.chat or not text:
@@ -156,7 +180,7 @@ class App:
         try:
             self.bot.send(self.chat, text)
         except BotError as e:
-            self.log("send failed: %s" % e)
+            self.log(f"send failed: {e}")
 
     def current(self):
         return self.state.current
@@ -212,7 +236,7 @@ class App:
         if not model:
             return []
         try:
-            entry = self.door.call("config", {"key": "models.model.%s" % model})
+            entry = self.door.call("config", {"key": f"models.model.{model}"})
         except Refused:
             return []
         return [rung for rung in (entry.get("value") or {}).get("reasoningEfforts") or []]
@@ -229,7 +253,7 @@ class App:
         if not model:
             return 0
         try:
-            entry = self.door.call("config", {"key": "models.model.%s" % model})
+            entry = self.door.call("config", {"key": f"models.model.{model}"})
         except Refused:
             return 0
         return int((entry.get("value") or {}).get("contextWindow") or 0)
@@ -237,7 +261,7 @@ class App:
     def handle(self, message):
         text = (message.get("text") or "").strip()
         if not text:
-            self.say("暂时只认文字。")
+            self.say(words.t("text_only"))
             return
         if text.startswith("/"):
             head, _, rest = text.partition(" ")
@@ -252,11 +276,11 @@ class App:
         if self.state.draft:
             self.spawn(text, sent)
             return
-        self.say("现在没对着任何会话。\n/list 挑一个，或者 /new 起一个。")
+        self.say(words.t("no_current"))
 
     def send_to(self, session, text, sent=None):
         if not self.hold(session):
-            self.say("已经托管了 %d 个，放掉一个再来：/quit。" % MOST)
+            self.say(words.t("hosted_full", most=MOST))
             return
         ask = {"session": session, "text": text}
         ask.update(self.decorate(session, sent))
@@ -265,28 +289,17 @@ class App:
         except Refused as e:
             if e.code == "busy":
                 self.door.post("mailbox", {"session": session, "text": text, **ask})
-                self.say("%d 号在跑，这句话排进去了。" % session)
+                self.say(words.t("queued", session=session))
                 return
-            self.say("…%s" % e.message)
+            self.say(f"…{e.message}")
 
     # The two moments a turn is bounded by, as the prefix and suffix the server takes: a chat has no clock the model can otherwise see.
     def decorate(self, session, sent):
-        return {"prefix": "你上次回复于：%s\n" % self.last_reply(session), "suffix": "\n本条消息发送于：%s（来自 telegram）" % (sent or now())}
+        return {"prefix": words.t("reply_prefix", at=self.last_reply(session)), "suffix": words.t("message_suffix", at=sent or now())}
 
-    # When this session's own words last landed: the newest assistant block's stamp.
+    # When this session's own words last landed: the newest assistant block's stamp, read the same way `/attach` reads its words.
     def last_reply(self, session):
-        try:
-            blocks = self.door.call("init", {"session": session}).get("blocks") or []
-        except Refused:
-            return "没有过"
-        newest = None
-        for block in blocks:
-            if block.get("kind") != "assistant":
-                continue
-            ts = block.get("ts")
-            if ts and (newest is None or ts > newest):
-                newest = ts
-        return newest or "没有过"
+        return read.newest_stamp(self.door, session) or words.t("never")
 
     def spawn(self, text, sent=None):
         draft = self.state.draft
@@ -302,38 +315,39 @@ class App:
         try:
             answer = self.door.post("init", ask)
         except Refused as e:
-            self.say("建不出来：%s" % e.message)
+            self.say(words.t("spawn_failed", words=e.message))
             return
         session = answer.get("session")
         if not session:
-            self.say("建不出来：桥没有给出编号。")
+            self.say(words.t("spawn_no_id"))
             return
         self.state.draft = None
         self.state.current = session
         self.state.save()
         if not self.hold(session):
-            self.say("%d 号建好了，但托管满了，先 /quit 放掉一个。" % session)
+            self.say(words.t("spawn_unhosted", session=session))
             return
-        note = "%d 号起来了。" % session
+        note = words.t("spawned", session=session)
         if answer.get("cwd"):
-            note += "\n目录落在 %s" % answer["cwd"]
+            note += words.t("spawn_cwd", cwd=answer["cwd"])
         self.say(note)
         self.send_to(session, text, sent)
 
     def run(self):
         me = self.bot.me()
-        self.log("bot @%s" % me.get("username"))
+        self.log(f"bot @{me.get('username')}")
         self.bot.drop_webhook()
         self.bot.skip_backlog()
+        self.speak()
         if self.state.user:
             self.chat = self.state.user
-            self.log("paired with %s" % self.chat)
+            self.log(f"paired with {self.chat}")
         self.bring()
         while True:
             try:
                 updates = self.bot.poll(30)
             except BotError as e:
-                self.log("poll failed: %s" % e)
+                self.log(f"poll failed: {e}")
                 time.sleep(3)
                 continue
             for update in updates:
@@ -348,11 +362,11 @@ class App:
                     self.state.user = chat.get("id")
                     self.state.save()
                     self.chat = self.state.user
-                    self.log("paired with %s" % self.chat)
-                    self.say("绑上了。/help 看命令。")
+                    self.log(f"paired with {self.chat}")
+                    self.say(words.t("paired"))
                 if chat.get("id") != self.state.user:
                     try:
-                        self.bot.send(chat.get("id"), "这个 bot 不给别人用。")
+                        self.bot.send(chat.get("id"), words.t("not_yours"))
                     except BotError:
                         pass
                     continue
@@ -361,17 +375,23 @@ class App:
                     self.handle(message)
                 except Exception as e:
                     # One bad command must not stop the bot.
-                    self.log("handle failed: %r" % e)
-                    self.say("这句话没办成：%s" % e)
+                    self.log(f"handle failed: {e!r}")
+                    self.say(words.t("handle_failed", words=e))
 
 
 def main(argv):
+    # A line the console cannot encode is a line lost: a front end started without a terminal runs on a code page, and `zh` does not fit in one. The log survives, the thread stays up.
+    hook = getattr(sys.stdout, "reconfigure", None)
+    if hook:
+        hook(errors="replace")
     state = State()
     if argv and argv[0] == "--say":
         # A one-shot line to the paired account: the only way to test from this side.
         app = App(state)
+        app.speak()
         if not state.user:
-            raise SystemExit("还没有绑定的账号")
+            raise SystemExit(words.t("no_pairing"))
+        app.chat = state.user
         app.bot.send(state.user, " ".join(argv[1:]))
         return 0
     App(state).run()

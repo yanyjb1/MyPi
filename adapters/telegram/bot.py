@@ -19,7 +19,7 @@ class Bot:
 
     def _call(self, method, body, timeout=60):
         request = urllib.request.Request(
-            "https://api.telegram.org/bot%s/%s" % (self.token, method),
+            f"https://api.telegram.org/bot{self.token}/{method}",
             data=json.dumps(body, ensure_ascii=False).encode(),
             method="POST",
             headers={"content-type": "application/json"},

@@ -6,6 +6,8 @@ import threading
 import urllib.error
 import urllib.request
 
+import words
+
 # The stream ended: a closed connection is reported, never reopened.
 CLOSED = object()
 
@@ -29,6 +31,9 @@ def said(text):
         return text["text"]
     key = text.get("key") or text.get("code") or "refused"
     args = text.get("args") or {}
+    known = words.refusal(key)
+    if known:
+        return known
     if not args:
         return key
     return key + " " + json.dumps(args, ensure_ascii=False)
@@ -37,7 +42,7 @@ def said(text):
 class Door:
     # One address, two methods: POST for a frame, and the stream a hosted session answers on.
     def __init__(self, host, port, adapter, timeout=60):
-        self.base = "http://%s:%d/" % (host, port)
+        self.base = f"http://{host}:{port}/"
         self.adapter = adapter
         self.timeout = timeout
 
@@ -48,12 +53,12 @@ class Door:
                 answer = json.loads(res.read())
         except urllib.error.HTTPError as e:
             answer = self._read(e)
-            code, message = self._reason(answer, "http_%d" % e.code)
+            code, message = self._reason(answer, f"http_{e.code}")
             raise Refused(code, message)
         except (urllib.error.URLError, OSError) as e:
-            raise Refused("unreachable", "桥没有应答：%s" % e)
+            raise Refused("unreachable", words.t("unreachable", words=str(e)))
         except ValueError:
-            raise Refused("unreadable", "桥回了读不懂的东西")
+            raise Refused("unreadable", words.t("unreadable"))
         code, message = self._reason(answer, None)
         if code:
             raise Refused(code, message)
@@ -106,7 +111,7 @@ class Feed:
         self._thread = None
 
     def open(self):
-        self._thread = threading.Thread(target=self._run, name="feed-%d" % self.session, daemon=True)
+        self._thread = threading.Thread(target=self._run, name=f"feed-{self.session}", daemon=True)
         self._thread.start()
         return self
 

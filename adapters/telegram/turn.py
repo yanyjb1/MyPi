@@ -1,16 +1,20 @@
-# One hosted session's round: the block being written, the calls it made, its receipt.
+# One held session's round: the block being written, the prose it opened with, and its receipt.
+
+import words
 
 # How often a round that is still running reports the calls it made.
 BEAT = 15.0
 
 
 class Turn:
-    # The round a stream is in: the block being written, and how its calls went.
+    # The round a stream is in: the block being written, the round's first words, and how its calls went.
     def __init__(self):
         self.running = False
         self.id = None
+        self.closed = None
         self.opened_by = "submit"
         self.block = ""
+        self.first = ""
         self.last = ""
         self.names = {}
         self.count = {}
@@ -21,6 +25,7 @@ class Turn:
         self.id = round_id
         self.opened_by = opened_by
         self.block = ""
+        self.first = ""
         self.last = ""
         self.names = {}
         self.count = {}
@@ -34,6 +39,8 @@ class Turn:
         text = self.block.strip()
         self.block = ""
         if text:
+            if not self.first:
+                self.first = text
             self.last = text
         return text
 
@@ -61,18 +68,24 @@ class Turn:
         self.beat = at
         return rows
 
-    # `(unsaid, words)`: what the round never sent, and the last block it did; None once this receipt is its second, or another round's.
+    # `(unsaid, words)`: the tail the round never sent, and the words it opened with. None for a round already closed, or another round's receipt.
     def close(self, round_id):
-        if not self.running or round_id != self.id:
+        if round_id is None or round_id == self.closed:
+            return None
+        if self.running and self.id is not None and round_id != self.id:
             return None
         unsaid = self.block.strip()
-        words = unsaid or self.last
+        # A round whose every piece the door dropped still ended here: the prose it opened with is what a phone reads.
+        said = self.first or unsaid or self.last
         self.running = False
+        self.id = None
+        self.closed = round_id
         self.block = ""
+        self.first = ""
         self.last = ""
         self.names = {}
         self.count = {}
-        return unsaid, words
+        return unsaid, said
 
 
 # The counts of one round as the line a person reads.
@@ -81,8 +94,8 @@ def counts(rows):
         return ""
     parts = []
     for name, ok, failed in rows:
-        part = "%s ×%d" % (name, ok + failed)
+        part = f"{name} ×{ok + failed}"
         if failed:
-            part += "（%d 失败）" % failed
+            part += words.t("failed_note", count=failed)
         parts.append(part)
-    return "跑着：" + " · ".join(parts)
+    return words.t("running") + " · ".join(parts)

@@ -26,10 +26,13 @@ The program's name is the one the door knows it by: `adapters.yml` must call it
 | `commands.py` | every `/` word and the wording of its answer |
 | `turn.py` | one round: the block being written, the calls it made, its receipt |
 | `bridge.py` | the door: one frame with its answer, one connection's stream |
-| `telegram.py` | the bot api, and one long body cut into messages |
+| `bot.py` | the telegram api, and one long body cut into messages |
 | `state.py` | what the bot remembers between restarts |
 | `show.py` | how a fact is written for a phone |
+| `read.py` | the newest words a session wrote: round by round, ranges asked for |
+| `words.py` | every line the bot says, in two languages |
 | `pyproject.toml` | metadata only; nothing reads it at run time |
+| `__main__.py` | the `python -m` entry, from either side of this directory |
 
 ## One block is one message
 
@@ -40,12 +43,28 @@ sent, so two blocks are two messages even inside one round, and a long block is
 the only thing that is ever cut again.
 
 A hosted session is different: while nobody is talking to it, nothing of its
-round is forwarded. Its round ends with one line —
-`会话#id结束了，正文消息：<the first fifty characters>` — and `/attach` then
-sends the last block whole.
+round is forwarded. Its round ends with one line naming the first fifty
+characters of the prose that round opened with; a round the door filtered whole
+still announces itself, and says it had no words. `/attach` then sends the newest
+assistant block whole, asked for by its round's own ranges rather than taken
+from the newest handful of rows.
 
 The frame that closes a round is the one carrying `ranges`; a second receipt for
 a round already closed is ignored.
+
+## When the stream ends
+
+A held session outlives its stream. A bridge restart, or the ten minutes of
+silence after which the door lets a session go, ends the reader's connection;
+the bot asks for it again two seconds later. Only `/quit` lets a session go for
+kept.
+
+## The language
+
+`words.py` carries every line twice, English and Chinese, and the bot reads
+`config.ui.lang` from the server once at startup: `zh` speaks Chinese and
+anything else speaks English. A refusal the server keys and this bot knows is
+said in that language; any other refusal is shown with its own key.
 
 ## The token
 
@@ -64,11 +83,18 @@ Whichever it finds, it remembers. `token.txt` and the state file are both in
 hosted sessions and the draft. Its location follows the bridge's own config root,
 so `MYPI_CONFIG_DIR` moves both together. Delete it to start over.
 
-## Running it by hand
-
 ```sh
-python3 adapters/telegram/app.py
+python -m adapters.telegram        # from the repository root
+python -m telegram                 # from inside `adapters/`
+python3 adapters/telegram/app.py   # the file itself, either way
 ```
+
+Any of the three starts the same bot. The package form is the one that carries over to another machine: copy
+the directory, and one line runs it. `--say <words>` sends one line to the paired account and exits, which is
+the only way to test from this side without a round.
+
+tree down when it stops, so no `exec`, and no program left holding the port. That is the copy-and-run shape: a
+machine needs Python 3 and one line naming where this directory landed.
 
 Under the bridge it is started and stopped with the door, so this is only for
 watching it fail loudly.
