@@ -14,8 +14,8 @@ pub(crate) struct Cell {
     // The line its `}` closes on, 1-based.
     pub(crate) close: usize,
 
-    // The line the cell's first `source` string stands on, 1-based; `None` when the cell writes none.
-    pub(crate) source: Option<usize>,
+    // The file line each row of its `source` stands on, 1-based and in row order; empty when the cell writes no source. One row is not one line: a source written as one string carries many rows on the line it stands on.
+    pub(crate) rows: Vec<usize>,
 }
 
 // Every cell of one notebook, in the order the file writes them.
@@ -38,7 +38,7 @@ pub(crate) fn cells(text: &str) -> Vec<Cell> {
             kind: kind(&lines, start, end),
             open: start + 1,
             close: end + 1,
-            source: source(&lines, start, end),
+            rows: rows(&lines, start, end),
         });
         at = end + 1;
     }
@@ -47,7 +47,7 @@ pub(crate) fn cells(text: &str) -> Vec<Cell> {
 
 // The `cells` array, 0-based: the line its first cell stands on, and the line its `]` closes on.
 fn cells_array(lines: &[&str]) -> Option<(usize, usize)> {
-    let named = lines.iter().position(|line| line.contains("\"cells\""))?;
+    let named = lines.iter().position(|line| key(line, "cells").is_some())?;
     let open = (named..lines.len()).find(|at| lines[*at].contains('['))?;
     let close = matching(lines, open, b'[', lines.len())?;
     Some((open + 1, close))
@@ -98,7 +98,7 @@ fn matching(lines: &[&str], open: usize, opener: u8, end: usize) -> Option<usize
 // One cell's own word, from the `cell_type` it writes; `raw` for a cell that names none.
 fn kind(lines: &[&str], open: usize, close: usize) -> String {
     for line in &lines[open..=close] {
-        let Some(at) = line.find("\"cell_type\"") else {
+        let Some(at) = key(line, "cell_type") else {
             continue;
         };
         let Some((_, value)) = line[at + "\"cell_type\"".len()..].split_once(':') else {
@@ -117,34 +117,88 @@ fn kind(lines: &[&str], open: usize, close: usize) -> String {
     "raw".to_string()
 }
 
-// The line the cell's own source starts on, 1-based: the first string of its `source`, whether that is an array or one bare string.
-fn source(lines: &[&str], open: usize, close: usize) -> Option<usize> {
-    for at in open..=close {
-        let Some(found) = lines[at].find("\"source\"") else {
-            continue;
+// The file line of each row a cell's `source` holds, in row order: an array of one string per line, or one bare string holding them all on the key's own line.
+fn rows(lines: &[&str], open: usize, close: usize) -> Vec<usize> {
+    let Some((at, found)) =
+        (open..=close).find_map(|at| key(lines[at], "source").map(|found| (at, found)))
+    else {
+        return Vec::new();
+    };
+    let Some((_, value)) = lines[at][found + "\"source\"".len()..].split_once(':') else {
+        return Vec::new();
+    };
+    let value = value.trim_start();
+    if !value.starts_with('[') {
+        return match value.starts_with('"') {
+            true => vec![at + 1; rows_of(value)],
+            false => Vec::new(),
         };
-        let rest = &lines[at][found + "\"source\"".len()..];
-        let Some((_, value)) = rest.split_once(':') else {
-            continue;
-        };
-        let value = value.trim_start();
-        if !value.starts_with('[') {
-            return value.starts_with('"').then_some(at + 1);
-        }
-        if value[1..].trim_start().starts_with('"') {
-            return Some(at + 1);
-        }
-        return (at + 1..=close)
-            .find(|line| lines[*line].trim_start().starts_with('"'))
-            .map(|line| line + 1);
     }
-    None
+    let mut out: Vec<usize> = Vec::new();
+    if let Some(first) = value.strip_prefix('[').map(str::trim_start)
+        && first.starts_with('"')
+    {
+        out.extend(std::iter::repeat_n(at + 1, rows_of(first)));
+    }
+    let stop = matching(lines, at, b'[', close).unwrap_or(close);
+    for (line, element) in lines.iter().enumerate().take(stop + 1).skip(at + 1) {
+        let element = element.trim_start();
+        if element.starts_with('"') {
+            out.extend(std::iter::repeat_n(line + 1, rows_of(element)));
+        }
+    }
+    out
 }
 
-// One row ruff counts inside a cell, as the file's own line.
+// How many rows one JSON string literal carries: each `\n` escape closes a row, and the one it ends on closes the last.
+fn rows_of(literal: &str) -> usize {
+    let body = literal.strip_prefix('"').unwrap_or(literal);
+    let mut closed = 0usize;
+    let mut ends_row = false;
+    let mut at = 0usize;
+    let bytes = body.as_bytes();
+    while at < bytes.len() {
+        match bytes[at] {
+            b'"' => break,
+            b'\\' => {
+                ends_row = bytes.get(at + 1) == Some(&b'n');
+                closed += usize::from(ends_row);
+                at += 2;
+            }
+            _ => {
+                ends_row = false;
+                at += 1;
+            }
+        }
+    }
+    match closed {
+        0 => 1,
+        _ if ends_row => closed,
+        _ => closed + 1,
+    }
+}
+
+// One row ruff counts inside a cell, as the file's own line; a row past the cell's last stands on its last line.
 pub(crate) fn place(cell: &Cell, row: usize) -> usize {
-    cell.source
-        .unwrap_or(cell.open)
-        .saturating_add(row)
-        .saturating_sub(1)
+    let last = cell.rows.last().copied().unwrap_or(cell.open);
+    cell.rows
+        .get(row.saturating_sub(1))
+        .copied()
+        .unwrap_or(last)
+}
+
+// Where one line names a JSON key, when it does: a quoted word that is not itself inside a quoted value, and that a colon follows. A cell's outputs quote whole texts, and a key is the one place its quotes stand unescaped.
+fn key(line: &str, name: &str) -> Option<usize> {
+    let quoted = format!("\"{name}\"");
+    let mut from = 0usize;
+    while let Some(at) = line[from..].find(&quoted) {
+        let at = from + at;
+        let escaped = at > 0 && line.as_bytes()[at - 1] == b'\\';
+        let tail = line[at + quoted.len()..].trim_start();
+        if !escaped && tail.starts_with(':') {
+            return Some(at);
+        }
+        from = at + quoted.len();
+    }
+    None
 }

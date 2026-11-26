@@ -70,8 +70,9 @@ fn run(root: &Path, touched: &[PathBuf], stop: &Arc<Stop>) -> Check {
     };
     let mut faults = Vec::new();
     let mut warns = Vec::new();
+    let mut cells: HashMap<PathBuf, Vec<scan::Cell>> = HashMap::new();
     for found in report.as_array().into_iter().flatten() {
-        let Some(fault) = fault(root, found) else {
+        let Some(fault) = fault(root, found, &mut cells) else {
             continue;
         };
         // A cell that does not parse is an error whatever the linter calls it; every other finding is a warning, since a linter who called its own findings fatal would stop a batch that only needs to hear them.
@@ -107,8 +108,12 @@ fn failure(ran: &gate::Ran) -> String {
     }
 }
 
-// One ruff finding as a fault: its file, the file line its cell row stands on, what it said and how it would mend it.
-fn fault(root: &Path, found: &serde_json::Value) -> Option<Fault> {
+// One ruff finding as a fault: its file, the file line its cell row stands on, what it said and how it would mend it. `cells` remembers each file's scan, since one report names the same file many times.
+fn fault(
+    root: &Path,
+    found: &serde_json::Value,
+    cells: &mut HashMap<PathBuf, Vec<scan::Cell>>,
+) -> Option<Fault> {
     let file = found.get("filename").and_then(|f| f.as_str())?;
     let said = found.get("message").and_then(|m| m.as_str())?;
     let code = found.get("code").and_then(|c| c.as_str());
@@ -125,7 +130,7 @@ fn fault(root: &Path, found: &serde_json::Value) -> Option<Fault> {
         helps.push(fix.to_string());
     }
     let path = file_path(root, file);
-    let (line, message) = place(&path, found, message)?;
+    let (line, message) = place(&path, found, message, cells);
     Some(Fault {
         file: parts::rel(root, &path),
         line,
@@ -134,23 +139,38 @@ fn fault(root: &Path, found: &serde_json::Value) -> Option<Fault> {
     })
 }
 
-// One finding's place in the file: a cell's own row turned into the file line it stands on, or the row a plain file names.
-fn place(path: &Path, found: &serde_json::Value, message: String) -> Option<(usize, String)> {
+// One finding's place in the file: a cell's own row turned into the file line it stands on, or the row a plain file names. A cell the scan cannot name leaves the row ruff gave, so no diagnostic is lost to a scan that came up short.
+fn place(
+    path: &Path,
+    found: &serde_json::Value,
+    message: String,
+    cells: &mut HashMap<PathBuf, Vec<scan::Cell>>,
+) -> (usize, String) {
     let row = found
         .get("location")
         .and_then(|spot| spot.get("row"))
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(1) as usize;
     let Some(cell) = found.get("cell").and_then(serde_json::Value::as_u64) else {
-        return Some((row, message));
+        return (row, message);
     };
-    let text = std::fs::read_to_string(path).ok()?;
-    let cells = scan::cells(&text);
-    let held = cells.iter().find(|one| one.index == cell as usize)?;
-    Some((
+    let scan = cells
+        .entry(path.to_path_buf())
+        .or_insert_with(|| scan_of(path));
+    let Some(held) = scan.iter().find(|one| one.index == cell as usize) else {
+        return (row, message);
+    };
+    (
         scan::place(held, row),
         format!("cell {} ({}): {message}", held.index, held.kind),
-    ))
+    )
+}
+
+// One file's cells, read once and remembered; an unreadable file scans to none.
+fn scan_of(path: &Path) -> Vec<scan::Cell> {
+    std::fs::read_to_string(path)
+        .map(|text| scan::cells(&text))
+        .unwrap_or_default()
 }
 
 // A ruff filename as a path: absolute as it stands, otherwise against the unit's root.

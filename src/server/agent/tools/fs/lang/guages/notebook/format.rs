@@ -42,14 +42,18 @@ fn judge(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
         Ok(ran) if ran.stopped => Outcome::Stopped,
         Ok(ran) if ran.timed_out => Outcome::Parsed,
         Ok(ran) if ran.code == Some(0) => Outcome::Parsed,
-        Ok(ran) => Outcome::Unparsed(parse(&ran.err, text)),
+        Ok(ran) => Outcome::Unparsed(parse(&ran.err, path, text)),
         Err(_) => Outcome::Parsed,
     }
 }
 
-// ruff's stderr, cut to what a model can act on. A notebook's position reads `path:cell:row:column`, so the cell's own place turns that row into a file line, and the sentence names the cell it fell in.
-fn parse(stderr: &str, text: &str) -> Unparsed {
+// ruff's stderr, cut to what a model can act on. A notebook's position reads `name:cell:row:column`, so the cell's own rows turn that row into a file line, the sentence names the cell it fell in, and the position itself is cut away.
+fn parse(stderr: &str, path: &Path, text: &str) -> Unparsed {
     let cells = scan::cells(text);
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
     let mut message: Option<String> = None;
     let mut line = None;
     let mut named = None;
@@ -59,10 +63,14 @@ fn parse(stderr: &str, text: &str) -> Unparsed {
             .strip_prefix("[stderr]")
             .map_or(trimmed, str::trim_start);
         if line.is_none()
-            && let Some((word, at)) = position(trimmed, &cells)
+            && let Some((word, at, rest)) = position(trimmed, &name, &cells)
         {
             line = Some(at);
             named = Some(word);
+            if message.is_none() {
+                message = Some(rest.trim_end_matches(':').trim().to_string());
+            }
+            continue;
         }
         if message.is_some() {
             continue;
@@ -86,37 +94,25 @@ fn parse(stderr: &str, text: &str) -> Unparsed {
     }
 }
 
-// The cell a `path:cell:row:column` position names, and the file line that row stands on.
-fn position(said: &str, cells: &[scan::Cell]) -> Option<(String, usize)> {
-    let bytes: Vec<char> = said.chars().collect();
-    let mut at = 0usize;
-    while at < bytes.len() {
-        if bytes[at] == ':'
-            && let Some((cell, after)) = digits(&bytes, at)
-            && let Some((row, _)) = digits(&bytes, after)
-            && let Some(found) = cells.iter().find(|one| one.index == cell)
-        {
-            return Some((
-                format!("cell {} ({})", found.index, found.kind),
-                scan::place(found, row),
-            ));
-        }
-        at += 1;
-    }
-    None
+// The cell a `name:cell:row:column` position names, the file line that row stands on, and what the sentence says after the position.
+fn position<'a>(
+    said: &'a str,
+    name: &str,
+    cells: &[scan::Cell],
+) -> Option<(String, usize, &'a str)> {
+    let after = said.split_once(name)?.1;
+    let (cell, row, rest) = numbers(after)?;
+    let found = cells.iter().find(|one| one.index == cell)?;
+    let word = format!("cell {} ({})", found.index, found.kind);
+    Some((word, scan::place(found, row), rest))
 }
 
-// The number behind one colon, and the index of the colon that follows it.
-fn digits(bytes: &[char], at: usize) -> Option<(usize, usize)> {
-    let mut end = at + 1;
-    while end < bytes.len() && bytes[end].is_ascii_digit() {
-        end += 1;
-    }
-    if end == at + 1 {
-        return None;
-    }
-    let run: String = bytes[at + 1..end].iter().collect();
-    Some((run.parse().ok()?, end))
+// The cell and row a position names, and what follows its column.
+fn numbers(after: &str) -> Option<(usize, usize, &str)> {
+    let (cell, rest) = after.strip_prefix(':')?.split_once(':')?;
+    let (row, rest) = rest.split_once(':')?;
+    let (_column, rest) = rest.split_once(':')?;
+    Some((cell.parse().ok()?, row.parse().ok()?, rest))
 }
 
 // The verdicts this process has already reached, oldest first.
