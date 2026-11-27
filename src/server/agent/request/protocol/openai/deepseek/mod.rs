@@ -1,6 +1,6 @@
 //! DeepSeek: its own body and its own decode; the completion dialect is a different wire.
 
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 use std::io::BufRead;
 
 use anyhow::Result;

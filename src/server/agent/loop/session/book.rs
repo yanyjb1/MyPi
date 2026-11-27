@@ -232,7 +232,7 @@ impl Loop {
             return;
         };
         if let Err(e) = handle.transcript().reload() {
-            crate::server::platform::log::warn(
+            crate::platform::log::warn(
                 "loop",
                 format!("session {session}: history reload failed: {e:#}"),
             );
@@ -242,7 +242,7 @@ impl Loop {
             Ok(aliases) => {
                 handle.env().aliases = Aliases::new(self.inner.defaults.aliases.clone(), aliases);
             }
-            Err(e) => crate::server::platform::log::warn(
+            Err(e) => crate::platform::log::warn(
                 "loop",
                 format!("session {session}: alias reload failed: {e:#}"),
             ),
@@ -302,7 +302,7 @@ pub(crate) fn bind(inner: &Arc<Inner>, birth: Birth) -> Result<Arc<Handle>> {
     let cwd: Cwd = Arc::new(std::sync::RwLock::new(
         crate::server::agent::tools::workspace::standing_dir(&birth.cwd),
     ));
-    let stop = crate::server::platform::stop::Stop::new();
+    let stop = crate::platform::stop::Stop::new();
     let own = format!("{}:{}", birth.provider, birth.model);
     let env = inner.defaults.session(
         birth.session,
@@ -385,7 +385,7 @@ fn schedule(weak: Weak<Inner>, handle: Arc<Handle>) {
         };
         if !handle.busy.load(Ordering::Acquire) {
             if let Err(e) = start_turn(&inner, &handle, start, queued) {
-                crate::server::platform::log::error(
+                crate::platform::log::error(
                     "loop",
                     format!("session {}: queued mail did not start: {e:#}", handle.id),
                 );
@@ -492,7 +492,7 @@ fn start_turn(
                                 current = next;
                             }
                             Err(e) => {
-                                crate::server::platform::log::error(
+                                crate::platform::log::error(
                                     "loop",
                                     format!(
                                         "session {}: follow-up did not open: {e:#}",
@@ -505,7 +505,7 @@ fn start_turn(
                     }
                     Ok(_) => break,
                     Err(e) => {
-                        crate::server::platform::log::error(
+                        crate::platform::log::error(
                             "loop",
                             format!("session {}: turn {current} died: {e:#}", thread_handle.id),
                         );

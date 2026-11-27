@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 
 use super::page::Page;
 use super::{lifecycle, tabs};
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 
 // How often the page is read again, and how long the whole wait may last.
 const POLL: std::time::Duration = std::time::Duration::from_secs(30);

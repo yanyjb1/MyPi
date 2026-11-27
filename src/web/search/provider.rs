@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::hit::Hit;
 use super::providers::PROVIDERS;
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 
 pub(crate) trait SearchProvider: Sync {
     fn name(&self) -> &'static str;

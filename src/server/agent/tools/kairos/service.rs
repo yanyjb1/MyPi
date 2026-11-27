@@ -187,6 +187,6 @@ fn memo(value: Value) -> ToolOutput {
 }
 
 fn stamp(unix: i64) -> String {
-    let (y, m, d, h, min, s) = crate::server::platform::time::local_parts(unix);
+    let (y, m, d, h, min, s) = crate::platform::time::local_parts(unix);
     format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}")
 }

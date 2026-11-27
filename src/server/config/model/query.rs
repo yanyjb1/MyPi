@@ -49,7 +49,7 @@ impl ModelsConfig {
     pub fn resolve_key(&self, provider: &Provider) -> String {
         let raw = provider.api_key.trim();
         if let Some(inner) = raw.strip_prefix("${").and_then(|r| r.strip_suffix('}')) {
-            crate::server::platform::env::var(inner).unwrap_or_default()
+            crate::platform::env::var(inner).unwrap_or_default()
         } else {
             raw.to_string()
         }

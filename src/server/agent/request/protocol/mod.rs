@@ -6,7 +6,7 @@ pub mod sse;
 pub mod stitch;
 pub mod stream;
 
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 use std::fmt;
 use std::io::BufRead;
 use std::sync::Arc;

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
-use crate::server::platform::proc;
-use crate::server::platform::stop::Stop;
+use crate::platform::proc;
+use crate::platform::stop::Stop;
 
 // How many bytes of one stream a child may hand back.
 const CAP: usize = 8 << 20;

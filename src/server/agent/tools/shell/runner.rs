@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
+use crate::platform::proc;
+use crate::platform::shell::Shell;
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::contract::job::{Exit, OutputSink};
 use crate::server::agent::tools::spec::ToolProgress;
-use crate::server::platform::proc;
-use crate::server::platform::shell::Shell;
-use crate::server::platform::stop::Stop;
 
 // One command line through the backend, collecting its output. The exit code and how it ended live in the `Exit`; the text carries `[exit N]` and nothing about stopping.
 pub(crate) fn run(

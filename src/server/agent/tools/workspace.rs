@@ -121,8 +121,8 @@ pub fn resolve_cwd(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBu
 pub fn resolve_dir(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBuf> {
     anyhow::ensure!(!raw.trim().is_empty(), "empty path");
     let raw = raw.trim();
-    let target = crate::server::platform::env::expand(raw)
-        .context("no home directory to expand `~` into")?;
+    let target =
+        crate::platform::env::expand(raw).context("no home directory to expand `~` into")?;
     let target = if target.is_absolute() {
         target
     } else {
@@ -136,8 +136,8 @@ pub fn resolve_dir(cwd: &std::path::Path, raw: &str) -> Result<std::path::PathBu
 // The directory `init` was handed, landed: `~` expanded, relative read from the process. Anything that is not an existing directory a session may stand in becomes the temp dir.
 pub fn launch_dir(raw: &str) -> std::path::PathBuf {
     let raw = raw.trim();
-    let Some(given) = crate::server::platform::env::expand(raw) else {
-        return canonicalize_lenient(&crate::server::platform::env::temp_dir());
+    let Some(given) = crate::platform::env::expand(raw) else {
+        return canonicalize_lenient(&crate::platform::env::temp_dir());
     };
     let given = if given.is_absolute() {
         given
@@ -153,16 +153,16 @@ pub fn standing_dir(dir: &std::path::Path) -> std::path::PathBuf {
     if real.is_dir() && may_stand_in(&real).is_ok() {
         return real;
     }
-    canonicalize_lenient(&crate::server::platform::env::temp_dir())
+    canonicalize_lenient(&crate::platform::env::temp_dir())
 }
 
 // Where a session may stand: not the filesystem root, not a top-level directory (the temp dir and everything under it excepted), and not a home directory itself.
 pub fn may_stand_in(real: &std::path::Path) -> Result<()> {
-    let temp = canonicalize_lenient(&crate::server::platform::env::temp_dir());
+    let temp = canonicalize_lenient(&crate::platform::env::temp_dir());
     if !temp.as_os_str().is_empty() && real.starts_with(&temp) {
         return Ok(());
     }
-    if let Some(home) = crate::server::platform::env::home().map(|home| canonicalize_lenient(&home))
+    if let Some(home) = crate::platform::env::home().map(|home| canonicalize_lenient(&home))
         && !home.as_os_str().is_empty()
     {
         anyhow::ensure!(real != home, "Target directory is not allowed");
@@ -185,7 +185,7 @@ pub fn may_stand_in(real: &std::path::Path) -> Result<()> {
 // The zones **file tools** may touch: the session workspace plus the system temp dir. `shell`'s delete rule reads the same two, so "inside" has one definition.
 fn licensed_zones(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut zones = vec![canonicalize_lenient(root)];
-    let tmp = crate::server::platform::env::temp_dir();
+    let tmp = crate::platform::env::temp_dir();
     zones.push(canonicalize_lenient(&tmp));
     zones.dedup();
     zones

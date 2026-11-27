@@ -2,21 +2,12 @@
 
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::platform::proc::{Origin, Process};
 
 // How long one git call may run before it and everything it forked are killed: a helper waiting on a prompt no terminal will answer must never hold the call it belongs to.
 const LIMIT: Duration = Duration::from_secs(20);
-
-// How often the wait looks at the child: git answers in milliseconds, and a stalled one is killed at the deadline.
-const TICK: Duration = Duration::from_millis(5);
-
-const SIGKILL: i32 = 9;
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn setsid() -> i32;
-    fn kill(pid: i32, sig: i32) -> i32;
-}
 
 // Run git with these arguments from `root`. `None` = git is not installed, or it and its children were killed at the deadline.
 pub(super) fn git(root: &Path, args: &[&str]) -> Option<Output> {
@@ -26,33 +17,14 @@ pub(super) fn git(root: &Path, args: &[&str]) -> Option<Output> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    lead_own_group(&mut cmd);
-    let mut child = cmd.spawn().ok()?;
-    let group = child.id();
+    let process = Process::spawn(Origin::Tool, &mut cmd).ok()?;
     // Both pipes are drained on threads of their own: a child that fills one must never block on a reader that is not there yet.
-    let out = drain(child.stdout.take()?);
-    let err = drain(child.stderr.take()?);
-    let deadline = Instant::now() + LIMIT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    // The deadline passed with the child still running: it and its group are killed, and the call reads as git's silence.
-                    let _ = child.kill();
-                    kill_tree(group);
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(TICK);
-            }
-            Err(_) => {
-                let _ = child.kill();
-                kill_tree(group);
-                let _ = child.wait();
-                return None;
-            }
-        }
+    let out = drain(process.take_stdout()?);
+    let err = drain(process.take_stderr()?);
+    // The deadline passed with git still running: its whole tree is killed, and the call reads as git's silence.
+    let Ok(Some(status)) = process.wait_timeout(LIMIT) else {
+        process.stop();
+        return None;
     };
     Some(Output {
         status,
@@ -60,36 +32,6 @@ pub(super) fn git(root: &Path, args: &[&str]) -> Option<Output> {
         stderr: err.join().unwrap_or_default(),
     })
 }
-
-// The child leads its own group, so a helper it forks dies with it instead of outliving the deadline.
-#[cfg(unix)]
-fn lead_own_group(cmd: &mut Command) {
-    use std::os::unix::process::CommandExt as _;
-    // SAFETY: `setsid` is one syscall, and the child has not execed yet.
-    unsafe {
-        cmd.pre_exec(|| {
-            if setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-}
-
-// Windows has no group to lead, and no session id to kill against: the child alone is killed at the deadline.
-#[cfg(not(unix))]
-fn lead_own_group(_cmd: &mut Command) {}
-
-#[cfg(unix)]
-fn kill_tree(group: u32) {
-    // SAFETY: a plain syscall on a group that may already be gone, which it tolerates.
-    unsafe {
-        kill(-(group as i32), SIGKILL);
-    }
-}
-
-#[cfg(not(unix))]
-fn kill_tree(_group: u32) {}
 
 // Read one pipe to its end on a thread of its own.
 fn drain(pipe: impl std::io::Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {

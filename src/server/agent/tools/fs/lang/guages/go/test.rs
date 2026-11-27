@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use super::check::{broken, named, position, program, title, unit};
 use super::table::shape;
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::gate;
 use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::fs::lang::verdict::{Fault, Verdict};
 use crate::server::agent::tools::fs::lang::{Line, Table, Tests};
-use crate::server::platform::stop::Stop;
 
 // What this language owes the tools as test support.
 pub(crate) const TESTS: Tests = Tests {

@@ -8,12 +8,12 @@ use anyhow::Context;
 use mypi::cli::Cli;
 use mypi::ipc::endpoint::{self, Endpoint, Kind};
 use mypi::ipc::server;
+use mypi::platform::proc;
+use mypi::platform::time;
 use mypi::server::api::Api;
 use mypi::server::config::{
     Config, KEY_CONFIG_SERVER_PLATFORM_IPC, KEY_CONFIG_SERVER_PLATFORM_TIMEZONE,
 };
-use mypi::server::platform::proc;
-use mypi::server::platform::time;
 use mypi::server::storage;
 use mypi::ui::bridge;
 use mypi::ui::tui;
@@ -161,7 +161,7 @@ fn init_time(cfg: &Config) {
 
 // What `~` stands for: the configured directory, else nothing and the platform's own home answers.
 fn init_home(cfg: &Config) {
-    mypi::server::platform::env::anchor(cfg.home());
+    mypi::platform::env::anchor(cfg.home());
 }
 
 // The front end on an open connection: read the launch directory, pick the first zone, go.

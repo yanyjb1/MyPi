@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 
 // Between two redirect lookups: one per hit that carries an engine redirect.
 const RESOLVE_MIN_MS: u64 = 300;

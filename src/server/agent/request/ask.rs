@@ -144,7 +144,7 @@ impl Ask for Request {
         }
 
         let mut known: Vec<Reference> = Vec::new();
-        let ts = crate::server::platform::time::now_stamp();
+        let ts = crate::platform::time::now_stamp();
 
         for run in results {
             let (text, attached) = match run.spill {
@@ -271,7 +271,7 @@ impl<'a> Forward<'a> {
             pending: None,
             text: String::new(),
             thinking: String::new(),
-            ts: Some(crate::server::platform::time::now_stamp()),
+            ts: Some(crate::platform::time::now_stamp()),
             failure: None,
         }
     }

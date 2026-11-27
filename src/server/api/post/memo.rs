@@ -28,7 +28,7 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<(), Refuse> {
                     anchor: anchor.map(Ref::Known),
                     name: name.clone(),
                     content: content.to_string(),
-                    ts: crate::server::platform::time::now_stamp(),
+                    ts: crate::platform::time::now_stamp(),
                 }],
             })?;
             Ok(())

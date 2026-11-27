@@ -1,6 +1,6 @@
 //! One provider connection: its protocol, its retry policy, and the child's output.
 
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -80,7 +80,7 @@ impl Client {
                                 retry::notice(failure, self.retry.timeout),
                             ));
                         }
-                        crate::server::platform::log::error(&self.model, format!("{e:#}"));
+                        crate::platform::log::error(&self.model, format!("{e:#}"));
                         break Err(e);
                     }
                     if cancel.is_stopped() {
@@ -90,7 +90,7 @@ impl Client {
                         retry::notice(failure, self.retry.timeout),
                     ));
                     attempt += 1;
-                    crate::server::platform::log::warn(
+                    crate::platform::log::warn(
                         &self.model,
                         format!(
                             "request failed: {e:#}; retrying {attempt}/{}",

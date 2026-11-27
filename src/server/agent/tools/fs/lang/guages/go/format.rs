@@ -6,9 +6,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use super::check::program;
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::gate;
 use crate::server::agent::tools::fs::lang::verdict::{Outcome, Unparsed};
-use crate::server::platform::stop::Stop;
 
 // How long one parser round trip may take before its tree is killed.
 const LIMIT: Duration = Duration::from_secs(5);

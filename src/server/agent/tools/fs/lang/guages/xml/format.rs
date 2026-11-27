@@ -6,8 +6,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::lang::verdict::{Outcome, Unparsed};
-use crate::server::platform::stop::Stop;
 
 // How many verdicts this process remembers.
 const CACHE: usize = 32;

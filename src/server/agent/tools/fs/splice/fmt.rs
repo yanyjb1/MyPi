@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use super::edit::{self, Edit};
 
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::lang::Format;
 use crate::server::agent::tools::fs::lang::verdict::Outcome;
-use crate::server::platform::stop::Stop;
 
 // What the parser made of one merged change.
 pub(crate) struct Settled {

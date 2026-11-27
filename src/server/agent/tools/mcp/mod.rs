@@ -15,8 +15,8 @@ use super::contract::output::ToolOutput;
 use super::contract::view::CallRecord;
 use super::spec::{Args, Item, Kind, Param, Tool, ToolProgress};
 use super::summary;
+use crate::platform::stop::Stop;
 use crate::server::agent::request::contract::ItemOk;
-use crate::server::platform::stop::Stop;
 
 use bridge::{McpBridge, McpContent, McpResult};
 

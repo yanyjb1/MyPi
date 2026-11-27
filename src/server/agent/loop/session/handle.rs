@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
+use crate::platform::stop::Stop;
 use crate::server::agent::request::transport::worker::SessionWorker;
 use crate::server::agent::tools::contract::call::Cwd;
 use crate::server::agent::tools::contract::env::Env;
-use crate::server::platform::stop::Stop;
 
 use super::config::Config;
 use super::mailbox::Mailbox;

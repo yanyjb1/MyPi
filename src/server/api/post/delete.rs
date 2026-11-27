@@ -45,7 +45,7 @@ pub(crate) fn apply(api: &Api, viewer: &str, ask: &Value) -> Result<Vec<i64>, Re
     let folder = api
         .cfg()
         .memo_folder()
-        .or_else(crate::server::platform::env::downloads_dir);
+        .or_else(crate::platform::env::downloads_dir);
     if let Some(folder) = folder {
         for id in &ids {
             api.writer()

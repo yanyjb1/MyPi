@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use super::check::{program, shown};
 use super::kind;
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::gate;
-use crate::server::platform::stop::Stop;
 
 // How long one layout round trip may take before its tree is killed.
 const LIMIT: Duration = Duration::from_secs(10);

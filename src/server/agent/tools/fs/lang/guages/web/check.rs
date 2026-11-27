@@ -5,11 +5,11 @@ use std::process::Command;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use super::facts;
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::gate;
 use crate::server::agent::tools::fs::lang::Checker;
 use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::fs::lang::verdict::{Check, Fault};
-use crate::server::platform::stop::Stop;
 
 // What this language owes the tools as a checker.
 pub(crate) const CHECKER: Checker = Checker {

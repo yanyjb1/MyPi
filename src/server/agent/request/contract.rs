@@ -70,7 +70,7 @@ pub struct LapInput {
     pub system: String,
     /// The session's manuals, serialized once at booking; the wire body takes a copy.
     pub tools_json: Arc<serde_json::Value>,
-    pub stop: Arc<crate::server::platform::stop::Stop>,
+    pub stop: Arc<crate::platform::stop::Stop>,
     /// This session's worker: the child that owns its sockets.
     pub worker: Arc<SessionWorker>,
     pub live: Sender<Event>,
@@ -324,7 +324,7 @@ pub struct CompactInput {
     pub retention: Option<Retention>,
     /// The instruction this compaction sends, rendered once when the round opened.
     pub instruction: String,
-    pub stop: Arc<crate::server::platform::stop::Stop>,
+    pub stop: Arc<crate::platform::stop::Stop>,
     /// This session's worker: the child that owns its sockets.
     pub worker: Arc<SessionWorker>,
     pub live: Sender<Event>,

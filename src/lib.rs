@@ -6,6 +6,7 @@ pub mod cli;
 pub mod git;
 pub mod i18n;
 pub mod ipc;
+pub mod platform;
 pub mod server;
 pub mod ui;
 #[cfg(feature = "web")]
@@ -29,19 +30,10 @@ mod architecture {
         // The api surface asks downward (storage / config / platform / agent);
         // terminals, the CLI and the tool providers are none of its business.
         ("server::api", &["cli", "tui", "web", "git", "ansi"]),
-        // Platform: the standard library and each other, nothing more. The backend layers may
-        // ask it; a front end may not (`ui::tui` below forbids the whole `server` tree).
+        // Platform stands under every layer: it asks the standard library and the system, and answers whoever asks.
         (
-            "server::platform",
-            &[
-                "server::agent",
-                "server::api",
-                "server::config",
-                "server::storage",
-                "cli",
-                "tui",
-                "web",
-            ],
+            "platform",
+            &["server", "ui", "ipc", "cli", "web", "git", "ansi", "i18n"],
         ),
         // web: a self-contained tool provider.
         ("web", &["server::agent", "cli", "tui"]),

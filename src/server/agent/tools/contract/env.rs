@@ -21,7 +21,7 @@ pub struct Env {
     pub grep: GrepLimits,
     pub shell: ShellEnv,
     // The session's stop signal; a tool that blocks registers what stopping it means.
-    pub stop: Arc<crate::server::platform::stop::Stop>,
+    pub stop: Arc<crate::platform::stop::Stop>,
     pub session: i64,
     pub batch_len: usize,
     pub tools: BTreeSet<String>,
@@ -355,7 +355,7 @@ impl Defaults {
         session: i64,
         cwd: super::call::Cwd,
         tools: Vec<String>,
-        stop: Arc<crate::server::platform::stop::Stop>,
+        stop: Arc<crate::platform::stop::Stop>,
         vision: bool,
         own: &str,
     ) -> anyhow::Result<Env> {
@@ -393,7 +393,7 @@ impl Defaults {
 #[derive(Clone)]
 pub struct ShellEnv {
     pub timeout: Duration,
-    pub backend: crate::server::platform::shell::Shell,
+    pub backend: crate::platform::shell::Shell,
 }
 
 // The one folder a sub-session reads from that is not the project's own: the user's templates. The project's `.mypi` is taken from the live working directory at call time.

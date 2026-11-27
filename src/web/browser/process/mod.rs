@@ -5,12 +5,12 @@ mod launch;
 use std::path::{Path, PathBuf};
 
 use super::devtools::Client;
+use crate::platform::proc::Process;
 use crate::server::config::BrowserOptions;
-use crate::server::platform::proc::Process;
 
 pub(crate) fn profile_dir(cfg: &BrowserOptions) -> PathBuf {
     cfg.profile_dir.clone().unwrap_or_else(|| {
-        crate::server::platform::env::data_dir()
+        crate::platform::env::data_dir()
             .join("browser")
             .join("profile")
     })

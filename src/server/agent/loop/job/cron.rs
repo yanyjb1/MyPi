@@ -44,8 +44,7 @@ impl Cron {
         let mut minute = after_unix.div_euclid(60).saturating_add(1);
         let limit = minute.saturating_add(5 * 366 * 24 * 60);
         while minute <= limit {
-            let (y, month, day, hour, min, _) =
-                crate::server::platform::time::local_parts(minute * 60);
+            let (y, month, day, hour, min, _) = crate::platform::time::local_parts(minute * 60);
             let weekday = weekday(y, month, day);
             let day_ok = bit(self.days as u64, day) != 0;
             let weekday_ok = bit(self.weekdays as u64, weekday) != 0;
@@ -72,7 +71,7 @@ fn bit(bits: u64, value: u32) -> u64 {
 }
 
 fn weekday(year: i64, month: u32, day: u32) -> u32 {
-    let days = crate::server::platform::time::days_from_civil(year, month, day);
+    let days = crate::platform::time::days_from_civil(year, month, day);
     (days + 4).rem_euclid(7) as u32
 }
 
