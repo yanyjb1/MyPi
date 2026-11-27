@@ -2,10 +2,10 @@
 
 use super::super::hit::Hit;
 use super::super::provider::{SearchProvider, absolute};
-use crate::web::html::{
+use crate::browser::html::{
     class_blocks, class_text, decode_text, enclosing_open_before, extract_attr, extract_between,
 };
-use crate::web::url::encode_query;
+use crate::browser::url::encode_query;
 
 pub(super) const NAME: &str = "baidu";
 

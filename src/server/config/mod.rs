@@ -3,7 +3,7 @@
 pub mod paths;
 pub mod profile;
 pub mod prompts;
-#[cfg(feature = "web")]
+#[cfg(feature = "browser")]
 pub mod rules;
 
 mod load;
@@ -13,7 +13,7 @@ mod registry;
 mod schema;
 mod write;
 
-#[cfg(feature = "web")]
+#[cfg(feature = "browser")]
 pub use load::BrowserOptions;
 pub use load::{Config, Effective};
 pub use model::{Cost, Currency, ModelEntry, ModelsConfig, Provider, ResolvedModel};

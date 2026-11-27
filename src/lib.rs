@@ -2,6 +2,8 @@
 //! The module graph is a contract, and `mod architecture` below enforces it.
 
 pub mod ansi;
+#[cfg(feature = "browser")]
+pub mod browser;
 pub mod cli;
 pub mod git;
 pub mod i18n;
@@ -9,8 +11,6 @@ pub mod ipc;
 pub mod platform;
 pub mod server;
 pub mod ui;
-#[cfg(feature = "web")]
-pub mod web;
 
 /// The layering rules as a test: a forbidden `crate::` reference has to fail something, and it
 /// fails here. Rules are path-prefix pairs, so they survive a file moving into a submodule.
@@ -19,66 +19,90 @@ mod architecture {
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
-    /// `(module prefix, module prefixes it must never reference)`. The direction is downward only;
-    /// anything not listed is allowed.
-    const FORBIDDEN: &[(&str, &[&str])] = &[
-        // Execution engine: runs tools, knows no UI and no layer above it.
-        ("server::agent", &["server::api", "cli", "tui"]),
-        // api sits above: any of the lower layers reaching for it would close a cycle.
-        ("server::storage", &["server::api"]),
-        ("server::config", &["server::api"]),
-        // The api surface asks downward (storage / config / platform / agent);
-        // terminals, the CLI and the tool providers are none of its business.
-        ("server::api", &["cli", "tui", "web", "git", "ansi"]),
-        // Platform stands under every layer: it asks the standard library and the system, and answers whoever asks.
-        (
-            "platform",
-            &["server", "ui", "ipc", "cli", "web", "git", "ansi", "i18n"],
-        ),
-        // web: a self-contained tool provider.
-        ("web", &["server::agent", "cli", "tui"]),
+    /// `(module prefix, module prefixes it may reference)`. Anything else a file names is a
+    /// violation, and a module with no row may reference nothing: placing a new module is a
+    /// deliberate act, not a default that happens to compile.
+    const ALLOWED: &[(&str, &[&str])] = &[
         // Leaves: the standard library only.
-        ("git", &["cli", "server", "tui", "web"]),
-        ("ansi", &["cli", "server", "tui", "web"]),
-        // Backstop: no file under `server` may name a front end or the IPC edges. The contract and
-        // transport are the only ipc pieces a backend may name.
-        ("server", &["ui", "ipc::client", "ipc::server"]),
-        // Text: compiled-in language data; it names no layer above it.
+        ("ansi", &[]),
+        ("cli", &[]),
+        ("i18n", &[]),
+        ("platform", &[]),
+        // One git call runs in a process tree of its own.
+        ("git", &["platform"]),
+        // The browser asks the system for a process and a directory; its configuration arrives as a
+        // value from the caller, never by opening the file itself.
+        ("browser", &["platform", "server::config"]),
+        // The wire: contract, line and stream are vocabulary, transport and endpoint are mechanics,
+        // and only the server half names the api.
+        ("ipc::contract", &[]),
+        ("ipc::endpoint", &[]),
+        ("ipc::line", &[]),
+        ("ipc::transport", &["ipc::endpoint"]),
         (
-            "i18n",
-            &["server", "ui", "ipc", "cli", "web", "git", "ansi"],
+            "ipc::stream",
+            &["ipc::contract", "ipc::line", "ipc::transport"],
         ),
-        // The protocol layer stands between the halves: it carries api's shapes, knows no UI.
-        ("ipc", &["cli", "ui", "web", "git", "ansi"]),
-        // The front end's half never reaches into the backend.
-        ("ui::session", &["server", "ipc::server"]),
-        // The client half is the front end's; it never names the backend or the server half.
-        ("ipc::client", &["server", "ipc::server"]),
-        // The bridge is a front end too: it holds connections and never names the backend or the
-        // server half of ipc.
-        ("ui::bridge", &["server", "ipc::server", "ipc::transport"]),
-        // The contract is shared vocabulary; it names neither end.
         (
-            "ipc::contract",
-            &["server", "ui", "ipc::client", "ipc::server"],
-        ),
-        // The server half is the only adapter; it never names a front end.
-        ("ipc::server", &["ui"]),
-        // Transport and endpoint are platform mechanics; they know no backend or front end.
-        ("ipc::transport", &["server", "ui"]),
-        ("ipc::endpoint", &["server", "ui"]),
-        // The TUI is a front end: it reads `ui::session` and never the backend or the
-        // client/server halves of IPC.
-        (
-            "ui::tui",
+            "ipc::client",
             &[
-                "server",
-                "ipc::client",
                 "ipc::contract",
-                "ipc::server",
                 "ipc::endpoint",
+                "ipc::line",
                 "ipc::transport",
             ],
+        ),
+        (
+            "ipc::server",
+            &[
+                "ipc::contract",
+                "ipc::endpoint",
+                "ipc::line",
+                "ipc::stream",
+                "ipc::transport",
+                "server::api",
+            ],
+        ),
+        // The backend, bottom to top.
+        ("server::storage", &["platform"]),
+        (
+            "server::config",
+            &["ipc::endpoint", "platform", "server::agent"],
+        ),
+        (
+            "server::agent",
+            &[
+                "ansi",
+                "browser",
+                "git",
+                "ipc::contract",
+                "platform",
+                "server::config",
+                "server::storage",
+            ],
+        ),
+        (
+            "server::api",
+            &[
+                "ipc::contract",
+                "platform",
+                "server::agent",
+                "server::config",
+                "server::storage",
+            ],
+        ),
+        // The front end, bottom to top.
+        (
+            "ui::session",
+            &["ipc::client", "ipc::contract", "ipc::endpoint"],
+        ),
+        (
+            "ui::tui",
+            &["ansi", "git", "i18n", "ipc::contract", "ui::session"],
+        ),
+        (
+            "ui::bridge",
+            &["ipc::client", "ipc::contract", "ipc::endpoint", "platform"],
         ),
     ];
 
@@ -148,25 +172,24 @@ mod architecture {
         out
     }
 
-    /// Identifiers joined by `::`, up to the first non-path character.
     fn ident_chain(after: &str) -> Option<String> {
         let mut chain = String::new();
-        let mut chars = after.chars().peekable();
+        let mut rest = after;
         loop {
-            let ident: String = chars
-                .by_ref()
+            let ident: String = rest
+                .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if ident.is_empty() {
-                return None;
+                return Some(chain).filter(|c| !c.is_empty());
             }
             chain.push_str(&ident);
-            let mut clone = chars.clone();
-            if clone.next() == Some(':') && clone.next() == Some(':') {
-                chars = clone;
-                chain.push_str("::");
-            } else {
-                return Some(chain);
+            match rest.get(ident.len()..) {
+                Some(tail) if tail.starts_with("::") => {
+                    chain.push_str("::");
+                    rest = &tail[2..];
+                }
+                _ => return Some(chain),
             }
         }
     }
@@ -221,27 +244,52 @@ mod architecture {
         }
     }
 
-    /// `(file, source module, referenced path)` for every forbidden edge.
+    /// What a region may reference: its row in ALLOWED, or nothing when it has no row.
+    fn allowed(region: &str) -> Vec<&'static str> {
+        ALLOWED
+            .iter()
+            .filter(|(m, _)| under(region, m))
+            .flat_map(|(_, a)| a.iter().copied())
+            .collect()
+    }
+
+    /// A module's region: the unit a row in ALLOWED describes. The three deep trees are cut at
+    /// their second segment (`server::agent`, `ui::tui`, `ipc::client`); everything else is one
+    /// segment (`git`, `browser`, `platform`).
+    fn region(module: &str) -> &str {
+        let mut parts = module.split("::");
+        let first = parts.next().unwrap_or(module);
+        match (first, parts.next()) {
+            ("server" | "ui" | "ipc", Some(second)) => {
+                let end = first.len() + 2 + second.len();
+                module.get(..end).unwrap_or(module)
+            }
+            _ => first,
+        }
+    }
+
+    /// `module -> referenced path` for every undeclared edge.
     fn violations(root: &Path) -> Vec<String> {
         let mut found = Vec::new();
         for file in rust_files(root) {
             let module = module_path(root, &file);
-            let forbidden: Vec<&str> = FORBIDDEN
-                .iter()
-                .filter(|(m, _)| under(&module, m))
-                .flat_map(|(_, f)| f.iter().copied())
-                .collect();
-            if forbidden.is_empty() {
+            let here = region(&module);
+            // The crate root and the entry point wire the regions together; they are the one place
+            // that names everything by design.
+            if here == "lib" || here == "main" {
                 continue;
             }
+            let permitted = allowed(here);
             let src = production_source(&std::fs::read_to_string(&file).unwrap());
             for target in refs(&src) {
-                if forbidden.iter().any(|f| under(&target, f)) {
-                    found.push(format!(
-                        "{}: {module} -> {target}",
-                        file.strip_prefix(root).unwrap_or(&file).display()
-                    ));
+                // An item inside the file's own region is not an edge.
+                if region(&target) == here || permitted.iter().any(|p| under(&target, p)) {
+                    continue;
                 }
+                found.push(format!(
+                    "{}: {module} -> {target}",
+                    file.strip_prefix(root).unwrap_or(&file).display()
+                ));
             }
         }
         found
@@ -262,6 +310,22 @@ mod architecture {
             "分层被打破（只允许向下依赖）：\n  {}",
             found.join("\n  ")
         );
+    }
+
+    #[test]
+    fn the_walker_reads_a_whole_path() {
+        // The guard is only as good as this walker: cut at the first segment, every two-segment
+        // row in ALLOWED would pass vacuously.
+        assert_eq!(
+            ident_chain("server::api::Api"),
+            Some("server::api::Api".into())
+        );
+        assert_eq!(
+            ident_chain("ipc::contract::Frame;"),
+            Some("ipc::contract::Frame".into())
+        );
+        assert_eq!(ident_chain("ansi"), Some("ansi".into()));
+        assert_eq!(ident_chain("::x"), None);
     }
 
     #[test]

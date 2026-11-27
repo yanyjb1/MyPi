@@ -3,8 +3,8 @@
 use anyhow::{Context as _, Result};
 use serde_json::Value;
 
+use crate::browser::artifact;
 use crate::server::config::rules::Part;
-use crate::web::artifact;
 
 // Up to this many controls an answer shows inline; past it every one goes to a file.
 const INLINE: usize = 10;

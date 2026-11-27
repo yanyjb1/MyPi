@@ -4,10 +4,10 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use super::ACTION_TIMEOUT;
+use crate::browser::WebArgs;
+use crate::browser::page::Page;
+use crate::browser::tabs;
 use crate::platform::stop::Stop;
-use crate::web::WebArgs;
-use crate::web::browser::page::Page;
-use crate::web::browser::tabs;
 
 fn js_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);

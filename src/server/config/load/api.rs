@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "web")]
+#[cfg(feature = "browser")]
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -13,7 +13,7 @@ use super::super::notice::ConfigNotice;
 use super::super::paths::{self, ConfigPaths};
 use super::super::profile::{self, ResolvedProfile};
 use super::super::registry::{self, Value};
-#[cfg(feature = "web")]
+#[cfg(feature = "browser")]
 use super::super::rules::Rules;
 use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_LOOP_MAX_TOOL_CALLS, KEY_CONFIG_SERVER_AGENT_LOOP_REQUEST_MAX_RETRIES,
@@ -29,7 +29,7 @@ use super::super::schema::{
     KEY_CONFIG_SERVER_PLATFORM_HOME, KEY_CONFIG_SERVER_REQUEST_COMPACT_INSTRUCTION_FILE,
     KEY_CONFIG_SERVER_REQUEST_COMPACT_RETAIN_TAIL, KEY_CONFIG_SERVER_REQUEST_STREAMING,
 };
-#[cfg(feature = "web")]
+#[cfg(feature = "browser")]
 use super::super::schema::{
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_BIN, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_EXTRA_ARGS,
     KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_IDLE_SECS, KEY_CONFIG_SERVER_AGENT_TOOLS_BROWSER_PORT,
@@ -142,7 +142,7 @@ impl Config {
             .filter(|doc| !doc.is_empty())
             .collect()
     }
-    #[cfg(feature = "web")]
+    #[cfg(feature = "browser")]
     // What the web tool launches with.
     pub fn browser(&self) -> crate::server::config::BrowserOptions {
         let effective = self.effective(None);
@@ -170,7 +170,7 @@ impl Config {
         }
     }
 
-    #[cfg(feature = "web")]
+    #[cfg(feature = "browser")]
     // Whether a verification challenge should raise the browser window.
     pub fn bring_to_front(&self) -> bool {
         self.effective(None)
@@ -229,7 +229,7 @@ impl Config {
         self.inner.models.default_model(configured)
     }
 
-    #[cfg(feature = "web")]
+    #[cfg(feature = "browser")]
     // The site rules the web tool narrows a page with: one read, at load.
     pub fn web_rules(&self) -> Arc<Rules> {
         Arc::clone(&self.inner.web_rules)

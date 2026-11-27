@@ -107,8 +107,8 @@ fn run_server(db: &Path) -> anyhow::Result<()> {
     init_home(&cfg);
     let endpoint = Endpoint::for_db(db, ipc_kind(&cfg));
     let served = server::run(Api::open(db.to_path_buf(), cfg)?, db, endpoint, claim);
-    #[cfg(feature = "web")]
-    mypi::web::shutdown();
+    #[cfg(feature = "browser")]
+    mypi::browser::shutdown();
     served
 }
 

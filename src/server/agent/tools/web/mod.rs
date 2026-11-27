@@ -74,7 +74,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         "scroll" => Some(serde_json::Value::from(args.int(PIXELS)?)),
         _ => args.opt_str(VALUE)?.map(serde_json::Value::from),
     };
-    let a = crate::web::WebArgs {
+    let a = crate::browser::WebArgs {
         op: kind,
         url: args.opt_str(URL)?,
         raw: args.flag(RAW)?,
@@ -85,7 +85,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         value,
         full_page: args.flag(FULL_PAGE)?,
     };
-    let text = crate::web::run(&a, env.session, &env.rules, &env.stop)?;
+    let text = crate::browser::run(&a, env.session, &env.rules, &env.stop)?;
     Ok(ToolOutput::text(text))
 }
 

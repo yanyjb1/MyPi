@@ -45,7 +45,7 @@ impl Client {
         let endpoint = format!(
             "http://127.0.0.1:{}/json/new?{}",
             self.port,
-            crate::web::url::encode_query(url)
+            crate::browser::url::encode_query(url)
         );
         let mut resp = ureq::put(&endpoint)
             .header("Host", &format!("127.0.0.1:{}", self.port))

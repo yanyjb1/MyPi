@@ -8,7 +8,7 @@ use super::super::notice::{ConfigNotice, warn, warn_args};
 use super::super::paths::{self, ConfigPaths};
 use super::super::profile;
 use super::super::registry;
-#[cfg(feature = "web")]
+#[cfg(feature = "browser")]
 use super::super::rules;
 use super::super::write;
 use super::types::Layers;
@@ -85,7 +85,7 @@ pub(super) fn bootstrap(
     let Some(root) = paths.global_root() else {
         return Ok(());
     };
-    #[cfg(feature = "web")]
+    #[cfg(feature = "browser")]
     rules::install(root)?;
     let config = root.join(paths::CONFIG_FILE);
     if paths.config_files().is_empty() {

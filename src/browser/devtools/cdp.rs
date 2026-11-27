@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 use tungstenite::Message;
 
-use crate::web::halt;
+use crate::browser::halt;
 
 // The two ids no request reaches: one ends the wait, the other says the socket is gone.
 const ABORT: u64 = u64::MAX;

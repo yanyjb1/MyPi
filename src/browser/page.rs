@@ -8,8 +8,8 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 use super::devtools::{Cdp, Client, Knocker, Target};
+use crate::browser::halt;
 use crate::platform::stop::{Hook, Stop};
-use crate::web::halt;
 
 const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) const RENDER_WAIT: Duration = Duration::from_secs(15);
@@ -108,7 +108,7 @@ impl Page {
                 .map(str::to_string)
                 .ok_or_else(|| anyhow!("no screenshot data"))
         })?;
-        crate::web::url::base64_decode(&data)
+        crate::browser::url::base64_decode(&data)
     }
 
     fn resilient<T>(&self, f: impl Fn(&mut Cdp) -> anyhow::Result<T>) -> anyhow::Result<T> {

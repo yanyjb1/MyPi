@@ -8,9 +8,9 @@ use anyhow::{Result, anyhow, bail};
 
 use self::hit::{Hit, dedup_key};
 use self::provider::SearchProvider;
-use super::browser::page::{Page, RENDER_WAIT};
-use super::browser::{tabs, verify};
 use super::halt;
+use super::page::{Page, RENDER_WAIT};
+use super::{tabs, verify};
 use crate::platform::stop::Stop;
 
 mod hit;

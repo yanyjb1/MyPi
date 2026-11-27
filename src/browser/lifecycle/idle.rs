@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use super::STATE;
 use super::tabs;
-use crate::web::run;
+use crate::browser::run;
 
 static LAST: Mutex<Option<Instant>> = Mutex::new(None);
 

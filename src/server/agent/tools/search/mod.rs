@@ -20,7 +20,7 @@ const PARAMS: &[Param] = &[
     ),
     Param::new(
         "provider",
-        Kind::Choice(crate::web::ENGINES),
+        Kind::Choice(crate::browser::ENGINES),
         "The one engine this query runs against.",
     ),
     Param::df(
@@ -49,7 +49,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         (1..=u32::MAX as i64).contains(&pages),
         "`pages` must be at least 1"
     );
-    let a = crate::web::WebArgs {
+    let a = crate::browser::WebArgs {
         op: "search".to_string(),
         url: None,
         raw: false,
@@ -60,7 +60,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         value: None,
         full_page: false,
     };
-    let text = crate::web::run(&a, env.session, &env.rules, &env.stop)?;
+    let text = crate::browser::run(&a, env.session, &env.rules, &env.stop)?;
     Ok(ToolOutput::text(text))
 }
 

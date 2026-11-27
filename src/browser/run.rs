@@ -7,9 +7,9 @@ use parking_lot::{Condvar, Mutex};
 
 use super::ops;
 use super::search;
+use crate::browser::WebArgs;
 use crate::platform::stop::Stop;
 use crate::server::config::rules::Rules;
-use crate::web::WebArgs;
 
 static ACTIVE: Mutex<usize> = Mutex::new(0);
 static WAKE: Condvar = Condvar::new();

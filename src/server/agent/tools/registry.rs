@@ -7,14 +7,14 @@ use super::fs::{edit, grep, read, splice, write};
 use super::kairos::tool;
 use super::mcp;
 use super::memo::{context, memo as memo_tool, todo};
-#[cfg(feature = "web")]
+#[cfg(feature = "browser")]
 use super::search;
 use super::shell::{alias, tool as shell_tool};
 use super::spec::Tool;
 use super::subagent;
 use crate::server::agent::request::message::ToolDef;
 
-#[cfg(feature = "web")]
+#[cfg(feature = "browser")]
 use super::web;
 
 // Every built-in tool, in the order the model reads them.
@@ -31,9 +31,9 @@ pub const TOOLS: &[Tool] = &[
     subagent::TASK,
     subagent::FINAL,
     mcp::TOOL,
-    #[cfg(feature = "web")]
+    #[cfg(feature = "browser")]
     web::TOOL,
-    #[cfg(feature = "web")]
+    #[cfg(feature = "browser")]
     search::TOOL,
     memo_tool::TOOL,
     todo::TOOL,

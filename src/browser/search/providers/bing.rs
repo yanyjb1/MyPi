@@ -2,11 +2,11 @@
 
 use super::super::hit::Hit;
 use super::super::provider::SearchProvider;
-use crate::web::html::{
+use crate::browser::html::{
     class_blocks, class_text, decode_text, extract_attr, extract_between, strip_tags,
     unescape_entities,
 };
-use crate::web::url::{encode_query, percent_decode};
+use crate::browser::url::{encode_query, percent_decode};
 
 pub(super) const NAME: &str = "bing";
 

@@ -5,17 +5,17 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::browser::WebArgs;
+use crate::browser::artifact;
+use crate::browser::halt;
+use crate::browser::html::{expression, html_to_markdown, is_js_shell, scan};
+use crate::browser::ops::ACTION_TIMEOUT;
+use crate::browser::page::{Page, RENDER_WAIT};
+use crate::browser::seen;
+use crate::browser::tabs;
+use crate::browser::url;
 use crate::platform::stop::Stop;
 use crate::server::config::rules::{Part, Rules};
-use crate::web::WebArgs;
-use crate::web::artifact;
-use crate::web::browser::page::{Page, RENDER_WAIT};
-use crate::web::browser::tabs;
-use crate::web::halt;
-use crate::web::html::{expression, html_to_markdown, is_js_shell, scan};
-use crate::web::ops::ACTION_TIMEOUT;
-use crate::web::seen;
-use crate::web::url;
 
 // How long a body that painted nothing gets before it is called empty.
 const EMPTY_WAIT: Duration = Duration::from_secs(3);

@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 [features]
-default = ["web"]
+default = ["browser"]
 # 浏览器工具族：CDP 客户端、HTML 转 Markdown、URL 解析。没有浏览器的机器用 --no-default-features 编。
-web = ["dep:html-to-markdown-rs", "dep:url"]
+browser = ["dep:html-to-markdown-rs", "dep:url"]
 
 [dependencies]
 # 同步 HTTP 客户端：极轻、无异步运行时依赖。rustls = 纯 Rust 的 TLS，不依赖系统 OpenSSL

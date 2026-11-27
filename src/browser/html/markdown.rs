@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use html_to_markdown_rs::convert;
 use html_to_markdown_rs::options::{ConversionOptions, PreprocessingOptions, PreprocessingPreset};
 
-use crate::web::html::tags::{drop_svg, fold_controls};
+use crate::browser::html::tags::{drop_svg, fold_controls};
 
 // The tags kept as HTML where they sit, so a control stays visible under its own name.
 const KEEP: &[&str] = &["button", "input", "select", "textarea", "summary"];
