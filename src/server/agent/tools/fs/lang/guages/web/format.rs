@@ -1,17 +1,16 @@
-// The web parser: biome under a deadline, on the name biome knows a page by. It judges a text and never rewrites it.
+// The web parser: one biome round trip on a text, under a deadline, and the verdict read off it. It judges a text and never rewrites it.
 
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use super::check::{program, shown};
 use super::kind;
 use crate::server::agent::tools::fs::gate;
 use crate::server::agent::tools::fs::lang::verdict::{Outcome, Unparsed};
 use crate::server::platform::stop::Stop;
 
-// How long one parser round trip may take before its tree is killed.
+// How long one biome round trip may take before its tree is killed.
 const LIMIT: Duration = Duration::from_secs(10);
 
 // How many verdicts this process remembers.
@@ -19,7 +18,8 @@ const CACHE: usize = 32;
 
 // Whether one text parses. A verdict biome reached is remembered; a missing binary is no verdict against the text.
 pub(crate) fn format(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
-    let key = hash(text);
+    // The verdict belongs to a kind as much as to a text: the same bytes are a page, a stylesheet or a script by the name they are handed over under.
+    let key = hash(&format!("{}{text}", kind(path).unwrap_or("")));
     if let Some(hit) = remembered(&key) {
         return hit;
     }
@@ -30,24 +30,43 @@ pub(crate) fn format(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
     outcome
 }
 
-// One parser round trip. What it lays out is thrown away: only its verdict is read. A page is always handed over with its formatter switched on, since biome leaves the HTML one off until asked.
+// One biome round trip on the text: the answer it gave, or `None` when the binary never answered. `switch` starts the formatter of this kind; a commit asks for none, and takes the repository's own answer instead.
+pub(super) fn round(
+    text: &str,
+    path: &Path,
+    switch: Option<&str>,
+    stop: &Arc<Stop>,
+) -> Option<gate::Ran> {
+    let mut cmd = Command::new(gate::beside("biome"));
+    cmd.arg("format")
+        .arg(format!("--stdin-file-path={}", path.display()));
+    if let Some(switch) = switch {
+        cmd.arg(switch);
+    }
+    gate::run(cmd, Some(text.as_bytes()), Some(LIMIT), stop).ok()
+}
+
+// The switch that turns biome's formatter on for this kind. A repository may leave its formatters off, and a formatter that is off answers nothing about the text: it hands the text back as it came, whatever the text holds.
+fn flag(path: &Path) -> &'static str {
+    match kind(path) {
+        Some("css") => "--css-formatter-enabled=true",
+        Some("js") => "--javascript-formatter-enabled=true",
+        _ => "--html-formatter-enabled=true",
+    }
+}
+
+// One parser round trip. What it lays out is thrown away: only its verdict is read.
 fn judge(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
-    let Some(bin) = program() else {
+    let Some(ran) = round(text, path, Some(flag(path)), stop) else {
         return Outcome::Parsed;
     };
-    let mut cmd = Command::new(&bin);
-    cmd.arg("format")
-        .arg(format!("--stdin-file-path={}", shown(path)));
-    if kind(path) == Some("html") {
-        cmd.arg("--html-formatter-enabled=true");
+    if ran.stopped {
+        return Outcome::Stopped;
     }
-    match gate::run(cmd, Some(text.as_bytes()), Some(LIMIT), stop) {
-        Ok(ran) if ran.stopped => Outcome::Stopped,
-        Ok(ran) if ran.timed_out => Outcome::Parsed,
-        Ok(ran) if ran.code == Some(0) => Outcome::Parsed,
-        Ok(ran) => Outcome::Unparsed(parse(&ran.err)),
-        Err(_) => Outcome::Parsed,
+    if ran.timed_out || ran.code == Some(0) {
+        return Outcome::Parsed;
     }
+    Outcome::Unparsed(parse(&ran.err))
 }
 
 // biome's stderr, cut to the position a model can act on.

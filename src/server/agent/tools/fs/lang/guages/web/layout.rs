@@ -1,27 +1,17 @@
-// The web layout: biome sets a page, a stylesheet or a script under the name it knows the file by, and that answer is what a commit writes back.
+// The web layout: biome sets a page, a stylesheet or a script as the repository itself configures it, and that answer is what a commit writes back.
 
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
 
-use super::check::{program, shown};
-use super::kind;
-use crate::server::agent::tools::fs::gate;
 use crate::server::platform::stop::Stop;
 
-// How long one layout round trip may take before its tree is killed.
-const LIMIT: Duration = Duration::from_secs(10);
+use super::format::round;
 
-// The text as biome sets it. `None` = no biome, a stopped turn, or a text biome refused; a commit then leaves the file as it is.
+// The text as biome sets it. `None` = no biome, a stopped turn, or a formatter this repository leaves off; a commit then leaves the file as it is. No switch starts a formatter here: a commit writes what the repository has already decided its files read like.
 pub(crate) fn layout(text: &str, path: &Path, stop: &Arc<Stop>) -> Option<String> {
-    let mut cmd = Command::new(program()?);
-    cmd.arg("format")
-        .arg(format!("--stdin-file-path={}", shown(path)));
-    // Biome leaves its HTML formatter off until asked, the same way the parser asks.
-    if kind(path) == Some("html") {
-        cmd.arg("--html-formatter-enabled=true");
+    let ran = round(text, path, None, stop)?;
+    if ran.stopped || ran.timed_out || ran.code != Some(0) {
+        return None;
     }
-    let ran = gate::run(cmd, Some(text.as_bytes()), Some(LIMIT), stop).ok()?;
-    (ran.code == Some(0)).then_some(ran.out)
+    Some(ran.out)
 }

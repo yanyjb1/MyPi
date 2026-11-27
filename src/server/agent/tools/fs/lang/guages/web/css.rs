@@ -242,11 +242,18 @@ pub(super) fn imports(scanned: &Scanned, text: &str) -> Vec<(usize, String)> {
         if !scanned.live.get(at).copied().unwrap_or(false) {
             continue;
         }
-        let line = raw.trim();
-        let Some(rest) = line.strip_prefix("@import") else {
+        // The scan holds the line's own code with every comment and string blanked, so an `@import` behind a comment is still the first word of it; the path itself is a string it blanked, and is read from the file's own text.
+        let Some(code) = scanned.code.get(at) else {
             continue;
         };
-        let rest = rest.trim_start();
+        if !code.trim_start().starts_with("@import") {
+            continue;
+        }
+        let start = match raw.find("@import") {
+            Some(start) => start + "@import".len(),
+            None => continue,
+        };
+        let rest = raw[start..].trim_start();
         let rest = rest
             .strip_prefix("url(")
             .map(str::trim_start)

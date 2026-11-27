@@ -27,6 +27,9 @@ const LONG: usize = 15;
 // How far a declaration's header may run before the scan stops looking for its block.
 const HEAD: usize = 20;
 
+// How many lines one imported statement may run onto before the scan gives up on it.
+const WIDE: usize = 12;
+
 // Words that open a control block inside a long body.
 const CONTROL: &[&str] = &[
     "catch", "do", "else", "finally", "for", "if", "switch", "try", "while",
@@ -555,23 +558,52 @@ fn code_lines<'a>(scanned: &Scanned, text: &'a str) -> impl Iterator<Item = (usi
         .filter(|(at, _)| scanned.live.get(*at).copied().unwrap_or(false))
 }
 
-// Every module this file imports or re-exports, as written, with the line it stands on.
+// Every module this file imports or re-exports, as written, with the line it stands on. A statement's names and the module it names may sit on different lines, so the lines one statement takes are read together.
 pub(super) fn refs(scanned: &Scanned, text: &str) -> Vec<(usize, String, Vec<String>)> {
+    let lines: Vec<(usize, &str)> = code_lines(scanned, text).collect();
     let mut out = Vec::new();
-    for (at, raw) in code_lines(scanned, text) {
-        let line = raw.trim();
-        if !(line.starts_with("import") || line.starts_with("export")) {
+    for (at, (line, raw)) in lines.iter().enumerate() {
+        let head = raw.trim();
+        if !(head.starts_with("import") || head.starts_with("export")) {
             continue;
         }
-        let Some(rest) = after_from(line) else {
+        let joined = statement(&lines, at);
+        // A module named without `from`: `import './styles.css'`.
+        let wrote = match after_from(&joined) {
+            Some(rest) => quoted(rest),
+            None if head.starts_with("import") => quoted(&joined),
+            None => None,
+        };
+        let Some(wrote) = wrote else {
             continue;
         };
-        let Some(wrote) = quoted(rest) else {
-            continue;
-        };
-        out.push((at, wrote, named(line)));
+        out.push((*line, wrote, named(&joined)));
     }
     out
+}
+
+// One statement's text: the line it opens on, and every line below it while its braces still stand open and nothing else has closed the statement.
+fn statement(lines: &[(usize, &str)], at: usize) -> String {
+    let mut joined = lines[at].1.trim().to_string();
+    let mut next = at + 1;
+    while open(&joined) && next < lines.len() && next - at <= WIDE {
+        joined.push(' ');
+        joined.push_str(lines[next].1.trim());
+        next += 1;
+    }
+    joined
+}
+
+// Whether a statement read so far still wants the line below: its braces stand open, and nothing has closed it yet — no module named, no statement ended, no header finished.
+fn open(text: &str) -> bool {
+    unbalanced(text) && !text.contains(" from ") && !text.contains(';') && !text.contains(')')
+}
+
+// Whether these braces open more than they close.
+fn unbalanced(text: &str) -> bool {
+    let opens = text.chars().filter(|c| *c == '{').count();
+    let closes = text.chars().filter(|c| *c == '}').count();
+    opens > closes
 }
 
 // What stands after `from`, when this line carries one.
@@ -612,12 +644,16 @@ fn named(line: &str) -> Vec<String> {
         .collect()
 }
 
-// Every name this file exports.
+// Every name this file exports. A list of names may run past its own line, so a statement is read joined.
 pub(super) fn exports(scanned: &Scanned, text: &str) -> Vec<String> {
+    let lines: Vec<(usize, &str)> = code_lines(scanned, text).collect();
     let mut out: Vec<String> = Vec::new();
-    for (_, raw) in code_lines(scanned, text) {
-        let line = raw.trim();
-        let Some(rest) = line.strip_prefix("export ") else {
+    for (at, (_, raw)) in lines.iter().enumerate() {
+        if !raw.trim().starts_with("export ") {
+            continue;
+        }
+        let joined = statement(&lines, at);
+        let Some(rest) = joined.trim_start().strip_prefix("export ") else {
             continue;
         };
         let rest = rest.trim_start();

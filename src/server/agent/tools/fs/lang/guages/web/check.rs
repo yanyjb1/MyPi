@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 
 use super::facts;
 use crate::server::agent::tools::fs::gate;
@@ -40,18 +40,16 @@ fn run(root: &Path, touched: &[PathBuf], stop: &Arc<Stop>) -> Check {
     if files.is_empty() {
         return Check::Clean;
     }
-    let Some(bin) = program() else {
-        return Check::Unchecked(
-            "failed to find `biome`; put it beside this executable or on PATH".to_string(),
-        );
+    // A written file biome's own configuration leaves out is no error of the batch: the pass runs to its end and the report says what it read.
+    let mut cmd = Command::new(gate::beside("biome"));
+    cmd.arg("lint")
+        .arg("--reporter=json")
+        .args(&files)
+        .current_dir(root);
+    let mut warns = match report(cmd, root, stop) {
+        Ok(found) => found,
+        Err(why) => return Check::Unchecked(why),
     };
-    let mut warns: Vec<Fault> = Vec::new();
-    for Pass { cmd, input, rename } in passes(&bin, root, &files) {
-        match report(cmd, input.as_deref(), root, stop, rename.as_deref()) {
-            Ok(mut found) => warns.append(&mut found),
-            Err(why) => return Check::Unchecked(why),
-        }
-    }
     warns.dedup_by(|a, b| a.file == b.file && a.line == b.line && a.message == b.message);
     if warns.is_empty() {
         Check::Clean
@@ -63,61 +61,9 @@ fn run(root: &Path, touched: &[PathBuf], stop: &Arc<Stop>) -> Check {
     }
 }
 
-// One lint pass: the command, the text it reads on stdin when it takes one, and the file a report about that text belongs to.
-struct Pass {
-    cmd: Command,
-    input: Option<Vec<u8>>,
-    rename: Option<PathBuf>,
-}
-
-// The passes one batch needs. `.htm` is a name biome does not know, so a page written with it is handed over on stdin under the `.html` name biome does read.
-fn passes(bin: &Path, root: &Path, files: &[&PathBuf]) -> Vec<Pass> {
-    let mut out = Vec::new();
-    let mut plain: Vec<&PathBuf> = Vec::new();
-    for path in files {
-        if path.extension().and_then(|e| e.to_str()) != Some("htm") {
-            plain.push(path);
-            continue;
-        }
-        let Some(text) = std::fs::read_to_string(path).ok() else {
-            continue;
-        };
-        let mut cmd = Command::new(bin);
-        cmd.arg("lint")
-            .arg("--reporter=json")
-            .arg(format!("--stdin-file-path={}", shown(path)))
-            .current_dir(root);
-        out.push(Pass {
-            cmd,
-            input: Some(text.into_bytes()),
-            rename: Some((*path).clone()),
-        });
-    }
-    if !plain.is_empty() {
-        let mut cmd = Command::new(bin);
-        cmd.arg("lint")
-            .arg("--reporter=json")
-            .arg("--no-errors-on-unmatched")
-            .args(&plain)
-            .current_dir(root);
-        out.push(Pass {
-            cmd,
-            input: None,
-            rename: None,
-        });
-    }
-    out
-}
-
 // One lint pass and the faults its report holds; the reason when the pass said nothing useful.
-fn report(
-    cmd: Command,
-    input: Option<&[u8]>,
-    root: &Path,
-    stop: &Arc<Stop>,
-    rename: Option<&Path>,
-) -> Result<Vec<Fault>, String> {
-    let Ok(ran) = gate::run(cmd, input, None, stop) else {
+fn report(cmd: Command, root: &Path, stop: &Arc<Stop>) -> Result<Vec<Fault>, String> {
+    let Ok(ran) = gate::run(cmd, None, None, stop) else {
         return Err("biome did not run".to_string());
     };
     if ran.stopped {
@@ -131,10 +77,21 @@ fn report(
             Err(failure(&ran))
         };
     };
+    // How many files the pass actually read: a file the configuration covers none of is a file this report cannot speak for.
+    let counted: u64 = ["changed", "unchanged"]
+        .iter()
+        .filter_map(|key| report.get("summary")?.get(*key)?.as_u64())
+        .sum();
+    if counted == 0 {
+        return Err(format!(
+            "biome read none of the written files: its configuration in {} does not cover them",
+            root.display()
+        ));
+    }
     let mut out = Vec::new();
     let found = report.get("diagnostics").and_then(|d| d.as_array());
     for one in found.into_iter().flatten() {
-        if let Some(fault) = biome_fault(root, one, rename) {
+        if let Some(fault) = biome_fault(root, one) {
             out.push(fault);
         }
     }
@@ -159,8 +116,8 @@ fn failure(ran: &gate::Ran) -> String {
     }
 }
 
-// One biome diagnostic as a fault: its file, its line, what it said and the rule it named. A report about a text handed over on stdin names that text's stand-in, so the file it belongs to is said here instead.
-fn biome_fault(root: &Path, one: &serde_json::Value, rename: Option<&Path>) -> Option<Fault> {
+// One biome diagnostic as a fault: its file, its line, what it said and the rule it named.
+fn biome_fault(root: &Path, one: &serde_json::Value) -> Option<Fault> {
     let message = one
         .get("message")
         .and_then(|m| m.as_str())?
@@ -177,42 +134,10 @@ fn biome_fault(root: &Path, one: &serde_json::Value, rename: Option<&Path>) -> O
     if let Some(category) = one.get("category").and_then(|c| c.as_str()) {
         helps.push(category.to_string());
     }
-    let named = rename.unwrap_or_else(|| Path::new(file));
     Some(Fault {
-        file: parts::rel(root, named),
+        file: parts::rel(root, Path::new(file)),
         line,
         message,
         helps,
     })
-}
-
-// The name biome reads the kind from: `.htm` is not one it knows, so a page is handed over as `.html`.
-pub(super) fn shown(path: &Path) -> String {
-    if path.extension().and_then(|e| e.to_str()) == Some("htm") {
-        return path.with_extension("html").display().to_string();
-    }
-    path.display().to_string()
-}
-
-// The biome binary: beside this executable first, then whatever PATH holds.
-pub(super) fn program() -> Option<PathBuf> {
-    static FOUND: LazyLock<Mutex<Option<Option<PathBuf>>>> = LazyLock::new(|| Mutex::new(None));
-    if let Some(hit) = lock(&FOUND).as_ref() {
-        return hit.clone();
-    }
-    let beside = gate::beside("biome");
-    let found = beside.is_file().then_some(beside).or_else(|| {
-        let dirs = std::env::var_os("PATH")?;
-        std::env::split_paths(&dirs)
-            .map(|dir| dir.join("biome"))
-            .find(|candidate| candidate.is_file())
-    });
-    *lock(&FOUND) = Some(found.clone());
-    found
-}
-
-// A lock that survives a panicking holder: the state behind it is a cache, never a promise.
-fn lock<T>(held: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    held.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

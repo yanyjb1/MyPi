@@ -125,28 +125,60 @@ fn kind_word(kind: char) -> &'static str {
 // The lines of one script that reach for this anchor: `getElementById`, `querySelector` and the class list.
 fn calls(scanned: &js::Scanned, text: &str, kind: char, name: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
-    let marks: Vec<String> = if kind == '#' {
-        vec![
-            format!("getElementById(\"{name}\")"),
-            format!("getElementById('{name}')"),
-            format!("#{name}\""),
-            format!("#{name}'"),
-        ]
-    } else {
-        vec![format!(".{name}\""), format!(".{name}'")]
-    };
     for (at, raw) in text.lines().enumerate() {
         if !scanned.live.get(at).copied().unwrap_or(false) {
             continue;
         }
         let line = raw.trim();
-        if marks.iter().any(|mark| line.contains(mark.as_str()))
-            || (kind == '.' && mentions_class(line, name))
-        {
+        if reaches(line, kind, name) || (kind == '.' && mentions_class(line, name)) {
             out.push((at, line.to_string()));
         }
     }
     out
+}
+
+// Whether a line reaches this anchor wherever a script may write it: `getElementById('x')` takes the bare name, and every other form writes it as a quoted selector or fragment — compound, descendant, or a call.
+fn reaches(line: &str, kind: char, name: &str) -> bool {
+    let bare = kind == '#' && line.contains("getElementById(");
+    literals(line)
+        .into_iter()
+        .any(|held| (bare && held == name) || carries(held, kind, name))
+}
+
+// Every text one line wraps in quotes.
+fn literals(line: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    let mut open: Option<(char, usize)> = None;
+    for (at, c) in line.char_indices() {
+        match open {
+            None if c == '"' || c == '\'' => open = Some((c, at + c.len_utf8())),
+            Some((mark, from)) if c == mark => {
+                out.push(&line[from..at]);
+                open = None;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+// Whether one quoted selector names this anchor, wherever the anchor stands inside it: `'.card'`, `'div.card > .title'` and `'#list .card'` all name `.card`. A name that goes on letters is another name: `.cardio` is not `.card`, and `#card-list` is not `#card`.
+fn carries(selector: &str, kind: char, name: &str) -> bool {
+    let want = format!("{kind}{name}");
+    let mut rest = selector;
+    while let Some(at) = rest.find(&want) {
+        let after = &rest[at + want.len()..];
+        if !after.chars().next().is_some_and(name_char) {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
+// Whether this character may go on a name.
+fn name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '-'
 }
 
 // Whether a line names this class through the class list.
