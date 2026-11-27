@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::contract::Effort;
 use super::message::{Message, WireMessage};
 use super::protocol::ProtocolRequest;
 use super::transcript;
+use crate::server::config::Effort;
 
 /// One lap's request body.
 pub fn build(

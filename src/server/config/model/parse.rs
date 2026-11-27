@@ -4,6 +4,7 @@ use serde_yaml::{Mapping, Value as Yaml};
 
 use super::super::notice::{ConfigNotice, warn, warn_args};
 use super::super::registry;
+use super::protocol::ProtocolId;
 use super::types::{ModelEntry, ModelsConfig, Provider};
 
 use super::entry::parse_model;
@@ -60,14 +61,14 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
                 continue;
             }
         };
-        let api = match map.get("api") {
+        let protocol = match map.get("api") {
             None => {
                 notices.push(warn(&key, file, "config_api_missing", "provider skipped"));
                 continue;
             }
             Some(value) => match value.as_str() {
-                Some(raw) => match crate::server::agent::request::ProtocolId::parse(raw) {
-                    Ok(id) => id.as_str().to_string(),
+                Some(raw) => match ProtocolId::parse(raw) {
+                    Ok(id) => id,
                     Err(_) => {
                         notices.push(warn_args(
                             &key,
@@ -152,7 +153,7 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
         providers.push(Provider {
             name: name.to_string(),
             base_url,
-            api,
+            protocol,
             api_key,
             auth_header,
             models,

@@ -36,7 +36,7 @@ pub struct Birth {
     // The compaction instruction template; `{{focus}}` marks where the focus goes.
     pub compact: String,
     // How hard this session's laps ask the model to think; a child inherits it.
-    pub effort: crate::server::agent::request::Effort,
+    pub effort: crate::server::config::Effort,
     // Whether this session's model takes image parts on the wire.
     pub vision: bool,
     pub meta: Option<i64>,
@@ -262,7 +262,7 @@ impl Loop {
     }
 
     // How hard this session currently asks the model to think.
-    pub fn effort(&self, session: i64) -> Option<crate::server::agent::request::Effort> {
+    pub fn effort(&self, session: i64) -> Option<crate::server::config::Effort> {
         self.inner
             .slots
             .get(session)

@@ -10,20 +10,9 @@ use anyhow::{Result, anyhow};
 
 use self::client::Client;
 use self::worker::{ChannelReader, SessionWorker};
+use super::protocol::WireRequest;
 use super::protocol::stream::SILENCE;
-use super::protocol::{ProtocolId, WireRequest};
 use super::retry::Failure;
-
-/// One provider as the configuration resolved it.
-#[derive(Debug, Clone)]
-pub struct Provider {
-    pub name: String,
-    pub base_url: String,
-    pub protocol: ProtocolId,
-    pub api_key: String,
-    /// False sends no credential header at all.
-    pub auth_header: bool,
-}
 
 /// One request, on the child that owns the session's sockets.
 pub(crate) fn send(

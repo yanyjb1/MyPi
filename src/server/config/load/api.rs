@@ -290,21 +290,18 @@ impl Config {
         Ok(target)
     }
     // Every provider the request half can reach, credentials expanded.
-    pub fn providers(&self) -> Vec<crate::server::agent::request::Provider> {
+    pub fn providers(&self) -> Vec<model::Provider> {
         self.inner
             .models
             .providers
             .iter()
-            .filter_map(|provider| {
-                let protocol =
-                    crate::server::agent::request::ProtocolId::parse(&provider.api).ok()?;
-                Some(crate::server::agent::request::Provider {
-                    name: provider.name.clone(),
-                    base_url: provider.base_url.clone(),
-                    protocol,
-                    api_key: self.inner.models.resolve_key(provider),
-                    auth_header: provider.auth_header,
-                })
+            .map(|provider| model::Provider {
+                name: provider.name.clone(),
+                base_url: provider.base_url.clone(),
+                protocol: provider.protocol,
+                api_key: self.inner.models.resolve_key(provider),
+                auth_header: provider.auth_header,
+                models: provider.models.clone(),
             })
             .collect()
     }

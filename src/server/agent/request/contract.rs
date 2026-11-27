@@ -9,6 +9,7 @@ use super::live::Event;
 pub use super::message::Usage;
 use super::message::{ImagePart, Message};
 use super::transport::worker::SessionWorker;
+use crate::server::config::Effort;
 
 /// Where one request goes: which provider serves, which model answers.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -180,56 +181,6 @@ pub struct Block {
     pub duration_ms: Option<u64>,
 }
 
-/// How hard a session asks the model to think.
-/// How hard a session asks the model to think. Front ends spell it; request decides what it means.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Effort {
-    /// Ask for nothing and take the host's default. Never sent: the field stays off the body.
-    #[default]
-    Auto,
-    None,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    Xhigh,
-    Max,
-}
-
-impl Effort {
-    /// Every rung, `Auto` first, so parsing and the one list agree on a set.
-    const ALL: [Self; 8] = [
-        Self::Auto,
-        Self::None,
-        Self::Minimal,
-        Self::Low,
-        Self::Medium,
-        Self::High,
-        Self::Xhigh,
-        Self::Max,
-    ];
-
-    /// The one spelling the wire and every front end share.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::None => "none",
-            Self::Minimal => "minimal",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Xhigh => "xhigh",
-            Self::Max => "max",
-        }
-    }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        let raw = raw.trim().to_ascii_lowercase();
-        Self::ALL
-            .into_iter()
-            .find(|effort| effort.as_str() == raw.as_str())
-    }
-}
 /// One spilled output and the citation it goes by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artifact {

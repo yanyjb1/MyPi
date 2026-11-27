@@ -19,7 +19,7 @@ pub enum Change {
     },
     Cwd(PathBuf),
     /// Purely in memory: an effort never reaches the rows.
-    Effort(crate::server::agent::request::Effort),
+    Effort(crate::server::config::Effort),
 }
 
 pub(crate) fn apply(
@@ -42,7 +42,7 @@ pub(crate) fn apply(
                 let mut config = handle.config_mut();
                 config.provider = provider.clone();
                 config.model = model.clone();
-                config.effort = crate::server::agent::request::Effort::Auto;
+                config.effort = crate::server::config::Effort::Auto;
             }
             handle.env().vision = vision;
             handle.env().models = roster(&defaults.models, &format!("{provider}:{model}"));

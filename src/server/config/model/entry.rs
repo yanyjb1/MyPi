@@ -3,7 +3,7 @@
 use serde_json::json;
 use serde_yaml::{Mapping, Value as Yaml};
 
-use crate::server::agent::request::Effort;
+use crate::server::config::Effort;
 
 use super::super::notice::{ConfigNotice, warn, warn_args};
 use super::super::registry;

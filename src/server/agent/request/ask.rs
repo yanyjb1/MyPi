@@ -15,8 +15,8 @@ use super::live::{Line, Stream};
 use super::message::{Message, Usage};
 use super::protocol::Output;
 use super::retry::RetryPolicy;
-use super::transport::Provider;
 use super::transport::client::Client;
+use crate::server::config::Provider;
 
 /// How much of the stream a front end sees as it arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

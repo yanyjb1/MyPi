@@ -248,7 +248,7 @@ impl Api {
             tools,
             manuals,
             compact: profile.compact_instruction,
-            effort: crate::server::agent::request::Effort::Auto,
+            effort: crate::server::config::Effort::Auto,
             vision,
             meta,
             cwd,

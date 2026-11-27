@@ -9,8 +9,8 @@ use crate::server::agent::request::live::Line;
 use crate::server::agent::request::message::AssistantMessage;
 use crate::server::agent::request::protocol::{Endpoint, Output, Protocol, ProtocolRequest};
 use crate::server::agent::request::retry::{self, Class, Failure, RetryPolicy};
-use crate::server::agent::request::transport::Provider;
 use crate::server::agent::request::transport::worker::SessionWorker;
+use crate::server::config::Provider;
 
 /// One provider, one model, one protocol instance.
 pub struct Client {
@@ -29,7 +29,7 @@ impl Client {
                 api_key: provider.api_key.clone(),
                 auth_header: provider.auth_header,
             },
-            protocol: provider.protocol.build(),
+            protocol: super::super::protocol::build(provider.protocol),
             model: model.to_string(),
             retry,
         }

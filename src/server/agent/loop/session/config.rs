@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::server::agent::request::Effort;
 use crate::server::agent::request::contract::Transport;
+use crate::server::config::Effort;
 
 /// What every lap of one session sends: the model, the system prompt, the manuals, the cut.
 #[derive(Clone)]

@@ -1,6 +1,7 @@
-//! The `models.` types.
+// The `models.` types: what one provider entry and one model entry carry.
 
-use crate::server::agent::request::Effort;
+use super::effort::Effort;
+use super::protocol::ProtocolId;
 
 #[derive(Debug, Clone)]
 pub struct ModelsConfig {
@@ -11,8 +12,9 @@ pub struct ModelsConfig {
 pub struct Provider {
     pub name: String,
     pub base_url: String,
-    pub api: String,
+    pub protocol: ProtocolId,
     pub api_key: String,
+    /// False sends no credential header at all.
     pub auth_header: bool,
     pub models: Vec<ModelEntry>,
 }

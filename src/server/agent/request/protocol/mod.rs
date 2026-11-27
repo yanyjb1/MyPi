@@ -7,58 +7,24 @@ pub mod stitch;
 pub mod stream;
 
 use crate::platform::stop::Stop;
-use std::fmt;
 use std::io::BufRead;
 use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::contract::{Block, Effort};
+use super::contract::Block;
 use super::live::Stream;
 use super::message::{AssistantMessage, DEFAULT_EMPTY_REPLY, WireMessage};
+use crate::server::config::Effort;
+use crate::server::config::ProtocolId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolId {
-    Completion,
-    Deepseek,
-}
-
-impl ProtocolId {
-    /// The one spelling of a protocol id; `models.yml`'s `api` value must match it.
-    pub fn parse(raw: &str) -> Result<Self, ProtocolError> {
-        Ok(match raw {
-            "openai-completion" => Self::Completion,
-            "openai-deepseek" => Self::Deepseek,
-            other => return Err(ProtocolError(other.to_string())),
-        })
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Completion => "openai-completion",
-            Self::Deepseek => "openai-deepseek",
-        }
-    }
-
-    /// Build one protocol for one endpoint.
-    pub fn build(self) -> Box<dyn Protocol> {
-        match self {
-            Self::Completion => Box::new(openai::completion::Completion::new()),
-            Self::Deepseek => Box::new(openai::deepseek::Deepseek::new()),
-        }
+/// One protocol for one provider id.
+pub(crate) fn build(id: ProtocolId) -> Box<dyn Protocol> {
+    match id {
+        ProtocolId::Completion => Box::new(openai::completion::Completion::new()),
+        ProtocolId::Deepseek => Box::new(openai::deepseek::Deepseek::new()),
     }
 }
-
-#[derive(Debug)]
-pub struct ProtocolError(pub String);
-
-impl fmt::Display for ProtocolError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown protocol id: {}", self.0)
-    }
-}
-
-impl std::error::Error for ProtocolError {}
 
 /// What one protocol needs to know about its host.
 #[derive(Debug, Clone)]

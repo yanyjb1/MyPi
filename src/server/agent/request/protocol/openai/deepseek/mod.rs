@@ -15,8 +15,9 @@ use crate::server::agent::request::protocol::blocks;
 use crate::server::agent::request::protocol::stitch::Calls;
 use crate::server::agent::request::protocol::stream;
 use crate::server::agent::request::protocol::{
-    Effort, Endpoint, Output, Protocol, ProtocolRequest, WireRequest, broken_calls, fault, silence,
+    Endpoint, Output, Protocol, ProtocolRequest, WireRequest, broken_calls, fault, silence,
 };
+use crate::server::config::Effort;
 
 pub struct Deepseek;
 

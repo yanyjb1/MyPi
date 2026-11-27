@@ -65,7 +65,7 @@ impl ModelsConfig {
                 .ok_or_else(|| format!("unknown provider: {name}"))?;
             return match field {
                 "baseUrl" => Ok(Value::Text(provider.base_url.clone())),
-                "api" => Ok(Value::Text(provider.api.clone())),
+                "api" => Ok(Value::Text(provider.protocol.as_str().to_string())),
                 "authHeader" => Ok(Value::Bool(provider.auth_header)),
                 "models" => Ok(Value::List(
                     provider.models.iter().map(|m| m.id.clone()).collect(),

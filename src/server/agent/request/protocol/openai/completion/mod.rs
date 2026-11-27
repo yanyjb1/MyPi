@@ -5,11 +5,11 @@ use std::io::BufRead;
 
 use anyhow::Result;
 
-use crate::server::agent::request::contract::Effort;
 use crate::server::agent::request::message::AssistantMessage;
 use crate::server::agent::request::protocol::{
     self, Endpoint, Output, Protocol, ProtocolRequest, WireRequest,
 };
+use crate::server::config::Effort;
 
 pub mod stream;
 

@@ -33,9 +33,9 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<Value, Refuse> {
     let profile = opt_str_of(ask, "profile")?.map(str::to_string);
     // A rung the front end picked before this row existed: the row opens with it.
     let effort = match ask.get("effort").and_then(Value::as_str) {
-        Some(raw) => crate::server::agent::request::Effort::parse(raw)
+        Some(raw) => crate::server::config::Effort::parse(raw)
             .ok_or_else(|| Refuse::new("effort_unknown").args(json!({"effort": raw})))?,
-        None => crate::server::agent::request::Effort::Auto,
+        None => crate::server::config::Effort::Auto,
     };
     let stated = match ask.get("model") {
         Some(value) if !value.is_null() => Some(emit::model_of(value)?),

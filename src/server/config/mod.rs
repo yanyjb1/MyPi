@@ -16,7 +16,10 @@ mod write;
 #[cfg(feature = "browser")]
 pub use load::BrowserOptions;
 pub use load::{Config, Effective};
-pub use model::{Cost, Currency, ModelEntry, ModelsConfig, Provider, ResolvedModel};
+pub use model::{
+    Cost, Currency, Effort, ModelEntry, ModelsConfig, ProtocolError, ProtocolId, Provider,
+    ResolvedModel,
+};
 pub use notice::ConfigNotice;
 pub use profile::{DEFAULT_PROFILE, ResolvedProfile};
 pub use registry::{BoolOrInt, DefaultValue, Key, Kind, Value, model_key, provider_key, template};

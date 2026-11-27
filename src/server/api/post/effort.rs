@@ -4,9 +4,9 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::server::agent::r#loop::Change;
-use crate::server::agent::request::Effort;
 use crate::server::api::route::i64_of;
 use crate::server::api::{Api, Refuse};
+use crate::server::config::Effort;
 
 use super::emit;
 
