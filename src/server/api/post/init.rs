@@ -76,7 +76,7 @@ pub(crate) fn apply(api: &Api, ask: &Value) -> Result<Value, Refuse> {
                 },
             },
             Row::Session {
-                started_at: crate::server::platform::time::now_stamp(),
+                started_at: crate::platform::time::now_stamp(),
                 cwd: cwd.to_string_lossy().into_owned(),
                 model: Some((provider.clone(), model.clone())),
                 name,

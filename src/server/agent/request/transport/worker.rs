@@ -43,7 +43,7 @@ pub enum Response {
 
 #[derive(Debug)]
 pub struct HttpWorker {
-    process: crate::server::platform::proc::Process,
+    process: crate::platform::proc::Process,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
     next_id: u64,
@@ -56,7 +56,7 @@ pub const WORKER_ENV: &str = "MYPI_HTTP_WORKER";
 // One session's worker: the child that owns its sockets, made on demand and stopped on demand.
 pub struct SessionWorker {
     // The worker owns the sockets; the process sits beside it so a stop never waits for the worker lock an interrupted request holds while it reads.
-    slot: Mutex<Option<(SharedWorker, crate::server::platform::proc::Process)>>,
+    slot: Mutex<Option<(SharedWorker, crate::platform::proc::Process)>>,
 }
 
 impl SessionWorker {
@@ -81,13 +81,10 @@ impl SessionWorker {
     pub fn kill(&self) {
         let old = self.slot.lock().ok().and_then(|mut slot| slot.take());
         let Some((_, process)) = old else {
-            crate::server::platform::log::info("worker", "no child to stop");
+            crate::platform::log::info("worker", "no child to stop");
             return;
         };
-        crate::server::platform::log::info(
-            "worker",
-            format!("stopped the child on {}", process.id()),
-        );
+        crate::platform::log::info("worker", format!("stopped the child on {}", process.id()));
         process.stop();
     }
 }
@@ -111,11 +108,9 @@ impl HttpWorker {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let process = crate::server::platform::proc::Process::spawn(
-            crate::server::platform::proc::Origin::Request,
-            &mut cmd,
-        )
-        .context("failed to start the HTTP worker")?;
+        let process =
+            crate::platform::proc::Process::spawn(crate::platform::proc::Origin::Request, &mut cmd)
+                .context("failed to start the HTTP worker")?;
         let input = process
             .take_stdin()
             .context("HTTP worker stdin unavailable")?;

@@ -3,8 +3,8 @@
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::lang::verdict::{Outcome, Unparsed};
-use crate::server::platform::stop::Stop;
 
 // How many verdicts this process remembers.
 const CACHE: usize = 32;

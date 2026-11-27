@@ -1,17 +1,16 @@
 // The bridge's loop: bind the door, take every request, start the adapters' own programs.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-#[cfg(unix)]
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 
 use crate::ipc::endpoint::Endpoint;
 
+use crate::platform::proc::{Origin, Process};
 use crate::ui::bridge::Manifest;
 use crate::ui::bridge::adapter::web;
 use crate::ui::bridge::http::serve::serve;
@@ -22,10 +21,6 @@ const IDLE: Duration = Duration::from_secs(10 * 60);
 
 // How often the table is swept for conversations that have gone quiet.
 const SWEEP: Duration = Duration::from_secs(30);
-
-// How long a program gets to leave before its whole tree is killed outright.
-#[cfg(unix)]
-const GRACE: Duration = Duration::from_secs(2);
 
 // What the bridge was started with: the server, the adapter file, the page, and the network switch.
 pub struct Options {
@@ -116,29 +111,8 @@ fn accept(listener: TcpListener, options: Arc<Options>, hub: Arc<Hub>) {
     }
 }
 
-// One program the bridge started and the tree it leads: a program left behind is a program nobody stops, and the door holds the port until it is gone.
-struct Program {
-    child: Child,
-    tree: Tree,
-}
-
-impl Program {
-    fn spawn(mut command: Command) -> std::io::Result<Program> {
-        Tree::prepare(&mut command);
-        let child = command.spawn()?;
-        let tree = Tree::attach(&child);
-        Ok(Program { child, tree })
-    }
-
-    // The tree first: a leader that has already left is still the one its children are named by.
-    fn stop(mut self) {
-        self.tree.stop(&mut self.child);
-        let _ = self.child.wait();
-    }
-}
-
 // The adapters' own programs: started beside the door, stopped with it.
-fn start_adapters(options: &Options) -> Vec<Program> {
+fn start_adapters(options: &Options) -> Vec<Process> {
     let mut out = Vec::new();
     for adapter in options.manifest.adapters() {
         let Some(command) = &adapter.command else {
@@ -149,7 +123,7 @@ fn start_adapters(options: &Options) -> Vec<Program> {
             shell.arg(flag);
         }
         shell.stdin(Stdio::null()).arg(command);
-        match Program::spawn(shell) {
+        match Process::spawn(Origin::Frontend, &mut shell) {
             Ok(program) => out.push(program),
             Err(e) => eprintln!("mypi: bridge cannot start {}: {e}", adapter.name),
         }
@@ -195,97 +169,3 @@ const SHELL: &str = "pwsh";
 
 #[cfg(windows)]
 const FLAGS: &[&str] = &["-NoProfile", "-NonInteractive", "-Command"];
-
-// The unix tree, copied from `server::platform::proc::sys_unix`: a session per child, the group that comes with it, and the parent's death wired to the kernel.
-#[cfg(unix)]
-struct Tree;
-
-#[cfg(unix)]
-impl Tree {
-    fn attach(_child: &Child) -> Tree {
-        Tree
-    }
-}
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn setsid() -> i32;
-    fn kill(pid: i32, sig: i32) -> i32;
-}
-
-#[cfg(unix)]
-fn sigterm() -> i32 {
-    15
-}
-
-#[cfg(unix)]
-fn sigkill() -> i32 {
-    9
-}
-
-#[cfg(unix)]
-impl Tree {
-    fn prepare(command: &mut Command) {
-        use std::os::unix::process::CommandExt as _;
-        // SAFETY: `setsid` is one syscall, and the child has not execed yet.
-        unsafe {
-            command.pre_exec(move || {
-                if setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                #[cfg(any(target_os = "linux", target_os = "android"))]
-                if linux::die_with_parent() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-
-    fn stop(&self, child: &mut Child) {
-        let group = -(child.id() as i32);
-        // SAFETY: a plain syscall; a group that has already vanished is the normal case.
-        unsafe {
-            kill(group, sigterm());
-        }
-        let within = match child.try_wait() {
-            Ok(Some(_)) | Err(_) => true,
-            Ok(None) => false,
-        };
-        let within = within || wait(child, GRACE);
-        if !within {
-            // SAFETY: the group outlives its leader, so this reaches whatever the program left behind.
-            unsafe {
-                kill(group, sigkill());
-            }
-            let _ = wait(child, Duration::from_millis(50));
-        }
-    }
-}
-
-#[cfg(unix)]
-fn wait(child: &mut Child, limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) | Err(_) => return true,
-            Ok(None) if Instant::now() >= deadline => return false,
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-        }
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-mod linux {
-    unsafe extern "C" {
-        fn prctl(option: i32, ...) -> i32;
-    }
-
-    // PR_SET_PDEATHSIG: the kernel kills this child once the thread that forked it ends.
-    pub fn die_with_parent() -> i32 {
-        const PR_SET_PDEATHSIG: i32 = 1;
-        const SIGKILL: u64 = 9;
-        // SAFETY: one syscall with constant arguments.
-        unsafe { prctl(PR_SET_PDEATHSIG, SIGKILL, 0u64, 0u64, 0u64) }
-    }
-}

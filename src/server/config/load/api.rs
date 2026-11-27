@@ -81,7 +81,7 @@ impl Config {
     }
 
     // The shell backend this session runs its command lines on; the first unanswered start detects one and writes it here.
-    pub fn shell(&self) -> anyhow::Result<crate::server::platform::shell::Shell> {
+    pub fn shell(&self) -> anyhow::Result<crate::platform::shell::Shell> {
         let effective = self.effective(None);
         let name = effective
             .values
@@ -89,9 +89,9 @@ impl Config {
             .and_then(Value::as_text);
         let name = name.map(str::trim).unwrap_or_default();
         if !name.is_empty() && name != "auto" {
-            return crate::server::platform::shell::Shell::resolve(name);
+            return crate::platform::shell::Shell::resolve(name);
         }
-        let shell = crate::server::platform::shell::Shell::detect()?;
+        let shell = crate::platform::shell::Shell::detect()?;
         write::write_key(
             &self.shell_target(),
             &["config", "server", "agent", "tools", "shell"],
@@ -205,7 +205,7 @@ impl Config {
 
     // Where exported spill texts and artifact files land: `<temp>/mypi`.
     pub fn export_dir(&self) -> PathBuf {
-        crate::server::platform::env::temp_dir().join("mypi")
+        crate::platform::env::temp_dir().join("mypi")
     }
 
     pub fn models(&self) -> impl Iterator<Item = (&str, &model::ModelEntry)> {
@@ -334,7 +334,7 @@ impl Config {
             .and_then(|value| value.as_text())
             .map(str::trim)
             .filter(|path| !path.is_empty())?;
-        crate::server::platform::env::expand(named)
+        crate::platform::env::expand(named)
     }
 
     // What `~` stands for: the configured directory; empty = this platform's own home.

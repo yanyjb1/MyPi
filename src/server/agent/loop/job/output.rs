@@ -18,7 +18,7 @@ pub(crate) struct OutputDir {
 
 impl OutputDir {
     pub(crate) fn new(session: i64, max_output_bytes: usize, max_retained: usize) -> Self {
-        let root = crate::server::platform::env::temp_dir()
+        let root = crate::platform::env::temp_dir()
             .join("mypi-jobs")
             .join(session.to_string());
         Self {
@@ -29,7 +29,7 @@ impl OutputDir {
     }
 
     pub(crate) fn clean_root() {
-        let root = crate::server::platform::env::temp_dir().join("mypi-jobs");
+        let root = crate::platform::env::temp_dir().join("mypi-jobs");
         let _ = std::fs::remove_dir_all(root);
     }
 

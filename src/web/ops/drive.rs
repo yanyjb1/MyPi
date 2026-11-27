@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use super::ACTION_TIMEOUT;
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 use crate::web::WebArgs;
 use crate::web::browser::page::Page;
 use crate::web::browser::tabs;

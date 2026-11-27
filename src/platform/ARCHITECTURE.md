@@ -40,15 +40,8 @@ Everything else in this folder is private.
 
 ## Relationships
 
-- **Who asks platform**: config (the directory roots, the environment, the family, for its
-  bootstrap), the api (the clock when it opens a session or lands a message, the log, the data
-  directory the database file sits in), the agent (the clock when a block lands, the log, and the
-  temp directory the artifact files are materialized under, plus the shell and the process tree
-  the `shell` tool runs on). Storage asks it **nothing**: every
-  instant arrives as a value, and the caller reads the clock.
-- **Who platform asks**: nobody of ours — the standard library and the operating system only. The
-  guard table in `src/lib.rs` keeps it that way (the entry forbids this folder from naming any other
-  domain).
+- **Who asks platform**: any layer — it stands under all of them. In practice: config (the directory roots, the environment, the family, for its bootstrap), the api (the clock when it opens a session or lands a message, the log, the data directory the database file sits in), the agent (the clock when a block lands, the log, the temp directory the artifact files are materialized under, plus the shell and the process tree the `shell` tool runs on), web (the process tree the browser is launched into, the stop it waits on), the bridge (the process tree its adapters are started in), and `git` (the process tree one git call runs in). Storage asks it **nothing**: every instant arrives as a value, and the caller reads the clock.
+- **Who platform asks**: nobody of ours — the standard library and the operating system only. The guard table in `src/lib.rs` keeps it that way: this folder is in no other layer's forbidden list, while its own names every one of them.
 - **One mouth for the environment**: `env.rs` is the only file that reads environment variables, and
   the only place a directory is decided. `time.rs` is the only file that reads zoneinfo. `log.rs`
   holds the process's one ring.

@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 
+use crate::platform::shell::Shell;
 use crate::server::agent::tools::contract::env::Env;
 use crate::server::agent::tools::contract::job::{Exit, JobCtx, JobOutcome, JobRunner, OutputSink};
 use crate::server::agent::tools::shell::{admit, runner};
-use crate::server::platform::shell::Shell;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Command {
@@ -34,7 +34,7 @@ impl Command {
         &self,
         shell: &Shell,
         timeout: Duration,
-        cancel: Arc<crate::server::platform::stop::Stop>,
+        cancel: Arc<crate::platform::stop::Stop>,
         output: &mut dyn OutputSink,
     ) -> Result<Exit> {
         if let Some(ids) = &self.warn {

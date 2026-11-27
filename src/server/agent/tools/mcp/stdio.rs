@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use super::setup::ServerConfig;
-use crate::server::platform::proc;
+use crate::platform::proc;
 
 pub(crate) struct Server {
     name: String,

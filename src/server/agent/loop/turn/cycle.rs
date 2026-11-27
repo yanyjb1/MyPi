@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 use super::ask::{CompactInput, LapInput, ResultsInput, Stop};
 use super::fence::Fence;
 use crate::ipc::contract::Text;
+use crate::platform::time::now_stamp;
 use crate::server::agent::r#loop::pen::{self, Pen};
 use crate::server::agent::r#loop::session::agent::{AgentRunner, stem};
 use crate::server::agent::r#loop::session::book::{Birth, Inner, Retention};
@@ -21,7 +22,6 @@ use crate::server::agent::tools::contract::output::ToolResult;
 use crate::server::agent::tools::contract::view::Source;
 use crate::server::agent::tools::registry::roster;
 use crate::server::agent::tools::subagent::{FINAL, TASK};
-use crate::server::platform::time::now_stamp;
 use crate::server::storage::{Ref, RequestMeta, Row};
 
 // Which machine a turn runs.
@@ -304,7 +304,7 @@ fn keep_blocks(pen: Option<Arc<Pen>>, handle: &Handle) {
     match pen.flush() {
         Ok((_, blocks)) => {
             if let Err(e) = handle.transcript().append(blocks) {
-                crate::server::platform::log::error(
+                crate::platform::log::error(
                     "loop",
                     format!(
                         "session {}: a dead lap's blocks were not cached: {e:#}",
@@ -313,7 +313,7 @@ fn keep_blocks(pen: Option<Arc<Pen>>, handle: &Handle) {
                 );
             }
         }
-        Err(e) => crate::server::platform::log::error(
+        Err(e) => crate::platform::log::error(
             "loop",
             format!(
                 "session {}: a dead lap's blocks were not stored: {e:#}",

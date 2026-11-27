@@ -1,6 +1,6 @@
 //! Chat Completions: the standard body, auth, and decode. No vendor switches.
 
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 use std::io::BufRead;
 
 use anyhow::Result;

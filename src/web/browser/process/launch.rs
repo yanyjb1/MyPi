@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::server::platform::proc::{Origin, Process};
+use crate::platform::proc::{Origin, Process};
 
 use super::super::devtools::Client;
 use super::Browser;

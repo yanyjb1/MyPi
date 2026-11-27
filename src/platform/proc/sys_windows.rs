@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use super::{Follow, Grace, Inner, Phase, Process, lock};
-use crate::server::platform::log;
+use crate::platform::log;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_SUSPENDED: u32 = 0x0000_0004;

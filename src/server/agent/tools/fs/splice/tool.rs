@@ -14,6 +14,7 @@ use crate::server::agent::tools::contract::env::{Answer, Env, License, Shell, Sl
 use crate::server::agent::tools::contract::halt::INTERRUPTED;
 use crate::server::agent::tools::contract::output::ToolOutput;
 
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::change;
 use crate::server::agent::tools::fs::eol;
 use crate::server::agent::tools::fs::lang;
@@ -21,7 +22,6 @@ use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::spec::{Args, Kind, Param, Tool, ToolProgress};
 use crate::server::agent::tools::summary;
 use crate::server::agent::tools::workspace::write_atomic;
-use crate::server::platform::stop::Stop;
 
 const PATH: usize = 0;
 const EDITS: usize = 1;

@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 use super::devtools::{Cdp, Client, Knocker, Target};
-use crate::server::platform::stop::{Hook, Stop};
+use crate::platform::stop::{Hook, Stop};
 use crate::web::halt;
 
 const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(20);

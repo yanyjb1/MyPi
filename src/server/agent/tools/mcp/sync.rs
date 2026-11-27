@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::bridge::{McpBridge, McpContent, McpResult, ServerInfo, ToolInfo};
 use super::setup::ServerConfig;
 use super::stdio::{self, Server};
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 
 pub struct SyncMcpBridge {
     standing: Mutex<Standing>,

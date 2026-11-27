@@ -9,11 +9,11 @@ use super::change;
 use super::lang::graph::parts;
 use super::lang::verdict::{Check, Fault, Unparsed, Verdict};
 use super::skeleton;
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::contract::env::{Env, Shell, Slot};
 use crate::server::agent::tools::contract::output::ToolResult;
 use crate::server::agent::tools::fs::lang;
 use crate::server::agent::tools::fs::lang::{Checker, Table, Tests};
-use crate::server::platform::stop::Stop;
 
 // How many diagnostics one folded report lists.
 const FAULTS: usize = 12;

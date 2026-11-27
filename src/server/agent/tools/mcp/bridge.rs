@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 
 #[derive(Debug, Clone)]
 pub struct ServerInfo {

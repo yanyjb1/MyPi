@@ -48,7 +48,7 @@ pub fn open(
                 content: Some(text.clone()),
                 prefix: prefix.clone(),
                 suffix: suffix.clone(),
-                ts: Some(crate::server::platform::time::now_stamp()),
+                ts: Some(crate::platform::time::now_stamp()),
                 ..NewBlock::default()
             }),
             Some(Stored::User {
@@ -62,7 +62,7 @@ pub fn open(
             Some(NewBlock {
                 kind: BlockKind::Wake,
                 content: Some(text.clone()),
-                ts: Some(crate::server::platform::time::now_stamp()),
+                ts: Some(crate::platform::time::now_stamp()),
                 ..NewBlock::default()
             }),
             Some(Stored::User {
@@ -114,7 +114,7 @@ pub fn append_user(
         content: Some(text),
         prefix,
         suffix,
-        ts: Some(crate::server::platform::time::now_stamp()),
+        ts: Some(crate::platform::time::now_stamp()),
         ..NewBlock::default()
     };
     w.push(Submit {
@@ -144,7 +144,7 @@ pub fn land_compaction(
             block: NewBlock {
                 kind: BlockKind::User,
                 content: Some(instruction),
-                ts: Some(crate::server::platform::time::now_stamp()),
+                ts: Some(crate::platform::time::now_stamp()),
                 ..NewBlock::default()
             },
         },
@@ -153,7 +153,7 @@ pub fn land_compaction(
             block: NewBlock {
                 kind: BlockKind::Assistant,
                 content: Some(text),
-                ts: Some(crate::server::platform::time::now_stamp()),
+                ts: Some(crate::platform::time::now_stamp()),
                 usage_total: Some(usage.prompt + usage.completion),
                 usage_prompt: Some(usage.prompt),
                 usage_completion: Some(usage.completion),
@@ -195,7 +195,7 @@ pub fn append_wake(w: &Writer, turn: i64, text: String) -> Result<()> {
             block: NewBlock {
                 kind: BlockKind::Wake,
                 content: Some(text),
-                ts: Some(crate::server::platform::time::now_stamp()),
+                ts: Some(crate::platform::time::now_stamp()),
                 ..NewBlock::default()
             },
         }],

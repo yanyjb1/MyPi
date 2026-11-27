@@ -14,13 +14,13 @@ src/
   main.rs      进程入口：装配置、起后端、拉前端
   i18n/        编译进二进制的多语言词表，按 key 查
   ipc/         前后端唯一的线路
+  platform/    OS 原语：进程树、shell、时钟、日志、目录。位于所有区域之下，谁都可以找它
     contract/  线上传的信封形状（三元组、错误、文本）
     transport/ 管道与套接字，分平台
   server/      后端，不认任何前端
     agent/     模型循环：loop 驱动本轮、request 与服务商对话、tools 工具层
     api/       所有门口：call 读、post 写、subscribe 订阅推送
     config/    配置加载、校验、生效
-    platform/  OS 原语：进程、shell、时钟、日志
     storage/   SQLite 持久化：读写、删改
   ui/          前端，只认 ipc 与会话
     lang/      前端语言包：Lang + 内联双语 + 错误翻译

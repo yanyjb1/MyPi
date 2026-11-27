@@ -14,9 +14,9 @@ use super::fs::{fault, grep, read};
 use super::registry;
 use super::spec::{Args, ToolProgress};
 use super::subagent::FINAL;
+use crate::platform::time::now_stamp;
 use crate::server::agent::request::contract::{ItemOk, Spill, ToolCall};
 use crate::server::agent::request::live::{Element, Event, ToolEvent, Truncation};
-use crate::server::platform::time::now_stamp;
 
 /// The one implementation of [`Batch`]. Everything a run needs arrives in its [`Env`].
 pub struct Engine;

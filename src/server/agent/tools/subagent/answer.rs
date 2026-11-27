@@ -52,9 +52,9 @@ fn clean(stem: &str) -> Result<String> {
 }
 
 fn generated() -> String {
-    let now = crate::server::platform::time::unix_now();
-    let (y, m, d, h, min, s) = crate::server::platform::time::local_parts(now);
-    let offset = crate::server::platform::time::offset_at(now);
+    let now = crate::platform::time::unix_now();
+    let (y, m, d, h, min, s) = crate::platform::time::local_parts(now);
+    let offset = crate::platform::time::offset_at(now);
     format!(
         "<!-- generated: {y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02} (UTC{}) -->",
         offset_label(offset)

@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use super::eol;
 use super::lang;
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::contract::env::Env;
-use crate::server::platform::stop::Stop;
 
 // What one commit has to say: every line the committing answer prints, in order.
 pub(crate) fn commit(env: &mut Env) -> Vec<String> {

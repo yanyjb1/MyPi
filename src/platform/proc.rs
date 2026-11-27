@@ -7,7 +7,7 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::server::platform::log;
+use crate::platform::log;
 
 // How long a polite stop gets on Unix before the whole group is killed.
 #[cfg(unix)]

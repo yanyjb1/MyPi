@@ -56,7 +56,7 @@ impl ConfigPaths {
         if let Some(root) = project_root() {
             roots.push((Origin::Project, project_dir(&root)));
         }
-        roots.push((Origin::Global, crate::server::platform::env::config_dir()));
+        roots.push((Origin::Global, crate::platform::env::config_dir()));
         Self::new(roots)
     }
 
@@ -71,7 +71,7 @@ impl ConfigPaths {
         if project.is_dir() {
             roots.push((Origin::Project, project));
         }
-        roots.push((Origin::Global, crate::server::platform::env::config_dir()));
+        roots.push((Origin::Global, crate::platform::env::config_dir()));
         Self::new(roots)
     }
 
@@ -109,7 +109,7 @@ impl ConfigPaths {
 }
 
 fn env_root() -> Option<PathBuf> {
-    crate::server::platform::env::var_os("MYPI_CONFIG_DIR").map(PathBuf::from)
+    crate::platform::env::var_os("MYPI_CONFIG_DIR").map(PathBuf::from)
 }
 
 fn absolute(p: &Path) -> PathBuf {

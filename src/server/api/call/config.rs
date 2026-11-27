@@ -3,12 +3,12 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use crate::platform::{env, time};
 use crate::server::api::{Api, Refuse};
 use crate::server::config::{
     KEY_CONFIG_SERVER_API_DEFAULT_MODEL, KEY_CONFIG_SERVER_PLATFORM_HOME,
     KEY_CONFIG_SERVER_PLATFORM_TIMEZONE, ResolvedModel,
 };
-use crate::server::platform::{env, time};
 
 // A keyed answer: the caller never has to remember what it asked for.
 pub(crate) fn answer(api: &Api, key: &str) -> Result<Value, Refuse> {

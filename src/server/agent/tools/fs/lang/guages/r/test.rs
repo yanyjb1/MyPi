@@ -5,11 +5,11 @@ use std::process::Command;
 use std::sync::Arc;
 
 use super::format::program;
+use crate::platform::stop::Stop;
 use crate::server::agent::tools::fs::gate;
 use crate::server::agent::tools::fs::lang::graph::parts;
 use crate::server::agent::tools::fs::lang::verdict::{Fault, Verdict};
 use crate::server::agent::tools::fs::lang::{Table, Tests};
-use crate::server::platform::stop::Stop;
 
 // What this language owes the tools as test support.
 pub(crate) const TESTS: Tests = Tests {

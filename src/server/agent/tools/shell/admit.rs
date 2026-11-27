@@ -3,10 +3,10 @@
 use anyhow::{Result, bail};
 
 use super::{guard, segment};
+use crate::platform::log;
+use crate::platform::shell::Shell;
 use crate::server::agent::tools::contract::env::{Aliases, Env};
 use crate::server::agent::tools::contract::view::Export;
-use crate::server::platform::log;
-use crate::server::platform::shell::Shell;
 
 // A command that passed the gate, plus the rule ids the guard warned about.
 pub(crate) struct Admitted {

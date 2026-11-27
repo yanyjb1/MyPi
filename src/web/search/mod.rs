@@ -11,7 +11,7 @@ use self::provider::SearchProvider;
 use super::browser::page::{Page, RENDER_WAIT};
 use super::browser::{tabs, verify};
 use super::halt;
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 
 mod hit;
 mod pace;

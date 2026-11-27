@@ -37,7 +37,7 @@ pub trait JobRunner: Send + Sync {
 
 // One run's conditions.
 pub struct JobCtx<'a> {
-    pub cancel: Arc<crate::server::platform::stop::Stop>,
+    pub cancel: Arc<crate::platform::stop::Stop>,
     pub timeout: Duration,
     pub output: Option<&'a mut dyn OutputSink>,
 }

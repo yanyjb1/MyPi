@@ -10,8 +10,8 @@ use super::job::{Id, Job, ScheduleEntry, Spec, State, TaskState};
 use super::output::OutputDir;
 use super::scheduler;
 use super::wake::WakeSink;
+use crate::platform::time;
 use crate::server::agent::tools::contract::job as port;
-use crate::server::platform::time;
 use crate::server::storage::query::{Cond, Query, Sheet};
 
 // The scheduler's own numbers, read from config by whoever builds the factory.

@@ -1,6 +1,6 @@
 //! Chat Completions: SSE deltas in, pieces and blocks out.
 
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 use std::io::BufRead;
 
 use anyhow::Context as _;

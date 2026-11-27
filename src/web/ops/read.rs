@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::platform::stop::Stop;
 use crate::server::config::rules::{Part, Rules};
-use crate::server::platform::stop::Stop;
 use crate::web::WebArgs;
 use crate::web::artifact;
 use crate::web::browser::page::{Page, RENDER_WAIT};

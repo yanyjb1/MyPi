@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::server::platform::stop::Stop;
+use crate::platform::stop::Stop;
 
 use super::graph::{self, Around, Decl, Domain, Loader, RawEdge, Unit};
 use super::guages;

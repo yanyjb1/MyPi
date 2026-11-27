@@ -17,7 +17,7 @@ committing what a session wrote.
 
 - **Consumed by**: `ui::tui`'s statusline for `snapshot`; `fs/commit` and `fs/write`, `fs/edit` and
   `fs/splice` for the rest.
-- **Knows nothing about**: tools, sessions, the model, or any layer above. It runs `git` and reads
+- **Asks `platform`**: one tree per git call (`proc::Process`), so a helper git forks cannot outlive the deadline. Otherwise it knows nothing about tools, sessions, the model, or any layer above: it runs `git` and reads
   what came back.
 - **The front end and the backend both name it, and neither names the other.**
 

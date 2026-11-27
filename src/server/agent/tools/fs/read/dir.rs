@@ -5,11 +5,11 @@ use std::time::SystemTime;
 
 use anyhow::{Result, bail};
 
+use crate::platform::time;
 use crate::server::agent::tools::fs::lang;
 use crate::server::agent::tools::fs::lang::graph::loader::{MAX_BYTES, entries_all};
 use crate::server::agent::tools::fs::lang::graph::parts::plural;
 use crate::server::agent::tools::workspace::canonicalize_lenient;
-use crate::server::platform::time;
 
 // Direct files at or past this count fold into counts.
 const FOLD_AT: usize = 10;
