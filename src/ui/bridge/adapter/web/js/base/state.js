@@ -44,12 +44,9 @@ export function blank(id) {
     live: [],
     liveNode: null,
     busy: false,
+    liveTurn: null,
     effort: "auto",
     usage: null,
-    todo: [],
-    memos: null,
-    read: null,
-    children: null,
     queued: [],
   };
 }

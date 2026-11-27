@@ -128,9 +128,6 @@
   stroke-width: 1.8;
 }
 
-#dial-wrap[data-on="1"] #dial-track {
-  stroke: rgb(var(--accent) / 0.45);
-}
 
 #dial-wrap[data-on="1"] #dial-hub {
   fill: rgb(var(--accent));

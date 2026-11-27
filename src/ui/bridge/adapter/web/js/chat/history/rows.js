@@ -1,6 +1,5 @@
 // The blocks of one round, oldest first, with each tool result paired to its request.
 
-// The blocks of one round, oldest first, with each tool result paired to its request.
 function roundRows(rows) {
   const requests = new Map();
   for (const block of rows) {

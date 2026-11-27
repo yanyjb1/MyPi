@@ -43,7 +43,6 @@ export async function open(id) {
     held.heads = null;
     held.span = null;
     for (const block of snapshot.blocks || []) held.blocks.set(block.id, block);
-    held.todo = snapshot.todo || [];
     held.effort = snapshot.effort || "auto";
   } catch (e) {
     failed(e);
@@ -110,57 +109,6 @@ export async function bill(id) {
   return asked;
 }
 
-export async function todos(id) {
-  const at = id || state.active;
-  if (!at) return;
-  try {
-    const list = await call("todo", { session: at });
-    ensure(at).todo = list || [];
-    announce();
-  } catch (e) {
-    failed(e);
-  }
-}
-
-export async function memos(id) {
-  const at = id || state.active;
-  if (!at) return;
-  try {
-    const answer = await call("memo", { session: at, op: "list" });
-    ensure(at).memos = answer.memos || [];
-    announce();
-  } catch (e) {
-    failed(e);
-  }
-}
-
-export async function memoHistory(id, scope, name) {
-  try {
-    const answer = await call("memo", {
-      session: id || state.active,
-      op: "history",
-      scope,
-      name,
-    });
-    const held = ensure(state.active);
-    held.read = { scope, name, versions: answer.versions || [] };
-    announce();
-  } catch (e) {
-    failed(e);
-  }
-}
-
-export async function kids() {
-  const id = state.active;
-  if (!id) return;
-  try {
-    const answer = await call("children", { session: id });
-    ensure(id).children = answer.rows || [];
-    announce();
-  } catch (e) {
-    failed(e);
-  }
-}
 
 export async function pools(where) {
   try {

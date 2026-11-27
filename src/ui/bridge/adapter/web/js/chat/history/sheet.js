@@ -4,7 +4,7 @@ import { at, clear, el } from "../../base/dom.js";
 import { dismiss, state } from "../../base/state.js";
 import { noteLine } from "./card.js";
 import { blocks } from "../../base/read.js";
-import { loaded, turnNode } from "./rounds.js";
+import { loaded, spoken, turnNode } from "./rounds.js";
 import { liveTurn } from "./liveturn.js";
 import { slice, trim } from "./window.js";
 import { watched } from "./watched.js";
@@ -41,6 +41,16 @@ function gap(held, round) {
   return node;
 }
 
+// Whether the live tail already says this round. The server writes a round's opening block the moment
+// it starts, so the landed copy below the tail would say that same user line a second time.
+function saying(held, round) {
+  if (round.turn === held.liveTurn && held.live.length) return true;
+  const opening = held.live.find((item) => item.type === "user");
+  if (!opening || !held.busy) return false;
+  const newest = held.structure[held.structure.length - 1];
+  return newest === round && spoken(held, round) === opening.text;
+}
+
 // One page: the rounds of the span from the node cache, the live tail under them, the one refusal.
 export function draw() {
   const chat = at("chat");
@@ -60,7 +70,7 @@ export function draw() {
       }),
     );
   }
-  const rounds = slice(held);
+  const rounds = slice(held).filter((round) => !saying(held, round));
   for (const round of rounds) {
     let node = held.view.get(round.turn);
     if (!node) {

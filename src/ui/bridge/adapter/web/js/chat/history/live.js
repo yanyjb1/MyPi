@@ -8,6 +8,8 @@ export function absorb(held, frame) {
   if (frame.kind !== "stream") return;
   const payload = frame.payload || {};
   if (payload.session != null && payload.session !== held.id) return;
+  // The round this stream is saying: its landed copy is not drawn beside it.
+  if (payload.turn != null) held.liveTurn = payload.turn;
   if (frame.name === "notice") {
     held.live.push({
       type: "notice",
@@ -54,7 +56,9 @@ export function absorb(held, frame) {
 function echo(held, text) {
   if (!text) return;
   held.live.push({ type: "user", text: String(text) });
-  announce("tail");
+  // A whole page, not the tail: the round this line belongs to may already be laid below it, and the
+  // page is what takes that copy away.
+  announce();
 }
 
 // A round starting over: no live piece of the last one is still in hand.
@@ -154,6 +158,7 @@ function byCall(held, id) {
 // The round closed: its rows come from storage now, so the live pieces go and the ranges are asked for.
 function closed(held, payload) {
   held.busy = false;
+  held.liveTurn = null;
   held.live = [];
   const round = {
     turn: payload.turn,

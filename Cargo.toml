@@ -45,3 +45,4 @@ quick-xml = "0.42"
 # TOML、YAML：只解析不改写，提交时保持模型写的原样
 toml = "1"
 saphyr = "0.4"
+include_dir = "0.7.4"

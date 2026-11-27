@@ -1,34 +1,10 @@
 // The page's boot: register the panels, wire the controls, ask the first rows, and redraw once.
 
 import { at } from "./base/dom.js";
-import {
-  announce,
-  closePanel,
-  state,
-  watch as watchState,
-} from "./base/state.js";
-import {
-  bill,
-  kids,
-  memoHistory,
-  memos,
-  pools,
-  refresh,
-  todos,
-} from "./base/read.js";
+import { closePanel, state, watch as watchState } from "./base/state.js";
+import { bill, refresh } from "./base/read.js";
 import { enter } from "./chat/history/enter.js";
-import {
-  compact,
-  defaultModel,
-  interrupt,
-  move,
-  remove,
-  rename,
-  rewind,
-  setRung,
-  switchModel,
-  writeMemo,
-} from "./base/write.js";
+import { interrupt, remove } from "./base/write.js";
 import { fresh } from "./rail/draft.js";
 import { send } from "./chat/composer/talk.js";
 import { keys, submit } from "./chat/composer/key.js";
@@ -43,46 +19,12 @@ import {
   PanelRegistry,
   toggle as togglePanel,
 } from "./panel/panels.js";
-import { register as registerSetup } from "./panel/plugins/setup.js";
 import { register as registerUsage } from "./panel/plugins/usage.js";
-import { register as registerTodo } from "./panel/plugins/todo.js";
-import { register as registerMemo } from "./panel/plugins/memo.js";
-import { register as registerTree } from "./panel/plugins/tree.js";
-import { register as registerChild } from "./panel/plugins/child.js";
 
 // The pieces a panel may ask for: the page's own writes, and the reads its rows come from.
-const page = {
-  bill,
-  todos,
-  memos,
-  kids,
-  pools,
-  rename,
-  move,
-  switchModel,
-  setRung,
-  defaultModel,
-  compact,
-  writeMemo,
-  remove,
-  readMemo: (scope, name) => memoHistory(state.active, scope, name),
-  closeMemo: () => {
-    const held = state.session;
-    if (held) held.read = null;
-    announce();
-  },
-  askRewind: (turn, block) => rewind(turn, block),
-  enter: (id) => enter(id),
-  jump: (turn) => place.jump(turn),
-  latest: () => place.latest(),
-};
+const page = { bill };
 
 registerUsage(PanelRegistry, page);
-registerTodo(PanelRegistry, page);
-registerMemo(PanelRegistry, page);
-registerTree(PanelRegistry, page);
-registerChild(PanelRegistry, page);
-registerSetup(PanelRegistry, page);
 
 // A burst of stream pieces moves the tail once: the redraw waits for the frame, not for every piece.
 let pending = null;

@@ -1,7 +1,6 @@
 // The slash words the composer answers: each one runs inside the page, never leaves as text, and
 // declares the arguments its own position completes.
 
-import { announce, closePanel, state } from "../../base/state.js";
 import { fresh } from "../../rail/draft.js";
 import {
   compact,
@@ -13,7 +12,6 @@ import {
   switchModel,
 } from "../../base/write.js";
 import { pools, refresh } from "../../base/read.js";
-import { at } from "../../base/dom.js";
 import { give as openPanel } from "../../panel/panels.js";
 
 const words = new Map();
@@ -65,18 +63,11 @@ word("model", ["model"], (said) => {
   else pools();
 });
 word("compact", ["text"], (said) => compact(said));
-word("rewind", [], () => openPanel("tree"));
 word("stop", [], () => interrupt());
 word("sessions", [], () => refresh());
 word("pools", [], () => pools());
 
-// The panel words: opening one is the same act as asking it for its rows, and it is the only one open.
+// The one panel: opening it is the same act as asking it for its rows, and it is the only one there is.
 word("usage", [], () => openPanel("usage"));
-word("todo", [], () => openPanel("todo"));
-word("memo", [], () => openPanel("memo"));
-word("tree", [], () => openPanel("tree"));
-word("child", [], () => openPanel("child"));
-word("children", [], () => openPanel("child"));
-word("setup", [], () => openPanel("setup"));
 
-export { announce, at, closePanel, table };
+export { table };

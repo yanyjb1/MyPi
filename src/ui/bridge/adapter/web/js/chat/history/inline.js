@@ -1,6 +1,7 @@
+// One line of prose: the marks inside code spans stay literal, the rest become their tags.
+
 import { esc } from "../../base/note.js";
 
-// One line of prose: code spans first, so the marks inside them stay literal.
 export function inline(source) {
   const spans = [];
   let out = esc(source).replace(/`([^`\n]+)`/g, (_, code) => {

@@ -77,18 +77,29 @@ export function loaded(held, round) {
   return true;
 }
 
-// The user's own words in a round, once its blocks are here: what a jump list says.
-export function said(held, round) {
+// The user's own block in a round, once its blocks are here.
+function youSaid(held, round) {
   for (const [lo, hi] of round.ranges || []) {
     for (let id = lo; id <= hi; id += 1) {
       const block = held.blocks.get(id);
-      if (block && block.kind === "user") {
-        return String(block.prefix || "") +
-          String(block.content || block.text || "");
-      }
+      if (block && block.kind === "user") return block;
     }
   }
-  return "";
+  return null;
+}
+
+// The user's own words in a round, once its blocks are here: what a jump list says.
+export function said(held, round) {
+  const block = youSaid(held, round);
+  if (!block) return "";
+  return String(block.prefix || "") + String(block.content || block.text || "");
+}
+
+// The words alone, without the wrapper around them: exactly what an echo of another front end says.
+export function spoken(held, round) {
+  const block = youSaid(held, round);
+  if (!block) return "";
+  return String(block.content || block.text || "");
 }
 
 // One round as it stands: a compaction says so, then every block it owns, oldest first.

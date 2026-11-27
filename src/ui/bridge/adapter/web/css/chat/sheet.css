@@ -466,14 +466,25 @@ hr {
   color: rgb(var(--ink-2));
 }
 
+/* One line a refusal or a stream notice has to say; a notice is the same small type the rail's rows use. */
 .note {
   display: flex;
   gap: 0.5rem;
   padding: 0.15rem 0;
+  font-family: var(--mono);
   font-size: 12px;
+  line-height: 18px;
+  color: rgb(var(--ink-4));
+}
+
+.note[data-level="warn"] {
+  color: rgb(var(--warn));
+}
+
+.note[data-level="error"] {
+  color: rgb(var(--danger));
 }
 
 .note .src {
-  font-family: var(--mono);
   color: rgb(var(--ink-4));
 }

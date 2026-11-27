@@ -4,10 +4,9 @@ import { at, clear, el } from "../base/dom.js";
 import { state } from "../base/state.js";
 import { refresh } from "../base/read.js";
 import { enter } from "../chat/history/enter.js";
-import { remove } from "../base/write.js";
+import { remove, rename } from "../base/write.js";
 import { fresh } from "./draft.js";
 import { confirm, typed } from "./ask.js";
-import { rename } from "../base/write.js";
 import { short } from "../base/note.js";
 
 function title(row) {

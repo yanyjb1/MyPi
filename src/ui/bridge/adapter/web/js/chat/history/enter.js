@@ -21,6 +21,7 @@ export async function enter(id) {
   held.liveNode = null;
   forget();
   held.busy = false;
+  held.liveTurn = null;
   announce();
   state.follow = follow(id, (frame) => absorb(held, frame), () => {});
   state.streaming = true;

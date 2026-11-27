@@ -2,7 +2,7 @@
 
 import { post, subscribe } from "./wire.js";
 import { announce, failed, state } from "./state.js";
-import { memos as listMemos, open, pools, refresh } from "./read.js";
+import { open, pools, refresh } from "./read.js";
 import { entry } from "./model.js";
 
 // Safe model split at first colon only, preserving model IDs containing colons (e.g., provider:model:tag)
@@ -128,17 +128,6 @@ export function defaultModel(address) {
     .catch(failed);
 }
 
-export function rewind(turn, block) {
-  const held = state.session;
-  if (!held) return;
-  post("meta", {
-    name: "rewind",
-    session: held.id,
-    content: { session: held.id, turn, block },
-  })
-    .then(() => open(held.id))
-    .catch(failed);
-}
 
 export function compact(focus) {
   const held = state.session;
@@ -151,18 +140,3 @@ export function compact(focus) {
   subscribe("compact", payload).catch(failed);
 }
 
-export function writeMemo(op, scope, name, content) {
-  const held = state.session;
-  return post("memo", {
-    session: scope === "current" && held ? held.id : undefined,
-    op,
-    scope,
-    name,
-    content,
-  })
-    .then(() => {
-      if (held) held.read = null;
-      return listMemos();
-    })
-    .catch(failed);
-}

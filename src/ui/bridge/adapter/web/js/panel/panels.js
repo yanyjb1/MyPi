@@ -1,6 +1,6 @@
 // The right drawer: one owner at a time, its own template, and only its own writes on top of it.
 
-import { at, clear, el } from "../base/dom.js";
+import { at, clear } from "../base/dom.js";
 import { closePanel, openPanel, state } from "../base/state.js";
 
 const plugins = new Map();
