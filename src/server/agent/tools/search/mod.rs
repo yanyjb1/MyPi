@@ -60,7 +60,7 @@ fn run(env: &mut Env, args: &Args, _progress: &mut dyn FnMut(ToolProgress)) -> R
         value: None,
         full_page: false,
     };
-    let text = crate::browser::run(&a, env.session, &env.rules, &env.stop)?;
+    let text = crate::browser::run(&env.browser, &a, env.session, &env.rules, &env.stop)?;
     Ok(ToolOutput::text(text))
 }
 

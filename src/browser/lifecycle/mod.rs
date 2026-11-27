@@ -12,7 +12,14 @@ use std::time::Duration;
 
 use super::process::{self, Browser};
 use super::tabs;
-use crate::server::config::Config;
+use crate::server::config::BrowserOptions;
+
+// What the caller decided for this process's browser; the domain opens no configuration file itself.
+#[derive(Debug)]
+pub struct Setup {
+    pub options: BrowserOptions,
+    pub bring_to_front: bool,
+}
 
 struct Live {
     browser: Browser,
@@ -23,7 +30,7 @@ struct Live {
 static STATE: Mutex<Option<Live>> = Mutex::new(None);
 
 /// The port to talk to, launching the browser if there is none.
-pub(crate) fn port() -> anyhow::Result<u16> {
+pub(crate) fn port(setup: &Setup) -> anyhow::Result<u16> {
     let mut guard = STATE.lock();
     if let Some(live) = guard.as_mut()
         && live.browser.alive()
@@ -32,9 +39,8 @@ pub(crate) fn port() -> anyhow::Result<u16> {
     }
     let dead = guard.take();
     drop(dead);
-    let cfg = Config::load()?;
-    let opts = cfg.browser();
-    let profile = process::profile_dir(&opts);
+    let opts = &setup.options;
+    let profile = process::profile_dir(opts);
     let browser = match std::env::var("MYPI_BROWSER_PORT")
         .ok()
         .and_then(|port| port.parse::<u16>().ok())
@@ -42,13 +48,13 @@ pub(crate) fn port() -> anyhow::Result<u16> {
         .or_else(|| process::discover_live_browser(&profile))
     {
         Some(port) => Browser::attach(port)?,
-        None => Browser::launch(&opts, &profile)?,
+        None => Browser::launch(opts, &profile)?,
     };
     let port = browser.port();
     *guard = Some(Live {
         browser,
         idle: opts.idle,
-        bring_to_front: cfg.bring_to_front(),
+        bring_to_front: setup.bring_to_front,
     });
     drop(guard);
     idle::touch();

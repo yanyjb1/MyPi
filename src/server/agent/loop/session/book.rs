@@ -137,6 +137,11 @@ impl Loop {
             source: source.clone(),
             #[cfg(feature = "browser")]
             rules: cfg.web_rules(),
+            #[cfg(feature = "browser")]
+            browser: Arc::new(crate::browser::Setup {
+                options: cfg.browser(),
+                bring_to_front: cfg.bring_to_front(),
+            }),
         };
         Ok(Self {
             inner: Arc::new(Inner {

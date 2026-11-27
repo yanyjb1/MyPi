@@ -9,6 +9,7 @@ use anyhow::{Result, anyhow, bail};
 use self::hit::{Hit, dedup_key};
 use self::provider::SearchProvider;
 use super::halt;
+use super::lifecycle;
 use super::page::{Page, RENDER_WAIT};
 use super::{tabs, verify};
 use crate::platform::stop::Stop;
@@ -38,6 +39,7 @@ const TIDY: &str = r#"(() => {
 })()"#;
 
 pub(crate) fn run(
+    setup: &lifecycle::Setup,
     session: i64,
     query: &str,
     provider_name: &str,
@@ -61,7 +63,7 @@ pub(crate) fn run(
         }
         let url = provider.page_url(query, current);
         // A stop interrupts the page in flight: this page is not read, the earlier ones stand.
-        let mut html = match fetch(session, &url, provider, stop) {
+        let mut html = match fetch(setup, session, &url, provider, stop) {
             Ok(html) => html,
             Err(e) if halt::is(&e) => {
                 cut = true;
@@ -72,7 +74,7 @@ pub(crate) fn run(
 
         // A gate is a page whose result body is not there: hand it to the human and poll until the engine's own page is back.
         if !provider.normal(&html) {
-            match verify::await_human(session, stop, |_url, html| provider.normal(html)) {
+            match verify::await_human(setup, session, stop, |_url, html| provider.normal(html)) {
                 Ok(()) => {}
                 Err(_) if stop.is_stopped() => {
                     cut = true;
@@ -80,7 +82,7 @@ pub(crate) fn run(
                 }
                 Err(e) => return Err(anyhow!("{name}: {e}")),
             }
-            html = match fetch(session, &url, provider, stop) {
+            html = match fetch(setup, session, &url, provider, stop) {
                 Ok(html) => html,
                 Err(e) if halt::is(&e) => {
                     cut = true;
@@ -118,12 +120,13 @@ pub(crate) fn run(
 }
 
 fn fetch(
+    setup: &lifecycle::Setup,
     session: i64,
     url: &str,
     provider: &'static dyn SearchProvider,
     stop: &Arc<Stop>,
 ) -> Result<String> {
-    tabs::with_search(session, |page: &Page| {
+    tabs::with_search(setup, session, |page: &Page| {
         let _hook = page.end_on_stop(stop);
         page.navigate(url)?;
         let html = page.wait(RENDER_WAIT, stop, |html| {

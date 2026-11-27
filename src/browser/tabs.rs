@@ -144,6 +144,7 @@ fn reclaim_launch_tab(client: &Client) {
 }
 
 fn with_tab<T>(
+    setup: &lifecycle::Setup,
     session: i64,
     kind: TabKind,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
@@ -155,7 +156,7 @@ fn with_tab<T>(
     };
     let _serial = slot.lock();
 
-    let port = lifecycle::port()?;
+    let port = lifecycle::port(setup)?;
     let client = Client::new(port);
     let live = client.targets()?;
 
@@ -197,17 +198,19 @@ fn with_tab<T>(
 }
 
 pub(crate) fn with_search<T>(
+    setup: &lifecycle::Setup,
     session: i64,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    with_tab(session, TabKind::Search, f)
+    with_tab(setup, session, TabKind::Search, f)
 }
 
 pub(crate) fn with_work<T>(
+    setup: &lifecycle::Setup,
     session: i64,
     f: impl FnOnce(&Page) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    with_tab(session, TabKind::Work, f)
+    with_tab(setup, session, TabKind::Work, f)
 }
 
 pub fn close_session(session: i64) {

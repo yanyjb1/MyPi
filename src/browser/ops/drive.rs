@@ -52,9 +52,14 @@ fn selector(args: &WebArgs, what: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("{what} requires selector"))
 }
 
-pub(crate) fn run(args: &WebArgs, session: i64, stop: &Arc<Stop>) -> Result<String> {
+pub(crate) fn run(
+    setup: &crate::browser::lifecycle::Setup,
+    args: &WebArgs,
+    session: i64,
+    stop: &Arc<Stop>,
+) -> Result<String> {
     let op = args.op.as_str();
-    tabs::with_work(session, |page: &Page| {
+    tabs::with_work(setup, session, |page: &Page| {
         let _hook = page.end_on_stop(stop);
         match op {
             "click" => {

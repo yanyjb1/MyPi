@@ -14,11 +14,12 @@ const WAIT: std::time::Duration = std::time::Duration::from_secs(300);
 
 // Poll the session's search tab until `done` accepts the page, or five minutes pass; a stop ends the wait at once.
 pub(crate) fn await_human(
+    setup: &lifecycle::Setup,
     session: i64,
     stop: &Arc<Stop>,
     done: impl Fn(&str, &str) -> bool,
 ) -> Result<()> {
-    tabs::with_search(session, |page: &Page| {
+    tabs::with_search(setup, session, |page: &Page| {
         if lifecycle::bring_to_front() {
             let _ = page.bring_to_front();
         }

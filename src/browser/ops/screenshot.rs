@@ -9,8 +9,13 @@ use crate::browser::tabs;
 use crate::browser::url;
 use crate::platform::stop::Stop;
 
-pub(crate) fn run(args: &WebArgs, session: i64, stop: &Arc<Stop>) -> Result<String> {
-    tabs::with_work(session, |page: &Page| {
+pub(crate) fn run(
+    setup: &crate::browser::lifecycle::Setup,
+    args: &WebArgs,
+    session: i64,
+    stop: &Arc<Stop>,
+) -> Result<String> {
+    tabs::with_work(setup, session, |page: &Page| {
         let _hook = page.end_on_stop(stop);
         let bytes = page.screenshot(args.full_page)?;
         let site = url::site(&page.url()?);

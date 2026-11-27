@@ -21,12 +21,18 @@ use crate::server::config::rules::{Part, Rules};
 const EMPTY_WAIT: Duration = Duration::from_secs(3);
 
 // The work tab only: the search tab belongs to `search`.
-pub(crate) fn run(args: &WebArgs, session: i64, rules: &Rules, stop: &Arc<Stop>) -> Result<String> {
+pub(crate) fn run(
+    setup: &crate::browser::lifecycle::Setup,
+    args: &WebArgs,
+    session: i64,
+    rules: &Rules,
+    stop: &Arc<Stop>,
+) -> Result<String> {
     let target = match args.url.as_deref() {
         Some(raw) => Some(url::normalize(raw)?),
         None => None,
     };
-    tabs::with_work(session, |page: &Page| {
+    tabs::with_work(setup, session, |page: &Page| {
         let _hook = page.end_on_stop(stop);
         if let Some(target) = target.as_deref() {
             if let Err(e) = page.navigate(target) {

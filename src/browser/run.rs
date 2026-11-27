@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow, bail};
 use parking_lot::{Condvar, Mutex};
 
+use super::lifecycle;
 use super::ops;
 use super::search;
 use crate::browser::WebArgs;
@@ -50,12 +51,18 @@ pub(crate) fn active() -> usize {
 }
 
 // One operation under the permit; the op names which.
-pub fn run(args: &WebArgs, session: i64, rules: &Rules, stop: &Arc<Stop>) -> Result<String> {
+pub fn run(
+    setup: &lifecycle::Setup,
+    args: &WebArgs,
+    session: i64,
+    rules: &Rules,
+    stop: &Arc<Stop>,
+) -> Result<String> {
     let Some(_permit) = permit(stop) else {
         bail!("the call was stopped before it started");
     };
     match args.op.as_str() {
-        "read" => ops::read::run(args, session, rules, stop),
+        "read" => ops::read::run(setup, args, session, rules, stop),
         "search" => {
             let query = args
                 .query
@@ -65,11 +72,13 @@ pub fn run(args: &WebArgs, session: i64, rules: &Rules, stop: &Arc<Stop>) -> Res
                 .provider
                 .as_deref()
                 .ok_or_else(|| anyhow!("`search` requires `provider`"))?;
-            search::run(session, query, provider, args.pages, stop)
+            search::run(setup, session, query, provider, args.pages, stop)
         }
-        "open" => ops::open::run(args, session, stop),
-        "click" | "fill" | "select" | "scroll" | "eval" => ops::drive::run(args, session, stop),
-        "screenshot" => ops::screenshot::run(args, session, stop),
+        "open" => ops::open::run(setup, args, session, stop),
+        "click" | "fill" | "select" | "scroll" | "eval" => {
+            ops::drive::run(setup, args, session, stop)
+        }
+        "screenshot" => ops::screenshot::run(setup, args, session, stop),
         other => {
             bail!("unknown op {other:?}; read|search|open|click|fill|select|scroll|eval|screenshot")
         }

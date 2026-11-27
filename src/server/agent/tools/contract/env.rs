@@ -37,9 +37,11 @@ pub struct Env {
     pub export: Arc<dyn Export>,
     pub paths: Paths,
     pub source: Arc<dyn Source>,
-    // The site rules `web` narrows a page with: one read, when the config was loaded.
+    // The site rules `browser` narrows a page with, and how its browser is launched: both read once, when the config was loaded.
     #[cfg(feature = "browser")]
     pub rules: Arc<Rules>,
+    #[cfg(feature = "browser")]
+    pub browser: Arc<crate::browser::Setup>,
     // What this conversation's reads have already shown the model.
     pub seen: Seen,
     // The batch now running, so a tool can merge the siblings that touch its own file.
@@ -346,6 +348,8 @@ pub struct Defaults {
     pub source: Arc<dyn Source>,
     #[cfg(feature = "browser")]
     pub rules: Arc<Rules>,
+    #[cfg(feature = "browser")]
+    pub browser: Arc<crate::browser::Setup>,
 }
 
 impl Defaults {
@@ -378,6 +382,8 @@ impl Defaults {
             source: self.source.clone(),
             #[cfg(feature = "browser")]
             rules: Arc::clone(&self.rules),
+            #[cfg(feature = "browser")]
+            browser: Arc::clone(&self.browser),
             seen: Seen::default(),
             batch: Vec::new(),
             current: String::new(),

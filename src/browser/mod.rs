@@ -5,7 +5,7 @@ mod artifact;
 mod devtools;
 mod halt;
 mod html;
-mod lifecycle;
+pub mod lifecycle;
 mod ops;
 mod page;
 mod process;
@@ -17,7 +17,7 @@ mod url;
 mod verify;
 
 pub use args::WebArgs;
-pub use lifecycle::shutdown;
+pub use lifecycle::{Setup, shutdown};
 pub use run::run;
 pub(crate) use search::ENGINES;
 pub use tabs::close_session as closed_tabs;
