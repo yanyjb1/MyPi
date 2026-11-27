@@ -4,13 +4,11 @@ What is here, what each file holds, who calls whom. Current state only.
 
 ## Files
 
-| path | holds |
-|---|---|
-| `mod.rs` | the module list and the three exports |
-| `run.rs` | `Options`, `run`: the listener, the accept loop, the sweep, the adapters' own programs |
-| `manager/` | the conversations the door holds: `hub.rs` the table, `held.rs` one connection's question, listeners and round |
-| `http/` | the door itself: `read.rs` one request, `respond.rs` one answer, `serve.rs` one connection answered, `route.rs` who may come, `rpc.rs` one body to a frame, `host.rs` the door's own look at this machine |
-| `adapter/` | everything that speaks for a front end: `manifest.rs` `adapters.yml`, `events.rs` what one adapter is fed, `web.rs` and `web/` the webui |
+1. `mod.rs` is the module list and the three exports.
+2. `run.rs` is `Options` and `run`: the listener, the accept loop, the sweep, and the adapters' own programs.
+3. `manager/` holds the conversations the door keeps: `hub.rs` the table, `held.rs` one connection's question, its listeners and its round.
+4. `http/` is the door itself: `read.rs` one request, `respond.rs` one answer, `serve.rs` one connection answered, `route.rs` who may come, `rpc.rs` one body to a frame, `host.rs` the door's own look at this machine.
+5. `adapter/` is everything that speaks for a front end: `manifest.rs` reads `adapters.yml`, `events.rs` is what one adapter is fed, `web.rs` and `web/` are the webui.
 
 ## What it talks to
 
@@ -45,24 +43,17 @@ bridge::run
 
 ## The webui
 
-| path | holds |
-|---|---|
-| `adapter/web/index.html` | the page's template: the rail, the transcript, the composer's bar and box, and the panel's empty frame |
-| `adapter/web/css/base/` | `base.css` (the palette of `R G B` tokens and the reset), `bits.css` (the reusable shapes), `layout.css` (the three columns and the two drawers) |
-| `adapter/web/css/rail/` | the left column's own sheet |
-| `adapter/web/css/chat/` | the middle column's sheets: `sheet.css` for the transcript, `deck.css` for the composer, `dial.css` for the ring |
-| `adapter/web/css/panel/` | the right column: the panel's tabs, `bill.css` the drawer of a lap's bill, and the body a plugin fills |
-| `adapter/web/js/base/` | what every column shares: `dom.js` (the one node builder), `model.js` (a model's declared rungs), `note.js` (one-line text and numbers), `state.js` (what the page knows), `wire.js` (the door), `read.js` and `write.js` (every `call` and every `post`), `theme.js` (the two palettes) |
-| `adapter/web/js/rail/` | the left column: `rail.js` the session list, `ask.js` the two dialogs it asks with, `draft.js` a draft becoming a session |
-| `adapter/web/js/chat/history/` | the transcript: `sheet.js` its drawing, `rounds.js` and `card.js` one round and its cards, `mark.js` a body to HTML, `window.js` which rounds are built, `cap.js` the quota and `trim.js` what it gives up, `live.js` how a frame is folded, `enter.js` entering a conversation |
-| `adapter/web/js/chat/composer/` | the box: `bar.js` the bar of directory, model, effort and bill, `ring.js` the ring it carries, `say.js` its text and chips, `offer.js` and `path.js` what a word offers and how one is picked, `key.js` the keys claimed, `summon.js` the `/` words, `talk.js` sending |
-| `adapter/web/js/chat/dial/` | the ring: `dial.js` five bearings thirty degrees apart, `words.js` a round's opening set along its notch's own line |
-| `adapter/web/js/panel/` | the right column: `panels.js` the registry, `bill.js` the drawer a lap's bill fills, `plugins/` the six panels (`usage`, `todo`, `memo`, `tree`, `child`, `setup`) |
-| `adapter/web/js/main.js` | the boot: the registrations, the controls, the first frames |
+1. `index.html` is the shell: the three columns, the dial's own drawing, and every fixed shape as a `<template>` a builder clones.
+2. `styles/main.css` is the one entry. It declares the `@layer` order and imports `01-reset`, `02-tokens` (both palettes and every length), `03-layout` (the three columns and the two drawers), `04-primitives` (the shapes every region reuses), then the five in `styles/components/` — `rail.css`, `chat.css`, `composer.css`, `dial.css`, `panel.css`, one sheet a region.
+3. `js/core/` is what every region stands on: `api.js` (the door, every read and write, and the model table), `store.js` (the state and the one announcement), `template.js` (a template cloned and filled by name, and a panel's own markup and sheet taken in), `theme.js`, `format.js`.
+4. `js/render/` turns a body into HTML: `markdown.js` cuts a block into runs and paints each on its own, `tools.js` draws the tool card and holds the registry a tool claims.
+5. `js/components/` holds one region a file: `rail.js` the session list and the two dialogs it asks with, `panels.js` the drawer's host and registry, `dial.js` the ring and the words on it. `chat/` is the transcript — `list.js` enters a conversation, opens a draft and draws the head above, `sheet.js` lays one page and its tail, `window.js` decides which rounds are built, what is read ahead and what is given up, `scroll.js` keeps the reader's place, `stream.js` folds a frame in, `live.js` says the round being said now, `note.js` is one line a notice takes. `composer/` is the box — `input.js` the directory field and the first draw, `keys.js`, `say.js`, `offer.js`, `path.js`, `summon.js`, `talk.js`, and `mods.js` the capsule under it.
+6. `panels/` holds one panel a directory, its markup, its sheet and its script together; `usage/` is the one there is.
+7. `js/main.js` is the boot: the registration, the controls, the first frames.
 
-The page holds no framework and no third-party script: the browser loads the modules as they are. Every file is seeded into `webui/` under the global config directory on the first start and served from disk afterwards, so a reader changes the look by editing a sheet and nothing else.
+The page holds no framework and no third-party script: the browser loads the modules as they are. Every file is seeded into `webui/` under the global config directory on the first start and served from disk afterwards, so a reader changes the look by editing a sheet and nothing else. The page's own directory is the only place a file is named: `web.rs` embeds it whole.
 
-`state.js` holds the page's state and the one announcement that follows a change; every other module writes into what it holds and then announces. A frame from `stream` reaches `live.js` first, which decides what it changes.
+`store.js` holds the page's state and the one announcement that follows a change; every other module writes into what it holds and then announces. A frame from `stream` reaches `stream.js` first, which decides what it changes. A fixed shape is a `<template>` and a builder clones it and fills it by the name each part carries; a panel brings its own markup and its own sheet, both taken in the first time it opens.
 
 A round's frames arrive live and are thrown away when the round closes: the receipt carries the ranges, the page asks `call blocks` for those, and the transcript is then drawn from what storage holds. That is why a rewind or a reload shows the same history the terminal does.
 
@@ -76,10 +67,11 @@ The three controls above the box speak for a session or for the draft. `#cwd`, `
 2. `Rule::parse`'s three kinds and the api's `route.rs`: a new kind on the wire is a new word here.
 3. `events::take`'s piece kinds and the relay's live payloads: a new `kind` needs its place on the `THINKING`/`TOOLS` lists, or it crosses every adapter unfiltered.
 4. `closes_frame` and the receipt the relay sends: the frame that ends a round is the one carrying `ranges`.
-5. `live.js`'s frame kinds and the relay's live payloads: a piece the page does not name is a piece it drops.
-6. One address, two methods: `GET` for a file and `POST` for a frame, and `README.md`'s table.
+5. `chat/stream.js`'s frame kinds and the relay's live payloads: a piece the page does not name is a piece it drops.
+6. One address, two methods: `GET` for a file and `POST` for a frame, and `README.md`'s own list.
 7. `rpc::KINDS` and the door's own branch in `http/serve.rs`: `host` is the one kind that never reaches the server.
-8. `web.rs`'s seed table and `web/`: a file added to the page is a file the table must name.
+8. `web.rs`'s embedded directory and `web/`: a file written there is served without an edit; a name the door must serve is one the page's own `kind` knows.
+9. `main.css`'s `@layer` order and every sheet: a sheet names the layer it joins, and the order is declared once.
 
 ## Not wired
 

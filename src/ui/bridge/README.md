@@ -10,11 +10,9 @@ An HTTP door onto the server, for every front end that is not this terminal: a b
 
 One TCP port and nothing behind it: no path, no query, no second address. What a request is asking for is said by its method.
 
-| method | asks for |
-|---|---|
-| `GET /<file>` | one file of the webui directory; `/` is the page itself |
-| `POST /` | one frame, and the server's answer as the reply |
-| `GET /` (Upgrade: websocket) | full-duplex WebSocket frame stream for rich clients |
+1. `GET /<file>` asks for one file of the webui directory; `/` is the page itself.
+2. `POST /` asks for one frame, and answers with the server's reply.
+3. `GET /` with `Upgrade: websocket` opens a full-duplex WebSocket frame stream, for a client that wants one.
 
 A `POST` names its adapter in the `X-Bridge-Adapter` head; there is no other way to say it. A name the file does not carry is refused with `403`. The body is `{kind, name, payload}`, carried as it arrived: `call`, `post` and `subscribe` cross unchanged, and the answer is the payload the server wrote.
 
@@ -28,11 +26,9 @@ An error is `{"error": {"code", "message"}}` when the door itself refused. A ref
 
 Every adapter declares which categories of live output it wants, and how long a text piece may be. The door then keeps what was asked for and drops the rest.
 
-| declaration | effect |
-|---|---|
-| `thinking` | `thinking` and `boundary` pieces are forwarded, or dropped |
-| `tools` | `arguments` and `tool_*` pieces are forwarded, or dropped |
-| `chunk` | a `text` piece longer than this many characters arrives as several frames; `0` is no limit |
+1. `thinking` decides whether `thinking` and `boundary` pieces are forwarded or dropped.
+2. `tools` decides whether `arguments` and `tool_*` pieces are forwarded or dropped.
+3. `chunk` is how long a `text` piece may be: a longer one arrives as several frames, and `0` is no limit.
 
 Only the categories are separated. Whether a tool call is paired with its result, how long a round was, and how the words are laid out are the receiver's own business: the door forwards frames, it does not assemble new ones.
 
@@ -54,15 +50,13 @@ adapters:
     forbid: [post]
 ```
 
-| field | default | meaning |
-|---|---|---|
-| `port` | `8737` | the one port every adapter shares |
-| `local-only` | `false` | refuse a client from anywhere but this machine |
-| `thinking` | `true` | whether `thinking` and `boundary` pieces are forwarded |
-| `tools` | `true` | whether `arguments` and `tool_*` pieces are forwarded |
-| `chunk` | `0` | the most characters one `text` frame carries; `0` is no limit |
-| `command` | none | a program the bridge starts beside itself and stops with it |
-| `forbid` | none | what this adapter may not send, written as `kind` or `kind/name` |
+1. `port`, `8737` by default, is the one port every adapter shares.
+2. `local-only`, `false` by default, refuses a client from anywhere but this machine.
+3. `thinking`, `true` by default, decides whether `thinking` and `boundary` pieces are forwarded.
+4. `tools`, `true` by default, decides whether `arguments` and `tool_*` pieces are forwarded.
+5. `chunk`, `0` by default, is the most characters one `text` frame carries; `0` is no limit.
+6. `command`, none by default, is a program the bridge starts beside itself and stops with it.
+7. `forbid`, none by default, is what this adapter may not send, written as `kind` or `kind/name`.
 
 `forbid` holds only what is refused, never what is allowed: an adapter may say everything the server names, except what is written there. `post` closes the whole kind; `post/delete` closes one name inside it. The three kinds are `call`, `post` and `subscribe`; a rule names a kind and at most one name, so `post/meta` is the deepest a rule goes.
 
@@ -70,7 +64,7 @@ adapters:
 
 The one front end that is written here rather than declared. Its files are seeded into `webui/` under the global config directory on the first start and served from disk afterwards, so a reader may edit the page without rebuilding anything; a deleted file falls back to the built-in copy and is written back on the next start.
 
-The page has no framework, no bundler and no third-party script: one HTML template, `css/` with one sheet per region, and `js/` with the plain modules the browser loads.
+The page has no framework, no bundler and no third-party script: one HTML shell holding its fixed shapes as templates, `styles/` with one sheet a region under one `@layer` order, and `js/` with the plain modules the browser loads. A fixed shape is a `<template>` a builder clones and fills by the name each part carries; a panel brings its own markup and its own sheet, both taken in the first time it opens.
 
 A running round is laid down a segment at a time. A block's body is cut into runs — prose, a fence, a table, a quote, a list — and only the open tail is ever cut again, so a settled run parses once and keeps the nodes it was given; a stream frame repaints that tail and nothing else on the page.
 
@@ -84,13 +78,13 @@ A lap's bill rides the last piece it wrote, and a zeroed one is the provider sta
 
 ## 2. Design intent
 
-- **The postman does not open the mail.** Names and payloads cross unchanged; what a frame means is the front end's business. The bridge reads a `kind` and a `name` for one decision — the adapter's own rules — and nothing else.
-- **Categories, not shapes.** An adapter declares which kinds of piece it can receive. Assembling, pairing and laying out are what the receiver does with them.
-- **One connection per conversation.** The server keeps a conversation's runtime only while some connection follows it, and one connection follows one conversation, so holding several is holding several connections.
-- **A conversation is held while it has a reason to be.** A listener on its stream, or a round it has not finished, is that reason; a conversation with neither for ten minutes is handed back.
-- **One stranger at a time per conversation.** A reply names only its kind and its name, so two questions in flight on one connection could take each other's answers. Each conversation therefore answers one question before the next is sent.
-- **One program, one door.** An adapter's own program is started and stopped with the bridge, so a bot does not outlive the process that fed it.
-- **One address.** A front end reaches the door by connecting to it; nothing about what it wants lives in the path.
+1. **The postman does not open the mail.** Names and payloads cross unchanged; what a frame means is the front end's business. The bridge reads a `kind` and a `name` for one decision — the adapter's own rules — and nothing else.
+2. **Categories, not shapes.** An adapter declares which kinds of piece it can receive. Assembling, pairing and laying out are what the receiver does with them.
+3. **One connection per conversation.** The server keeps a conversation's runtime only while some connection follows it, and one connection follows one conversation, so holding several is holding several connections.
+4. **A conversation is held while it has a reason to be.** A listener on its stream, or a round it has not finished, is that reason; a conversation with neither for ten minutes is handed back.
+5. **One stranger at a time per conversation.** A reply names only its kind and its name, so two questions in flight on one connection could take each other's answers. Each conversation therefore answers one question before the next is sent.
+6. **One program, one door.** An adapter's own program is started and stopped with the bridge, so a bot does not outlive the process that fed it.
+7. **One address.** A front end reaches the door by connecting to it; nothing about what it wants lives in the path.
 
 ## 3. Unresolved
 
@@ -100,7 +94,5 @@ A lap's bill rides the last piece it wrote, and a zeroed one is the provider sta
 
 ## 4. Config fields
 
-| key | use |
-|---|---|
-| `adapters.yml`'s `port` | the port the door listens on |
-| `config.server.platform.ipc` | not read here: `main` picks the endpoint the door connects to |
+1. `adapters.yml`'s `port` is the port the door listens on.
+2. `config.server.platform.ipc` is not read here: `main` picks the endpoint the door connects to.

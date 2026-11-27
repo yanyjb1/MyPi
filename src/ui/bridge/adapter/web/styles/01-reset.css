@@ -1,0 +1,64 @@
+/* What every element starts as: one box model, no inherited margins, and the transcript's own scrollbar hidden —
+   the dial beside it is where the reader's place is read. */
+
+@layer reset {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: rgb(var(--base));
+    color: rgb(var(--ink));
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 22px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  p,
+  ol,
+  ul,
+  dl,
+  dd,
+  dt {
+    margin: 0;
+    padding: 0;
+  }
+
+  ol,
+  ul {
+    list-style: none;
+  }
+
+  /* A control keeps its own type and takes a finger's worth of touch, and a keyboard's focus is never invisible. */
+  button {
+    font: inherit;
+    color: inherit;
+    touch-action: manipulation;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent) / 0.6);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.28);
+  }
+
+  #chat {
+    scrollbar-width: none;
+  }
+
+  #chat::-webkit-scrollbar {
+    display: none;
+  }
+}

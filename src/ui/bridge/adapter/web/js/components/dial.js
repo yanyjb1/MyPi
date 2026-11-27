@@ -1,0 +1,325 @@
+// The dial: five notches thirty degrees apart, the round in view always the one in the middle, and the words each
+// notch carries. A pointer coming to rest on the ring wakes it; one that leaves folds it at once.
+
+import { at, clear } from "../core/template.js";
+import { words } from "../core/api.js";
+import { state } from "../core/store.js";
+import { jump } from "./chat/scroll.js";
+import { said } from "./chat/sheet.js";
+import { loaded } from "./chat/window.js";
+
+// The arc a notch sits on, in the svg's own units: centre (99,100), radius 96, bulging left. Bearings run negative
+// along the sweep, so the middle of the ring is -180: the round in view sits straight out from the hub.
+const CX = 99;
+const CY = 100;
+const R = 96;
+const MID = -180;
+const STEP = 30;
+// A half ring holds seven bearings; the topmost and the bottommost are left empty, because a line there would have
+// no room to say anything. Five it is, and the round in view keeps the middle one whatever its place in the list.
+const SPAN = 2;
+// How long a pointer rests on the ring before it is awake.
+const WAIT = 180;
+
+let active = false;
+let waking = 0;
+let cursorIndex = -1;
+let dir = 0;
+
+const rounds = () => (state.session && state.session.structure) || [];
+
+function point(angle, radius) {
+  const rad = (angle * Math.PI) / 180;
+  return [CX + radius * Math.cos(rad), CY + radius * Math.sin(rad)];
+}
+
+// The position of the round in view or the standalone cursor while wandering the dial.
+function bearing() {
+  const list = rounds();
+  if (cursorIndex >= 0 && cursorIndex < list.length) return cursorIndex;
+  const seen = state.session && state.session.anchor;
+  const found = list.findIndex((round) => round.turn === seen);
+  return found < 0 ? Math.max(0, list.length - 1) : found;
+}
+
+// One notch, drawn from the track inwards: a tick that is also the way to its round.
+function notch(round, angle, span) {
+  const [x1, y1] = point(angle, R + 4);
+  const [x2, y2] = point(angle, R + 4 - span);
+  const tick = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  tick.setAttribute("class", "tick");
+  tick.setAttribute("x1", x1);
+  tick.setAttribute("y1", y1);
+  tick.setAttribute("x2", x2);
+  tick.setAttribute("y2", y2);
+  tick.dataset.turn = String(round.turn);
+  tick.setAttribute("vector-effect", "non-scaling-stroke");
+  tick.addEventListener("click", (event) => {
+    event.stopPropagation();
+    cursorIndex = -1;
+    jump(round.turn);
+  });
+  return tick;
+}
+
+// The ring in the svg's own units: the centre every line is hung from, and the room a line has.
+const LENGTH = 58;
+const FONT = 10.5;
+const TAIL = "…";
+
+// Widths are measured in em, never in pixels and never assumed: an em is the same in the drawing's units whatever
+// size the ring is on screen, and a canvas measure knows that a wide glyph and a latin one differ.
+const canvas = document.createElement("canvas");
+const ctx = canvas.getContext("2d");
+
+function prepare() {
+  if (!ctx) return;
+  const family = getComputedStyle(document.body).fontFamily || "sans-serif";
+  ctx.font = "100px " + family;
+}
+
+// The width of a line in em, and the room a line has.
+function width(text) {
+  if (!ctx) return text.length;
+  return ctx.measureText(text).width / 100;
+}
+
+const ROOM = LENGTH / FONT;
+
+// The opening that fits the room: the rest is said with an ellipsis, and the whole message waits in the title. A
+// width only ever grows with the text, so the cut is found by halving, never by measuring a glyph at a time.
+function fitted(text) {
+  const whole = String(text || "").replace(/\s+/g, " ").trim();
+  if (!whole || width(whole) <= ROOM) return whole;
+  const tail = width(TAIL);
+  let low = 0;
+  let high = whole.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (width(whole.slice(0, mid)) + tail > ROOM) high = mid - 1;
+    else low = mid;
+  }
+  // A cut inside a surrogate pair is not a character: the pair goes whole or not at all.
+  let cut = whole.slice(0, low);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return (cut || "") + TAIL;
+}
+
+// Each round's first words, kept here because the transcript's own page drops what it is not showing. Only the
+// rounds the ring has actually shown live here, and only a few of them: a session of thirty thousand rounds must
+// never be carried about in the browser.
+let spoken = new Map();
+const KEEP = 512;
+// The session the kept words belong to: another one starts the map again.
+let owner = null;
+// Rounds already asked for, so a frame that lands mid-ask is not asked for twice.
+const owed = new Set();
+
+function remember(turn, text) {
+  spoken.set(turn, text);
+  if (spoken.size > KEEP) {
+    const first = spoken.keys().next().value;
+    spoken.delete(first);
+  }
+}
+
+// One line, hung on its own notch's line: every line is pinned to one length, so all five tips end at the same
+// radius whichever words they carry.
+function line(round, offset, text, isSelected) {
+  const k = offset || 0;
+  // Strictly horizontal: vertical alignment around CY = 100.
+  const y = CY + k * 20;
+  // Stepwise rightward indent: the middle is farthest left, the edges indent rightward.
+  const indent = Math.abs(k) * 16;
+  const x = 16 + indent;
+  const display = text || (round.compact ? "compact" : "turn " + round.turn);
+
+  const node = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  node.setAttribute("class", "word");
+  node.setAttribute("x", x);
+  node.setAttribute("y", y + 3);
+  node.setAttribute("text-anchor", "start");
+  node.setAttribute("font-size", FONT);
+  node.dataset.turn = String(round.turn);
+  node.dataset.on = isSelected ? "1" : "0";
+  node.textContent = fitted(display);
+  node.title = display;
+  node.addEventListener("click", (event) => {
+    event.stopPropagation();
+    jump(round.turn);
+  });
+  return node;
+}
+
+// The user's own words among the blocks one answer brought back, whichever interval of the round holds them.
+function spokenOf(blocks, ranges) {
+  const first = blocks.find((block) => {
+    if (block.kind !== "user") return false;
+    return (ranges || []).some(([lo, hi]) => lo <= block.id && block.id <= hi);
+  });
+  if (!first) return "";
+  return String(first.prefix || "") + String(first.content || first.text || "");
+}
+
+// A runway of rounds is read in one question, never one question a round.
+async function speakBatch(held, missing, again) {
+  if (!missing.length) return;
+  const targetRanges = [];
+  const turnRounds = new Map();
+  for (const r of missing) {
+    turnRounds.set(r.turn, r);
+    for (const range of r.ranges || []) targetRanges.push(range);
+  }
+  if (!targetRanges.length) return;
+  try {
+    const answer = await words({ session: held.id, ranges: targetRanges });
+    const blocks = answer.blocks || [];
+    for (const block of blocks) {
+      if (held.blocks) held.blocks.set(block.id, block);
+    }
+    for (const [turn, r] of turnRounds.entries()) {
+      remember(turn, spokenOf(blocks, r.ranges) || "turn " + turn);
+    }
+  } catch {}
+
+  for (const r of missing) owed.delete(held.id + ":" + r.turn);
+  if (!state.session || state.session.id !== held.id) return;
+  again();
+}
+
+const RUNWAY = 64;
+let inFlight = false;
+
+// Every line of the window on its own notch's line, all of one length. The runway runs the way the reader turns.
+export function label(box, held, items, again, direction = 0, here = -1) {
+  prepare();
+  if (owner !== held.id) {
+    owner = held.id;
+    spoken = new Map();
+  }
+  const list = (held && held.structure) || [];
+  const atIdx = here >= 0
+    ? here
+    : (items[0] ? list.indexOf(items[0].round) : 0);
+  const from = direction <= 0 ? Math.max(0, atIdx - RUNWAY) : atIdx;
+  const to = direction >= 0 ? Math.min(list.length - 1, atIdx + RUNWAY) : atIdx;
+  const missing = [];
+
+  for (let i = from; i <= to; i += 1) {
+    const round = list[i];
+    if (!round || spoken.has(round.turn)) continue;
+    if (loaded(held, round)) spoken.set(round.turn, said(held, round));
+    else if (!owed.has(held.id + ":" + round.turn)) {
+      owed.add(held.id + ":" + round.turn);
+      missing.push(round);
+    }
+  }
+
+  // The five beside the middle are read before the runway, so a notch that is on screen never waits for one.
+  for (const { round } of items) {
+    if (!spoken.has(round.turn) && loaded(held, round)) {
+      spoken.set(round.turn, said(held, round));
+    }
+  }
+
+  if (missing.length && !inFlight) {
+    inFlight = true;
+    speakBatch(held, missing, () => {
+      inFlight = false;
+      again();
+    });
+  }
+
+  for (const { round, offset, isSelected } of items) {
+    box.append(line(round, offset, spoken.get(round.turn), isSelected));
+  }
+}
+
+function paint() {
+  const box = clear(at("dial-ticks"));
+  clear(at("dial-words"));
+  const wrap = at("dial-wrap");
+  wrap.dataset.on = active ? "1" : "0";
+  wrap.dataset.state = active ? "active" : "inactive";
+  const held = state.session;
+  const list = rounds();
+  if (!list.length) return;
+  const here = bearing();
+  const items = [];
+  for (let k = -SPAN; k <= SPAN; k += 1) {
+    const round = list[here + k];
+    if (!round) continue;
+    const angle = MID - k * STEP;
+    box.append(notch(round, angle, active ? 16 : 10));
+    items.push({ round, offset: k, isSelected: k === 0 });
+  }
+  // The selected notch stays lit.
+  for (const tick of box.children) {
+    tick.dataset.on = Number(tick.dataset.turn) === list[here].turn ? "1" : "0";
+  }
+  if (active && held) label(at("dial-words"), held, items, paint, dir, here);
+}
+
+function wake() {
+  if (active) return;
+  active = true;
+  cursorIndex = -1;
+  dir = 0;
+  paint();
+}
+
+function fold() {
+  if (!active) return;
+  active = false;
+  cursorIndex = -1;
+  dir = 0;
+  paint();
+}
+
+// The wheel wanders within the dial's cursor only: the transcript is not scrolled and no body is fetched.
+function wheel(event) {
+  if (!active) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const list = rounds();
+  if (list.length < 2) return;
+  dir = event.deltaY > 0 ? 1 : -1;
+  const here = bearing();
+  const there = Math.min(Math.max(here + dir, 0), list.length - 1);
+  if (there !== here) {
+    cursorIndex = there;
+    paint();
+  }
+}
+
+export function draw() {
+  paint();
+}
+
+// The ring has two states: five ticks to glance at, and a navigator that owns the wheel. One box holds the ticks
+// and their words, so entering and leaving it is the whole of the hover.
+export function wire() {
+  const wrap = at("dial-wrap");
+  wrap.addEventListener("pointerenter", (event) => {
+    if (event.pointerType === "touch") return;
+    clearTimeout(waking);
+    if (!active) waking = setTimeout(wake, WAIT);
+  });
+  wrap.addEventListener("pointerleave", (event) => {
+    if (event.pointerType === "touch") return;
+    clearTimeout(waking);
+    waking = 0;
+    fold();
+  });
+  // A screen with no pointer keeps a tap as its only way in and out.
+  wrap.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch") return;
+    if (active) fold();
+    else wake();
+  });
+  wrap.addEventListener("wheel", wheel, { passive: false });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !active) return;
+    fold();
+  });
+}

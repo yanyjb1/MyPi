@@ -1,7 +1,8 @@
 <!doctype html>
 <html lang="en">
 	<head>
-		<meta charset="utf-8" />
+		<!-- The page's shell: the three columns and the templates their builders clone. -->
+		<meta charset
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<meta name="color-scheme" content="dark light" />
 		<script>
@@ -12,15 +13,7 @@
 		</script>
 		<meta name="theme-color" content="#151517" />
 		<title>mypi</title>
-		<link rel="stylesheet" href="/css/base/base.css" />
-		<link rel="stylesheet" href="/css/base/bits.css" />
-		<link rel="stylesheet" href="/css/base/layout.css" />
-		<link rel="stylesheet" href="/css/rail/rail.css" />
-		<link rel="stylesheet" href="/css/chat/sheet.css" />
-		<link rel="stylesheet" href="/css/chat/deck.css" />
-		<link rel="stylesheet" href="/css/chat/dial.css" />
-		<link rel="stylesheet" href="/css/panel/panel.css" />
-		<link rel="stylesheet" href="/css/panel/bill.css" />
+		<link rel="stylesheet" href="/styles/main.css" />
 	</head>
 	<body data-rail="open" data-panel="closed">
 		<div id="backdrop"></div>
@@ -181,6 +174,131 @@
 			</header>
 			<div class="panel-body" id="panel-body"></div>
 		</aside>
+
+		<template id="tpl-rail-item">
+			<li data-id="" data-on="0" data-live="0">
+				<span class="title" data-ref="title"></span>
+				<span class="meta">
+					<span data-ref="id"></span>
+					<span data-ref="rounds" hidden></span>
+					<span data-ref="time" hidden></span>
+					<span data-ref="live" hidden></span>
+				</span>
+				<span class="acts">
+					<button class="icon rename" title="rename this session" aria-label="rename this session">
+						<svg viewBox="0 0 16 16" aria-hidden="true">
+							<path d="M10.6 2.4l3 3L6 13l-3.6.7.7-3.6z" />
+						</svg>
+					</button>
+					<button class="icon remove" title="delete this session" aria-label="delete this session">
+						<svg viewBox="0 0 16 16" aria-hidden="true">
+							<path d="M2.5 4.5h11M6.5 4.5V3h3v1.5M4.2 4.5l.6 9h6.4l.6-9M6.8 7v4M9.2 7v4" />
+						</svg>
+					</button>
+				</span>
+			</li>
+		</template>
+
+		<template id="tpl-turn">
+			<section class="turn" data-turn="">
+				<div class="who" data-ref="who" hidden>
+					<span class="accent">compaction</span>
+				</div>
+			</section>
+		</template>
+
+		<template id="tpl-gap">
+			<div class="turn gap" data-turn="" title="read this round"></div>
+		</template>
+
+		<template id="tpl-live">
+			<section class="turn live"></section>
+		</template>
+
+		<template id="tpl-you">
+			<div class="you">
+				<span class="wrap" data-ref="prefix" hidden></span>
+				<span data-ref="said"></span>
+				<span class="wrap" data-ref="suffix" hidden></span>
+			</div>
+		</template>
+
+		<template id="tpl-prose">
+			<div class="md" data-ref="body"></div>
+		</template>
+
+		<template id="tpl-think">
+			<details class="think">
+				<summary class="think-head">
+					<span class="label">thinking</span>
+				</summary>
+				<div class="body md think-body" data-ref="body"></div>
+			</details>
+		</template>
+
+		<template id="tpl-tool">
+			<div class="tool-card" data-state="running">
+				<div class="tool-head">
+					<span class="dot">●</span>
+					<span class="tool-name" data-ref="name"></span>
+					<span class="tool-intent" data-ref="intent"></span>
+					<span class="tool-meta">
+						<span class="took" data-ref="took" hidden></span>
+						<span class="state-tag" data-ref="state"></span>
+						<button class="icon tool-toggle" title="toggle details" aria-label="toggle details">▾</button>
+					</span>
+				</div>
+				<div class="tool-detail" data-ref="detail" hidden></div>
+			</div>
+		</template>
+
+		<template id="tpl-tool-part">
+			<div class="tool-part">
+				<div class="part-label" data-ref="label"></div>
+				<div class="args" data-ref="args"></div>
+				<pre class="out" data-ref="out"></pre>
+			</div>
+		</template>
+
+		<template id="tpl-tool-arg">
+			<span class="k"></span>
+			<span class="v"></span>
+		</template>
+
+		<template id="tpl-note">
+			<div class="note">
+				<span class="src" data-ref="src"></span>
+				<span data-ref="said"></span>
+			</div>
+		</template>
+
+		<template id="tpl-break">
+			<hr />
+		</template>
+
+		<template id="tpl-menu-item">
+			<div class="item" data-on="0">
+				<span data-ref="name"></span>
+				<span class="dir" data-ref="detail"></span>
+			</div>
+		</template>
+
+		<template id="tpl-queue-line">
+			<div class="line"></div>
+		</template>
+
+		<template id="tpl-option">
+			<option value=""></option>
+		</template>
+
+		<template id="tpl-dialog">
+			<dialog>
+				<p data-ref="text"></p>
+				<input data-ref="field" spellcheck="false" hidden />
+				<button class="btn primary" type="button" data-ref="yes"></button>
+				<button class="btn" type="button" data-ref="no">cancel</button>
+			</dialog>
+		</template>
 
 		<script type="module" src="/js/main.js"></script>
 	</body>

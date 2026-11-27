@@ -1,30 +1,23 @@
-// The page's boot: register the panels, wire the controls, ask the first rows, and redraw once.
+// The page's boot: register the panels, wire the controls, ask the first rows, and redraw once. Everything below is
+// one region's own entry point; nothing here knows what a region holds.
 
-import { at } from "./base/dom.js";
-import { closePanel, state, watch as watchState } from "./base/state.js";
-import { bill, refresh } from "./base/read.js";
-import { enter } from "./chat/history/enter.js";
-import { interrupt, remove } from "./base/write.js";
-import { fresh } from "./rail/draft.js";
-import { send } from "./chat/composer/talk.js";
-import { keys, submit } from "./chat/composer/key.js";
-import * as rail from "./rail/rail.js";
-import * as bar from "./chat/composer/bar.js";
-import * as sheet from "./chat/history/sheet.js";
-import * as place from "./chat/history/place.js";
-import * as dial from "./chat/dial/dial.js";
-import * as theme from "./base/theme.js";
-import {
-  draw as drawPanels,
-  PanelRegistry,
-  toggle as togglePanel,
-} from "./panel/panels.js";
-import { register as registerUsage } from "./panel/plugins/usage.js";
+import { at } from "./core/template.js";
+import { closePanel, state, watch as watchState } from "./core/store.js";
+import { interrupt, remove } from "./core/api.js";
+import * as theme from "./core/theme.js";
+import * as rail from "./components/rail.js";
+import * as capsule from "./components/composer/mods.js";
+import * as input from "./components/composer/input.js";
+import { keys, submit } from "./components/composer/keys.js";
+import { send } from "./components/composer/talk.js";
+import { enter, fresh, head } from "./components/chat/list.js";
+import * as sheet from "./components/chat/sheet.js";
+import { follow, latest } from "./components/chat/scroll.js";
+import * as dial from "./components/dial.js";
+import { draw as drawPanels, PanelRegistry, toggle as togglePanel } from "./components/panels.js";
+import { register as registerUsage } from "../panels/usage/usage.js";
 
-// The pieces a panel may ask for: the page's own writes, and the reads its rows come from.
-const page = { bill };
-
-registerUsage(PanelRegistry, page);
+registerUsage(PanelRegistry);
 
 // A burst of stream pieces moves the tail once: the redraw waits for the frame, not for every piece.
 let pending = null;
@@ -32,7 +25,7 @@ let pending = null;
 // A piece moves the tail, a bill moves the ring and the drawer, and the rest of a change moves the page.
 function paint(reason) {
   if (reason === "bill") {
-    bar.draw();
+    capsule.draw();
     drawPanels();
     return;
   }
@@ -41,7 +34,8 @@ function paint(reason) {
     return;
   }
   rail.draw();
-  bar.draw();
+  head();
+  capsule.draw();
   sheet.draw();
   drawPanels();
   dial.draw();
@@ -67,15 +61,16 @@ function draw(reason) {
 watchState(draw);
 keys();
 rail.wire();
-bar.wire();
-place.follow();
+input.wire();
+capsule.wire();
+follow();
 dial.wire();
 theme.boot();
 theme.wire();
 
 // Three columns need a reading column between them. Narrower than that, the middle keeps the width and the two
-// drawers come in over it, one at a time, asked for by their own chevrons: a drawer the page left open shuts on
-// the way in, so the narrow window never opens on a panel covering what the reader was reading.
+// drawers come in over it, one at a time, asked for by their own chevrons: a drawer the page left open shuts on the
+// way in, so the narrow window never opens on a panel covering what the reader was reading.
 const roomy = matchMedia("(min-width: 71rem)");
 function fold() {
   if (roomy.matches) return;
@@ -100,14 +95,13 @@ at("backdrop").addEventListener("click", () => {
   document.body.dataset.rail = "closed";
   closePanel();
 });
-at("jump-latest").addEventListener("click", () => place.latest());
+at("jump-latest").addEventListener("click", () => latest());
 
 draw();
-bar.boot().then(async () => {
-  await refresh();
+input.boot().then(async () => {
   if (state.active) await enter(state.active);
   else fresh();
   at("say").focus();
 });
 
-export { fresh, interrupt, page, remove, send, submit };
+export { fresh, interrupt, remove, send, submit };

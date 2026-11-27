@@ -1,0 +1,73 @@
+<!-- The usage drawer's own markup: the body the host lays down, then every shape its drawing clones. -->
+
+<div class="bill">
+	<div data-ref="head"></div>
+	<div data-ref="split"></div>
+	<div data-ref="cards"></div>
+	<div data-ref="foot"></div>
+</div>
+
+<template id="tpl-bill-head">
+	<div class="bill-kpi"></div>
+</template>
+
+<template id="tpl-bill-cell">
+	<div>
+		<span class="k" data-ref="k"></span>
+		<span class="v" data-ref="v"></span>
+		<div class="bill-track" data-ref="track" hidden><i></i></div>
+		<span class="f" data-ref="f" hidden></span>
+	</div>
+</template>
+
+<template id="tpl-bill-split">
+	<div class="bill-split">
+		<div class="bill-bar" data-ref="bar"></div>
+		<div class="bill-legend" data-ref="legend"></div>
+	</div>
+</template>
+
+<template id="tpl-bill-legend">
+	<div>
+		<span class="n"><i class="swatch"></i><span data-ref="word"></span></span>
+		<b data-ref="count"></b>
+	</div>
+</template>
+
+<template id="tpl-bill-cards">
+	<div class="bill-cards"></div>
+</template>
+
+<template id="tpl-bill-card">
+	<div class="bill-card">
+		<div class="top">
+			<span class="name" data-ref="name"></span>
+			<span class="tag" data-ref="tag" hidden></span>
+			<span class="cost" data-ref="cost"><small data-ref="share"></small></span>
+		</div>
+		<div class="nums" data-ref="nums"></div>
+	</div>
+</template>
+
+<template id="tpl-bill-num">
+	<div>
+		<span class="k" data-ref="k"></span>
+		<span class="v" data-ref="v"></span>
+		<span class="p" data-ref="p"></span>
+	</div>
+</template>
+
+<template id="tpl-bill-more">
+	<button class="bill-more" type="button"></button>
+</template>
+
+<template id="tpl-bill-foot">
+	<div class="bill-foot"></div>
+</template>
+
+<template id="tpl-bill-row">
+	<div class="bill-row">
+		<span class="l" data-ref="l"></span>
+		<span class="r" data-ref="r"></span>
+	</div>
+</template>

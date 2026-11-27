@@ -9,10 +9,8 @@ disagree, that one is right.
 
 One port, one address, no path. The method says what is being asked for.
 
-| method | asks for |
-|---|---|
-| `GET /<file>` | one file of the webui directory; `/` is the page |
-| `POST /` | one frame, and the answer |
+1. `GET /<file>` asks for one file of the webui directory; `/` is the page.
+2. `POST /` asks for one frame, and answers with it.
 
 A `POST` names itself in the `X-Bridge-Adapter` head. The name must be an adapter in
 `adapters.yml`; anything else is refused with `403`. The body is one frame:
@@ -23,12 +21,10 @@ A `POST` names itself in the `X-Bridge-Adapter` head. The name must be an adapte
 
 `payload` is always an object, possibly empty. There are four kinds a front end may send:
 
-| kind | what it does | answer |
-|---|---|---|
-| `call` | reads; changes nothing | the read's payload |
-| `post` | writes | `{}`, or the write's own answer |
-| `subscribe` | asks for a stream, or opens a turn | a stream, or the turn's reply |
-| `host` | the door's own: one directory's names | the listing |
+1. `call` reads and changes nothing; the answer is the read's payload.
+2. `post` writes; the answer is `{}`, or the write's own answer.
+3. `subscribe` asks for a stream or opens a turn; the answer is a stream, or the turn's reply.
+4. `host` is the door's own, one directory's names; the answer is the listing.
 
 Nothing is remembered between requests. A front end that wants to know the answer to a question
 sends it again.
@@ -40,47 +36,46 @@ that conversation's stream, one frame per line, and keeps it open until the peer
 
 ```
 data: {"kind":"stream","name":"submit","payload":{...}}
-
 ```
 
 Three things follow, and they matter more than they look.
 
-- **A held session lives while somebody follows it.** The server keeps a session's runtime — its
-  round, its worker, its jobs, its browser tabs — only while a connection follows it. Stop
-  following, and it is released. This is why an adapter that hosts several conversations holds
-  several connections rather than one.
-- **A conversation has one writer at a time.** Whoever opens a turn owns it; another front end's
-  write answers `writer_required`. A session whose last watcher left keeps its turn but loses its
-  name, so the next front end to write claims it.
-- **A connection follows one conversation.** `watch` switches which; `watch` with `session: null`
-  stops following.
+1. **A held session lives while somebody follows it.** The server keeps a session's runtime — its
+   round, its worker, its jobs, its browser tabs — only while a connection follows it. Stop
+   following, and it is released. This is why an adapter that hosts several conversations holds
+   several connections rather than one.
+2. **A conversation has one writer at a time.** Whoever opens a turn owns it; another front end's
+   write answers `writer_required`. A session whose last watcher left keeps its turn but loses its
+   name, so the next front end to write claims it.
+3. **A connection follows one conversation.** `watch` switches which; `watch` with `session: null`
+   stops following.
 
 ## 3. What the stream carries
 
-| `name` | `payload` |
-|---|---|
-| `notice` | `session`, `text` — one line the server has to say |
-| `signal` | the write's own fields plus `signal` naming it |
-| the name that opened the turn (`submit`, `mailbox`, `wake`, `compact`) | `session`, `turn`, `kind`, and the piece |
-| the same | `session`, `turn`, `ranges`, `compact` — the round is over |
+A frame's `name` says what it is, and its `payload` says what it carries:
 
-The last row is the receipt. It is the only frame that says a round ended: when its `payload` has
+1. `notice` carries `session` and `text`: one line the server has to say.
+2. `signal` carries the write's own fields, plus `signal` naming it.
+3. The name that opened the turn — `submit`, `mailbox`, `wake`, `compact` — carries `session`,
+   `turn`, `kind`, and the piece.
+4. The same name carries `session`, `turn`, `ranges`, `compact` once the round is over.
+
+The last is the receipt. It is the only frame that says a round ended: when its `payload` has
 `ranges`, the round is closed and everything before it belonged to that round. A front end that
 missed the beginning of a round is given the whole round from its first frame the moment it
 starts following, so a receipt always closes what the front end has actually seen.
 
 `kind` in a live piece is one of:
 
-| kind | piece |
-|---|---|
-| `text` | the assistant's words; blocks of it add up to one block |
-| `thinking` | the model's reasoning, when the model exposes it |
-| `arguments` | one tool call's arguments, as they are written |
-| `boundary` | **a block just ended** — nothing follows it in that block |
-| `tool_start` | `call_id`, `name`, `args`, `intent` |
-| `tool_progress` | `call_id`, `text` |
-| `tool_end` | `call_id`, `ok` (one outcome per item), `result`, `memo`, `duration_ms`, `truncated` |
-| `wake` | a job's reminder, which keeps a block of its own |
+1. `text` is the assistant's words; blocks of it add up to one block.
+2. `thinking` is the model's reasoning, when the model exposes it.
+3. `arguments` is one tool call's arguments, as they are written.
+4. `boundary` says a block just ended — nothing follows it in that block.
+5. `tool_start` carries `call_id`, `name`, `args`, `intent`.
+6. `tool_progress` carries `call_id` and `text`.
+7. `tool_end` carries `call_id`, `ok` (one outcome per item), `result`, `memo`, `duration_ms`,
+   `truncated`.
+8. `wake` is a job's reminder, which keeps a block of its own.
 
 A tool's name arrives on `tool_start` and nowhere else; pair it with `tool_end` by `call_id`.
 `text` is the unit that opens and closes: `boundary` ends it, so a block of prose never spans one.
@@ -92,32 +87,36 @@ receipt go to everyone watching.
 
 ## 4. Reads
 
-| name | payload | answer |
-|---|---|---|
-| `init` | `session` | `structure` (each round's `turn`, `ranges`, `compact`), `blocks` (the newest 32 whole rows), `todo`, `effort` |
-| `blocks` | `session`, `ranges` (`[[lo, hi]]`) | `session`, `blocks` |
-| `meta` | `session` | the session row |
-| `usage` | `session` | the bill: tokens, `cache_hit_rate`, `cny`, `usd`, `context`, `estimated`, `baseline_prompt`, `groups`, and the subagents' `subagent_price`, `subagent_groups` |
-| `todo` | `session` | `[{"text", "done"}]` |
-| `memo` | `session`, `op`, `scope`, `name` | `names`, or `content`, or `history`, by `op` |
-| `children` | `session` | `session`, `rows` (each child's `id`, `name`, `cwd`, `anchor`, `rounds`, `bytes`, `last_ts`, `first_user`, `running`) |
-| `config` | `key` | the value; `models.model.<address>` answers that whole entry |
-| `pools` | `cwd`, `session` (both optional) | `models`, `profiles` |
-| `sessions` | `under` (optional directory) | `rows`, newest first |
+1. `init` takes `session` and answers `structure` (each round's `turn`, `ranges`, `compact`),
+   `blocks` (the newest 32 whole rows), `todo` and `effort`.
+2. `blocks` takes `session` and `ranges` (`[[lo, hi]]`) and answers `session` and `blocks`.
+3. `meta` takes `session` and answers the session row.
+4. `usage` takes `session` and answers the bill: tokens, `cache_hit_rate`, `cny`, `usd`, `context`,
+   `estimated`, `baseline_prompt`, `groups`, and the subagents' `subagent_price`,
+   `subagent_groups`.
+5. `todo` takes `session` and answers `[{"text", "done"}]`.
+6. `memo` takes `session`, `op`, `scope` and `name`, and answers `names`, `content` or `history`, by
+   `op`.
+7. `children` takes `session` and answers `session` and `rows`: each child's `id`, `name`, `cwd`,
+   `anchor`, `rounds`, `bytes`, `last_ts`, `first_user`, `running`.
+8. `config` takes `key` and answers the value; `models.model.<address>` answers that whole entry.
+9. `pools` takes `cwd` and `session`, both optional, and answers `models` and `profiles`.
+10. `sessions` takes `under`, an optional directory, and answers `rows`, newest first.
 
-A `sessions` row carries the session's own columns plus `first_user`, `bytes`, `last_ts` and `memos`. A `pools` model carries `provider`, `id`, `address`, `name`, `context_window`, `max_output_tokens`, `currency`.
+A `sessions` row carries the session's own columns plus `first_user`, `bytes`, `last_ts` and
+`memos`. A `pools` model carries `provider`, `id`, `address`, `name`, `context_window`,
+`max_output_tokens`, `currency`.
 
 ## 5. Writes
 
-| name | payload | answer |
-|---|---|---|
-| `init` | `cwd`, `name`, `model`, `profile`, `effort`, `fallback` | `{"session"}`, plus `cwd` when `fallback` moved the directory |
-| `delete` | `session` | `{}`; that session's stream closes |
-| `memo` | `session`, `op`, `scope`, `name`, `content` | `{}` |
-| `default_model` | `model` | `{}` |
-| `interrupt` | `session` | `{}` |
-| `mailbox` | `session`, `text`, `prefix`, `suffix` | `{}` |
-| `meta` | `name`, `content` | `{}`; the result is a signal on the stream |
+1. `init` takes `cwd`, `name`, `model`, `profile`, `effort` and `fallback`, and answers
+   `{"session"}`, plus `cwd` when `fallback` moved the directory.
+2. `delete` takes `session` and answers `{}`; that session's stream closes.
+3. `memo` takes `session`, `op`, `scope`, `name` and `content`, and answers `{}`.
+4. `default_model` takes `model` and answers `{}`.
+5. `interrupt` takes `session` and answers `{}`.
+6. `mailbox` takes `session`, `text`, `prefix` and `suffix`, and answers `{}`.
+7. `meta` takes `name` and `content`, and answers `{}`; the result is a signal on the stream.
 
 `init` without `fallback` takes the directory as given and refuses one that does not exist: the
 user picked it. With `fallback`, the front end only carried the path over from where it started,
@@ -128,24 +127,23 @@ empty `text` with a `prefix` or `suffix` still writes; neither clears it. The lo
 next blocking point and opens a turn named `mailbox`.
 
 `meta` is the one nested write: its `name` picks which field changes, its `content` holds that
-write's arguments.
+write's arguments. Each of its five names takes `session` and one more field, and comes back as a
+signal:
 
-| `name` | `content` | signal |
-|---|---|---|
-| `name` | `session`, `name` | `{"signal": "name", "name"}` |
-| `cwd` | `session`, `path` | `{"signal": "cwd", "cwd"}` |
-| `switch` | `session`, `model` | `{"signal": "model", "model"}` |
-| `effort` | `session`, `effort` | `{"signal": "effort", "effort"}` |
-| `rewind` | `session`, `turn`, `block` | `{"signal": "rewind", "turn", "block", "cut"}` |
+1. `name` takes `name`; the signal is `{"signal": "name", "name"}`.
+2. `cwd` takes `path`; the signal is `{"signal": "cwd", "cwd"}`.
+3. `switch` takes `model`; the signal is `{"signal": "model", "model"}`.
+4. `effort` takes `effort`; the signal is `{"signal": "effort", "effort"}`.
+5. `rewind` takes `turn` and `block`; the signal is
+   `{"signal": "rewind", "turn", "block", "cut"}`.
 
 `model` is `{"provider", "model"}` everywhere it appears.
 
 ## 6. Opening a turn
 
-| name | payload | answer |
-|---|---|---|
-| `submit` | `session`, `text`, `prefix`, `suffix` | `turn` |
-| `compact` | `session`, `retention` (`{"chars"}` or `{"blocks"}`), `focus` | `turn` |
+1. `submit` takes `session`, `text`, `prefix` and `suffix`, and answers `turn`.
+2. `compact` takes `session`, `retention` (`{"chars"}` or `{"blocks"}`) and `focus`, and answers
+   `turn`.
 
 Both answer `busy` when the conversation is already in a turn. Nothing is queued here: a message
 that must wait goes to `mailbox` instead. A child session takes no messages and answers
@@ -156,9 +154,7 @@ tells the model what it cannot otherwise know — a chat has no clock.
 
 ## 7. The door's own frame
 
-| name | payload | answer |
-|---|---|---|
-| `host` / `list` | `path`, `cwd` | `{"dir", "entries": [{"name", "dir"}]}` |
+`host` / `list` takes `path` and `cwd`, and answers `{"dir", "entries": [{"name", "dir"}]}`.
 
 `path` is a half-typed directory: its own head is resolved against `cwd`, `~` is home, and one
 name per entry comes back with a flag saying whether it is a directory. It never reaches the

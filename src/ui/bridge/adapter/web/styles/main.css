@@ -1,0 +1,14 @@
+/* The one stylesheet entry: the layer order, then every sheet the page owns. A sheet loaded later — a panel's own
+   — declares the same layer by name and lands in the same order, however late it arrives. */
+
+@layer reset, tokens, layout, primitives, components, utilities;
+
+@import url("01-reset.css") layer(reset);
+@import url("02-tokens.css") layer(tokens);
+@import url("03-layout.css") layer(layout);
+@import url("04-primitives.css") layer(primitives);
+@import url("components/rail.css") layer(components);
+@import url("components/chat.css") layer(components);
+@import url("components/composer.css") layer(components);
+@import url("components/dial.css") layer(components);
+@import url("components/panel.css") layer(components);
