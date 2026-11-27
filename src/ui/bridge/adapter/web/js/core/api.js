@@ -61,7 +61,7 @@ async function ask(kind, name, payload = {}) {
 const call = (name, payload) => ask("call", name, payload);
 const post = (name, payload) => ask("post", name, payload);
 const subscribe = (name, payload) => ask("subscribe", name, payload);
-const host = (name, payload) => ask("host", name, payload);
+const local = (name, payload) => ask("local", name, payload);
 
 // The two writes a message makes and the one read a jump list makes, named for what they say rather than for the
 // door they go through.
@@ -253,7 +253,7 @@ export function listing(where, path) {
   const payload = {};
   if (where) payload.cwd = where;
   if (path) payload.path = path;
-  return host("list", payload);
+  return local("list", payload);
 }
 
 // Safe model split at the first colon only, so an address naming a tag of its own keeps it.

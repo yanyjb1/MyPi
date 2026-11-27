@@ -1,66 +1,42 @@
-// What the door answers itself: the one look at this machine's directories a page cannot take.
-
-use std::path::{Path, PathBuf};
+// The door's own hosting frames: a session handed to the bridge to keep alive, and the same one given back.
 
 use serde_json::{Value, json};
 
-// How many names one listing carries; a longer directory offers no more.
-const MAX: usize = 2000;
+use crate::ipc::contract::Frame;
+use crate::ui::bridge::manager::Hub;
 
-// `host/list`: every name one directory holds, directories marked, and the directory that was read.
-pub fn list(payload: &Value) -> Value {
-    let word = payload
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let base = payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let head = match word.rfind('/') {
-        Some(at) => &word[..=at],
-        None => "",
-    };
-    let dir = std::fs::canonicalize(resolve(head, base)).unwrap_or_else(|_| resolve(head, base));
-    let mut found: Vec<(bool, String)> = match std::fs::read_dir(&dir) {
-        Ok(read) => read
-            .flatten()
-            .take(MAX)
-            .map(|one| {
-                let dir = one.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
-                (dir, one.file_name().to_string_lossy().to_string())
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    found.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-    });
-    let entries: Vec<Value> = found
-        .into_iter()
-        .map(|(dir, name)| json!({"name": name, "dir": dir}))
-        .collect();
-    json!({"dir": dir.to_string_lossy(), "entries": entries})
+use super::respond;
+
+// `host/attach` keeps a session booked with no front end watching, `host/release` gives it back, and `host/list` names what is kept.
+pub fn apply(hub: &Hub, frame: &Frame) -> Result<Value, (u16, Value)> {
+    if frame.name == "list" {
+        let sessions: Vec<Value> = hub
+            .kept()
+            .into_iter()
+            .map(|(session, turn)| json!({"session": session, "turn": turn}))
+            .collect();
+        return Ok(json!({"sessions": sessions}));
+    }
+    let session = frame
+        .payload
+        .get("session")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| bad("a hosting frame names `session`"))?;
+    match frame.name.as_str() {
+        "attach" => hub
+            .host(session)
+            .map(|()| json!({}))
+            .map_err(|e| (502, respond::error("upstream_closed", &e))),
+        "release" => {
+            hub.release(session);
+            Ok(json!({}))
+        }
+        other => Err(bad(&format!(
+            "the door answers `attach`, `release` and `list`, not `{other}`"
+        ))),
+    }
 }
 
-// The directory the word's own head names: relative paths stand on the session's own directory.
-fn resolve(head: &str, base: &str) -> PathBuf {
-    if head.is_empty() {
-        return if base.is_empty() {
-            PathBuf::from(".")
-        } else {
-            PathBuf::from(base)
-        };
-    }
-    if let Some(rest) = head.strip_prefix('~')
-        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-    {
-        return Path::new(&home).join(rest.trim_start_matches(['/', '\\']));
-    }
-    let named = Path::new(head);
-    if named.is_absolute() || base.is_empty() {
-        return named.to_path_buf();
-    }
-    Path::new(base).join(named)
+fn bad(message: &str) -> (u16, Value) {
+    (400, respond::error("bad_request", message))
 }

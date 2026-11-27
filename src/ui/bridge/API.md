@@ -24,7 +24,9 @@ A `POST` names itself in the `X-Bridge-Adapter` head. The name must be an adapte
 1. `call` reads and changes nothing; the answer is the read's payload.
 2. `post` writes; the answer is `{}`, or the write's own answer.
 3. `subscribe` asks for a stream or opens a turn; the answer is a stream, or the turn's reply.
-4. `host` is the door's own, one directory's names; the answer is the listing.
+4. `local` is the door's own look at this machine: one directory's names, and never anything else.
+5. `host` is the door's own keeping of a session: it hands one over, takes it back, or lists what it
+   keeps. Neither of the last two ever reaches the server.
 
 Nothing is remembered between requests. A front end that wants to know the answer to a question
 sends it again.
@@ -40,15 +42,19 @@ data: {"kind":"stream","name":"submit","payload":{...}}
 
 Three things follow, and they matter more than they look.
 
-1. **A held session lives while somebody follows it.** The server keeps a session's runtime — its
-   round, its worker, its jobs, its browser tabs — only while a connection follows it. Stop
-   following, and it is released. This is why an adapter that hosts several conversations holds
-   several connections rather than one.
+1. **A held session lives while somebody follows it, or while the door keeps it.** The server keeps a
+   session's runtime — its round, its worker, its jobs, its browser tabs — only while a connection
+   follows it, or while the door holds it under `host` / `attach`. A session neither followed nor
+   held is released.
 2. **A conversation has one writer at a time.** Whoever opens a turn owns it; another front end's
    write answers `writer_required`. A session whose last watcher left keeps its turn but loses its
    name, so the next front end to write claims it.
 3. **A connection follows one conversation.** `watch` switches which; `watch` with `session: null`
-   stops following.
+   stops following. Following a session the door was keeping takes it back from the door: a watcher
+   is reason enough for it to live.
+
+A front end that hands a session over is told nothing when its round ends. It asks instead, and
+`host` / `list` answers whether each kept session is running right now.
 
 ## 3. What the stream carries
 
@@ -152,13 +158,19 @@ that must wait goes to `mailbox` instead. A child session takes no messages and 
 `prefix` and `suffix` are carried in front of and behind the user's words. They are how a front end
 tells the model what it cannot otherwise know — a chat has no clock.
 
-## 7. The door's own frame
+## 7. The door's own frames
 
-`host` / `list` takes `path` and `cwd`, and answers `{"dir", "entries": [{"name", "dir"}]}`.
+`local` / `list` takes `path` and `cwd`, and answers `{"dir", "entries": [{"name", "dir"}]}`. `path`
+is a half-typed directory: its own head is resolved against `cwd`, `~` is home, and one name per
+entry comes back with a flag saying whether it is a directory.
 
-`path` is a half-typed directory: its own head is resolved against `cwd`, `~` is home, and one
-name per entry comes back with a flag saying whether it is a directory. It never reaches the
-server.
+`host` / `attach` takes `session` and answers `{}`: from then on the door keeps that session booked
+whether or not anything follows it. `host` / `release` takes `session` and answers `{}`, giving it
+back. `host` / `list` takes nothing and answers `{"sessions": [{"session", "turn"}, ...]}` — every
+session kept, and whether a round is running in it now, which is how a front end learns a round
+ended without being told.
+
+Neither frame reaches the server.
 
 ## 8. Errors
 
@@ -187,7 +199,8 @@ call is paired with its result, and how the words are laid out, is the receiver'
 
 Four things here have a single owner elsewhere, and a change to one is a change to this file:
 
-1. The four kinds, and `host` among them — the door's own switch in `http/serve.rs`.
+1. The five kinds, and `local` and `host` among them — `http/rpc.rs`'s list, and the door's own
+   branches in `http/serve.rs`, `http/local.rs` and `http/host.rs`.
 2. The name tables in §4, §5, §6 and §7 — `src/server/api/route.rs`.
 3. The live `kind`s in §3 — the relay's payloads, and `adapter/events.rs`'s two lists.
 4. The receipt — the frame carrying `ranges`, which `manager/held.rs` also reads to know a round

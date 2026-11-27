@@ -33,11 +33,6 @@
     width: auto;
     max-width: 9rem;
     display: block;
-    stroke-width: 2.1;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    fill: none;
   }
 
   .rail-head #rail-close {

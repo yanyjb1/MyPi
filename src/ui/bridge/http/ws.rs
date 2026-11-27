@@ -10,6 +10,7 @@ use tungstenite::Message;
 use tungstenite::protocol::{Role, WebSocket};
 
 use super::host;
+use super::local;
 use super::read::Request;
 use super::respond;
 use super::route;
@@ -138,10 +139,17 @@ fn handle_text(
         return send_json(ws_writer, with_id(reply, id.as_ref())).is_ok();
     }
     if frame.kind == "host" {
+        let res = match host::apply(hub, &frame) {
+            Ok(answer) => answer,
+            Err((_, answer)) => answer,
+        };
+        return send_json(ws_writer, with_id(res, id.as_ref())).is_ok();
+    }
+    if frame.kind == "local" {
         let res = if frame.name == "list" {
-            host::list(&frame.payload)
+            local::list(&frame.payload)
         } else {
-            respond::error("bad_request", "the door answers one host frame: `list`")
+            respond::error("bad_request", "the door answers one local frame: `list`")
         };
         return send_json(ws_writer, with_id(res, id.as_ref())).is_ok();
     }
@@ -173,7 +181,7 @@ fn start_watch(
             "a frame that follows a conversation names `session`",
         );
     };
-    let held = match hub.get(session) {
+    let held = match hub.watch(session) {
         Ok(h) => h,
         Err(e) => return respond::error("upstream_closed", &e),
     };

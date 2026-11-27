@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::ipc::contract::Frame;
 
 use super::host;
+use super::local;
 use super::read::{self, Request};
 use super::respond;
 use super::route;
@@ -129,12 +130,21 @@ fn handle_request(
         }
     };
     if frame.kind == "host" {
+        match host::apply(hub, &frame) {
+            Ok(answer) => respond::respond_json(stream, "200 OK", &answer, keep_alive)?,
+            Err((status, answer)) => {
+                respond::respond_json(stream, &status_line(status), &answer, keep_alive)?
+            }
+        }
+        return Ok(false);
+    }
+    if frame.kind == "local" {
         if frame.name != "list" {
-            let answer = respond::error("bad_request", "the door answers one host frame: `list`");
+            let answer = respond::error("bad_request", "the door answers one local frame: `list`");
             respond::respond_json(stream, "400 Bad Request", &answer, keep_alive)?;
             return Ok(false);
         }
-        respond::respond_json(stream, "200 OK", &host::list(&frame.payload), keep_alive)?;
+        respond::respond_json(stream, "200 OK", &local::list(&frame.payload), keep_alive)?;
         return Ok(false);
     }
     if rpc::is_watch(&frame) {
@@ -187,7 +197,7 @@ fn follow(
         );
         return respond::respond_json(stream, "400 Bad Request", &answer, false);
     };
-    let held = match hub.get(session) {
+    let held = match hub.watch(session) {
         Ok(held) => held,
         Err(e) => {
             let answer = respond::error("upstream_closed", &e);

@@ -51,8 +51,8 @@ impl Webui {
         let asked = if name.is_empty() { "index.html" } else { name };
         let ctype = kind(asked)?;
         let built = PAGE.get_file(asked)?;
-        let body = std::fs::read(self.dir.join(asked))
-            .unwrap_or_else(|_| built.contents().to_vec());
+        let body =
+            std::fs::read(self.dir.join(asked)).unwrap_or_else(|_| built.contents().to_vec());
         Some((ctype, body))
     }
 

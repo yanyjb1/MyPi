@@ -16,7 +16,9 @@ One TCP port and nothing behind it: no path, no query, no second address. What a
 
 A `POST` names its adapter in the `X-Bridge-Adapter` head; there is no other way to say it. A name the file does not carry is refused with `403`. The body is `{kind, name, payload}`, carried as it arrived: `call`, `post` and `subscribe` cross unchanged, and the answer is the payload the server wrote.
 
-One kind is the door's own: `host` / `list` answers the names one directory holds, plus the directory it read, and never crosses to the server. The page uses it for path completion, which a browser cannot take on its own.
+Two kinds are the door's own. `local` looks at this machine: `local` / `list` answers the names one directory holds, plus the directory it read, which is what the page's path completion needs and a browser cannot take on its own. `host` keeps a session alive for whoever handed it over: `attach` books its connection with nobody watching, `release` gives it back, and `list` answers which of them is still running.
+
+Neither kind ever crosses to the server. A session the door keeps is taken back the moment any front end starts following it, so the door is only ever a reason for a session to live, never a second front end on it.
 
 One frame is answered with a stream instead of a reply: `subscribe` / `watch`, which starts following a conversation. Over HTTP, that connection stays open and carries that conversation's frames, one per line, until the peer leaves. Over WebSocket, the client may include an optional `"id"` field on any request JSON; the door echoes that `"id"` on the matching reply (including `subscribe` / `watch`, which answers `{"ok": true}` or `{"error": ...}`), while pushed conversation frames arrive without `"id"`. Which conversation it is comes from the frame's own `session`; the door adds nothing and asks for nothing else.
 
@@ -81,10 +83,11 @@ A lap's bill rides the last piece it wrote, and a zeroed one is the provider sta
 1. **The postman does not open the mail.** Names and payloads cross unchanged; what a frame means is the front end's business. The bridge reads a `kind` and a `name` for one decision — the adapter's own rules — and nothing else.
 2. **Categories, not shapes.** An adapter declares which kinds of piece it can receive. Assembling, pairing and laying out are what the receiver does with them.
 3. **One connection per conversation.** The server keeps a conversation's runtime only while some connection follows it, and one connection follows one conversation, so holding several is holding several connections.
-4. **A conversation is held while it has a reason to be.** A listener on its stream, or a round it has not finished, is that reason; a conversation with neither for ten minutes is handed back.
-5. **One stranger at a time per conversation.** A reply names only its kind and its name, so two questions in flight on one connection could take each other's answers. Each conversation therefore answers one question before the next is sent.
-6. **One program, one door.** An adapter's own program is started and stopped with the bridge, so a bot does not outlive the process that fed it.
-7. **One address.** A front end reaches the door by connecting to it; nothing about what it wants lives in the path.
+4. **A conversation is held while it has a reason to be.** A listener on its stream, a round it has not finished, or a front end that handed it over, is that reason; a conversation with none of the three for ten minutes is handed back.
+5. **Keeping is not watching.** A session the door keeps is forwarded to nobody: none of its frames leave the door, and whoever handed it over asks `host` / `list` for what it was not told. Any front end that starts following that session takes it back, because a watcher is its own reason for it to live.
+6. **One stranger at a time per conversation.** A reply names only its kind and its name, so two questions in flight on one connection could take each other's answers. Each conversation therefore answers one question before the next is sent.
+7. **One program, one door.** An adapter's own program is started and stopped with the bridge, so a bot does not outlive the process that fed it.
+8. **One address.** A front end reaches the door by connecting to it; nothing about what it wants lives in the path.
 
 ## 3. Unresolved
 

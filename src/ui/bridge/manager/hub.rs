@@ -1,4 +1,4 @@
-// The conversation table: which session id is held, and letting go of the ones gone quiet.
+// The sessions the bridge holds: a table of conversations, one connection behind each, and the ones it only keeps alive.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -61,8 +61,32 @@ impl Hub {
         Ok(held)
     }
 
+    // Keep this session booked with nobody watching it: the connection it opens is the whole of it.
+    pub fn host(&self, session: i64) -> Result<(), String> {
+        self.get(session)?.book();
+        Ok(())
+    }
+
+    // Give it back: from here only a watcher or a running round keeps it.
+    pub fn release(&self, session: i64) {
+        let table = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(held) = table.get(&session) {
+            held.unbook();
+        }
+    }
+
+    // Every kept session, and whether a round is running in it now.
+    pub fn kept(&self) -> Vec<(i64, bool)> {
+        let table = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        table
+            .iter()
+            .filter(|(_, held)| held.is_hosted() && !held.is_dead())
+            .map(|(session, held)| (*session, held.busy()))
+            .collect()
+    }
+
     // Let one conversation go: its stream, its booking and its browser tabs go back to the server.
-    fn release(&self, session: i64) {
+    fn let_go(&self, session: i64) {
         let held = self
             .held
             .lock()
@@ -73,19 +97,26 @@ impl Hub {
         }
     }
 
-    // Drop every conversation nobody has touched for a while and that is running nothing.
+    // Drop every conversation nobody has touched for a while, that runs nothing and that nobody paid to keep.
     pub fn sweep(&self, idle: Duration) {
         let stale: Vec<i64> = {
             let table = self.held.lock().unwrap_or_else(|e| e.into_inner());
             table
                 .iter()
-                .filter(|(_, held)| held.is_stale(idle))
+                .filter(|(_, held)| held.is_dead() || (!held.is_hosted() && held.is_stale(idle)))
                 .map(|(session, _)| *session)
                 .collect()
         };
         for session in stale {
-            self.release(session);
+            self.let_go(session);
         }
+    }
+
+    // Follow a conversation, and give up the hosting of it: a watcher is its own reason for the session to live.
+    pub fn watch(&self, session: i64) -> Result<Arc<Held>, String> {
+        let held = self.get(session)?;
+        held.unbook();
+        Ok(held)
     }
 
     pub fn stop(&self) {

@@ -1,4 +1,4 @@
-// One held conversation: its connection, the one question in flight, its listeners, and its round.
+// One held conversation: its connection, the question in flight, its listeners, its round, and whether it is booked.
 
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, MutexGuard};
@@ -33,6 +33,8 @@ struct State {
     // The round now running, as it was said: a listener that arrives late still sees all of it.
     round: Vec<Frame>,
     busy: bool,
+    // Booked by an adapter that handed it over: nobody watching, and still not handed back.
+    hosted: bool,
 }
 
 impl Held {
@@ -48,6 +50,7 @@ impl Held {
                 next: 0,
                 round: Vec::new(),
                 busy: false,
+                hosted: false,
             }),
             job: Mutex::new(()),
             touched: Mutex::new(Instant::now()),
@@ -136,6 +139,26 @@ impl Held {
         *self.dead.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    // Whether a round is running on this conversation, as its own frames have said.
+    pub fn busy(&self) -> bool {
+        self.state().busy
+    }
+
+    // Keep this connection open with nobody watching: the whole of what hosting is.
+    pub fn book(&self) {
+        self.state().hosted = true;
+    }
+
+    // Give it back: from here only a watcher or a running round keeps it.
+    pub fn unbook(&self) {
+        self.state().hosted = false;
+    }
+
+    // Whether an adapter handed this connection over and has not taken it back.
+    pub fn is_hosted(&self) -> bool {
+        self.state().hosted
+    }
+
     pub(super) fn is_stale(&self, idle: Duration) -> bool {
         let state = self.state();
         if state.busy || !state.listeners.is_empty() {
@@ -204,6 +227,7 @@ impl Held {
                 state.round.clear();
             } else {
                 state.busy = true;
+                // Buffered whether or not anyone listens, so a page that reconnects loses nothing.
                 state.round.push(frame.clone());
             }
         }

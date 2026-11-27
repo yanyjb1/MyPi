@@ -7,7 +7,7 @@ use crate::ipc::contract::Frame;
 use crate::ui::bridge::adapter::manifest::Adapter;
 
 // The kinds a front end may send; `register` is the bridge's own word and never crosses.
-const KINDS: &[&str] = &["call", "post", "subscribe", "host"];
+const KINDS: &[&str] = &["call", "post", "subscribe", "host", "local"];
 
 // What an adapter asked for, decided: the frame to carry, or the error to answer with.
 pub fn frame_of(adapter: &Adapter, body: &Value) -> Result<Frame, (u16, Value)> {
@@ -20,7 +20,9 @@ pub fn frame_of(adapter: &Adapter, body: &Value) -> Result<Frame, (u16, Value)> 
         .and_then(Value::as_str)
         .ok_or_else(|| bad("`name` is missing"))?;
     if !KINDS.contains(&kind) {
-        return Err(bad("`kind` is not one of call, post, subscribe, host"));
+        return Err(bad(
+            "`kind` is not one of call, post, subscribe, host, local",
+        ));
     }
     if adapter.forbids(kind, name) {
         return Err((

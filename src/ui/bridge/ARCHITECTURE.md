@@ -7,7 +7,7 @@ What is here, what each file holds, who calls whom. Current state only.
 1. `mod.rs` is the module list and the three exports.
 2. `run.rs` is `Options` and `run`: the listener, the accept loop, the sweep, and the adapters' own programs.
 3. `manager/` holds the conversations the door keeps: `hub.rs` the table, `held.rs` one connection's question, its listeners and its round.
-4. `http/` is the door itself: `read.rs` one request, `respond.rs` one answer, `serve.rs` one connection answered, `route.rs` who may come, `rpc.rs` one body to a frame, `host.rs` the door's own look at this machine.
+4. `http/` is the door itself: `read.rs` one request, `respond.rs` one answer, `serve.rs` one connection answered, `route.rs` who may come, `rpc.rs` one body to a frame, `local.rs` the door's own look at this machine, `host.rs` the door's own keeping of a session.
 5. `adapter/` is everything that speaks for a front end: `manifest.rs` reads `adapters.yml`, `events.rs` is what one adapter is fed, `web.rs` and `web/` are the webui.
 
 ## What it talks to
@@ -35,10 +35,11 @@ bridge::run
 - `Hub::get` opens a conversation's connection on first use and watches that conversation; `Hub::bare` is the connection every question without a `session` uses. Each carries its own viewer name, so the server sees one front end per conversation.
 - `Held::ask` takes the connection's one question slot, sends the frame, and waits for the reply that carries that kind and name. `Held::read` blocks on `Client::next` and hands a matching reply to the question and every other frame to the listeners.
 - `Held::fanout` keeps a round's frames until the receipt that carries `ranges` arrives, so a listener joining mid-turn sees the round from its first piece.
-- `Hub::sweep` lets go of a conversation with no listener and no running round for ten minutes; letting go means a `watch` with no session and a `bye`, which unbooks it on the server along with its jobs and browser tabs.
+- `Held::book` is the promise that a connection stays open with nobody watching it, and the whole of what hosting is; `Held::unbook` takes it back. `Hub::host` books the connection it opens, `Hub::watch` unbooks the one it hands out, so any front end following the session takes it back. `Hub::kept` is the table read for the connections still booked, with whether a round runs in each.
+- `Hub::sweep` lets go of a conversation whose connection died, and of one with no listener, no running round and no booking after ten minutes; letting go means a `watch` with no session and a `bye`, which unbooks it on the server along with its jobs and browser tabs.
 - `Held::close` shuts the socket down after its last words, which is what wakes the blocked reader.
 - `follow` keeps a second handle on the peer's socket and reads it in its own thread: the read returns only when the peer leaves, and that is when the listener it added is taken off the conversation again. Without it a closed browser tab would keep its conversation held forever.
-- `serve` reads the method first: `GET` is a file of `webui/`, answered without naming any adapter. `POST` names its adapter in the head, is checked against that adapter's rules, becomes a frame, and then either opens a stream — the frame is `subscribe` / `watch` — or is answered and closed. A frame of kind `host` is answered by the door itself and never crosses.
+- `serve` reads the method first: `GET` is a file of `webui/`, answered without naming any adapter. `POST` names its adapter in the head, is checked against that adapter's rules, becomes a frame, and then either opens a stream — the frame is `subscribe` / `watch` — or is answered and closed. Frames of kind `local` and `host` are answered by the door itself and never cross.
 - `events::take` is the one place an adapter's declarations are honoured: pieces it switched off go nowhere, and a text piece is cut to its own length. Nothing is assembled: a round's frames reach the adapter as they arrived.
 
 ## The webui
@@ -69,7 +70,7 @@ The three controls above the box speak for a session or for the draft. `#cwd`, `
 4. `closes_frame` and the receipt the relay sends: the frame that ends a round is the one carrying `ranges`.
 5. `chat/stream.js`'s frame kinds and the relay's live payloads: a piece the page does not name is a piece it drops.
 6. One address, two methods: `GET` for a file and `POST` for a frame, and `README.md`'s own list.
-7. `rpc::KINDS` and the door's own branch in `http/serve.rs`: `host` is the one kind that never reaches the server.
+7. `rpc::KINDS` and the door's own branches in `http/serve.rs`: `local` and `host` are the two kinds that never reach the server, and `Rule::parse` knows only the three that do.
 8. `web.rs`'s embedded directory and `web/`: a file written there is served without an edit; a name the door must serve is one the page's own `kind` knows.
 9. `main.css`'s `@layer` order and every sheet: a sheet names the layer it joins, and the order is declared once.
 
