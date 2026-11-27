@@ -85,7 +85,7 @@ class Door:
     def _read(error):
         try:
             return json.loads(error.read())
-        except Exception:
+        except (OSError, ValueError):
             return {}
 
     @staticmethod
@@ -118,7 +118,6 @@ class Feed:
     def _run(self):
         request = self._door.request("subscribe", "watch", {"session": self.session})
         try:
-            # No read timeout: this connection stays open for as long as we host the session.
             with urllib.request.urlopen(request, timeout=None) as res:
                 # Read by line, never by size: the door sends one frame per line and flushes it, and a size-kinded read would hold a whole short round until later frames filled the buffer.
                 for raw in res:
@@ -128,10 +127,13 @@ class Feed:
                     if not line.startswith("data: "):
                         continue
                     try:
-                        self._frames.put(json.loads(line[6:]))
+                        frame = json.loads(line[6:])
                     except ValueError:
-                        pass
-        except Exception:
+                        # A line that is not a frame carries nothing; the stream goes on.
+                        continue
+                    self._frames.put(frame)
+        except OSError:
+            # The stream ended: the door went, or the bridge restarted. The caller is told below.
             pass
         finally:
             self._frames.put(CLOSED)

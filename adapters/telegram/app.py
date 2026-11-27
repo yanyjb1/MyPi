@@ -1,7 +1,7 @@
 # mypi's Telegram front end: it talks to Telegram for updates and to the bridge's door for everything else.
 #
-# A hosted session keeps one connection open, which is what holds it alive on the server while nobody watches it.
-# The session being talked to answers with its own words as each block lands; a hosted one only says its round ended.
+# The session being talked to keeps one stream open, and what it writes is said as each block lands. A session
+# handed over is the bridge's to keep booked; it has no stream of ours, and one poll says when its round ended.
 
 import os
 import sys
@@ -17,7 +17,7 @@ from show import address, now, shorten, split_address, stamp
 from state import State
 from turn import Turn, counts
 
-# How many sessions the bot may hold at once; a fourth is refused, never bought at another's cost.
+# How many sessions the bot may hand to the bridge; a fourth is refused, never bought at another's cost.
 MOST = 3
 
 # How long the door may take to answer one question.
@@ -29,18 +29,22 @@ TYPING = 4.0
 # How long the bot waits before asking for a dropped stream again.
 RECONNECT = 2
 
+# How often a session handed to the bridge is asked whether its round is still running.
+POLL = 3.0
+
 HOST = os.environ.get("TG_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TG_BRIDGE_PORT", "8737"))
 
 # The name this adapter answers to in adapters.yml; the door refuses any other.
 ADAPTER = "telegram"
 
-# How much of a round's words `/host` names when a phone must show only one line.
+# How much of a round's words a phone shows when one line has to carry them.
 PREVIEW = 50
 
 
-class Hosted:
-    # One session the bot holds: its connection, the round in it, and its own reader.
+class Live:
+    # The session being talked to: its stream, the round in it, and its own reader.
+
     def __init__(self, app, session):
         self.app = app
         self.session = session
@@ -48,10 +52,10 @@ class Hosted:
         self.turn = Turn()
         self.dropped = False
         self.typing = 0.0
-        self.thread = threading.Thread(target=self.run, name=f"watch-{session}", daemon=True)
+        self.thread = threading.Thread(target=self.run, name=f"live-{session}", daemon=True)
         self.thread.start()
 
-    # A held session outlives its stream: a bridge restart or an idle sweep only means asking again.
+    # A stream that ends is asked for again: a bridge restart only means the connection went.
     def run(self):
         while True:
             frame = self.feed.take(0.5)
@@ -71,8 +75,6 @@ class Hosted:
 
     # No frame arrived: a round still running says what it is doing, at a beat and no faster.
     def quiet(self):
-        if self.app.current() != self.session:
-            return
         now = time.time()
         if self.turn.due(now):
             self.app.say(counts(self.turn.drain(now)))
@@ -86,7 +88,7 @@ class Hosted:
 
         if name == "notice":
             text = payload.get("text")
-            self.app.say(f"{self.prefix()}{said(text) if isinstance(text, dict) else str(text)}")
+            self.app.say(said(text) if isinstance(text, dict) else str(text))
             return
         if name == "signal":
             return
@@ -109,28 +111,20 @@ class Hosted:
         elif kind == "tool_end":
             self.turn.end(payload.get("call_id"), payload.get("ok"))
 
-    # One block ended: its words leave as one message, and only the one being talked to hears them.
+    # One block ended: its words leave as one message, so a long round is several of them.
     def close_block(self):
         text = self.turn.flush()
-        if text and self.app.current() == self.session:
+        if text:
             self.app.say(text)
 
-    # The round is over: the one being talked to hears nothing more, a hosted one says it ended.
+    # The round is over: the tail no block ended still leaves whole.
     def close_round(self, round_id):
         closed = self.turn.close(round_id)
         if closed is None:
             return
-        unsaid, said_words = closed
-        if self.app.current() == self.session:
-            if unsaid:
-                self.app.say(unsaid)
-            return
-        line = words.t("round_ended", session=self.session, words=shorten(said_words, PREVIEW) or words.t("no_words"))
-        self.app.say(f"{self.prefix()}{line}")
-
-    # What tells a background session's lines from the one being talked to.
-    def prefix(self):
-        return "" if self.app.current() == self.session else f"[{self.session}] "
+        unsaid, _ = closed
+        if unsaid:
+            self.app.say(unsaid)
 
     def stop(self):
         self.dropped = True
@@ -141,7 +135,8 @@ class App:
     def __init__(self, state):
         self.state = state
         self.door = Door(HOST, PORT, ADAPTER, PATIENCE)
-        self.hosted = {}
+        self.lives = {}
+        self.turns = {}
         self.chat = None
         self.picks = []
         self.picks_kind = None
@@ -185,32 +180,95 @@ class App:
     def current(self):
         return self.state.current
 
-    # Open a reader for every session the bot held when it last ran.
-    def bring(self):
-        for session in list(self.state.hosted):
-            if session not in self.hosted:
-                self.hosted[session] = Hosted(self, session)
+    # Say what a session writes as it writes it: one stream, which is what keeps it alive on the server.
+    def listen(self, session):
+        if session not in self.lives:
+            self.lives[session] = Live(self, session)
 
-    # Start holding one session. Answers whether there was room for it.
-    def hold(self, session):
-        if session in self.hosted:
+    # Hand a session to the bridge: its stream ends here, and the door keeps it booked instead.
+    def host(self, session):
+        if session in self.state.hosted:
             return True
-        if len(self.hosted) >= MOST:
+        if len(self.state.hosted) >= MOST:
             return False
-        self.hosted[session] = Hosted(self, session)
+        try:
+            self.door.ask("host", "attach", {"session": session})
+        except Refused as e:
+            self.log(f"cannot host {session}: {e.message}")
+            return False
+        live = self.lives.pop(session, None)
+        if live:
+            # The round it was in when handed over is the truth the first poll compares against.
+            self.turns[session] = live.turn.running
+            live.stop()
+        if self.state.current == session:
+            self.state.current = None
         self.state.host(session)
         return True
 
-    def release(self, session):
-        held = self.hosted.pop(session, None)
-        if held:
-            held.stop()
+    # Take a session back from the door: whoever watches it now is what keeps it alive.
+    def unhost(self, session):
+        if session not in self.state.hosted:
+            return
+        try:
+            self.door.ask("host", "release", {"session": session})
+        except Refused:
+            pass
         self.state.drop(session)
+        self.turns.pop(session, None)
 
-    # Whether that session is mid-round, read from the stream this bot already holds.
+    # Forget it entirely: no stream of ours, nothing kept by the door.
+    def release(self, session):
+        live = self.lives.pop(session, None)
+        if live:
+            live.stop()
+        try:
+            self.door.ask("host", "release", {"session": session})
+        except Refused:
+            pass
+        self.state.drop(session)
+        self.turns.pop(session, None)
+
+    # Hand every session the bot held when it last ran back to the door, so the poll still reports their rounds.
+    def bring(self):
+        for session in list(self.state.hosted):
+            try:
+                self.door.ask("host", "attach", {"session": session})
+            except Refused as e:
+                self.log(f"cannot host {session}: {e.message}")
+                self.state.drop(session)
+
+    # Whether that session is mid-round, as the door last said.
     def running(self, session):
-        held = self.hosted.get(session)
-        return held is not None and held.turn.running
+        live = self.lives.get(session)
+        if live is not None:
+            return live.turn.running
+        return self.turns.get(session, False)
+
+    # Ask at once and then at a beat, so a session just handed over is reported the moment its round ends.
+    def poll(self):
+        while True:
+            self.check()
+            time.sleep(POLL)
+
+    # What the door says of every kept session now: one whose round ended is said once, with the words it wrote.
+    def check(self):
+        if not self.state.hosted:
+            self.turns.clear()
+            return
+        try:
+            listing = self.door.ask("host", "list")
+        except Refused:
+            return
+        running = {item.get("session"): bool(item.get("turn")) for item in listing.get("sessions") or []}
+        for session in list(self.state.hosted):
+            now_ = running.get(session, False)
+            was = self.turns.get(session, False)
+            self.turns[session] = now_
+            if was and not now_ and self.current() != session:
+                text = read.newest_words(self.door, session)
+                line = words.t("round_ended", session=session, words=shorten(text, PREVIEW) or words.t("no_words"))
+                self.say(f"[{session}] {line}")
 
     # Where a setting lands: the session being talked to, else the draft.
     def target(self):
@@ -279,9 +337,7 @@ class App:
         self.say(words.t("no_current"))
 
     def send_to(self, session, text, sent=None):
-        if not self.hold(session):
-            self.say(words.t("hosted_full", most=MOST))
-            return
+        self.listen(session)
         ask = {"session": session, "text": text}
         ask.update(self.decorate(session, sent))
         try:
@@ -324,9 +380,7 @@ class App:
         self.state.draft = None
         self.state.current = session
         self.state.save()
-        if not self.hold(session):
-            self.say(words.t("spawn_unhosted", session=session))
-            return
+        self.listen(session)
         note = words.t("spawned", session=session)
         if answer.get("cwd"):
             note += words.t("spawn_cwd", cwd=answer["cwd"])
@@ -343,6 +397,10 @@ class App:
             self.chat = self.state.user
             self.log(f"paired with {self.chat}")
         self.bring()
+        if self.state.current is not None:
+            self.listen(self.state.current)
+        threading.Thread(target=self.poll, name="poll", daemon=True).start()
+
         while True:
             try:
                 updates = self.bot.poll(30)
@@ -373,8 +431,7 @@ class App:
                 self.chat = self.state.user
                 try:
                     self.handle(message)
-                except Exception as e:
-                    # One bad command must not stop the bot.
+                except Exception as e:  # noqa: BLE001 - one bad command must not stop the bot
                     self.log(f"handle failed: {e!r}")
                     self.say(words.t("handle_failed", words=e))
 
@@ -385,6 +442,7 @@ def main(argv):
     if hook:
         hook(errors="replace")
     state = State()
+
     if argv and argv[0] == "--say":
         # A one-shot line to the paired account: the only way to test from this side.
         app = App(state)
@@ -394,6 +452,7 @@ def main(argv):
         app.chat = state.user
         app.bot.send(state.user, " ".join(argv[1:]))
         return 0
+
     App(state).run()
     return 0
 

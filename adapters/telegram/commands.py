@@ -55,7 +55,7 @@ def ls(app, rest):
     for row in rows[:30]:
         session = row.get("id")
         title = row.get("name") or shorten(row.get("first_user") or "", 28) or words.t("empty_session")
-        mark = "▶" if session == app.state.current else ("●" if session in app.hosted else "·")
+        mark = "▶" if session == app.state.current else ("●" if session in app.state.hosted else "·")
         lines.append(f"{mark} {session} {shorten(title, 34)}")
         lines.append(f"    {clock(row.get('last_ts') or row.get('started_at'))} · {size(row.get('bytes'))} · {shorten(row.get('cwd') or '', 34)}")
     if len(rows) > 30:
@@ -89,21 +89,22 @@ def slots(plan):
     }
 
 
-# The pointer moves before the session is held: a reader started first would take the first frames for a background session's.
+# Talking to a session: the door gives it back if it was keeping it, and one stream of ours holds it from here.
 def attach(app, rest):
     session = pick(app, rest, "list", int)
     if session is None:
         app.say(words.t("attach_need_id"))
         return
     meta = app.door.call("meta", {"session": session})
+    # The session being left is handed to the door, and the one picked is taken back from it.
     before = app.state.current
+    if before is not None and before != session and not app.host(before):
+        app.say(words.t("attach_full", session=before))
+        return
+    app.unhost(session)
     app.state.current = session
     app.state.save()
-    if not app.hold(session):
-        app.state.current = before
-        app.state.save()
-        app.say(words.t("attach_full"))
-        return
+    app.listen(session)
     app.say(words.t("attached", session=session, name=shorten(meta.get("name") or words.t("unnamed"), 30), address=address(meta), cwd=shorten(meta.get("cwd") or "", 40)))
     # The last words this session wrote, whole: the receipt that closed its round only named them.
     text = read.newest_words(app.door, session)
@@ -116,11 +117,9 @@ def host(app, rest):
     if session is None:
         app.say(words.t("host_no_current"))
         return
-    if not app.hold(session):
+    if not app.host(session):
         app.say(words.t("host_full"))
         return
-    app.state.current = None
-    app.state.save()
     app.say(words.t("hosted", session=session))
 
 
@@ -206,7 +205,7 @@ def cwd(app, rest):
         return
     here = app.where(target)
     if not rest:
-        listing = app.door.ask("host", "list", {"path": "", "cwd": here or ""})
+        listing = app.door.ask("local", "list", {"path": "", "cwd": here or ""})
         names = [entry for entry in listing.get("entries") or [] if entry.get("dir")]
         app.picks = [entry["name"] for entry in names]
         app.picks_kind = "cwd"
