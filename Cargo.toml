@@ -2,7 +2,7 @@
 name = "mypi"
 version = "0.1.0"
 edition = "2024"
-
+license = "Apache-2.0"
 [features]
 default = ["web"]
 # 浏览器工具族：CDP 客户端、HTML 转 Markdown、URL 解析。没有浏览器的机器用 --no-default-features 编。
@@ -11,10 +11,8 @@ web = ["dep:html-to-markdown-rs", "dep:url"]
 [dependencies]
 # 同步 HTTP 客户端：极轻、无异步运行时依赖。rustls = 纯 Rust 的 TLS，不依赖系统 OpenSSL
 ureq = { version = "3", features = ["rustls", "json", "charset"] }
-# 序列化/反序列化：Rust 生态事实标准。derive = 自动为结构体生成 JSON 转换代码
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 错误处理：省掉手写几百行 Result 样板
 anyhow = "1"
 serde_yaml = "0.9.34"
 unicode-width = "0.2.2"
@@ -24,25 +22,16 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 pulldown-cmark = "0.13"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 parking_lot = "0.12"
-# TUI：终端渲染与键盘/鼠标事件
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
-# 停止信号（TERM/QUIT/INT/HUP）：还屏后退出。crossterm 已经带着它，这里只是显式声明
 signal-hook = "0.3"
 # ---- web 工具（feature `web`）----
 # WebSocket：同步、无 tokio，与 ureq 风格一致。用于 CDP 客户端与 UI bridge。
 tungstenite = "0.30"
-# HTML→Markdown：omp 同款 crate（纯 Rust，带 Aggressive 预处理去 nav/footer/form）
 html-to-markdown-rs = { version = "3.14", default-features = false, optional = true }
-# base64: tool-result 图片的编码,纯 Rust 零传递依赖
 base64 = "0.22"
-# 站点规则里的 match 是正则
 regex = "1"
-# URL 解析（fetch 的 scheme 校验）
 url = { version = "2", optional = true }
-# ---- 数据与配置语言：fs 的语法门禁，只判语法不排版 ----
-# XML：标签配对与元素大纲。它本来经 syntect 的 plist 间接进来，这里显式声明自用
 quick-xml = "0.42"
-# TOML、YAML：只解析不改写，提交时保持模型写的原样
 toml = "1"
 saphyr = "0.4"
 include_dir = "0.7.4"
