@@ -112,17 +112,21 @@ fn directives(raw: &[&str], code: &mut [String]) {
     }
 }
 
-// Every declaration: the line it opens on, the line it ends on, and what it declares.
+// Every declaration: the line it opens on, the line it ends on, and what it declares. A function's body declares no further function, so only the types it holds are read there: a call inside one is no piece, however it ends.
 fn pieces(raw: &[&str], code: &[String], ends: &[Option<usize>], table: &mut Table) {
-    for at in 0..code.len() {
+    let mut at = 0;
+    while at < code.len() {
         if code[at].trim_start().is_empty() {
+            at += 1;
             continue;
         }
         let Some((open, body)) = span(code, at) else {
+            at += 1;
             continue;
         };
-        let header = header_text(raw, at, open);
+        let header = header_text(raw, code, at, open);
         let Some(label) = classify(&header) else {
+            at += 1;
             continue;
         };
         let close = if body {
@@ -136,10 +140,66 @@ fn pieces(raw: &[&str], code: &[String], ends: &[Option<usize>], table: &mut Tab
             Some(label.to_string()),
             Some(without_body(&header)),
         );
+        // A function's body hands out no further function: its own blocks belong to `control`. The line that closes it is read again when it still holds the next declaration, as `} int h(void) {` does.
+        at = if body && label == "function" && close > at && rest(code, close) {
+            close
+        } else if body && label == "function" && close > at {
+            close + 1
+        } else {
+            at + 1
+        };
+    }
+    holds(code, ends, table);
+}
+
+// The types a function's body declares: C allows them where C++ allows only a statement, and a type is a piece wherever it stands. The body's own lines are read once, after every outer declaration is placed.
+fn holds(code: &[String], ends: &[Option<usize>], table: &mut Table) {
+    for at in 0..code.len() {
+        if code[at].trim_start().is_empty() {
+            continue;
+        }
+        let Some((open, body)) = span(code, at) else {
+            continue;
+        };
+        let word = lead_word(&code[at]);
+        if word != "struct" && word != "union" && word != "enum" && word != "typedef" {
+            continue;
+        }
+        // Only a type standing inside a body is read here: one at a file's own level is already placed.
+        if table.key(at) {
+            continue;
+        }
+        let close = if body {
+            ends.get(open).copied().flatten().unwrap_or(open)
+        } else {
+            open
+        };
+        table.span(at, close, Some(word), Some(joined(code, at, close)));
     }
 }
 
-// Comments: a run's first and last line are key, whatever they say.
+// Whether a line holds anything besides the braces and semicolons of what closed above it.
+fn rest(code: &[String], at: usize) -> bool {
+    code.get(at).is_some_and(|line| {
+        !line
+            .trim_start()
+            .trim_start_matches(['}', ';'])
+            .trim()
+            .is_empty()
+    })
+}
+
+// A piece's own lines as one line, so a signature never carries the whitespace of how it was wrapped.
+fn joined(code: &[String], head: usize, close: usize) -> String {
+    code.iter()
+        .take(close + 1)
+        .skip(head)
+        .flat_map(|line| line.split_whitespace())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// Comments: a run's first
 fn hats(raw: &[&str], table: &mut Table) {
     let mut at = 0;
     while at < raw.len() {
@@ -263,11 +323,13 @@ fn span(code: &[String], start: usize) -> Option<(usize, bool)> {
     None
 }
 
-// A header's lines joined into one, so a wrapped signature reads as one line.
-// A header's lines joined into one, so a wrapped signature reads as one line. The line the body opens on is cut at its brace, so a one-line body never joins the signature.
-fn header_text(raw: &[&str], head: usize, open: usize) -> String {
+// A header's lines joined into one, so a wrapped signature reads as one line. The line the body opens on is cut at its brace, so a one-line body never joins the signature. A preprocessor line joins nothing: a macro is no part of the signature it stands above.
+fn header_text(raw: &[&str], code: &[String], head: usize, open: usize) -> String {
     let mut text = String::new();
-    for line in raw.iter().take(open).skip(head) {
+    for (at, line) in raw.iter().enumerate().take(open).skip(head) {
+        if code.get(at).is_none_or(|held| held.trim().is_empty()) {
+            continue;
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -291,9 +353,9 @@ fn header_text(raw: &[&str], head: usize, open: usize) -> String {
     text
 }
 
-// A header with its body's own punctuation behind it: `int f() {` → `int f()`, `class Foo : public Bar {` → `class Foo : public Bar`.
+// A header with its body's own punctuation behind it: `int f() {` → `int f()`, `class Foo : public Bar {` → `class Foo : public Bar`. A declaration sharing the previous body's closing line keeps that brace out of its own name: `} int h(void)` → `int h(void)`.
 fn without_body(header: &str) -> String {
-    let mut exact = header.trim();
+    let mut exact = header.trim().trim_start_matches(['}', ';']).trim_start();
     for tail in ["{", ";"] {
         if let Some(rest) = exact.strip_suffix(tail) {
             exact = rest.trim_end();

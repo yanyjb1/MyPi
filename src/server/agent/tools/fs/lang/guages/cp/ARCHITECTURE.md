@@ -11,8 +11,8 @@ What is here, what each file holds, who talks to whom. Current state only.
 | `table.rs` | the line table: declarations, comment runs, preprocessor lines, and the blocks inside a long body |
 | `facts.rs` | the graph facts: the project domain, files as units, includes resolved through the compile database, and the database itself |
 | `relations.rs` | the relation index: a type's members here and elsewhere, a namespace's declarations, a lone name's x-ray |
-| `format.rs` | the parser: one `clang` verdict on a text, and the one line it names when the text does not parse |
-| `check.rs` | the checker: the translation unit a file belongs to, `clang-check`'s report, and how a missing program or database degrades |
+| `format.rs` | the parser: one `clang` verdict on a text, kept against the file it was given for, and the one line it names when the text does not parse |
+| `check.rs` | the checker: the translation unit a file belongs to, `clang-check`'s report, and how a missing program, database or command degrades |
 
 ## Relations
 
@@ -31,4 +31,11 @@ What is here, what each file holds, who talks to whom. Current state only.
 2. The parser and the checker name the same standard and the same include directories, so a text the
    parser accepts is one the checker can read.
 3. A unit is one file, so a header's own declarations are its own exports; nothing here aggregates a
+   directory.
+
+4. The table reads a function's body for its own blocks and for the types it holds: a call inside one
+   is no declaration, and a macro standing above a signature lends it no bracket.
+
+5. A checker that was handed no command has judged nothing, and says so: only a run that read the file
+   can answer clean.
    directory.

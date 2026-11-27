@@ -1,6 +1,6 @@
 // The CP parser: clang's own front end run as a syntax judge under a deadline. It judges a text and never rewrites it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -19,10 +19,10 @@ const CACHE: usize = 32;
 // The standard a lone text is read under, when nothing in the project says better.
 const STANDARD: &str = "-std=c++20";
 
-// Whether one text parses. A verdict clang reached is remembered; a timeout, a missing binary and a header the text was never given say nothing about the text and must not outlive the moment.
+// Whether one text parses. A verdict clang reached is remembered; a timeout, a missing binary and a header the text was never given say nothing about the text and must not outlive the moment. A verdict judges this text in this place, so the place is part of what is kept.
 pub(crate) fn format(text: &str, path: &Path, stop: &Arc<Stop>) -> Outcome {
     let half = language(path);
-    let key = (half.to_string(), hash(text));
+    let key = (half.to_string(), path.to_path_buf(), hash(text));
     if let Some(hit) = remembered(&key) {
         return hit;
     }
@@ -111,7 +111,8 @@ fn first(err: &str) -> Option<(Option<usize>, Option<usize>, String)> {
     None
 }
 
-type Key = (String, u64);
+// What one verdict was reached on: the half, the place, and the text.
+type Key = (String, PathBuf, u64);
 
 // The verdicts this process has already reached, oldest first.
 static MEMO: LazyLock<Mutex<Vec<(Key, Outcome)>>> = LazyLock::new(|| Mutex::new(Vec::new()));

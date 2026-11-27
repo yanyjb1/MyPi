@@ -65,7 +65,8 @@ fn run(root: &Path, touched: &[PathBuf], stop: &Arc<Stop>) -> Check {
         if one.stopped {
             return Check::Unchecked("the turn was stopped".to_string());
         }
-        if one.timed_out {
+        // A file the database has no command for was never looked at: the tool skipping it is not a clean verdict.
+        if one.timed_out || skipped(&one.err) {
             continue;
         }
         ran = true;
@@ -82,6 +83,11 @@ fn run(root: &Path, touched: &[PathBuf], stop: &Arc<Stop>) -> Check {
         return Check::Clean;
     }
     Check::Faults { faults, warns }
+}
+
+// Whether clang-check handed back no command at all: the database never described this file, so its silence is not a verdict about it.
+fn skipped(err: &str) -> bool {
+    err.contains("Compile command not found")
 }
 
 // The errors and the warnings one clang-check run reported. A diagnostic that names no file is dropped: the world's fault is not this batch's.

@@ -301,7 +301,17 @@ fn named(line: &Line) -> Option<&str> {
             }
             None
         }
-        "using" => Some(first_identifier(text.split_once("using")?.1.trim())),
+        // `using namespace` binds no name, `using A::B` binds `B`, and `using X = Y` binds `X`.
+        "using" => {
+            let rest = text.strip_prefix("using")?.trim_start();
+            if rest.starts_with("namespace") {
+                return None;
+            }
+            if let Some((alias, _)) = rest.split_once('=') {
+                return Some(first_identifier(alias.trim()));
+            }
+            Some(first_identifier(rest.rsplit("::").next().unwrap_or(rest)))
+        }
         "typedef" => text.split_whitespace().next_back().map(first_identifier),
         _ => {
             if text.contains("operator") {
@@ -344,17 +354,25 @@ fn binds(text: &str, name: &str) -> bool {
     tail == Some(name)
 }
 
-// Whether a declaration names a member of type `a`: `double Circle::area() const` and `void Circle::draw() {}` are `Circle`'s own.
+// Whether a declaration names a member of type `a`: `double Circle::area() const`, `void ns::Circle::area()` and `void Circle<T>::area()` are all `Circle`'s own.
 fn qualified(line: &Line, a: &str, b: &str) -> bool {
     let text = line.exact.as_deref().unwrap_or("");
-    let Some(close) = text.find("::") else {
+    let head = text.split('(').next().unwrap_or(text);
+    let parts: Vec<&str> = head.split("::").collect();
+    let Some((member, above)) = parts.split_last() else {
         return false;
     };
-    let scope = text[..close]
-        .rsplit(|c: char| c.is_whitespace() || matches!(c, '*' | '&'))
-        .next();
-    let member = text[close + 2..].trim_start();
-    scope == Some(a) && first_identifier(member) == b
+    if parts.len() < 2 || first_identifier(member.trim_start()) != b {
+        return false;
+    }
+    // A scope may carry a template's own parameters, and the type's name stands before them.
+    let scope = above
+        .last()
+        .map_or("", |one| one.rsplit([' ', '*', '&']).next().unwrap_or(one))
+        .split('<')
+        .next()
+        .unwrap_or("");
+    scope == a
 }
 
 // Every `#define` of `name`, with its line.
