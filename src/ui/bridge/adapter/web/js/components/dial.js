@@ -1,5 +1,4 @@
-// notch carries. A pointer that comes to rest on the ring, or a finger that lands on it, wakes it; a pointer that
-// leaves folds it at once.
+// The dial: a half ring of the session's rounds at the right edge of the transcript, folded until a pointer wakes it.
 
 import { at, clear } from "../core/template.js";
 import { words } from "../core/api.js";
@@ -70,7 +69,7 @@ function notch(round, angle, span) {
   tick.setAttribute("vector-effect", "non-scaling-stroke");
   tick.addEventListener("click", (event) => {
     event.stopPropagation();
-    cursorIndex = -1;
+    fold();
     jump(round.turn);
   });
   return tick;
@@ -162,6 +161,7 @@ function line(round, offset, text, isSelected) {
   node.title = display;
   node.addEventListener("click", (event) => {
     event.stopPropagation();
+    fold();
     jump(round.turn);
   });
   return node;
@@ -287,6 +287,10 @@ function fold() {
   active = false;
   cursorIndex = -1;
   dir = 0;
+  // A ring shut mid-drag leaves no hand holding it: the pointer that would let go is not coming back.
+  grab = null;
+  spun = 0;
+  clearTimeout(idle);
   paint();
 }
 
@@ -335,9 +339,7 @@ export function draw() {
   paint();
 }
 
-// The ring has two states: five ticks to glance at, and a navigator that owns the wheel and the finger. One box holds
-// the ticks and their words, so entering and leaving it is the whole of the hover. A finger turns the ring only once it
-// has moved far enough, so a tap still reaches the notch or the word it landed on.
+// A desk wakes the ring by hovering and shuts it by leaving; a touch has no edge to leave by, so a tap off the ring is its way out.
 export function wire() {
   const wrap = at("dial-wrap");
   wrap.addEventListener("pointerenter", (event) => {
@@ -351,10 +353,10 @@ export function wire() {
     waking = 0;
     fold();
   });
-  // A screen with no pointer keeps a tap as its only way in, and that first tap ends there: it wakes the ring.
+  // Every press starts the flag over, whatever the pointer: a click only follows its own press, so a stale drag cannot swallow it.
   wrap.addEventListener("pointerdown", (event) => {
-    if (event.pointerType !== "touch") return;
     dragged = false;
+    if (event.pointerType !== "touch") return;
     if (!active) {
       wake();
       return;
@@ -363,8 +365,7 @@ export function wire() {
   });
   wrap.addEventListener("pointermove", (event) => {
     if (!grab || event.pointerId !== grab.id) return;
-    // A finger that has come this far meant to turn the ring, so what it does from here belongs to the ring alone; the
-    // capture is what keeps it coming once it leaves the ring's own box.
+    // A finger this far meant to turn the ring, so what it does from here belongs to the ring alone: the capture keeps it coming past the box.
     if (!grab.taken) {
       if (Math.abs(event.clientY - grab.from) < SLIP) return;
       grab.taken = true;
@@ -372,7 +373,8 @@ export function wire() {
       wrap.setPointerCapture(event.pointerId);
     }
     event.preventDefault();
-    step(event.clientY - grab.y, PULL);
+    // A finger's way is the wheel's way: upward is later, though the axis it travels says the opposite.
+    step(grab.y - event.clientY, PULL);
     grab.y = event.clientY;
   });
   const release = (event) => {
@@ -397,6 +399,15 @@ export function wire() {
     true,
   );
   wrap.addEventListener("wheel", wheel, { passive: false });
+  // Anything off the ring shuts it: on a screen with no pointer to leave with, a tap elsewhere is the way out.
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!active || wrap.contains(event.target)) return;
+      fold();
+    },
+    true,
+  );
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || !active) return;
     fold();
