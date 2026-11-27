@@ -65,10 +65,7 @@ mod architecture {
         ),
         // The backend, bottom to top.
         ("server::storage", &["platform"]),
-        (
-            "server::config",
-            &["ipc::endpoint", "platform", "server::agent"],
-        ),
+        ("server::config", &["ipc::endpoint", "platform"]),
         (
             "server::agent",
             &[

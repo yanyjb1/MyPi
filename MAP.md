@@ -34,7 +34,7 @@ src/
       adapter/  接入者相关，其下的web目录即为本项目WebUI所在。
       http/  HTTP&WebSocket服务
       manager/  多会话管理
-  web/         浏览器工具：browser CDP 驱动、html 转换、ops 操作、search 搜索、seen 读取差量
+  browser/     浏览器本体：CDP 驱动、进程与标签调度、html 转换、ops 操作、search 搜索
 ```
 
 # 工具指南

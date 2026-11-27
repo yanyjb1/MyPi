@@ -1,10 +1,10 @@
-# web — architecture
+# browser — architecture
 
 What is here, what each file holds, and who talks to whom; current state only.
 
 ## Files
 
-- `mod.rs` — declares the modules, and exports `WebArgs`, `run`, `close_session`, `shutdown` and `ENGINES`.
+- `mod.rs` — declares the modules, and exports `WebArgs`, `Setup`, `run`, `close_session`, `shutdown` and `ENGINES`.
 - `args.rs` — `WebArgs`, the shared input shape of every operation.
 - `artifact.rs` — the files the model reads back: one writer, named for the site and numbered.
 - `halt.rs` — the stop as this domain says it: `Stopped`, and whether an error is it.
@@ -12,21 +12,20 @@ What is here, what each file holds, and who talks to whom; current state only.
 - `run.rs` — the two-operation permit, the in-flight count, and the `op` dispatch.
 - `url.rs` — URL normalisation, query encoding, percent and base64 decoding.
 
-### browser
+### The browser itself
 
-- `browser/mod.rs` — declares the browser's six parts.
-- `browser/process/mod.rs` — one browser handle: owned or attached, port, `alive`, `stop`, and the profile's DevToolsActivePort lookup.
-- `browser/process/launch.rs` — launch argv, the fork, the DevTools port wait, and the one resident thread that performs the fork.
-- `browser/devtools/mod.rs` — `Client`: `/json/list`, `/json/new`, `/json/close`, port probing.
-- `browser/devtools/cdp.rs` — the CDP WebSocket transport: connect, send, receive, and the `Knocker` a page's waits answer.
-- `browser/devtools/target.rs` — `Target`: id and socket URL.
-- `browser/page.rs` — one target: navigate, evaluate, DOM, wait, url, screenshot, bring-to-front.
-- `browser/lifecycle/mod.rs` — the process-wide state: lazy start, ownership, `port`, `existing_port`, `shutdown`.
-- `browser/lifecycle/idle.rs` — the activity clock and the idle decision.
-- `browser/lifecycle/timer.rs` — the one 30-second thread: idle sweep, then tab reap.
-- `browser/lifecycle/signal.rs` — INT/TERM/HUP registration.
-- `browser/tabs.rs` — the tab pool, per-tab slots, leases, launch-tab reclaim, idle reap, `close_session`.
-- `browser/verify.rs` — the human-verification wait: 30 seconds between looks, five minutes at most.
+- `process/mod.rs` — one browser handle: owned or attached, port, `alive`, `stop`, and the profile's DevToolsActivePort lookup.
+- `process/launch.rs` — launch argv, the fork, the DevTools port wait, and the one resident thread that performs the fork.
+- `devtools/mod.rs` — `Client`: `/json/list`, `/json/new`, `/json/close`, port probing.
+- `devtools/cdp.rs` — the CDP WebSocket transport: connect, send, receive, and the `Knocker` a page's waits answer.
+- `devtools/target.rs` — `Target`: id and socket URL.
+- `page.rs` — one target: navigate, evaluate, DOM, wait, url, screenshot, bring-to-front.
+- `lifecycle/mod.rs` — the process-wide state: lazy start, ownership, `port`, `existing_port`, `shutdown`.
+- `lifecycle/idle.rs` — the activity clock and the idle decision.
+- `lifecycle/timer.rs` — the one 30-second thread: idle sweep, then tab reap.
+- `lifecycle/signal.rs` — INT/TERM/HUP registration.
+- `tabs.rs` — the tab pool, per-tab slots, leases, launch-tab reclaim, idle reap, `close_session`.
+- `verify.rs` — the human-verification wait: 30 seconds between looks, five minutes at most.
 
 ### ops
 
@@ -53,24 +52,24 @@ What is here, what each file holds, and who talks to whom; current state only.
 
 ## What it talks to
 
-- **`server::config`**: `Config::load()`, `BrowserOptions` and `bring_to_front()`, read inside `lifecycle::port` and `lifecycle::bring_to_front`; this is the domain's only reach into the backend, and it is why `Env` carries no browser settings.
+- **`server::config`**: the value types `BrowserOptions`, `Rules` and `Part`, and nothing else; every one of them arrives as a value from the caller, so this domain opens no configuration file.
 - **`platform`**: `env::data_dir` for the default profile root, `proc::Process` for the browser's tree (spawn, stop, wait), and `stop::Stop` for the turn's stop signal, which ends the wait a call sits on rather than being polled.
 - **Crates**: `tungstenite` for the WebSocket, `html-to-markdown-rs` for DOM to Markdown, `url`, `ureq` for the DevTools HTTP, and `signal-hook` for the exit signals.
-- **Who calls it**: `server::agent::tools::web`, which calls `run` for every operation and `close_session` from the loop's `unbook`, so a session that ends takes its tabs with it; `main` calls `shutdown` once the IPC server returns.
+- **Who calls it**: `server::agent::tools::web` and `server::agent::tools::search`, which call `run` for every operation, and the loop's `unbook`, which calls `close_session` so a session that ends takes its tabs with it; `main` calls `shutdown` once the IPC server returns.
 - **Knows nothing about**: the api doors, storage, the front end.
 
 ## Inside
 
 ```text
-run (permit)
+run (permit, Setup)
   → ops::read ────→ tabs::with_work → page
-                   config::rules → html::control::expression → evaluate → html::control::scan
+                   rules → html::control::expression → evaluate → html::control::scan
   → search ───────→ tabs::with_search → verify::await_human
   → ops::open ────→ tabs::with_work → page
   → ops::drive ───→ tabs::with_work → page
   → ops::screenshot → tabs::with_work → page
 
-tabs::with_* → lifecycle::port → process::{launch, attach}
+tabs::with_* → lifecycle::port(Setup) → process::{launch, attach}
 page → devtools::{Client, Cdp}
 lifecycle::timer → idle::sweep, tabs::reap
 lifecycle::signal → shutdown
@@ -78,6 +77,7 @@ lifecycle::signal → shutdown
 
 - `tabs` is the only owner of tab state, `page` does not know sessions, `process` does not know tabs, and an operation does not touch CDP directly.
 - `lifecycle` is the only owner of the browser handle: `port` launches or attaches, `existing_port` never launches, `shutdown` closes and forgets, and `tabs` asks it for a port and nothing else.
+- `Setup` is the one thing this domain takes from the outside: the launch values and the bring-to-front switch, decided by whoever loaded the configuration.
 - `process::launch` is the only place that forks, and the only place that names a platform hook.
 - `devtools` only speaks protocol, and it never decides when a browser exists.
 - `verify` knows a page and a predicate, not an engine.
@@ -100,7 +100,7 @@ The front door turns the stop into the result's reason, and this domain never wr
 ## Must stay in step
 
 1. `WebArgs` and `tools/web/mod.rs`: the tool maps the model's positional arguments into this shape, so a field added here needs a parameter there.
-2. `BrowserOptions` and `lifecycle::port`: an owned browser caches the idle timeout and the bring-to-front flag at launch, so a rename in `server::config` is a rename here.
+2. `Setup` and `lifecycle::port`: an owned browser caches the idle timeout and the bring-to-front flag at launch, and the tool layer reads both from the configuration once.
 3. `tabs::POOL` and `lifecycle::shutdown`: the browser is gone, so every tab id is stale, and `shutdown` clears the pool.
 4. `search::provider` and `search/providers/`: the static table is the only registry, and `run` refuses a name it cannot find.
 5. `page::RENDER_WAIT` and the providers' parsers: a page that has not rendered yields no hits, and the wait is what keeps the loop from reading a shell.
