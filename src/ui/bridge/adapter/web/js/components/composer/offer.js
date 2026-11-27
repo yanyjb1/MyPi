@@ -25,10 +25,7 @@ function wordIndex(said) {
 function hit(typed, name, dots) {
   const low = name.toLowerCase();
   const want = typed.toLowerCase();
-  if (
-    dots && low.startsWith(".") && !want.startsWith(".") &&
-    low.slice(1).startsWith(want)
-  ) return 0;
+  if (dots && low.startsWith(".") && !want.startsWith(".") && low.slice(1).startsWith(want)) return 0;
   if (low.startsWith(want)) return 0;
   const chars = [...low];
   let cursor = 0;
@@ -64,10 +61,7 @@ async function paths(said, forced) {
     scored.push({ entry, rank });
   }
   scored.sort(
-    (a, b) =>
-      a.rank - b.rank ||
-      Number(b.entry.dir) - Number(a.entry.dir) ||
-      a.entry.name.localeCompare(b.entry.name),
+    (a, b) => a.rank - b.rank || Number(b.entry.dir) - Number(a.entry.dir) || a.entry.name.localeCompare(b.entry.name),
   );
   return scored.slice(0, MAX).map(({ entry }) => ({
     kind: "path",

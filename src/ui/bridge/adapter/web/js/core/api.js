@@ -1,10 +1,30 @@
-// The door: one question and its answer, the one connection a conversation streams down, and every read and write
+// The door: the one socket that carries every question and the one conversation followed, and every read and write
 // the page makes of the server — each answer landing in the store as the page's own state.
 
-import { address, announce, ensure, failed, state } from "./store.js";
+import { address, announce, ensure, failed, keep, state } from "./store.js";
 
-// The name the page answers to; the bridge reads it off the head and nothing else.
+// The name the page answers to; a browser may not set a head on a socket, so the name is said as its sub-protocol.
 const ADAPTER = "webui";
+
+// The ladder a broken socket is dialled again on, how long a dial waits for the handshake, and how long a question
+// waits for its answer before the door is called silent.
+const LATER = [500, 1000, 2000, 4000, 8000];
+const HANDSHAKE = 5000;
+const PATIENCE = 35_000;
+
+// The socket, the dial in flight, and the turn a question's id is taken from.
+let link = null;
+let dialing = null;
+let seq = 0;
+// Questions waiting for an answer, by the id the door echoes back.
+const waiting = new Map();
+// The conversation this page follows, and where its frames go: both outlive a broken socket.
+let watching = null;
+let sink = null;
+// The open socket's own end, as a promise whoever follows a conversation waits on.
+let ended = Promise.resolve();
+// The door is on its way shut: a connection is what keeps a conversation alive, so it goes once nothing wants it.
+let closing = false;
 
 // The server refuses with a keyed text and the door with a code; a stream notice carries that same shape, so this is
 // also how a notice becomes a line.
@@ -12,9 +32,7 @@ export function reason(bad) {
   if (!bad) return "refused";
   if (bad.text) return bad.text;
   if (bad.key) {
-    const args = bad.args && Object.keys(bad.args).length
-      ? " " + JSON.stringify(bad.args)
-      : "";
+    const args = bad.args && Object.keys(bad.args).length ? " " + JSON.stringify(bad.args) : "";
     return bad.key + args;
   }
   return bad.message || bad.code || "refused";
@@ -29,33 +47,122 @@ class Refused extends Error {
 
 // One frame, one answer: the payload the server wrote, or the refusal as it came.
 async function ask(kind, name, payload = {}) {
-  let res;
-  try {
-    res = await fetch("/", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Bridge-Adapter": ADAPTER,
-      },
-      body: JSON.stringify({ kind, name, payload }),
+  const ws = await reach();
+  const id = ++seq;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      waiting.delete(id);
+      reject(new Refused("silent", `no answer to ${kind}/${name}`));
+      settle();
+    }, PATIENCE);
+    waiting.set(id, { resolve, reject, timer });
+    try {
+      ws.send(JSON.stringify({ id, kind, name, payload }));
+    } catch (e) {
+      waiting.delete(id);
+      clearTimeout(timer);
+      reject(new Refused("unreachable", `the bridge is not answering: ${e.message}`));
+    }
+  });
+}
+
+// The one socket, dialled once however many ask for it at the same moment.
+function reach() {
+  if (link && link.readyState === WebSocket.OPEN) return Promise.resolve(link);
+  if (dialing) return dialing;
+  closing = false;
+  dialing = dial().finally(() => {
+    dialing = null;
+  });
+  return dialing;
+}
+
+function dial() {
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  return new Promise((resolve, reject) => {
+    let ws;
+    try {
+      ws = new WebSocket(`${scheme}//${location.host}/`, ADAPTER);
+    } catch (e) {
+      reject(new Refused("unreachable", `the bridge is not answering: ${e.message}`));
+      return;
+    }
+    let settled = false;
+    const giveUp = (said) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(late);
+      reject(new Refused("unreachable", said));
+    };
+    const late = setTimeout(() => {
+      giveUp("the bridge did not answer the socket");
+      ws.close();
+    }, HANDSHAKE);
+    ws.addEventListener("open", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(late);
+      link = ws;
+      attend(ws);
+      resolve(ws);
     });
-  } catch (e) {
-    throw new Refused(
-      "unreachable",
-      "the bridge is not answering: " + e.message,
-    );
-  }
-  const body = await res.json().catch(() => null);
-  if (body && body.error) {
-    throw new Refused(body.error.code || "refused", reason(body.error));
-  }
-  if (!res.ok || !body) {
-    throw new Refused(
-      "http_" + res.status,
-      "HTTP " + res.status + " on " + kind + "/" + name,
-    );
-  }
-  return body;
+    ws.addEventListener("error", () => giveUp("the bridge closed the socket"));
+    ws.addEventListener("close", () => giveUp("the bridge closed the socket"));
+  });
+}
+
+// Nothing follows a conversation and nothing waits on a reply any more: the socket goes, and with it the reason the
+// server had to keep that conversation. The check waits one turn of the event loop, so a page moving from one
+// conversation to the next keeps the socket it already has rather than shaking hands again.
+function shut() {
+  closing = true;
+  setTimeout(settle, 0);
+}
+
+function settle() {
+  if (!closing || watching !== null || waiting.size) return;
+  closing = false;
+  const ws = link;
+  link = null;
+  if (ws) ws.close();
+}
+
+// Every frame the socket says: one carrying an id on the ledger answers that question and nothing else, and the rest
+// belong to the conversation this page follows. A reply whose question was given up on carries an id nobody holds.
+function attend(ws) {
+  ended = new Promise((done) => ws.addEventListener("close", () => done(), { once: true }));
+  ws.addEventListener("message", (event) => {
+    let frame;
+    try {
+      frame = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (!frame || typeof frame !== "object") return;
+    if (frame.id != null && waiting.has(frame.id)) {
+      const asked = waiting.get(frame.id);
+      waiting.delete(frame.id);
+      clearTimeout(asked.timer);
+      // The id is the door's own field, so the payload handed on carries none of it.
+      delete frame.id;
+      if (frame.error) {
+        asked.reject(new Refused(frame.error.code || "refused", reason(frame.error)));
+      } else {
+        asked.resolve(frame);
+      }
+      settle();
+      return;
+    }
+    if (sink) sink(frame);
+  });
+  ws.addEventListener("close", () => {
+    if (link === ws) link = null;
+    for (const [id, asked] of waiting) {
+      clearTimeout(asked.timer);
+      asked.reject(new Refused("unreachable", "the bridge closed the socket"));
+      waiting.delete(id);
+    }
+  });
 }
 
 const call = (name, payload) => ask("call", name, payload);
@@ -69,61 +176,48 @@ export const mailbox = (payload) => post("mailbox", payload);
 export const opening = (payload) => subscribe("submit", payload);
 export const words = (payload) => call("blocks", payload);
 
-const LATER = [500, 1000, 2000, 4000, 8000];
+// The notes: one door reads them, the other writes them.
+export const memosRead = (ask) => call("memo", ask);
+export const memosWrite = (ask) => post("memo", ask);
 
-// One conversation's frames. The bridge replays the round in flight, so a reconnect loses nothing.
-export function follow(session, onFrame, onGone) {
+// One conversation's frames. The door tells a follower everything the running round has said so far the moment it is
+// told to follow, so a broken socket or a reloaded page loses nothing; `again` is what the page clears in exchange, and
+// it runs right after the watch is sent, because that replay may land before the watch's own reply does.
+export function follow(session, handlers) {
   let closed = false;
-  let tries = 0;
+  let rung = 0;
+
   const stop = () => {
     closed = true;
+    sink = null;
+    if (watching === session) watching = null;
+    shut();
   };
 
   const run = async () => {
     while (!closed) {
       try {
-        const res = await fetch("/", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "X-Bridge-Adapter": ADAPTER,
-          },
-          body: JSON.stringify({
+        const ws = await reach();
+        if (closed) return;
+        watching = session;
+        closing = false;
+        sink = handlers.frame;
+        ws.send(
+          JSON.stringify({
             kind: "subscribe",
             name: "watch",
             payload: { session },
           }),
-        });
-        if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
-        tries = 0;
-        const reader = res.body.pipeThrough(new TextDecoderStream())
-          .getReader();
-        let held = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          held += value;
-          let cut;
-          while ((cut = held.indexOf("\n\n")) >= 0) {
-            const block = held.slice(0, cut);
-            held = held.slice(cut + 2);
-            for (const line of block.split("\n")) {
-              if (!line.startsWith("data: ")) continue;
-              try {
-                onFrame(JSON.parse(line.slice(6)));
-              } catch {
-                // A frame the door never wrote is not a frame.
-              }
-            }
-          }
-        }
-      } catch (e) {
+        );
+        rung = 0;
+        handlers.again();
+        await ended;
+      } catch {
         if (closed) return;
-        onGone && onGone(e);
       }
       if (closed) return;
-      const wait = LATER[Math.min(tries, LATER.length - 1)];
-      tries += 1;
+      const wait = LATER[Math.min(rung, LATER.length - 1)];
+      rung += 1;
       await new Promise((done) => setTimeout(done, wait));
     }
   };
@@ -161,10 +255,7 @@ function fingerprint(rows) {
 export async function open(id) {
   const held = ensure(id);
   try {
-    const [snapshot, meta] = await Promise.all([
-      call("init", { session: id }),
-      call("meta", { session: id }),
-    ]);
+    const [snapshot, meta] = await Promise.all([call("init", { session: id }), call("meta", { session: id })]);
     held.meta = meta;
     held.structure = snapshot.structure || [];
     held.blocks = new Map();
@@ -256,6 +347,11 @@ export function listing(where, path) {
   return local("list", payload);
 }
 
+// What the pages a round cites call themselves: the door reads them, since a page may not read another site's head.
+export function citeTitles(urls) {
+  return local("title", { urls });
+}
+
 // Safe model split at the first colon only, so an address naming a tag of its own keeps it.
 function parseModel(addr) {
   const at = (addr || "").indexOf(":");
@@ -283,6 +379,7 @@ export async function remove(id) {
     if (state.active === id) {
       state.active = null;
       state.session = null;
+      keep(null);
     }
     state.byId.delete(id);
     await refresh();

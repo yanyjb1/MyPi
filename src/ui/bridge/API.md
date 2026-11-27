@@ -164,6 +164,11 @@ tells the model what it cannot otherwise know — a chat has no clock.
 is a half-typed directory: its own head is resolved against `cwd`, `~` is home, and one name per
 entry comes back with a flag saying whether it is a directory.
 
+`local` / `title` takes `urls`, a list of addresses, and answers `{"titles": {"<url>": "<title>"}}`.
+Only the addresses that named themselves are in it: a page that answered a status, a challenge, or
+no `<title>` at all is left out, and the front end speaks for that address in its own words. The
+door reads them, because a page may not read another site's head.
+
 `host` / `attach` takes `session` and answers `{}`: from then on the door keeps that session booked
 whether or not anything follows it. `host` / `release` takes `session` and answers `{}`, giving it
 back. `host` / `list` takes nothing and answers `{"sessions": [{"session", "turn"}, ...]}` — every

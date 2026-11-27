@@ -41,9 +41,7 @@ function ask(word, label, danger, value) {
         answer();
       });
     }
-    modal.querySelector('[data-ref="no"]').addEventListener("click", () =>
-      modal.close()
-    );
+    modal.querySelector('[data-ref="no"]').addEventListener("click", () => modal.close());
     modal.addEventListener("close", () => {
       modal.remove();
       done(asked ? null : false);
@@ -76,8 +74,7 @@ export function draw() {
     return;
   }
   for (const row of state.rows) {
-    const running = state.session && state.session.id === row.id &&
-      state.session.busy;
+    const running = state.session && state.session.id === row.id && state.session.busy;
     const node = build("tpl-rail-item");
     node.dataset.id = String(row.id);
     node.dataset.on = row.id === state.active ? "1" : "0";
@@ -86,11 +83,7 @@ export function draw() {
     text(node, "title", title(row));
     text(node, "id", "#" + row.id);
     text(node, "rounds", row.rounds ? row.rounds + "r" : "");
-    text(
-      node,
-      "time",
-      row.last_ts ? short(String(row.last_ts).replace("T", " "), 16) : "",
-    );
+    text(node, "time", row.last_ts ? short(String(row.last_ts).replace("T", " "), 16) : "");
     text(node, "live", running ? "running" : "");
 
     node.querySelector(".rename").addEventListener("click", async (event) => {
@@ -100,10 +93,7 @@ export function draw() {
     });
     node.querySelector(".remove").addEventListener("click", async (event) => {
       event.stopPropagation();
-      const sure = await confirm(
-        "delete session #" + row.id + " for good?",
-        "delete",
-      );
+      const sure = await confirm("delete session #" + row.id + " for good?", "delete");
       if (sure) remove(row.id);
     });
     list.append(node);

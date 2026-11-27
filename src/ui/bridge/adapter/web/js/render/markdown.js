@@ -152,13 +152,11 @@ function tableHead(rows, at) {
   if (line === undefined || !line.includes("|")) return false;
   const next = rows[at + 1];
   if (next === undefined) return false;
-  return next.split("").every((c) => "|-: \t\n\r".includes(c)) &&
-    next.includes("-");
+  return next.split("").every((c) => "|-: \t\n\r".includes(c)) && next.includes("-");
 }
 
 // The lines of a run, newlines off.
-const lines = (source) =>
-  source.split("\n").filter((line, at, all) => at < all.length - 1 || line);
+const lines = (source) => source.split("\n").filter((line, at, all) => at < all.length - 1 || line);
 
 const HEADING = /^(#{1,3})\s+(.*)$/;
 const BULLET = /^(\s*)[-*+]\s+(.*)$/;
@@ -184,14 +182,39 @@ function inline(source) {
   out = out
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>")
-    .replace(
-      /\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g,
-      '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
+    .replace(LINK, link);
+  return out.replace(/\u0000(\d+)\u0000/g, (_, at) => "<code>" + spans[Number(at)] + "</code>");
+}
+
+// The link a model writes: its words, and the address they point at.
+const LINK = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+
+// A link as the page paints it, and only a page on the web is a link: a number in the brackets whose address opens with
+// http is the model citing its source and stands as the pill the drawer opens on, and anything else — a file, a
+// directory, a bare host — stays the words that were written, since a page here has nothing to open them with.
+function link(all, label, href) {
+  if (!/^https?:\/\//.test(href)) return all;
+  if (/^\d+$/.test(label)) {
+    return (
+      '<button type="button" class="cite-pill" data-url="' + href + '" data-cite="' + label + '">' + label + "</button>"
     );
-  return out.replace(
-    /\u0000(\d+)\u0000/g,
-    (_, at) => "<code>" + spans[Number(at)] + "</code>",
-  );
+  }
+  return '<a href="' + href + '" target="_blank" rel="noreferrer">' + label + "</a>";
+}
+
+// One round's pills, each number said once: the first place an address stands keeps the number the model gave it, and
+// every later visit to that same page wears it too, so the prose and the drawer can never count differently.
+export function numberPills(root) {
+  const seen = new Map();
+  for (const pill of root.querySelectorAll(".cite-pill")) {
+    const url = pill.dataset.url;
+    if (seen.has(url)) {
+      pill.dataset.cite = seen.get(url);
+      pill.textContent = seen.get(url);
+      continue;
+    }
+    seen.set(url, pill.dataset.cite);
+  }
 }
 
 // Prose: headings, rules, and paragraphs, the plain lines of one gathered under one paragraph.
@@ -280,18 +303,12 @@ function listing(source) {
 
 function quoted(source) {
   const said = lines(source).map((line) => line.replace(/^\s*>\s?/, ""));
-  return "<blockquote>" + inline(said.join("\n")).replace(/\n/g, "<br>") +
-    "</blockquote>";
+  return "<blockquote>" + inline(said.join("\n")).replace(/\n/g, "<br>") + "</blockquote>";
 }
 
 function fenced(seg) {
   const rows = lines(seg.source);
-  const said = rows.slice(
-    1,
-    rows.length > 1 && rows[rows.length - 1].trim()
-      ? rows.length - 1
-      : rows.length,
-  );
+  const said = rows.slice(1, rows.length > 1 && rows[rows.length - 1].trim() ? rows.length - 1 : rows.length);
   const lang = seg.lang ? ' data-lang="' + esc(seg.lang) + '"' : "";
   return "<pre" + lang + "><code>" + esc(said.join("\n")) + "</code></pre>";
 }
@@ -300,14 +317,13 @@ function table(source) {
   const rows = lines(source).filter((line) => line.trim());
   const head = cells(rows[0]);
   const body = rows.slice(2).map(cells);
-  return "<table><thead><tr>" +
+  return (
+    "<table><thead><tr>" +
     head.map((cell) => "<th>" + inline(cell) + "</th>").join("") +
     "</tr></thead><tbody>" +
-    body.map((row) =>
-      "<tr>" + row.map((cell) => "<td>" + inline(cell) + "</td>").join("") +
-      "</tr>"
-    ).join("") +
-    "</tbody></table>";
+    body.map((row) => "<tr>" + row.map((cell) => "<td>" + inline(cell) + "</td>").join("") + "</tr>").join("") +
+    "</tbody></table>"
+  );
 }
 
 // One segment's HTML: the run painted on its own, with no knowledge of its neighbours.

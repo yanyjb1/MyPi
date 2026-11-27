@@ -1,5 +1,5 @@
-// The dial: five notches thirty degrees apart, the round in view always the one in the middle, and the words each
-// notch carries. A pointer coming to rest on the ring wakes it; one that leaves folds it at once.
+// notch carries. A pointer that comes to rest on the ring, or a finger that lands on it, wakes it; a pointer that
+// leaves folds it at once.
 
 import { at, clear } from "../core/template.js";
 import { words } from "../core/api.js";
@@ -18,13 +18,27 @@ const STEP = 30;
 // A half ring holds seven bearings; the topmost and the bottommost are left empty, because a line there would have
 // no room to say anything. Five it is, and the round in view keeps the middle one whatever its place in the list.
 const SPAN = 2;
-// How long a pointer rests on the ring before it is awake.
+// How long a pointer rests on the ring before it is awake, how far a wheel must travel for one notch, and how far a
+// finger must. A trackpad says dozens of small deltas where a mouse says one large one, so both are added up rather
+// than taken one event at a time.
 const WAIT = 180;
+const SPIN = 24;
+// How long the wheel must be still before what it has travelled so far is forgotten.
+const REST = 220;
+// How far a finger moves before it is dragging the ring rather than tapping the notch or the word it landed on.
+const SLIP = 8;
+// How far a finger travels for one notch: a drag is a coarser thing than a wheel, so it asks for more of it.
+const PULL = 28;
 
 let active = false;
 let waking = 0;
 let cursorIndex = -1;
 let dir = 0;
+// The travel added up since the last notch, the pause that ends one turn of the wheel, and the finger turning the ring.
+let spun = 0;
+let idle = 0;
+let grab = null;
+let dragged = false;
 
 const rounds = () => (state.session && state.session.structure) || [];
 
@@ -89,7 +103,9 @@ const ROOM = LENGTH / FONT;
 // The opening that fits the room: the rest is said with an ellipsis, and the whole message waits in the title. A
 // width only ever grows with the text, so the cut is found by halving, never by measuring a glyph at a time.
 function fitted(text) {
-  const whole = String(text || "").replace(/\s+/g, " ").trim();
+  const whole = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!whole || width(whole) <= ROOM) return whole;
   const tail = width(TAIL);
   let low = 0;
@@ -198,9 +214,7 @@ export function label(box, held, items, again, direction = 0, here = -1) {
     spoken = new Map();
   }
   const list = (held && held.structure) || [];
-  const atIdx = here >= 0
-    ? here
-    : (items[0] ? list.indexOf(items[0].round) : 0);
+  const atIdx = here >= 0 ? here : items[0] ? list.indexOf(items[0].round) : 0;
   const from = direction <= 0 ? Math.max(0, atIdx - RUNWAY) : atIdx;
   const to = direction >= 0 ? Math.min(list.length - 1, atIdx + RUNWAY) : atIdx;
   const missing = [];
@@ -281,9 +295,34 @@ function wheel(event) {
   if (!active) return;
   event.preventDefault();
   event.stopPropagation();
+  let travel = event.deltaY;
+  if (!travel) return;
+  // A line and a page are not pixels: each is turned into the distance it is worth before it is counted.
+  if (event.deltaMode === 1) travel *= 16;
+  else if (event.deltaMode === 2) travel *= 100;
+  step(travel);
+}
+
+// Travel of either kind, in pixels: one way adds up, the other starts the count again, and a notch is taken per enough
+// of it.
+function step(travel, need = SPIN) {
   const list = rounds();
-  if (list.length < 2) return;
-  dir = event.deltaY > 0 ? 1 : -1;
+  if (list.length < 2 || !travel) return;
+  const way = travel > 0 ? 1 : -1;
+  if (way !== dir) {
+    dir = way;
+    spun = 0;
+  }
+  spun += Math.abs(travel);
+  if (spun < need) return;
+  // One notch per call, and the count starts again: a wheel that says a hundred pixels at a time is one notch, not
+  // four, and a trackpad's many small ones add up until they are worth one.
+  spun = 0;
+  clearTimeout(idle);
+  idle = setTimeout(() => {
+    spun = 0;
+    dir = 0;
+  }, REST);
   const here = bearing();
   const there = Math.min(Math.max(here + dir, 0), list.length - 1);
   if (there !== here) {
@@ -296,8 +335,9 @@ export function draw() {
   paint();
 }
 
-// The ring has two states: five ticks to glance at, and a navigator that owns the wheel. One box holds the ticks
-// and their words, so entering and leaving it is the whole of the hover.
+// The ring has two states: five ticks to glance at, and a navigator that owns the wheel and the finger. One box holds
+// the ticks and their words, so entering and leaving it is the whole of the hover. A finger turns the ring only once it
+// has moved far enough, so a tap still reaches the notch or the word it landed on.
 export function wire() {
   const wrap = at("dial-wrap");
   wrap.addEventListener("pointerenter", (event) => {
@@ -311,12 +351,51 @@ export function wire() {
     waking = 0;
     fold();
   });
-  // A screen with no pointer keeps a tap as its only way in and out.
+  // A screen with no pointer keeps a tap as its only way in, and that first tap ends there: it wakes the ring.
   wrap.addEventListener("pointerdown", (event) => {
     if (event.pointerType !== "touch") return;
-    if (active) fold();
-    else wake();
+    dragged = false;
+    if (!active) {
+      wake();
+      return;
+    }
+    grab = { id: event.pointerId, from: event.clientY, y: event.clientY, taken: false };
   });
+  wrap.addEventListener("pointermove", (event) => {
+    if (!grab || event.pointerId !== grab.id) return;
+    // A finger that has come this far meant to turn the ring, so what it does from here belongs to the ring alone; the
+    // capture is what keeps it coming once it leaves the ring's own box.
+    if (!grab.taken) {
+      if (Math.abs(event.clientY - grab.from) < SLIP) return;
+      grab.taken = true;
+      dragged = true;
+      wrap.setPointerCapture(event.pointerId);
+    }
+    event.preventDefault();
+    step(event.clientY - grab.y, PULL);
+    grab.y = event.clientY;
+  });
+  const release = (event) => {
+    if (!grab || event.pointerId !== grab.id) return;
+    if (grab.taken && wrap.hasPointerCapture(event.pointerId)) {
+      wrap.releasePointerCapture(event.pointerId);
+    }
+    grab = null;
+    spun = 0;
+    dir = 0;
+  };
+  wrap.addEventListener("pointerup", release);
+  wrap.addEventListener("pointercancel", release);
+  // A finger that dragged leaves no click behind on the word it started on: the turn was the whole of what it said.
+  wrap.addEventListener(
+    "click",
+    (event) => {
+      if (!dragged) return;
+      event.stopPropagation();
+      event.preventDefault();
+    },
+    true,
+  );
   wrap.addEventListener("wheel", wheel, { passive: false });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || !active) return;

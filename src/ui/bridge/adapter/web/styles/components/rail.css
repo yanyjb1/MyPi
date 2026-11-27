@@ -101,7 +101,10 @@
     border-radius: 9px;
     border: 1px solid transparent;
     cursor: pointer;
-    transition: background 120ms ease, transform 120ms ease, border-color 120ms ease;
+    transition:
+      background 120ms ease,
+      transform 120ms ease,
+      border-color 120ms ease;
   }
 
   .sessions > li:hover {

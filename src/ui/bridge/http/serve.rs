@@ -139,12 +139,18 @@ fn handle_request(
         return Ok(false);
     }
     if frame.kind == "local" {
-        if frame.name != "list" {
-            let answer = respond::error("bad_request", "the door answers one local frame: `list`");
-            respond::respond_json(stream, "400 Bad Request", &answer, keep_alive)?;
-            return Ok(false);
+        match local::answer(&frame) {
+            Some(answer) => {
+                respond::respond_json(stream, "200 OK", &answer, keep_alive)?;
+            }
+            None => {
+                let answer = respond::error(
+                    "bad_request",
+                    "the door answers two local frames: `list` and `title`",
+                );
+                respond::respond_json(stream, "400 Bad Request", &answer, keep_alive)?;
+            }
         }
-        respond::respond_json(stream, "200 OK", &local::list(&frame.payload), keep_alive)?;
         return Ok(false);
     }
     if rpc::is_watch(&frame) {

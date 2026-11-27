@@ -37,7 +37,7 @@ export function row(group) {
 }
 
 // One figure of the head: its word, its figure under it, and the bar or the note that explains it.
-function cell(sheet, word, value, note, tone, bar) {
+function cell(word, value, note, tone, bar) {
   const box = build("tpl-bill-cell");
   text(box, "k", word);
   const figure = box.querySelector('[data-ref="v"]');
@@ -65,24 +65,13 @@ export function head(bill, rows) {
   const mark = bill.estimated ? "~" : "";
   const box = build("tpl-bill-head");
   box.append(
-    cell(box, "spend", bill.cny ? money(bill.cny) : "—", each, "t-warn"),
-    cell(box, "tokens", tokens(count), count.toLocaleString("en-US"), ""),
-    cell(
-      box,
-      "cache hit",
-      (count ? (cached / count) * 100 : 0).toFixed(2) + "%",
-      "",
-      "t-accent",
-      [cached, count],
-    ),
-    cell(
-      box,
-      "context",
-      mark + tokens(bill.context) + (room ? " / " + tokens(room) : ""),
-      "",
-      "t-success",
-      [bill.context, room],
-    ),
+    cell("spend", bill.cny ? money(bill.cny) : "—", each, "t-warn"),
+    cell("tokens", tokens(count), count.toLocaleString("en-US"), ""),
+    cell("cache hit", (count ? (cached / count) * 100 : 0).toFixed(2) + "%", "", "t-accent", [cached, count]),
+    cell("context", mark + tokens(bill.context) + (room ? " / " + tokens(room) : ""), "", "t-success", [
+      bill.context,
+      room,
+    ]),
   );
   return box;
 }
@@ -187,10 +176,7 @@ export function foot(bill, rows) {
   const sub = bill.subagent_price;
   const box = build("tpl-bill-foot");
   box.append(
-    line(
-      "main / subagents",
-      (bill.cny ? money(bill.cny) : "—") + " / " + (sub ? money(sub.cny) : "—"),
-    ),
+    line("main / subagents", (bill.cny ? money(bill.cny) : "—") + " / " + (sub ? money(sub.cny) : "—")),
     line("tokens a round", rounds ? tokens(Math.round(total / rounds)) : "—"),
   );
   return box;

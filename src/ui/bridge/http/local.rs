@@ -1,8 +1,10 @@
-// What the door answers itself: the one look at this machine's directories a page cannot take.
+// What the door answers itself: this machine's directories, and the name a cited page gives itself.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
+
+use crate::ipc::contract::Frame;
 
 // How many names one listing carries; a longer directory offers no more.
 const MAX: usize = 2000;
@@ -42,6 +44,15 @@ pub fn list(payload: &Value) -> Value {
         .map(|(dir, name)| json!({"name": name, "dir": dir}))
         .collect();
     json!({"dir": dir.to_string_lossy(), "entries": entries})
+}
+
+// One local frame, whichever of the two it is: the door's own look at this machine, or at the pages it cites.
+pub fn answer(frame: &Frame) -> Option<Value> {
+    match frame.name.as_str() {
+        "list" => Some(list(&frame.payload)),
+        "title" => Some(super::title::lookup(&frame.payload)),
+        _ => None,
+    }
 }
 
 // The directory the word's own head names: relative paths stand on the session's own directory.

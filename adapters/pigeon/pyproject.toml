@@ -1,0 +1,9 @@
+[project]
+name = "mypi-pigeon"
+version = "0.1.0"
+description = "A mailbox two agents on this machine share: post a letter, fetch a mailbox, the letters are deleted."
+requires-python = ">=3.8"
+dependencies = []
+
+[tool.ruff]
+line-length = 200

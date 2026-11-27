@@ -39,9 +39,7 @@ export function follow() {
     if (seen != null) held.anchor = seen;
 
     if (isUp && chat.scrollTop < 480) checkPrefetch(held, true);
-    else if (
-      !isUp && chat.scrollHeight - chat.scrollTop - chat.clientHeight < 480
-    ) checkPrefetch(held, false);
+    else if (!isUp && chat.scrollHeight - chat.scrollTop - chat.clientHeight < 480) checkPrefetch(held, false);
 
     if (chat.scrollTop < 96 && atEdge(held, "top")) {
       grow(held, "top");
@@ -89,8 +87,7 @@ export async function jump(turn) {
   draw();
   const node = at("sheet").querySelector('[data-turn="' + turn + '"]');
   if (node) {
-    const top = at("chat").scrollTop + node.getBoundingClientRect().top -
-      at("chat").getBoundingClientRect().top - 8;
+    const top = at("chat").scrollTop + node.getBoundingClientRect().top - at("chat").getBoundingClientRect().top - 8;
     settle(at("chat"), top);
   }
 }

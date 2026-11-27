@@ -11,5 +11,6 @@ ABOUT*
 # An adapter's own secrets and caches
 adapters/*/token.txt
 adapters/*/telegram-bridge.json
+adapters/pigeon/cache/
 __pycache__/
 *.pyc

@@ -33,10 +33,7 @@ function wholeChip(event) {
   if (node.nodeType !== Node.TEXT_NODE) {
     node = node.childNodes[range.startOffset] || null;
   }
-  if (
-    node && node.nodeType !== Node.TEXT_NODE && node.classList &&
-    node.classList.contains("chip-token")
-  ) {
+  if (node && node.nodeType !== Node.TEXT_NODE && node.classList && node.classList.contains("chip-token")) {
     event.preventDefault();
     node.remove();
     return true;

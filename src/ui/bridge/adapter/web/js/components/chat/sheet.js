@@ -4,7 +4,7 @@
 import { at, build, clear, text } from "../../core/template.js";
 import { dismiss, state } from "../../core/store.js";
 import { blocks } from "../../core/api.js";
-import { body } from "../../render/markdown.js";
+import { body, numberPills } from "../../render/markdown.js";
 import { card } from "../../render/tools.js";
 import { loaded, slice, trim, watched } from "./window.js";
 import { liveTurn } from "./live.js";
@@ -79,15 +79,7 @@ function blockView(block, paired) {
       if (paired) return null;
       const items = Array.isArray(block.ok) ? block.ok : [];
       const failed = items.some((item) => item && item.ok === false);
-      return card(
-        block.name,
-        {},
-        "",
-        failed ? "failed" : "done",
-        block.result,
-        block.duration_ms,
-        "",
-      );
+      return card(block.name, {}, "", failed ? "failed" : "done", block.result, block.duration_ms, "");
     }
     default:
       return prose(String(block.content || block.text || ""));
@@ -110,10 +102,7 @@ function blocksOf(held, round) {
     }
   }
   return found.map((block) => {
-    if (
-      block.kind === "tool_result" && block.call_id &&
-      requests.has(block.call_id)
-    ) {
+    if (block.kind === "tool_result" && block.call_id && requests.has(block.call_id)) {
       return { block, paired: requests.get(block.call_id) };
     }
     return { block, paired: null };
@@ -154,6 +143,8 @@ export function turnNode(held, round) {
     const view = blockView(block, paired);
     if (view) turn.append(view);
   }
+  // The model's numbers stand as it wrote them until the whole round is laid: only then is every address seen.
+  numberPills(turn);
   return turn;
 }
 
@@ -260,10 +251,7 @@ export function tail() {
   // round does not put the round under it.
   if (node.parentNode !== sheet) {
     const anchor = held.refusalNode;
-    sheet.insertBefore(
-      node,
-      anchor && anchor.parentNode === sheet ? anchor : null,
-    );
+    sheet.insertBefore(node, anchor && anchor.parentNode === sheet ? anchor : null);
   }
   if (state.pinned) settle(at("chat"), at("chat").scrollHeight);
 }

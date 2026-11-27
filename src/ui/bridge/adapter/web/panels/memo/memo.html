@@ -1,0 +1,75 @@
+<!-- The memo drawer's own markup: the node the host lays down, then every shape its drawing clones. -->
+
+<div class="memo-root"></div>
+
+<template id="tpl-memo-group">
+	<section class="memo-group">
+		<div class="memo-group-head">
+			<span class="memo-group-title" data-ref="title"></span>
+			<span class="memo-group-count" data-ref="count"></span>
+		</div>
+		<div class="memo-group-body" data-ref="body"></div>
+	</section>
+</template>
+
+<template id="tpl-memo-item">
+	<div class="memo-item">
+		<button class="memo-icon" type="button" data-act="copy" title="copy the newest text" aria-label="copy the newest text">
+			<svg class="i-copy" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.2" /><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11" /></svg>
+			<svg class="i-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5" /></svg>
+		</button>
+		<button class="memo-main" type="button" data-act="open">
+			<span class="memo-name" data-ref="name"></span>
+			<span class="memo-preview" data-ref="preview"></span>
+		</button>
+		<button class="memo-icon danger" type="button" data-act="del" data-ref="del" title="delete every version" aria-label="delete every version">
+			<svg class="i-trash" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" /></svg>
+			<span class="i-sure">sure?</span>
+		</button>
+	</div>
+</template>
+
+<template id="tpl-memo-dashed">
+	<button class="memo-dashed" type="button" data-ref="said"></button>
+</template>
+
+<template id="tpl-memo-editor">
+	<div class="memo-editor">
+		<input class="memo-field" data-ref="name" type="text" placeholder="name" spellcheck="false" autocomplete="off" />
+		<textarea class="memo-field memo-text" data-ref="content" placeholder="write the note" spellcheck="false"></textarea>
+		<div class="memo-acts">
+			<span class="memo-said" data-ref="said"></span>
+			<button class="memo-btn" type="button" data-act="cancel">cancel</button>
+			<button class="memo-btn primary" type="button" data-act="save" data-ref="save">save</button>
+		</div>
+	</div>
+</template>
+
+<template id="tpl-memo-detail">
+	<div class="memo-detail">
+		<div class="memo-detail-bar">
+			<button class="memo-back" type="button" data-act="back">back</button>
+			<span class="memo-scope" data-ref="scope"></span>
+			<span class="memo-detail-title" data-ref="title"></span>
+			<span class="memo-pager" data-ref="pager"></span>
+		</div>
+		<div class="memo-versions" data-ref="track"></div>
+	</div>
+</template>
+
+<template id="tpl-memo-version">
+	<article class="memo-ver" data-latest="0">
+		<div class="memo-ver-head">
+			<span class="memo-ver-badge" data-ref="badge"></span>
+			<span class="memo-ver-ts" data-ref="ts"></span>
+			<button class="memo-icon" type="button" data-act="copy" title="copy this version" aria-label="copy this version">
+				<svg class="i-copy" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.2" /><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11" /></svg>
+				<svg class="i-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5" /></svg>
+			</button>
+		</div>
+		<div class="memo-ver-wrap" data-ref="wrap">
+			<div class="memo-ver-body" data-ref="body"></div>
+		</div>
+		<button class="memo-expand" type="button" data-act="expand" data-ref="expand" hidden></button>
+	</article>
+</template>

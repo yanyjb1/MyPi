@@ -113,3 +113,25 @@ export function cwd() {
   const box = at("cwd");
   return box ? box.value.trim() : "";
 }
+
+// The conversation this tab last stood in, kept in the tab's own storage: a reload comes back to it, while a second
+// tab opens on a draft of its own, because it brings no storage with it.
+const KEPT = "mypi.session";
+
+export function keep(id) {
+  try {
+    if (id) sessionStorage.setItem(KEPT, String(id));
+    else sessionStorage.removeItem(KEPT);
+  } catch {
+    // A browser that keeps no storage reloads into a fresh draft: forgetful, never wrong.
+  }
+}
+
+export function kept() {
+  try {
+    const id = Number(sessionStorage.getItem(KEPT));
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}

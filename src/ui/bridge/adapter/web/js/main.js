@@ -2,8 +2,8 @@
 // one region's own entry point; nothing here knows what a region holds.
 
 import { at } from "./core/template.js";
-import { closePanel, state, watch as watchState } from "./core/store.js";
-import { interrupt, remove } from "./core/api.js";
+import { closePanel, kept, watch as watchState } from "./core/store.js";
+import { interrupt, refresh, remove } from "./core/api.js";
 import * as theme from "./core/theme.js";
 import * as rail from "./components/rail.js";
 import * as capsule from "./components/composer/mods.js";
@@ -16,8 +16,12 @@ import { follow, latest } from "./components/chat/scroll.js";
 import * as dial from "./components/dial.js";
 import { draw as drawPanels, PanelRegistry, toggle as togglePanel } from "./components/panels.js";
 import { register as registerUsage } from "../panels/usage/usage.js";
+import { register as registerMemo } from "../panels/memo/memo.js";
+import * as citation from "../panels/citation/citation.js";
 
 registerUsage(PanelRegistry);
+registerMemo(PanelRegistry);
+citation.register(PanelRegistry);
 
 // A burst of stream pieces moves the tail once: the redraw waits for the frame, not for every piece.
 let pending = null;
@@ -59,6 +63,7 @@ function draw(reason) {
 }
 
 watchState(draw);
+citation.wire();
 keys();
 rail.wire();
 input.wire();
@@ -99,8 +104,11 @@ at("jump-latest").addEventListener("click", () => latest());
 
 draw();
 input.boot().then(async () => {
-  if (state.active) await enter(state.active);
-  else fresh();
+  // The rail has nothing to draw until the rows are in hand, so the list is asked for before anything on it is entered.
+  await refresh();
+  // A tab remembers the conversation it stood in; one that remembers none opens a draft rather than the newest row.
+  const id = kept();
+  if (!id || !(await enter(id))) fresh();
   at("say").focus();
 });
 

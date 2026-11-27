@@ -49,8 +49,7 @@ function updateEffort(held) {
   const capsule = at("engine-capsule");
   if (capsule) capsule.dataset.effort = capable ? "1" : "0";
   if (!capable) return;
-  const live = (held && held.effort) || (state.draft && state.draft.effort) ||
-    "auto";
+  const live = (held && held.effort) || (state.draft && state.draft.effort) || "auto";
   btn.dataset.effort = live;
   const said = at("effort-text");
   if (said) said.textContent = live;
@@ -61,8 +60,7 @@ function cycleEffort(delta = 1) {
   const list = rungs();
   if (list.length < 2) return;
   const held = state.session;
-  const live = (held && held.effort) || (state.draft && state.draft.effort) ||
-    "auto";
+  const live = (held && held.effort) || (state.draft && state.draft.effort) || "auto";
   const idx = Math.max(list.indexOf(live), 0);
   const next = list[(idx + delta + list.length) % list.length];
   const btn = at("effort-btn");
@@ -158,11 +156,15 @@ export function wire() {
       e.stopPropagation();
       cycleEffort(1);
     });
-    btn.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      cycleEffort(e.deltaY > 0 ? 1 : -1);
-    }, { passive: false });
+    btn.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cycleEffort(e.deltaY > 0 ? 1 : -1);
+      },
+      { passive: false },
+    );
   }
 
   document.addEventListener("keydown", (e) => {
@@ -173,4 +175,3 @@ export function wire() {
     }
   });
 }
-

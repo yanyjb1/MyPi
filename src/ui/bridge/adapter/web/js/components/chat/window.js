@@ -48,10 +48,7 @@ function clamp(held) {
   const last = held.structure.length - 1;
   if (!held.span) return tail(held);
   const [lo, hi] = held.span;
-  held.span = [
-    Math.max(0, Math.min(lo, last)),
-    Math.max(0, Math.min(hi, last)),
-  ];
+  held.span = [Math.max(0, Math.min(lo, last)), Math.max(0, Math.min(hi, last))];
   return held.span[1] < held.span[0] ? tail(held) : held.span;
 }
 
@@ -160,11 +157,7 @@ export function jumpRanges(held, turn) {
   const lo = Math.max(0, centre - RADIUS);
   const hi = centre + RADIUS;
   const needed = [];
-  for (
-    let i = Math.max(0, at - 4);
-    i <= Math.min(held.structure.length - 1, at + 4);
-    i += 1
-  ) {
+  for (let i = Math.max(0, at - 4); i <= Math.min(held.structure.length - 1, at + 4); i += 1) {
     for (const [start, end] of held.structure[i].ranges || []) {
       if (start > hi || end < lo) continue;
       for (let b = Math.max(start, lo); b <= Math.min(end, hi); b += 1) {
@@ -189,11 +182,7 @@ function ids(ranges) {
 // Every block the window and the margin beside it keep: nothing here is a candidate.
 function spared(structure, lo, hi) {
   const kept = new Set();
-  for (
-    let i = Math.max(0, lo - 1);
-    i <= Math.min(structure.length - 1, hi + 1);
-    i += 1
-  ) {
+  for (let i = Math.max(0, lo - 1); i <= Math.min(structure.length - 1, hi + 1); i += 1) {
     for (const b of ids(structure[i].ranges)) kept.add(b);
   }
   return kept;
@@ -241,17 +230,20 @@ export const watched = {
   observer: null,
   observe(node, act) {
     if (!this.observer) {
-      this.observer = new IntersectionObserver((rows) => {
-        for (const row of rows) {
-          if (!row.isIntersecting) continue;
-          const run = this.seen.get(row.target);
-          if (run) {
-            this.seen.delete(row.target);
-            this.observer.unobserve(row.target);
-            run();
+      this.observer = new IntersectionObserver(
+        (rows) => {
+          for (const row of rows) {
+            if (!row.isIntersecting) continue;
+            const run = this.seen.get(row.target);
+            if (run) {
+              this.seen.delete(row.target);
+              this.observer.unobserve(row.target);
+              run();
+            }
           }
-        }
-      }, { root: at("chat"), rootMargin: "120px" });
+        },
+        { root: at("chat"), rootMargin: "120px" },
+      );
     }
     this.seen.set(node, act);
     this.observer.observe(node);

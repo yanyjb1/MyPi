@@ -245,6 +245,36 @@
     color: rgb(var(--accent));
   }
 
+  /* A cited source inside the prose: the number the model wrote, in the border of a link rather than as one. */
+  .cite-pill {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: 0.08em;
+    margin: 0 0.15rem;
+    padding: 0.06rem 0.36rem;
+    border-radius: 999px;
+    border: 1px solid rgb(var(--line-2));
+    background: rgb(var(--raise));
+    color: rgb(var(--ink-2));
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.35;
+    text-decoration: none;
+    cursor: pointer;
+    transition:
+      border-color 120ms ease,
+      background 120ms ease,
+      color 120ms ease;
+  }
+
+  /* The pill the reader pressed keeps the floor while it holds the keyboard: no other state has to be kept. */
+  .cite-pill:hover,
+  .cite-pill:focus {
+    border-color: rgb(var(--accent) / 0.75);
+    background: rgb(var(--accent) / 0.14);
+    color: rgb(var(--accent));
+  }
+
   .md table {
     width: 100%;
     border-collapse: collapse;

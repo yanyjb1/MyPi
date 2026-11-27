@@ -1,0 +1,19 @@
+<!-- The citation drawer's own markup: the node the host lays down, then every shape its drawing clones. -->
+
+<div class="cite-root"></div>
+
+<template id="tpl-cite-card">
+	<button class="cite-card" type="button" data-active="0" data-fallback="title">
+		<span class="cite-left">
+			<span class="cite-num" data-ref="num"></span>
+			<span class="cite-ico" data-ref="ico">
+				<span data-ref="initial"></span>
+				<img alt="" data-ref="img" />
+			</span>
+		</span>
+		<span class="cite-meta">
+			<span class="cite-title" data-ref="title"></span>
+			<span class="cite-url" data-ref="url"></span>
+		</span>
+	</button>
+</template>

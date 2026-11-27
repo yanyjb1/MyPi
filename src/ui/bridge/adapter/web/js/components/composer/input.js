@@ -76,10 +76,14 @@ export function wire() {
   at("cwd").addEventListener("keydown", handleCwdKey);
   at("cwd").addEventListener("input", () => complete(at("cwd")));
   // The field keeps the tail of its path in view itself, so a window grab shows which directory it is in.
-  at("cwd").addEventListener("scroll", () => {
-    const field = at("cwd");
-    if (field.readOnly) field.scrollLeft = field.scrollWidth;
-  }, { passive: true });
+  at("cwd").addEventListener(
+    "scroll",
+    () => {
+      const field = at("cwd");
+      if (field.readOnly) field.scrollLeft = field.scrollWidth;
+    },
+    { passive: true },
+  );
   // Hold the field's view on the tail of its path: the last folders say where a session stands.
   new ResizeObserver(() => {
     const field = at("cwd");

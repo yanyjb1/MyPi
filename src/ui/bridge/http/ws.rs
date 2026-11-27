@@ -146,11 +146,12 @@ fn handle_text(
         return send_json(ws_writer, with_id(res, id.as_ref())).is_ok();
     }
     if frame.kind == "local" {
-        let res = if frame.name == "list" {
-            local::list(&frame.payload)
-        } else {
-            respond::error("bad_request", "the door answers one local frame: `list`")
-        };
+        let res = local::answer(&frame).unwrap_or_else(|| {
+            respond::error(
+                "bad_request",
+                "the door answers two local frames: `list` and `title`",
+            )
+        });
         return send_json(ws_writer, with_id(res, id.as_ref())).is_ok();
     }
     let held = match rpc::session_of(&frame) {

@@ -68,7 +68,9 @@ word("stop", [], () => interrupt());
 word("sessions", [], () => refresh());
 word("pools", [], () => pools());
 
-// The one panel: opening it is the same act as asking it for its rows, and it is the only one there is.
+// A panel opens by name: the drawer holds one at a time, so these words are the whole of its way in.
 word("usage", [], () => openPanel("usage"));
+word("memo", [], () => openPanel("memo"));
+word("citations", [], () => openPanel("citation"));
 
 export { table };

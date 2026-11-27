@@ -56,22 +56,8 @@
   }
 
   :root {
-    --font:
-      ui-sans-serif,
-      system-ui,
-      -apple-system,
-      "Segoe UI",
-      "PingFang SC",
-      "Microsoft YaHei",
-      sans-serif;
-    --mono:
-      ui-monospace,
-      SFMono-Regular,
-      "SF Mono",
-      Menlo,
-      Consolas,
-      "Cascadia Mono",
-      monospace;
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Cascadia Mono", monospace;
     --rail-width: 16rem;
     --panel-width: 21rem;
     /* The band the three columns' heads open with, and the box the brand fills inside it: the two titles take that

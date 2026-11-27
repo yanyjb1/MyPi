@@ -1,0 +1,138 @@
+/* The citation drawer's own shapes: one card a cited page. The pill the prose wears is the transcript's, and lives in
+   the transcript's sheet, because a pill stands there long before this drawer is ever opened. */
+
+@layer components {
+  .cite-root {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .cite-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* A card is the whole of one link: a click opens the page it names, in a tab of its own. */
+  .cite-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.55rem;
+    padding: 0.6rem 0.65rem;
+    border: 1px solid rgb(var(--line));
+    border-radius: 7px;
+    background: rgb(var(--card));
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease;
+  }
+
+  .cite-card:hover {
+    background: rgb(var(--hover));
+    border-color: rgb(var(--line-2));
+  }
+
+  .cite-card[data-active="1"] {
+    border-color: rgb(var(--accent) / 0.75);
+    background: rgb(var(--accent) / 0.06);
+  }
+
+  .cite-left {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding-top: 0.08rem;
+  }
+
+  .cite-num {
+    font-family: var(--mono);
+    font-size: 10px;
+    line-height: 1;
+    color: rgb(var(--ink-4));
+  }
+
+  .cite-card[data-active="1"] .cite-num {
+    color: rgb(var(--accent));
+    font-weight: 600;
+  }
+
+  /* The icon sits over its own letter: whichever of the two the site answered with is the one on top. */
+  .cite-ico {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    background: rgb(var(--raise));
+    border: 1px solid rgb(var(--line));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: rgb(var(--ink-3));
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .cite-ico img {
+    position: absolute;
+    inset: 2px;
+    width: calc(100% - 4px);
+    height: calc(100% - 4px);
+    object-fit: contain;
+    border-radius: 3px;
+  }
+
+  .cite-ico img[hidden] {
+    display: none;
+  }
+
+  .cite-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.24rem;
+  }
+
+  .cite-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.38;
+    color: rgb(var(--ink));
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
+  .cite-url {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.35;
+    color: rgb(var(--ink-4));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* A page that named nothing worth naming speaks by its domain, and then the address is as loud as the title. */
+  .cite-card[data-fallback="domain"] .cite-title {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    font-weight: 700;
+    color: rgb(var(--ink));
+  }
+
+  .cite-card[data-fallback="domain"] .cite-url {
+    color: rgb(var(--ink-2));
+    font-weight: 600;
+  }
+}

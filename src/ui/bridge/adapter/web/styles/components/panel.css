@@ -81,4 +81,54 @@
   .panel-body h2:first-child {
     margin-top: 0;
   }
+
+  /* The grip: the sheet's one handle, and only the sheet has one. Its box is the band a finger drags it by. */
+  .panel-grip {
+    display: none;
+    position: absolute;
+    left: 50%;
+    top: 0.35rem;
+    transform: translateX(-50%);
+    width: 2.6rem;
+    height: 1rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .panel-grip::before {
+    content: "";
+    display: block;
+    margin: 0 auto;
+    width: 2.6rem;
+    height: 4px;
+    border-radius: 2px;
+    background: rgb(var(--silver) / 0.35);
+  }
+
+  /* Narrow, the drawer is a sheet lying on the floor of the page: its left edge is gone, a grip stands where a thumb
+     reaches, and it stays laid out while shut so its way in and out is one movement rather than a jump. */
+  @media (max-width: 70.999rem) {
+    body[data-panel="closed"] #panel {
+      display: flex;
+    }
+
+    #panel {
+      border-left: 0;
+    }
+
+    #panel-close {
+      top: 1.15rem;
+    }
+
+    .panel-head {
+      padding-top: 1.5rem;
+    }
+
+    .panel-grip {
+      display: block;
+    }
+  }
 }

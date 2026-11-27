@@ -3,7 +3,7 @@
 
 import { build, text } from "../../core/template.js";
 import { state } from "../../core/store.js";
-import { Text, paint } from "../../render/markdown.js";
+import { Text, numberPills, paint } from "../../render/markdown.js";
 import { card } from "../../render/tools.js";
 import { noteLine } from "./note.js";
 
@@ -74,15 +74,7 @@ function sync(item, isTail) {
     if (item.type === "thinking") view.node.open = state.streaming;
   } else if (item.type === "tool") {
     if (!view.node || view.rev !== item.rev) {
-      const made = card(
-        item.name,
-        item.args,
-        item.intent,
-        item.status,
-        item.result,
-        item.took,
-        item.note,
-      );
+      const made = card(item.name, item.args, item.intent, item.status, item.result, item.took, item.note);
       if (view.node) view.node.replaceWith(made);
       view.node = made;
       view.rev = item.rev;
@@ -114,5 +106,7 @@ export function liveTurn(held) {
   for (const node of [...turn.children]) {
     if (!kept.has(node)) node.remove();
   }
+  // The running round settles too, so a page it cites twice wears the number the first of them was given.
+  numberPills(turn);
   return turn;
 }

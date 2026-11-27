@@ -16,7 +16,7 @@ One TCP port and nothing behind it: no path, no query, no second address. What a
 
 A `POST` names its adapter in the `X-Bridge-Adapter` head; there is no other way to say it. A name the file does not carry is refused with `403`. The body is `{kind, name, payload}`, carried as it arrived: `call`, `post` and `subscribe` cross unchanged, and the answer is the payload the server wrote.
 
-Two kinds are the door's own. `local` looks at this machine: `local` / `list` answers the names one directory holds, plus the directory it read, which is what the page's path completion needs and a browser cannot take on its own. `host` keeps a session alive for whoever handed it over: `attach` books its connection with nobody watching, `release` gives it back, and `list` answers which of them is still running.
+Two kinds are the door's own. `local` looks at this machine on the page's behalf: `list` answers the names one directory holds, and `title` answers what each of a list of addresses calls itself, since a browser may not read another site's head. `host` keeps a session alive for whoever handed it over: `attach` books its connection with nobody watching, `release` gives it back, and `list` answers which of them is still running.
 
 Neither kind ever crosses to the server. A session the door keeps is taken back the moment any front end starts following it, so the door is only ever a reason for a session to live, never a second front end on it.
 
@@ -65,6 +65,10 @@ adapters:
 ### The webui
 
 The one front end that is written here rather than declared. Its files are seeded into `webui/` under the global config directory on the first start and served from disk afterwards, so a reader may edit the page without rebuilding anything; a deleted file falls back to the built-in copy and is written back on the next start.
+
+The page talks over one WebSocket and nothing else: a question carries an `id` the door echoes back, and a frame without one belongs to the conversation the page follows. A broken socket is dialled again on a rising delay, and the door replays the round in flight to whoever follows it late, so a reload loses nothing and a page moving to another conversation keeps the socket it has.
+
+The tab keeps the conversation it stood in, in its own storage: a reload comes back to it, while a second tab opens on a draft of its own. A conversation the server no longer has is forgotten rather than drawn.
 
 The page has no framework, no bundler and no third-party script: one HTML shell holding its fixed shapes as templates, `styles/` with one sheet a region under one `@layer` order, and `js/` with the plain modules the browser loads. A fixed shape is a `<template>` a builder clones and fills by the name each part carries; a panel brings its own markup and its own sheet, both taken in the first time it opens.
 

@@ -3,12 +3,12 @@
 
 import { bill, create, follow, open, windowed } from "../../core/api.js";
 import { at, clear } from "../../core/template.js";
-import { announce, dropPanel, ensure, state, slot } from "../../core/store.js";
+import { announce, dropPanel, ensure, keep, slot, state } from "../../core/store.js";
 import { send } from "../composer/talk.js";
 import { absorb, forget } from "./stream.js";
 
 export async function enter(id) {
-  if (!id) return;
+  if (!id) return null;
   if (state.follow) state.follow.close();
   if (state.active !== id) dropPanel();
   const held = ensure(id);
@@ -17,18 +17,38 @@ export async function enter(id) {
   state.session = held;
   state.pinned = true;
   held.anchor = null;
-  // The stream replays the round in flight, so the tail starts empty and every frame it says fills it again.
-  held.live = [];
-  held.liveNode = null;
-  forget();
-  held.busy = false;
-  held.liveTurn = null;
+  reset(held);
+  keep(id);
   announce();
-  state.follow = follow(id, (frame) => absorb(held, frame), () => {});
+  state.follow = follow(id, {
+    frame: (frame) => absorb(held, frame),
+    again: () => reset(held),
+  });
   state.streaming = true;
   await open(id);
   state.streaming = false;
+  // A conversation the server no longer has is no conversation: the tab forgets it and takes a draft instead.
+  if (!held.meta) {
+    // Nothing follows a conversation the server does not have: its stream is let go with it.
+    if (state.follow) state.follow.close();
+    state.follow = null;
+    state.active = null;
+    state.session = null;
+    keep(null);
+    return null;
+  }
   await Promise.all([bill(id), windowed()]);
+  return id;
+}
+
+// The round a conversation was saying, dropped whole: the socket replays it from its first frame, so every piece
+// laid here before belongs to a copy that is about to be written again.
+function reset(held) {
+  held.live = [];
+  held.liveNode = null;
+  held.busy = false;
+  held.liveTurn = null;
+  forget();
 }
 
 // Opening a draft writes nothing: the rail keeps its rows and the server keeps its count.
@@ -38,6 +58,7 @@ export function fresh() {
   state.follow = null;
   state.active = null;
   state.session = null;
+  keep(null);
   // The new draft keeps the directory and the model the last one stood on: only the effort starts over.
   const held = slot();
   state.draft = { cwd: held.cwd, model: held.model, effort: "auto" };
@@ -60,9 +81,7 @@ export async function speak(line) {
 export function head() {
   const held = state.session;
   at("main").dataset.empty = held ? "0" : "1";
-  at("topbar").querySelector("h1").textContent = held
-    ? (held.meta && held.meta.name) || "session " + held.id
-    : "mypi";
+  at("topbar").querySelector("h1").textContent = held ? (held.meta && held.meta.name) || `session ${held.id}` : "mypi";
   const acts = clear(at("session-acts"));
   if (!held || !held.busy) return;
   const running = document.createElement("span");

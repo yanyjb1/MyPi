@@ -48,15 +48,20 @@ export function parts(id) {
 // A panel's own markup, by the address it lives at; a second ask for it is the first one's answer.
 export function fetchTemplate(url) {
   if (!fetched.has(url)) {
-    fetched.set(url, fetch(url).then((res) => {
-      if (!res.ok) throw new Error("HTTP " + res.status + " on " + url);
-      return res.text();
-    }).then((html) => {
-      const box = document.createElement("template");
-      box.innerHTML = html.trim();
-      shelf(box.content);
-      return box.content;
-    }));
+    fetched.set(
+      url,
+      fetch(url)
+        .then((res) => {
+          if (!res.ok) throw new Error("HTTP " + res.status + " on " + url);
+          return res.text();
+        })
+        .then((html) => {
+          const box = document.createElement("template");
+          box.innerHTML = html.trim();
+          shelf(box.content);
+          return box.content;
+        }),
+    );
   }
   return fetched.get(url).then((content) => content.cloneNode(true));
 }

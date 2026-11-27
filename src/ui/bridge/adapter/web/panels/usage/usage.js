@@ -41,9 +41,7 @@ export function register(PanelRegistry) {
         box.dataset.opened = opened ? "1" : "0";
         slots.cards.replaceChildren(cards(rows, pool, opened, ask));
       };
-      slots.cards.replaceChildren(
-        cards(rows, pool, box.dataset.opened === "1", ask),
-      );
+      slots.cards.replaceChildren(cards(rows, pool, box.dataset.opened === "1", ask));
     },
   });
 }

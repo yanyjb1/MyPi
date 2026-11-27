@@ -2,7 +2,9 @@
 // a row has room for. Nothing here knows a region or builds a node.
 
 export function short(text, limit) {
-  const said = String(text ?? "").replace(/\s+/g, " ").trim();
+  const said = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (said.length <= limit) return said;
   return said.slice(0, limit - 1) + "…";
 }
@@ -17,8 +19,7 @@ export function tokens(count) {
 export function money(value, currency = "cny") {
   const amount = Number(value) || 0;
   if (!amount) return "";
-  return (currency === "usd" ? "$" : "¥") +
-    amount.toFixed(amount < 0.01 ? 4 : 2);
+  return (currency === "usd" ? "$" : "¥") + amount.toFixed(amount < 0.01 ? 4 : 2);
 }
 
 export function elapsed(ms) {
@@ -26,8 +27,7 @@ export function elapsed(ms) {
   if (!span) return "";
   if (span < 1000) return span + "ms";
   if (span < 60_000) return (span / 1000).toFixed(1) + "s";
-  return Math.floor(span / 60_000) + "m" + Math.round((span % 60_000) / 1000) +
-    "s";
+  return Math.floor(span / 60_000) + "m" + Math.round((span % 60_000) / 1000) + "s";
 }
 
 // A tool result said as one word: its text, whatever shape the row put it in.
@@ -79,17 +79,7 @@ export function note(name, args, intent) {
     case "kairos":
       return short(has("content") || has("intent"), 60);
     default: {
-      for (
-        const key of [
-          "path",
-          "command",
-          "query",
-          "name",
-          "url",
-          "text",
-          "content",
-        ]
-      ) {
+      for (const key of ["path", "command", "query", "name", "url", "text", "content"]) {
         if (has(key)) return short(has(key), 60);
       }
       return "";

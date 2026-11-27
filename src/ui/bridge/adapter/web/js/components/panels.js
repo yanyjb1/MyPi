@@ -1,7 +1,7 @@
 // The right drawer: one owner at a time, its own template, and only its own writes on top of it. A panel brings its
 // own sheet and its own markup, so it is added or taken away without the page knowing what is inside it.
 
-import { at, clear, fetchTemplate, stylesheet } from "../core/template.js";
+import { at, clear, stylesheet } from "../core/template.js";
 import { closePanel, openPanel, state } from "../core/store.js";
 
 const plugins = new Map();
@@ -43,9 +43,7 @@ export function toggle() {
 
 // The standing owner speaks again: it alone decides whether that is the whole template or one number in it.
 export function refresh(id) {
-  if (
-    !state.panel.open || state.panel.tab !== id || standing !== id || !mounted
-  ) return;
+  if (!state.panel.open || state.panel.tab !== id || standing !== id || !mounted) return;
   plugins.get(id).fill(mounted, state.session);
 }
 
@@ -63,7 +61,8 @@ export function vacate() {
 async function lay(plugin) {
   laying = plugin.id;
   if (plugin.css) stylesheet(plugin.css);
-  const fragment = await fetchTemplate(plugin.template);
+  // The owner hands over a promise of its markup, not an address: fetching is its own act.
+  const fragment = await plugin.template();
   // Another owner took the drawer, or this one was shut, while the markup was on its way.
   if (laying !== plugin.id || state.panel.tab !== plugin.id) return;
   laying = null;
@@ -74,6 +73,46 @@ async function lay(plugin) {
   if (plugin.load) await plugin.load(state.session);
   if (standing === plugin.id) plugin.fill(mounted, state.session);
 }
+
+// How far a finger pulls the sheet down before letting go counts as a request to shut it.
+const GIVE = 64;
+
+// The grip is a sheet's, and a sheet is narrow: this drag does nothing wherever the drawer stands as a column.
+function grip() {
+  const hold = at("panel-grip");
+  const panel = at("panel");
+  if (!hold) return;
+  let from = null;
+  let pull = 0;
+  hold.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    from = event.clientY;
+    pull = 0;
+    panel.dataset.dragging = "1";
+    hold.setPointerCapture(event.pointerId);
+  });
+  hold.addEventListener("pointermove", (event) => {
+    if (from === null) return;
+    // Downward only: the sheet's way out is the floor it came up from, so a pull upward is not a stretch.
+    pull = Math.max(event.clientY - from, 0);
+    panel.style.setProperty("--pull", `${pull}px`);
+  });
+  const done = (event) => {
+    if (from === null) return;
+    if (hold.hasPointerCapture(event.pointerId)) {
+      hold.releasePointerCapture(event.pointerId);
+    }
+    from = null;
+    panel.style.removeProperty("--pull");
+    delete panel.dataset.dragging;
+    if (pull >= GIVE) closePanel();
+    pull = 0;
+  };
+  hold.addEventListener("pointerup", done);
+  hold.addEventListener("pointercancel", done);
+}
+
+grip();
 
 export function draw() {
   document.body.dataset.panel = state.panel.open ? "open" : "closed";

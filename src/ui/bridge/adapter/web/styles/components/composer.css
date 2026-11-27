@@ -46,7 +46,9 @@
     background: rgb(var(--layer-1) / 0.88);
     backdrop-filter: blur(14px);
     box-shadow: 0 6px 24px -4px rgba(0, 0, 0, 0.22);
-    transition: border-color 150ms ease, box-shadow 150ms ease;
+    transition:
+      border-color 150ms ease,
+      box-shadow 150ms ease;
   }
 
   .deck:focus-within {
@@ -225,7 +227,9 @@
     color: rgb(var(--ink-3));
     cursor: pointer;
     flex: 0 0 auto;
-    transition: transform 140ms ease, opacity 140ms ease;
+    transition:
+      transform 140ms ease,
+      opacity 140ms ease;
   }
 
   .mod-context:hover {
@@ -356,6 +360,8 @@
     justify-content: center;
     height: 100%;
     padding: 0 0.6rem;
+    border: 0;
+    background: none;
     font-family: var(--mono);
     font-size: 11px;
     font-weight: 600;
@@ -369,7 +375,7 @@
 
   .capsule-effort[hidden],
   .capsule-divider[hidden] {
-    display: none !important;
+    display: none;
   }
 
   .capsule-effort:hover {

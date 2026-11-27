@@ -1,0 +1,34 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.9/schema.json",
+  "root": true,
+  "files": {
+    "includes": ["src/ui/bridge/adapter/web/**", "!**/*.md"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "useOptionalChain": "off"
+      },
+      "style": {
+        "useTemplate": "off",
+        "noDescendingSpecificity": "off"
+      },
+      "suspicious": {
+        "noAssignInExpressions": "off",
+        "noControlCharactersInRegex": "off",
+        "useIterableCallbackReturn": "off"
+      }
+    }
+  },
+  "assist": {
+    "enabled": false
+  }
+}

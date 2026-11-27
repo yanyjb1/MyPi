@@ -84,22 +84,14 @@ export function card(name, args, intent, status, result, took, progress) {
   const line = intent || progress || note(name, args, "");
   text(node, "intent", line ? ": " + line : "");
   text(node, "took", took ? elapsed(took) : "");
-  text(
-    node,
-    "state",
-    status === "running" ? "running" : status === "failed" ? "err" : "ok",
-  );
+  text(node, "state", status === "running" ? "running" : status === "failed" ? "err" : "ok");
 
   const detail = node.querySelector('[data-ref="detail"]');
   const draw = shapes.get(name);
   if (draw) draw(detail, parsed(args), result || "");
   else {
     asked(detail, parsed(args));
-    answered(
-      detail,
-      result ? resultText(result) : "",
-      status === "failed" ? "failed" : null,
-    );
+    answered(detail, result ? resultText(result) : "", status === "failed" ? "failed" : null);
   }
 
   const head = node.querySelector(".tool-head");

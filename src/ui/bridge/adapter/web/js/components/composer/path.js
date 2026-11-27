@@ -65,9 +65,7 @@ export async function refresh(field) {
 // Whether the word is finished: one candidate spells it, or a directory's own `/` ends it.
 function leaf(shown, typed) {
   const want = typed.replace(/^\//, "").trimEnd();
-  return shown.some((item) =>
-    item.insert.trimEnd().replace(/^\//, "") === want
-  );
+  return shown.some((item) => item.insert.trimEnd().replace(/^\//, "") === want);
 }
 
 // The list is drawn as it stands; the highlight is the only thing a key moves.
