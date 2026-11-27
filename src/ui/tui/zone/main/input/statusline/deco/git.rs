@@ -1,4 +1,4 @@
-//! The git segment — `@ <branch>`, `?N` unstaged, `+N` staged.
+// The git segment — `@ <branch>`, `?N` unstaged, `+N` staged.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -11,19 +11,19 @@ use crate::ui::tui::zone::main::input::Ctx;
 use crate::ui::tui::zone::main::input::statusline::Deco;
 use crate::ui::tui::zone::main::input::statusline::theme::{Slot, StatusTheme};
 
-/// Until the config answers: `config.ui.tui.zone.main.input.deco.gitScanInterval`.
+// Until the config answers: `config.ui.tui.zone.main.input.deco.gitScanInterval`.
 pub const DEFAULT_SCAN: Duration = Duration::from_secs(3);
 
-/// The segment scans on its own schedule, one frame at a time; the render reads what landed.
+// The segment scans on its own schedule, one frame at a time; the render reads what landed.
 pub struct Git {
     status: Option<GitStatus>,
-    /// Where the last scan looked.
+    // Where the last scan looked.
     dir: PathBuf,
-    /// When it landed; `None` = the first look has not happened yet.
+    // When it landed; `None` = the first look has not happened yet.
     at: Option<Instant>,
-    /// A tool finished or the workspace moved: look again on the next frame.
+    // A tool finished or the workspace moved: look again on the next frame.
     dirty: bool,
-    /// A scan landed: `None` then means "not a repository", not "not looked yet".
+    // A scan landed: `None` then means "not a repository", not "not looked yet".
     scanned: bool,
 }
 
@@ -44,8 +44,7 @@ impl Git {
 }
 
 impl Deco for Git {
-    /// The first frame scans at once; after that one scan per configured interval, and one
-    /// more whenever a round moved the tree.
+    // The first frame scans at once; after that one scan per configured interval, and one more whenever a round moved the tree.
     fn tick(&mut self, ctx: &Ctx) -> bool {
         if ctx.data.cwd.is_empty() {
             return false;
@@ -98,11 +97,14 @@ impl Deco for Git {
         if branch_only {
             return out;
         }
-        // Counts are gold; their marker wears the capsule default.
-        for (marker, n) in [(" ?", g.unstaged), (" +", g.staged)] {
+        // Counts wear their own slot: unstaged gold, staged the clean-branch green.
+        for (marker, n, color) in [
+            (" ?", g.unstaged, t.get(Slot::Gold)),
+            (" +", g.staged, t.get(Slot::GitClean)),
+        ] {
             if n > 0 {
                 out.push(t.on_capsule(marker));
-                out.push(t.capsule(n.to_string(), t.get(Slot::Gold)));
+                out.push(t.capsule(n.to_string(), color));
             }
         }
         out

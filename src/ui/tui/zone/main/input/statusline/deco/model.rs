@@ -1,4 +1,4 @@
-//! The model pill — `[<effort>] <display name> (<provider>)`, `[M]` when the wire names none.
+// The model pill — `[<effort>] <display name> (<provider>)`, `[M]` when the wire names none.
 
 use ratatui::text::Span;
 
@@ -18,10 +18,11 @@ impl Deco for Model {
         let Some(name) = ctx.data.model.as_deref() else {
             return Vec::new();
         };
-        // The brackets always stand; inside is the rung, or `M` for a wire that names none.
+        // The brackets always stand; inside is the rung, `auto` while it is unset, or `M` for a wire that names none.
         let tag = match ctx.data.takes_effort() {
-            true => ctx.data.effort.as_str(),
             false => "M",
+            true if ctx.data.effort.is_empty() => "auto",
+            true => ctx.data.effort.as_str(),
         };
         let text = match ctx.data.provider.as_deref() {
             Some(provider) => format!("[{tag}] {name} ({provider})"),

@@ -1,32 +1,32 @@
-//! Statusline colors: one snapshot per frame, built from the live accent.
+// Statusline colors: one snapshot per frame, built from the live accent.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
 use crate::ui::tui::theme::{Accent, fixed};
 
-/// Every color a statusline deco may ask for: one entry per rendering decision.
+// Every color a statusline deco may ask for: one entry per rendering decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
-    /// Frames, the gauge's used part, the model pill, the session pill, connectors.
+    // Frames, the gauge's used part, the model pill, the session pill, connectors.
     Accent,
-    /// Money and the `?N` / `+N` counts.
+    // Money, and the `?N` count.
     Gold,
-    /// The idle `π`.
+    // The idle `π`.
     Muted,
-    /// The capsule band the left group and the session pill sit on.
+    // The capsule band the left group and the session pill sit on.
     Capsule,
-    /// Plain foreground text: the working-directory path.
+    // Plain foreground text: the working-directory path.
     Text,
-    /// Clean git branch.
+    // Clean git branch, and the `+N` staged count.
     GitClean,
-    /// Dirty git branch.
+    // Dirty git branch.
     GitDirty,
-    /// The ` > ` connector between left decos.
+    // The ` > ` connector between left decos.
     Sep,
 }
 
-/// Every slot, in index order.
+// Every slot, in index order.
 pub const ALL_SLOTS: [Slot; 8] = [
     Slot::Accent,
     Slot::Gold,
@@ -53,14 +53,14 @@ impl Slot {
     }
 }
 
-/// A per-frame snapshot of the colors the statusline is allowed to use.
+// A per-frame snapshot of the colors the statusline is allowed to use.
 #[derive(Debug, Clone, Copy)]
 pub struct StatusTheme {
     colors: [Color; ALL_SLOTS.len()],
 }
 
 impl StatusTheme {
-    /// Snapshot one frame's colors from the live accent.
+    // Snapshot one frame's colors from the live accent.
     pub fn new(accent: Accent) -> Self {
         let mut colors = [Color::Reset; ALL_SLOTS.len()];
         colors[Slot::Accent.idx()] = accent.color();
@@ -74,24 +74,22 @@ impl StatusTheme {
         Self { colors }
     }
 
-    /// The resolved value of one slot.
+    // The resolved value of one slot.
     pub fn get(&self, tok: Slot) -> Color {
         self.colors[tok.idx()]
     }
 
-    // ---- span builders: the only place a statusline span is styled ----
-
-    /// Capsule body: the capsule background plus `fg`.
+    // Capsule body: the capsule background plus `fg`.
     pub fn capsule(&self, text: impl Into<String>, fg: Color) -> Span<'static> {
         Span::styled(text.into(), Style::new().bg(self.get(Slot::Capsule)).fg(fg))
     }
 
-    /// Capsule background only — the capsule's breathing room.
+    // Capsule background only — the capsule's breathing room.
     pub fn on_capsule(&self, text: impl Into<String>) -> Span<'static> {
         Span::styled(text.into(), Style::new().bg(self.get(Slot::Capsule)))
     }
 
-    /// A left-group connector: capsule background, separator foreground.
+    // A left-group connector: capsule background, separator foreground.
     pub fn sep(&self, text: impl Into<String>) -> Span<'static> {
         Span::styled(
             text.into(),
@@ -101,12 +99,12 @@ impl StatusTheme {
         )
     }
 
-    /// Foreground only, transparent background.
+    // Foreground only, transparent background.
     pub fn fg(&self, text: impl Into<String>, tok: Slot) -> Span<'static> {
         Span::styled(text.into(), Style::new().fg(self.get(tok)))
     }
 
-    /// No style at all: default foreground, transparent background.
+    // No style at all: default foreground, transparent background.
     pub fn plain(&self, text: impl Into<String>) -> Span<'static> {
         Span::styled(text.into(), Style::new())
     }
