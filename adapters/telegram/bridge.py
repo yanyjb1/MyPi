@@ -2,6 +2,7 @@
 
 import json
 import queue
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -13,6 +14,9 @@ CLOSED = object()
 
 # No frame arrived within the wait: the caller keeps whatever it was doing.
 IDLE = object()
+
+# How long a stream may stay silent before the connection is called dead: a proxy drops it without a word.
+SILENCE = 90
 
 
 class Refused(Exception):
@@ -59,6 +63,8 @@ class Door:
             raise Refused("unreachable", words.t("unreachable", words=str(e)))
         except ValueError:
             raise Refused("unreadable", words.t("unreadable"))
+        except Exception as e:  # noqa: BLE001 - a proxy that answers rubbish is a door that did not answer
+            raise Refused("unreachable", words.t("unreachable", words=str(e)))
         code, message = self._reason(answer, None)
         if code:
             raise Refused(code, message)
@@ -109,6 +115,7 @@ class Feed:
         self._frames = queue.Queue()
         self._closed = False
         self._thread = None
+        self._socket = None
 
     def open(self):
         self._thread = threading.Thread(target=self._run, name=f"feed-{self.session}", daemon=True)
@@ -118,7 +125,11 @@ class Feed:
     def _run(self):
         request = self._door.request("subscribe", "watch", {"session": self.session})
         try:
-            with urllib.request.urlopen(request, timeout=None) as res:
+            # A read timeout, never none: a proxy that drops the connection without a word leaves a plain read sleeping forever.
+            with urllib.request.urlopen(request, timeout=SILENCE) as res:
+                # The socket under the response, so `close` can wake the thread asleep in it.
+                self._socket = getattr(getattr(res, "fp", None), "raw", None)
+                self._socket = getattr(self._socket, "_sock", None)
                 # Read by line, never by size: the door sends one frame per line and flushes it, and a size-kinded read would hold a whole short round until later frames filled the buffer.
                 for raw in res:
                     if self._closed:
@@ -132,8 +143,8 @@ class Feed:
                         # A line that is not a frame carries nothing; the stream goes on.
                         continue
                     self._frames.put(frame)
-        except OSError:
-            # The stream ended: the door went, or the bridge restarted. The caller is told below.
+        except Exception:  # noqa: BLE001, S110 - any end of the stream, and any rubbish a proxy answers with, is the same end
+            # The stream ended or went quiet: the door went, the bridge restarted, the proxy dropped it. The caller is told below.
             pass
         finally:
             self._frames.put(CLOSED)
@@ -148,5 +159,11 @@ class Feed:
             return IDLE
 
     def close(self):
+        # The reader is asleep in a socket read: closing it is what actually ends the thread.
         self._closed = True
+        if self._socket is not None:
+            try:
+                self._socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         self._frames.put(CLOSED)

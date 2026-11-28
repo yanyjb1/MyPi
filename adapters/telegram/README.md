@@ -13,17 +13,18 @@ A bot that speaks to the bridge and carries a conversation to Telegram. It is an
 
 ## The files
 
-1. `app.py` — the entry: the bot's loop, the session being talked to, the ones the door keeps, who is being talked to.
-2. `commands.py` — every `/` word and the wording of its answer.
-3. `turn.py` — one round: the block being written, the calls it made, its receipt.
-4. `bridge.py` — the door: one frame with its answer, one connection's stream.
-5. `bot.py` — the telegram api, and one long body cut into messages.
-6. `state.py` — what the bot remembers between restarts.
-7. `show.py` — how a fact is written for a phone.
-8. `read.py` — the newest words a session wrote: round by round, ranges asked for.
-9. `words.py` — every line the bot says, in two languages.
-10. `pyproject.toml` — metadata only, read by nothing at run time.
-11. `__main__.py` — the `python -m` entry, from either side of this directory.
+- `app.py` — the entry: the bot's loop, the session being talked to, the ones the door keeps, who is being talked to.
+- `commands.py` — every `/` word and the wording of its answer.
+- `attach.py` — the two attachments a phone sends, landed in the temp dir, and the line naming their path.
+- `turn.py` — one round: the block being written, the calls it made, its receipt.
+- `bridge.py` — the door: one frame with its answer, one connection's stream.
+- `bot.py` — the telegram api: one long body cut into messages, one file either way.
+- `state.py` — what the bot remembers between restarts.
+- `show.py` — how a fact is written for a phone.
+- `read.py` — the newest words a session wrote: round by round, ranges asked for.
+- `words.py` — every line the bot says, in two languages.
+- `pyproject.toml` — metadata only, read by nothing at run time.
+- `__main__.py` — the `python -m` entry, from either side of this directory.
 
 ## One block is one message
 
@@ -41,7 +42,20 @@ Only the session being talked to has a stream of the bot's, which is what keeps 
 
 ## When the stream ends
 
-A talked-to session outlives its stream. A bridge restart, or the ten minutes of silence after which the door lets a session go, ends the reader's connection; the bot asks for it again two seconds later.
+A talked-to session outlives its stream. A bridge restart, a proxy that drops the connection without a word, or the ten minutes of silence after which the door lets a session go all end the reader's connection; the bot asks for it again, waiting twice as long after each failure up to half a minute. A stream silent for ninety seconds counts as ended: a socket a dropped proxy left behind never reports its own end.
+
+The door hands a reconnect the round from its first frame again, so the bot swallows the pieces it has already said and speaks only what followed.
+
+## Attachments
+
+A session has no field for a file, so an attachment becomes words: the file lands in `mypi-telegram/` under the system temp dir, and the message the model reads carries its path. The model then decides — a picture is read as a picture when the session's model takes images, anything else as the file it is.
+
+Only two kinds are taken:
+
+1. `photo` — the largest size Telegram offers, saved as `photo-<message id>`, with its pixel count named in the message.
+2. `document` — its own name, prefixed with the message id, refused when Telegram's twenty-megabyte limit is already passed.
+
+Voice, video, audio and stickers are answered as words the bot does not keep. The line naming the path also names how to send a file back: the one-off `--file` mode, written out whole so a session can run it as it stands.
 
 ## The language
 
@@ -67,6 +81,8 @@ python -m telegram                 # from inside `adapters/`
 python3 adapters/telegram/app.py   # the file itself, either way
 ```
 
-Any of the three starts the same bot. The package form is the one that carries over to another machine: copy the directory, and one line runs it. `--say <words>` sends one line to the paired account and exits, which is the only way to test from this side without a round.
+Any of the three starts the same bot. The package form is the one that carries over to another machine: copy the directory, and one line runs it.
+
+`--say <words>` sends one line to the paired account and exits. `--file <path> --text <caption>` sends one file and exits, the caption optional; a picture goes as a picture, anything else as a document Telegram does not change. Both print what they did before leaving, which is how a session learns a file was sent.
 
 Run this way the bot is its own tree, so it stops when the terminal does. Under the bridge it is started and stopped with the door, which is the shape a machine needs: one line naming where this directory landed, and the door holds the port.

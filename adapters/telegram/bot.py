@@ -1,11 +1,17 @@
-# The bot's own API: long polling in, plain messages out.
+# The bot's own API: long polling in, plain messages out, one file either way.
 
 import json
+import os
+import time
 import urllib.error
 import urllib.request
+import uuid
 
 # Telegram's own ceiling for one message; anything longer is refused by the server.
 LIMIT = 4096
+
+# How long a 429 makes the bot wait when Telegram names no delay.
+PAUSE = 3
 
 
 class BotError(Exception):
@@ -17,27 +23,39 @@ class Bot:
         self.token = token
         self.offset = None
 
+    # One JSON call, with the wait Telegram asks for honoured once before the failure is raised.
     def _call(self, method, body, timeout=60):
-        request = urllib.request.Request(
-            f"https://api.telegram.org/bot{self.token}/{method}",
-            data=json.dumps(body, ensure_ascii=False).encode(),
-            method="POST",
-            headers={"content-type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as res:
-                answer = json.loads(res.read())
-        except urllib.error.HTTPError as e:
-            try:
-                answer = json.loads(e.read())
-            except ValueError:
-                raise BotError(str(e))
-            raise BotError(answer.get("description") or str(e))
-        except (urllib.error.URLError, OSError) as e:
-            raise BotError(str(e))
+        answer = self._post(method, json.dumps(body, ensure_ascii=False).encode(), "application/json", timeout)
         if not answer.get("ok"):
             raise BotError(answer.get("description") or "the bot api refused")
         return answer.get("result")
+
+    def _post(self, method, data, ctype, timeout=60):
+        url = f"https://api.telegram.org/bot{self.token}/{method}"
+        for attempt in (0, 1):
+            request = urllib.request.Request(url, data=data, method="POST", headers={"content-type": ctype})
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as res:
+                    return self._read(res.read())
+            except urllib.error.HTTPError as e:
+                answer = self._read(e.read())
+                if e.code == 429 and attempt == 0:
+                    wait = int((answer.get("parameters") or {}).get("retry_after") or PAUSE)
+                    time.sleep(min(wait, 60))
+                    continue
+                raise BotError(answer.get("description") or str(e))
+            except (urllib.error.URLError, OSError) as e:
+                raise BotError(str(e))
+            except Exception as e:  # noqa: BLE001 - a proxy that answers rubbish is a call that failed, not a bot that died
+                raise BotError(str(e))
+        raise BotError("the bot api refused")
+
+    @staticmethod
+    def _read(raw):
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return {"ok": False, "description": "the bot api answered something unreadable"}
 
     def me(self):
         return self._call("getMe", {})
@@ -79,6 +97,63 @@ class Bot:
             self._call("sendChatAction", {"chat_id": chat, "action": "typing"})
         except BotError:
             pass
+
+    # Where Telegram keeps one file, as a path that `download` asks for.
+    def lookup(self, file_id):
+        found = self._call("getFile", {"file_id": file_id})
+        remote = found.get("file_path")
+        if not remote:
+            raise BotError("the bot api named no path for that file")
+        return remote
+
+    # The file itself, which Telegram serves from a second address carrying the token.
+    def download(self, remote):
+        url = f"https://api.telegram.org/file/bot{self.token}/{remote}"
+        try:
+            with urllib.request.urlopen(url, timeout=120) as res:
+                return res.read()
+        except (urllib.error.URLError, OSError) as e:
+            raise BotError(str(e))
+
+    # Both at once: the path Telegram knows it by and the bytes, since a caller wants both.
+    def fetch(self, file_id):
+        remote = self.lookup(file_id)
+        return remote, self.download(remote)
+
+    # One file to the paired account: a picture as a picture, anything else as a document it is not changed by.
+    def send_file(self, chat, path, caption=None, photo=False):
+        with open(path, "rb") as f:
+            data = f.read()
+        fields = {"chat_id": str(chat)}
+        if caption:
+            fields["caption"] = caption[:LIMIT]
+        name = os.path.basename(path).replace('"', "")
+        if photo:
+            fields["photo"] = (name, data)
+            return self._multipart("sendPhoto", fields)
+        fields["document"] = (name, data)
+        return self._multipart("sendDocument", fields)
+
+    # One multipart body, the shape Telegram takes for a file: every other field rides as plain text.
+    def _multipart(self, method, fields):
+        boundary = f"mypi-{uuid.uuid4().hex}"
+        body = bytearray()
+        for name, value in fields.items():
+            body += f"--{boundary}\r\n".encode()
+            if isinstance(value, tuple):
+                filename, data = value
+                body += f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode()
+                body += b"Content-Type: application/octet-stream\r\n\r\n"
+                body += data
+            else:
+                body += f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+                body += str(value).encode()
+            body += b"\r\n"
+        body += f"--{boundary}--\r\n".encode()
+        answer = self._post(method, bytes(body), f"multipart/form-data; boundary={boundary}", timeout=180)
+        if not answer.get("ok"):
+            raise BotError(answer.get("description") or "the bot api refused")
+        return answer.get("result")
 
 
 def split(text):

@@ -5,7 +5,7 @@ LANG = "en"
 
 # One entry per thing the bot can say: English first, Chinese second.
 WORDS = {
-    "text_only": ("Only plain text for now.", "暂时只认文字。"),
+    "text_only": ("Only words, pictures and files reach a session; that message carried none.", "只收文字、图片和文件，这条消息里一样都没有。"),
     "no_current": ("Nothing is selected here. /list to pick a session, or /new to start one.", "现在没对着任何会话。/list 挑一个，或者 /new 起一个。"),
     "queued": ("Session %(session)d is running; this line is waiting in its mailbox.", "%(session)d 号在跑，这句话排进去了。"),
     "reply_prefix": ("You last replied at %(at)s\n", "你上次回复于：%(at)s\n"),
@@ -22,6 +22,14 @@ WORDS = {
     "paired": ("Paired. /help for the commands.", "绑上了。/help 看命令。"),
     "not_yours": ("This bot is not shared.", "这个 bot 不给别人用。"),
     "handle_failed": ("That did not go through: %(words)s", "这句话没办成：%(words)s"),
+    "attach_photo": ("[telegram] the user sent a picture (%(size)s, %(bytes)s): %(path)s", "[telegram] 用户发来一张图片（%(size)s，%(bytes)s）：%(path)s"),
+    "attach_file": ("[telegram] the user sent a file %(name)s (%(bytes)s): %(path)s", "[telegram] 用户发来一个文件 %(name)s（%(bytes)s）：%(path)s"),
+    "attach_send": ("To send a file back, run: python3 %(script)s --file <path> --text <one line>", "要发文件回去，运行：python3 %(script)s --file <路径> --text <一句话>"),
+    "attach_too_big": ("Telegram gives a bot no file above %(size)s.", "Telegram 给 bot 的文件不能超过 %(size)s。"),
+    "attach_failed": ("Cannot take that attachment: %(words)s", "这个附件拿不下来：%(words)s"),
+    "file_sent": ("Sent to you: %(name)s", "发给你了：%(name)s"),
+    "file_missing": ("No such file: %(path)s", "没有这个文件：%(path)s"),
+    "attach_untaken": ("This bot takes words, pictures and documents only; a %(kind)s is not one.", "这个 bot 只收文字、图片和文件，%(kind)s 不算。"),
     "stream_lost": ("session %(session)d: the stream ended, reopening", "会话 %(session)d 的流断了，重新接上"),
     "unreachable": ("The door did not answer: %(words)s", "桥没有应答：%(words)s"),
     "unreadable": ("The door answered something unreadable.", "桥回了读不懂的东西"),

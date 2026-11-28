@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 
+import attach
 import commands
 import read
 import words
@@ -29,6 +30,12 @@ TYPING = 4.0
 # How long the bot waits before asking for a dropped stream again.
 RECONNECT = 2
 
+# How long the loop waits before reading the queue again after a failure it did not expect.
+RETRY = 5
+
+# The most the bot waits between two tries at a stream the proxy keeps dropping.
+RECONNECT_CAP = 30
+
 # How often a session handed to the bridge is asked whether its round is still running.
 POLL = 3.0
 
@@ -41,6 +48,9 @@ ADAPTER = "telegram"
 # How much of a round's words a phone shows when one line has to carry them.
 PREVIEW = 50
 
+# This script's own path, so the line telling the model how to send a file is one it can run as it stands.
+SCRIPT = os.path.abspath(__file__)
+
 
 class Live:
     # The session being talked to: its stream, the round in it, and its own reader.
@@ -52,22 +62,29 @@ class Live:
         self.turn = Turn()
         self.dropped = False
         self.typing = 0.0
+        self.rturn = None
+        self.seen = 0
+        self.skip = 0
         self.thread = threading.Thread(target=self.run, name=f"live-{session}", daemon=True)
         self.thread.start()
 
     # A stream that ends is asked for again: a bridge restart only means the connection went.
     def run(self):
+        patience = RECONNECT
         while True:
             frame = self.feed.take(0.5)
             if self.dropped:
                 return
             if frame is CLOSED:
                 self.app.log(words.t("stream_lost", session=self.session))
-                time.sleep(RECONNECT)
+                time.sleep(patience)
+                patience = min(patience * 2, RECONNECT_CAP)
+                # The door replays a running round to whoever asks again: say only what this bot has not said.
+                self.skip = self.seen
                 if self.dropped:
                     return
                 self.feed = self.app.door.watch(self.session)
-                continue
+            patience = RECONNECT
             if frame is IDLE:
                 self.quiet()
                 continue
@@ -86,20 +103,30 @@ class Live:
         name = frame.get("name")
         payload = frame.get("payload") or {}
 
+        if name == "signal":
+            return
+        # The door buffers a running round frame by frame and replays it whole to a reconnect: what was said is counted, and swallowed on its way back.
+        turn = payload.get("turn")
+        if turn is not None and turn != self.rturn:
+            self.rturn = turn
+            self.seen = 0
+            self.skip = 0
+        if payload.get("ranges") is not None:
+            self.skip = 0
+            self.close_round(turn)
+            return
+        if self.skip:
+            self.skip -= 1
+            return
+        self.seen += 1
         if name == "notice":
             text = payload.get("text")
             self.app.say(said(text) if isinstance(text, dict) else str(text))
             return
-        if name == "signal":
-            return
-        # The receipt closes the round whether or not a single piece of it was forwarded.
-        if payload.get("ranges") is not None:
-            self.close_round(payload.get("turn"))
-            return
         kind = payload.get("kind")
         if not self.turn.running:
             # A round opens with its first piece; a turn the loop opened itself is named by that piece's own frame.
-            self.turn.begin(payload.get("turn"), name, time.time())
+            self.turn.begin(turn, name, time.time())
         if kind == "text":
             self.turn.say(str(payload.get("text") or "").replace("\r\n", "\n").replace("\r", "\n"))
         elif kind == "boundary":
@@ -248,7 +275,10 @@ class App:
     # Ask at once and then at a beat, so a session just handed over is reported the moment its round ends.
     def poll(self):
         while True:
-            self.check()
+            try:
+                self.check()
+            except Exception as e:  # noqa: BLE001 - a kept session outlives any one question about it
+                self.log(f"check failed: {e!r}")
             time.sleep(POLL)
 
     # What the door says of every kept session now: one whose round ended is said once, with the words it wrote.
@@ -317,7 +347,21 @@ class App:
         return int((entry.get("value") or {}).get("contextWindow") or 0)
 
     def handle(self, message):
-        text = (message.get("text") or "").strip()
+        try:
+            item = attach.receive(self.bot, message)
+        except BotError as e:
+            self.say(words.t("attach_failed", words=e))
+            return
+        text = (message.get("text") or message.get("caption") or "").strip()
+        # An attachment is a message to the model whatever its caption says, and the line naming its path rides with it.
+        if item is not None:
+            note = attach.note(item, SCRIPT)
+            self.talk(f"{text}\n\n{note}" if text else note, stamp(message.get("date")))
+            return
+        kind = attach.untaken(message)
+        if kind:
+            self.say(words.t("attach_untaken", kind=kind))
+            return
         if not text:
             self.say(words.t("text_only"))
             return
@@ -403,37 +447,39 @@ class App:
 
         while True:
             try:
-                updates = self.bot.poll(30)
-            except BotError as e:
-                self.log(f"poll failed: {e}")
-                time.sleep(3)
+                self.cycle()
+            except Exception as e:  # noqa: BLE001 - a long conversation outlives any one failure of the loop
+                self.log(f"loop failed: {e!r}")
+                time.sleep(RETRY)
+
+    # One read of the phone's queue, every message in it answered: a failure here is the loop's to retry, not the process's to die of.
+    def cycle(self):
+        for update in self.bot.poll(30):
+            message = update.get("message")
+            if not message:
                 continue
-            for update in updates:
-                message = update.get("message")
-                if not message:
-                    continue
-                chat = message.get("chat") or {}
-                sender = message.get("from") or {}
-                if chat.get("type") != "private" or sender.get("is_bot"):
-                    continue
-                if self.state.user is None:
-                    self.state.user = chat.get("id")
-                    self.state.save()
-                    self.chat = self.state.user
-                    self.log(f"paired with {self.chat}")
-                    self.say(words.t("paired"))
-                if chat.get("id") != self.state.user:
-                    try:
-                        self.bot.send(chat.get("id"), words.t("not_yours"))
-                    except BotError:
-                        pass
-                    continue
+            chat = message.get("chat") or {}
+            sender = message.get("from") or {}
+            if chat.get("type") != "private" or sender.get("is_bot"):
+                continue
+            if self.state.user is None:
+                self.state.user = chat.get("id")
+                self.state.save()
                 self.chat = self.state.user
+                self.log(f"paired with {self.chat}")
+                self.say(words.t("paired"))
+            if chat.get("id") != self.state.user:
                 try:
-                    self.handle(message)
-                except Exception as e:  # noqa: BLE001 - one bad command must not stop the bot
-                    self.log(f"handle failed: {e!r}")
-                    self.say(words.t("handle_failed", words=e))
+                    self.bot.send(chat.get("id"), words.t("not_yours"))
+                except BotError:
+                    pass
+                continue
+            self.chat = self.state.user
+            try:
+                self.handle(message)
+            except Exception as e:  # noqa: BLE001 - one bad command must not stop the bot
+                self.log(f"handle failed: {e!r}")
+                self.say(words.t("handle_failed", words=e))
 
 
 def main(argv):
@@ -443,18 +489,54 @@ def main(argv):
         hook(errors="replace")
     state = State()
 
-    if argv and argv[0] == "--say":
-        # A one-shot line to the paired account: the only way to test from this side.
-        app = App(state)
-        app.speak()
-        if not state.user:
-            raise SystemExit(words.t("no_pairing"))
-        app.chat = state.user
-        app.bot.send(state.user, " ".join(argv[1:]))
-        return 0
+    if argv and argv[0] in ("--say", "--file"):
+        return once(state, argv)
 
     App(state).run()
     return 0
+
+
+# A one-shot line or file to the paired account: what a model holding a path can run, and the only way to test from this side.
+def once(state, argv):
+    app = App(state)
+    app.speak()
+    if not state.user:
+        raise SystemExit(words.t("no_pairing"))
+    app.chat = state.user
+    if argv[0] == "--say":
+        app.bot.send(state.user, " ".join(argv[1:]))
+        return 0
+    path, caption = options(argv[1:])
+    if not path or not os.path.isfile(path):
+        raise SystemExit(words.t("file_missing", path=path or ""))
+    name = os.path.basename(path)
+    app.bot.send_file(state.user, path, caption, photo=is_photo(name))
+    app.bot.send(state.user, words.t("file_sent", name=name))
+    print(words.t("file_sent", name=name))
+    return 0
+
+
+# `--text` says what the file is; the path is the one argument that must be there.
+def options(argv):
+    rest = list(argv)
+    path = None
+    caption = None
+    while rest:
+        one = rest.pop(0)
+        if one == "--text" and rest:
+            caption = rest.pop(0)
+        elif path is None:
+            path = one
+        elif caption is None:
+            caption = one
+        else:
+            caption += " " + one
+    return path, caption
+
+
+# Whether this file goes as a picture: the four Telegram shows in place, everything else as a document.
+def is_photo(name):
+    return os.path.splitext(name)[1].lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 
 if __name__ == "__main__":
