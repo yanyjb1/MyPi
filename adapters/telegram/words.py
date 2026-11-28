@@ -24,7 +24,7 @@ WORDS = {
     "handle_failed": ("That did not go through: %(words)s", "这句话没办成：%(words)s"),
     "attach_photo": ("[telegram] the user sent a picture (%(size)s, %(bytes)s): %(path)s", "[telegram] 用户发来一张图片（%(size)s，%(bytes)s）：%(path)s"),
     "attach_file": ("[telegram] the user sent a file %(name)s (%(bytes)s): %(path)s", "[telegram] 用户发来一个文件 %(name)s（%(bytes)s）：%(path)s"),
-    "attach_send": ("To send a file back, run: python3 %(script)s --file <path> --text <one line>", "要发文件回去，运行：python3 %(script)s --file <路径> --text <一句话>"),
+    "attach_send": ("To send a file back, run: %(script)s --file <path> --text <one line>", "要发文件回去，运行：%(script)s --file <路径> --text <一句话>"),
     "attach_too_big": ("Telegram gives a bot no file above %(size)s.", "Telegram 给 bot 的文件不能超过 %(size)s。"),
     "attach_failed": ("Cannot take that attachment: %(words)s", "这个附件拿不下来：%(words)s"),
     "file_sent": ("Sent to you: %(name)s", "发给你了：%(name)s"),

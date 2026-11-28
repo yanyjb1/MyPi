@@ -44,7 +44,7 @@ Only the session being talked to has a stream of the bot's, which is what keeps 
 
 A talked-to session outlives its stream. A bridge restart, a proxy that drops the connection without a word, or the ten minutes of silence after which the door lets a session go all end the reader's connection; the bot asks for it again, waiting twice as long after each failure up to half a minute. A stream silent for ninety seconds counts as ended: a socket a dropped proxy left behind never reports its own end.
 
-The door hands a reconnect the round from its first frame again, so the bot swallows the pieces it has already said and speaks only what followed. A receipt lost with the connection ends a round the bot never saw end, so a dropped stream gives up the round it was in and says nothing more of it until the door streams one again.
+The door hands a reconnect the round from its first frame again, so the bot swallows the pieces it has already said and speaks only what followed. A receipt lost with the connection ends a round the bot never saw end, so a dropped stream first says the words no block ended yet, then gives the round up and claims to run one only when the door streams one again.
 
 ## Attachments
 

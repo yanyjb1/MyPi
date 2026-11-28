@@ -84,6 +84,8 @@ class Live:
                 return
             if frame is CLOSED:
                 self.app.log(words.t("stream_lost", session=self.session))
+                # The prose no block ended yet still leaves: the door replays only what it sent, not what never left here.
+                self.close_block()
                 # A round whose stream ended may have ended with it: the bot claims to be running only once the door says so again.
                 self.turn.lapse()
                 time.sleep(patience)
@@ -135,6 +137,7 @@ class Live:
             return
         kind = payload.get("kind")
         if not self.turn.running:
+            # A round opens with its first piece; a turn the loop opened itself is named by that piece's own frame.
             self.turn.begin(turn, name, time.time())
         if kind == "text":
             self.turn.say(str(payload.get("text") or "").replace("\r\n", "\n").replace("\r", "\n"))
