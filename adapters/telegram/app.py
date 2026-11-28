@@ -84,6 +84,7 @@ class Live:
                 if self.dropped:
                     return
                 self.feed = self.app.door.watch(self.session)
+                continue
             patience = RECONNECT
             if frame is IDLE:
                 self.quiet()
