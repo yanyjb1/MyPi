@@ -13,6 +13,10 @@ LIMIT = 4096
 # How long a 429 makes the bot wait when Telegram names no delay.
 PAUSE = 3
 
+# What one sent file may weigh, and what a caption may carry: Telegram's own two ceilings.
+SEND = 50 * 1024 * 1024
+CAPTION = 1024
+
 
 class BotError(Exception):
     pass
@@ -126,7 +130,7 @@ class Bot:
             data = f.read()
         fields = {"chat_id": str(chat)}
         if caption:
-            fields["caption"] = caption[:LIMIT]
+            fields["caption"] = caption[:CAPTION]
         name = os.path.basename(path).replace('"', "")
         if photo:
             fields["photo"] = (name, data)

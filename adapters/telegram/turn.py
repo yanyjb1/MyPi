@@ -23,6 +23,7 @@ class Turn:
     def begin(self, round_id, opened_by, at):
         self.running = True
         self.id = round_id
+        self.closed = None
         self.opened_by = opened_by
         self.block = ""
         self.first = ""
@@ -69,6 +70,13 @@ class Turn:
         return rows
 
     # `(unsaid, words)`: the tail the round never sent, and the words it opened with. None for a round already closed, or another round's receipt.
+    # The stream ended: the round being said may have ended with it, so only the door can say the bot runs one again.
+    def lapse(self):
+        self.running = False
+        self.block = ""
+        self.names = {}
+        self.count = {}
+
     def close(self, round_id):
         if round_id is None or round_id == self.closed:
             return None

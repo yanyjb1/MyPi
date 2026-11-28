@@ -4,6 +4,7 @@
 # handed over is the bridge's to keep booked; it has no stream of ours, and one poll says when its round ended.
 
 import os
+import shlex
 import sys
 import threading
 import time
@@ -12,9 +13,9 @@ import attach
 import commands
 import read
 import words
-from bot import Bot, BotError
+from bot import SEND, Bot, BotError
 from bridge import CLOSED, IDLE, Door, Refused, said
-from show import address, now, shorten, split_address, stamp
+from show import address, now, shorten, size, split_address, stamp
 from state import State
 from turn import Turn, counts
 
@@ -48,8 +49,14 @@ ADAPTER = "telegram"
 # How much of a round's words a phone shows when one line has to carry them.
 PREVIEW = 50
 
-# This script's own path, so the line telling the model how to send a file is one it can run as it stands.
-SCRIPT = os.path.abspath(__file__)
+# This interpreter and this script, quoted so a space in either path survives: the head of the line a model runs to send a file back.
+def run_line():
+    if os.name == "nt":
+        return " ".join(f'"{one}"' for one in (sys.executable, os.path.abspath(__file__)))
+    return shlex.join((sys.executable, os.path.abspath(__file__)))
+
+
+SCRIPT = run_line()
 
 
 class Live:
@@ -77,6 +84,8 @@ class Live:
                 return
             if frame is CLOSED:
                 self.app.log(words.t("stream_lost", session=self.session))
+                # A round whose stream ended may have ended with it: the bot claims to be running only once the door says so again.
+                self.turn.lapse()
                 time.sleep(patience)
                 patience = min(patience * 2, RECONNECT_CAP)
                 # The door replays a running round to whoever asks again: say only what this bot has not said.
@@ -126,7 +135,6 @@ class Live:
             return
         kind = payload.get("kind")
         if not self.turn.running:
-            # A round opens with its first piece; a turn the loop opened itself is named by that piece's own frame.
             self.turn.begin(turn, name, time.time())
         if kind == "text":
             self.turn.say(str(payload.get("text") or "").replace("\r\n", "\n").replace("\r", "\n"))
@@ -505,13 +513,20 @@ def once(state, argv):
         raise SystemExit(words.t("no_pairing"))
     app.chat = state.user
     if argv[0] == "--say":
+        if not argv[1:]:
+            raise SystemExit(words.t("say_need_words"))
         app.bot.send(state.user, " ".join(argv[1:]))
         return 0
     path, caption = options(argv[1:])
     if not path or not os.path.isfile(path):
         raise SystemExit(words.t("file_missing", path=path or ""))
     name = os.path.basename(path)
-    app.bot.send_file(state.user, path, caption, photo=is_photo(name))
+    if os.path.getsize(path) > SEND:
+        raise SystemExit(words.t("file_too_big", size=size(SEND)))
+    try:
+        app.bot.send_file(state.user, path, caption, photo=is_photo(name))
+    except BotError as e:
+        raise SystemExit(words.t("file_failed", words=e)) from e
     app.bot.send(state.user, words.t("file_sent", name=name))
     print(words.t("file_sent", name=name))
     return 0

@@ -23,6 +23,14 @@ def default_path():
     return os.path.join(config_dir(), FILE)
 
 
+# A number the file holds, or None for anything that is not one: a hand-edited file loses its own row, never the boot.
+def int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class State:
     def __init__(self, path=None):
         self.path = path or default_path()
@@ -41,8 +49,8 @@ class State:
             return
         self.bot_token = data.get("botToken")
         self.user = data.get("user")
-        self.hosted = [int(n) for n in data.get("hosted") or []]
-        self.current = data.get("current")
+        self.hosted = [one for one in (int_or_none(n) for n in data.get("hosted") or []) if one is not None]
+        self.current = int_or_none(data.get("current"))
         self.draft = data.get("draft")
 
     # Written whole or not at all: a half-written state file would lose the pairing on the next start.
