@@ -179,6 +179,8 @@ class App:
         self.chat = None
         self.picks = []
         self.picks_kind = None
+        # The hand-overs whose one notice has already gone out.
+        self.seen_end = set()
         token = self.find_token()
         self.bot = Bot(token)
         self.state.bot_token = token
@@ -216,6 +218,12 @@ class App:
         except BotError as e:
             self.log(f"send failed: {e}")
 
+    # Say what this process is, then become a fresh one: `execv` keeps the pid, so the door's child is still the door's child.
+    def restart(self):
+        self.say(words.t("restarting"))
+        sys.stdout.flush()
+        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)])
+
     def current(self):
         return self.state.current
 
@@ -240,6 +248,8 @@ class App:
             # The round it was in when handed over is the truth the first poll compares against.
             self.turns[session] = live.turn.running
             live.stop()
+        # This hand-over owes one notice, and only this one: a later hand-over of the same session owes its own.
+        self.seen_end.discard(session)
         if self.state.current == session:
             self.state.current = None
         self.state.host(session)
@@ -307,10 +317,18 @@ class App:
             now_ = running.get(session, False)
             was = self.turns.get(session, False)
             self.turns[session] = now_
-            if was and not now_ and self.current() != session:
+            # One notice per handing over: after it, this session runs and ends as it likes, and the phone stays quiet.
+            if was and not now_ and self.noticed(session) and self.current() != session:
                 text = read.newest_words(self.door, session)
                 line = words.t("round_ended", session=session, words=shorten(text, PREVIEW) or words.t("no_words"))
                 self.say(f"[{session}] {line}")
+
+    # The first round to end under the door is the one a hand-over reports; every later one is the phone's silence.
+    def noticed(self, session):
+        if session in self.seen_end:
+            return False
+        self.seen_end.add(session)
+        return True
 
     # Where a setting lands: the session being talked to, else the draft.
     def target(self):
@@ -452,6 +470,8 @@ class App:
         if self.state.user:
             self.chat = self.state.user
             self.log(f"paired with {self.chat}")
+            # The phone hears every boot: a bot that came back says so, or nobody at the far end can tell it went.
+            self.say(words.t("awake"))
         self.bring()
         if self.state.current is not None:
             self.listen(self.state.current)

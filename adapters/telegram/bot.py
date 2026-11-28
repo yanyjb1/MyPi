@@ -1,11 +1,14 @@
 # The bot's own API: long polling in, plain messages out, one file either way.
 
+import http.client
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import suppress
 
 # Telegram's own ceiling for one message; anything longer is refused by the server.
 LIMIT = 4096
@@ -22,36 +25,68 @@ class BotError(Exception):
     pass
 
 
+class Link:
+    # One kept connection, dropped at the first sign of trouble: the proxy here changes hands under us, so a failed call opens a new one instead of failing.
+    def __init__(self, token):
+        self.token = token
+        self.lock = threading.Lock()
+        self.conn = None
+
+    def shut(self):
+        conn, self.conn = self.conn, None
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
+
+    # The answer's status and its bytes: a 429 names its own delay, so the caller reads both.
+    def post(self, method, data, ctype, timeout):
+        with self.lock:
+            for attempt in (0, 1):
+                if self.conn is None:
+                    self.conn = http.client.HTTPSConnection("api.telegram.org", timeout=timeout)
+                try:
+                    if self.conn.sock is not None:
+                        self.conn.sock.settimeout(timeout)
+                    path = f"/bot{self.token}/{method}"
+                    self.conn.request("POST", path, body=data, headers={"content-type": ctype})
+                    with self.conn.getresponse() as res:
+                        return res.status, res.read()
+                except Exception:  # a proxy that dropped the kept link is a call to make again on a new one
+                    self.shut()
+                    if attempt:
+                        raise
+
+
 class Bot:
     def __init__(self, token):
         self.token = token
         self.offset = None
+        # Two kept links: a long poll holds one for half a minute, and a message must never queue behind it.
+        self.fast = Link(token)
+        self.slow = Link(token)
 
     # One JSON call, with the wait Telegram asks for honoured once before the failure is raised.
-    def _call(self, method, body, timeout=60):
-        answer = self._post(method, json.dumps(body, ensure_ascii=False).encode(), "application/json", timeout)
+    def _call(self, method, body, timeout=60, link=None):
+        answer = self._post(method, json.dumps(body, ensure_ascii=False).encode(), "application/json", timeout, link)
         if not answer.get("ok"):
             raise BotError(answer.get("description") or "the bot api refused")
         return answer.get("result")
 
-    def _post(self, method, data, ctype, timeout=60):
-        url = f"https://api.telegram.org/bot{self.token}/{method}"
+    def _post(self, method, data, ctype, timeout=60, link=None):
+        link = link or self.fast
         for attempt in (0, 1):
-            request = urllib.request.Request(url, data=data, method="POST", headers={"content-type": ctype})
             try:
-                with urllib.request.urlopen(request, timeout=timeout) as res:
-                    return self._read(res.read())
-            except urllib.error.HTTPError as e:
-                answer = self._read(e.read())
-                if e.code == 429 and attempt == 0:
-                    wait = int((answer.get("parameters") or {}).get("retry_after") or PAUSE)
-                    time.sleep(min(wait, 60))
-                    continue
-                raise BotError(answer.get("description") or str(e))
-            except (urllib.error.URLError, OSError) as e:
+                status, raw = link.post(method, data, ctype, timeout)
+            except Exception as e:  # noqa: BLE001 - any failure of the wire is a call that failed, not a bot that died
                 raise BotError(str(e))
-            except Exception as e:  # noqa: BLE001 - a proxy that answers rubbish is a call that failed, not a bot that died
-                raise BotError(str(e))
+            answer = self._read(raw)
+            if status == 429 and attempt == 0:
+                wait = int((answer.get("parameters") or {}).get("retry_after") or PAUSE)
+                time.sleep(min(wait, 60))
+                continue
+            if status != 200:
+                raise BotError(answer.get("description") or f"the bot api answered {status}")
+            return answer
         raise BotError("the bot api refused")
 
     @staticmethod
@@ -83,7 +118,7 @@ class Bot:
         body = {"limit": 10, "timeout": wait, "allowed_updates": ["message"]}
         if self.offset is not None:
             body["offset"] = self.offset
-        updates = self._call("getUpdates", body, timeout=wait + 30)
+        updates = self._call("getUpdates", body, timeout=wait + 30, link=self.slow)
         for update in updates:
             self.offset = update["update_id"] + 1
         return updates

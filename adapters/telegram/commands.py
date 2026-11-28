@@ -31,6 +31,7 @@ def run(app, word, rest):
         "compact": compact,
         "esc": esc,
         "stop": esc,
+        "restart": restart,
     }
     handler = table.get(word)
     if handler is None:
@@ -334,6 +335,10 @@ def esc(app, rest):
     session = target["session"]
     app.door.post("interrupt", {"session": session})
     app.say(words.t("stopped", session=session))
+
+
+def restart(app, rest):
+    app.restart()
 
 
 # A word as an index into what was last listed, else the word itself.

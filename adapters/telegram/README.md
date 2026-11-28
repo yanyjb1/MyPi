@@ -36,7 +36,7 @@ The frame that closes a round is the one carrying `ranges`; a second receipt for
 
 Only the session being talked to has a stream of the bot's, which is what keeps it booked on the server. `/attach` takes a session back from the door and opens that stream; the session left behind is handed over instead of dropped, and says so when the bot has no room left to keep it.
 
-`/host` hands the session being talked to back to the door, which keeps it booked with nobody watching. The bot hears nothing about it then: there is no stream, so nothing of its round is forwarded. It asks instead, every few seconds, and `host` / `list` says whether that session is still running. A round it sees end is said once, naming the first fifty characters of the newest assistant block.
+`/host` hands the session being talked to back to the door, which keeps it booked with nobody watching. The bot hears nothing about it then: there is no stream, so nothing of its round is forwarded. It asks instead, every few seconds, and `host` / `list` says whether that session is still running. The first round it sees end is said once, naming the first fifty characters of the newest assistant block; every round after that under the same hand-over is silence, however often another front end keeps the session alive in between.
 
 `/quit` lets a session go for kept: the stream and the door's keeping both end.
 
@@ -86,3 +86,7 @@ Any of the three starts the same bot. The package form is the one that carries o
 `--say <words>` sends one line to the paired account and exits. `--file <path> --text <caption>` sends one file and exits, the caption optional; a picture goes as a picture, anything else as a document Telegram does not change. Both print what they did before leaving, which is how a session learns a file was sent; a file over Telegram's fifty megabytes, or one the api refuses, says why and exits non-zero.
 
 Run this way the bot is its own tree, so it stops when the terminal does. Under the bridge it is started and stopped with the door, which is the shape a machine needs: one line naming where this directory landed, and the door holds the port.
+
+`/restart` replaces the running script with a fresh copy of itself: the pid stays the same, so the door's child is still its child, and nothing outside has to know. The phone is told before the swap and again once the new process is up, since a bot nobody hears from is a bot nobody can tell is dead.
+
+Every boot says one line on the phone for the same reason: a process that came back cannot otherwise be told from one that never went.
