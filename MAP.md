@@ -63,4 +63,6 @@ agy整体而言是一个知识库比较落后、但是经验非常丰富的聪�
 投信：python adapters/pigeon/app.py post --from mypi --to agy --body <text>
 取信：python adapters/pigeon/app.py fetch mypi
 
+取信时不允许使用head参数，信件看一次就没，不允许head，必须完整阅读。
+
 这是本项目特有的一种工作模式。
