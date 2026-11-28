@@ -9,7 +9,7 @@ pub enum ProtocolId {
 }
 
 impl ProtocolId {
-    /// The one spelling of a protocol id; `models.yml`'s `api` value must match it.
+    // The one spelling of a protocol id; `models.yml`'s `api` value must match it.
     pub fn parse(raw: &str) -> Result<Self, ProtocolError> {
         Ok(match raw {
             "openai-completion" => Self::Completion,

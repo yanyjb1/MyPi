@@ -2,7 +2,7 @@
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Effort {
-    /// Ask for nothing and take the host's default. Never sent: the field stays off the body.
+    // Ask for nothing and take the host's default. Never sent: the field stays off the body.
     #[default]
     Auto,
     None,
@@ -15,7 +15,7 @@ pub enum Effort {
 }
 
 impl Effort {
-    /// Every rung, `Auto` first, so parsing and the one list agree on a set.
+    // Every rung, `Auto` first, so parsing and the one list agree on a set.
     const ALL: [Self; 8] = [
         Self::Auto,
         Self::None,
@@ -27,7 +27,7 @@ impl Effort {
         Self::Max,
     ];
 
-    /// The one spelling the wire and every front end share.
+    // The one spelling the wire and every front end share.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",

@@ -5,7 +5,7 @@
 1. `mod.rs` — module declarations and re-exports only.
 2. `registry/` — `types` (kinds, defaults, values, `Key`), `macros` (the `keys!` macro), and `table` (lookup, predicates, key helpers, `template`).
 3. `schema.rs` — the one `keys!` invocation: every `config.*` and `models.*` key with kind, default and comment.
-4. `load/` — `types` (`Config`, `Inner`, `Layers`, `Effective`, `BrowserOptions`), `entry` (load and reload), `api` (default model, profiles, writes), `source` (layer reading, bootstrap), `effective` (per-key merge), `check` (merged-value checks).
+4. `load/` — `types` (`Config`, `Inner`, `Layers`, `Effective`, `BrowserOptions`), `entry` (the one read), `api` (default model, profiles, writes), `source` (layer reading, bootstrap), `effective` (per-key merge), `check` (merged-value checks).
 5. `model/` — `types` (providers, models, prices, currency), `protocol` (`ProtocolId` and its error), `effort`, `parse` (the file and providers), `entry` (one model), `query` (keyed lookup).
 6. `profile/` — `types` (`ResolvedProfile`, the built-in table), `discover` (scan, precedence, duplicate names, the names on offer), `resolve` (prompts, tools, compaction).
 7. `paths.rs` — `ConfigPaths`: the project's `.mypi` and the global root, the files and folders under them, and `project_dir`.
@@ -17,7 +17,7 @@
 
 ## Public surface
 
-- `Config::load`, `Config::load_from(ConfigPaths)`, `Config::reload()`.
+- `Config::load`: the whole configuration, read once at startup.
 - `Config::get(key, profile)` and `Config::get_json(key, profile)`: one value, where an unknown key is an error.
 - `Config::effective(profile)`: all `config.*` values for one profile at the process's roots.
 - `Config::effective_in(cwd, profile)`: the same at one directory's roots.
@@ -46,7 +46,7 @@
 3. The key path `config.server.api.defaultModel` in `write.rs` and the schema entry.
 4. The bootstrap seeding one directory per entry of `profile/`'s built-in table, from the compiled texts in `prompts/`.
 5. The README's key table and `schema.rs`.
-6. `Provider.api` and `ProtocolId`, because the file spells the protocol as text and the parsed provider carries the value.
+6. `Provider.protocol` and `ProtocolId`, because the file spells the protocol as text and the parsed provider carries the value.
 
 ## Not wired yet
 

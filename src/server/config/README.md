@@ -57,7 +57,7 @@ A missing key does not warn, and only the warning level is produced.
 ### What lives in memory
 
 One `Config` per process holds the parsed layer trees and the model list, effective values are built per profile and cached, and disk stays the source of truth.
-`Config::reload` re-reads both files with the roots this `Config` was built with, `MYPI_CONFIG_DIR` is read by `Config::load` only and never again on reload, and a failed reload leaves the old `Config` alone for the caller to keep.
+Both files are read once at startup, and the process runs on that one `Config` for its whole life.
 
 ## 2. Design intent
 

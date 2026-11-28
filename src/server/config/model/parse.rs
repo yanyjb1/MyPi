@@ -156,7 +156,7 @@ pub fn parse(text: &str, file: &str) -> anyhow::Result<(ModelsConfig, Vec<Config
             protocol,
             api_key,
             auth_header,
-            models,
+            models: models.into(),
         });
     }
 

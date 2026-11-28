@@ -1,5 +1,7 @@
 // The `models.` types: what one provider entry and one model entry carry.
 
+use std::sync::Arc;
+
 use super::effort::Effort;
 use super::protocol::ProtocolId;
 
@@ -14,9 +16,9 @@ pub struct Provider {
     pub base_url: String,
     pub protocol: ProtocolId,
     pub api_key: String,
-    /// False sends no credential header at all.
+    // False sends no credential header at all.
     pub auth_header: bool,
-    pub models: Vec<ModelEntry>,
+    pub models: Arc<[ModelEntry]>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,11 +27,11 @@ pub struct ModelEntry {
     pub name: String,
     pub context_window: Option<u64>,
     pub max_output_tokens: Option<u64>,
-    /// The model accepts image parts on the wire.
+    // The model accepts image parts on the wire.
     pub vision: bool,
-    /// Whether the `task` tool may offer this model to a child.
+    // Whether the `task` tool may offer this model to a child.
     pub subagent: bool,
-    /// The thinking-effort rungs this model takes; empty takes none.
+    // The thinking-effort rungs this model takes; empty takes none.
     pub efforts: Vec<Effort>,
     pub currency: Currency,
     pub cost: Cost,

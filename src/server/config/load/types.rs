@@ -1,4 +1,4 @@
-//! Loading: layers, per-key merge, warnings, bootstrap, and the `Config` handle.
+// Loading: layers, per-key merge, warnings, bootstrap, and the `Config` handle.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,11 +23,11 @@ pub(super) struct Inner {
     pub(super) models: ModelsConfig,
     pub(super) layers: Layers,
     pub(super) cache: Mutex<HashMap<String, Arc<Effective>>>,
-    /// One scope per project folder a session has stood in, read on first use.
+    // One scope per project folder a session has stood in, read on first use.
     pub(super) projects: Mutex<HashMap<PathBuf, Arc<ProjectScope>>>,
-    /// The same, for the values a scope resolves: the key carries the scope and the profile.
+    // The same, for the values a scope resolves: the key carries the scope and the profile.
     pub(super) scoped: Mutex<HashMap<String, Arc<Effective>>>,
-    /// The site rules the web tool narrows a page with: read once, beside `config.yaml`.
+    // The site rules the browser domain narrows a page with: read once, beside `config.yaml`.
     #[cfg(feature = "browser")]
     pub(super) web_rules: Arc<Rules>,
     pub(super) load_notices: Vec<ConfigNotice>,
@@ -39,7 +39,7 @@ pub(super) struct Layers {
     pub(super) global: Option<(PathBuf, Mapping)>,
 }
 
-/// One directory's config roots and its project layer.
+// One directory's config roots and its project layer.
 pub(super) struct ProjectScope {
     pub(super) paths: ConfigPaths,
     pub(super) layer: Option<(PathBuf, Mapping)>,
@@ -50,7 +50,7 @@ pub struct Effective {
     pub notices: Vec<ConfigNotice>,
 }
 
-/// What the web domain needs when it starts or reclaims a browser.
+// What the browser domain needs when it starts or reclaims a browser.
 #[cfg(feature = "browser")]
 #[derive(Debug)]
 pub struct BrowserOptions {

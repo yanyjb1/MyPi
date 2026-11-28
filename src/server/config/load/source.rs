@@ -104,9 +104,7 @@ pub(super) fn bootstrap(
     Ok(())
 }
 
-/// One built-in profile, written only where no root already carries it: a directory of that name is
-/// the user's, and is never touched. A file that cannot be written leaves the compiled copy in
-/// force, so a read-only root costs a notice and nothing else.
+// One built-in profile, written only where no root already carries it: a directory of that name is the user's and is never touched, and a file that cannot be written leaves the compiled copy in force.
 fn seed(
     paths: &ConfigPaths,
     root: &Path,

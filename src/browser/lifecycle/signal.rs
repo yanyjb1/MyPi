@@ -1,4 +1,4 @@
-//! Exit signals: close the browser before the process goes away.
+// Exit signals: close the browser before the process goes away.
 
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 static START: LazyLock<()> = LazyLock::new(|| {
     std::thread::Builder::new()
-        .name("web-signal".to_string())
+        .name("browser-signal".to_string())
         .spawn(|| {
             let Ok(mut signals) = Signals::new([SIGINT, SIGTERM, SIGHUP]) else {
                 return;
@@ -18,7 +18,7 @@ static START: LazyLock<()> = LazyLock::new(|| {
                 }
             }
         })
-        .expect("cannot start the web signal thread");
+        .expect("cannot start the browser signal thread");
 });
 
 pub(crate) fn install() {

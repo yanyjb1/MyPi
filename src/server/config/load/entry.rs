@@ -13,14 +13,10 @@ use super::types::{Config, Inner, Layers};
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
-        Self::load_from(ConfigPaths::startup())
+        Self::read(ConfigPaths::startup())
     }
 
-    pub fn load_from(paths: ConfigPaths) -> anyhow::Result<Self> {
-        Self::read(paths, true)
-    }
-
-    fn read(paths: ConfigPaths, bootstrap_files: bool) -> anyhow::Result<Self> {
+    fn read(paths: ConfigPaths) -> anyhow::Result<Self> {
         let models_path = paths.models_file().ok_or_else(|| {
             anyhow!(
                 "no {} under the global root {} — create it there; the program never writes it",
@@ -37,9 +33,7 @@ impl Config {
         let first = models
             .alphabetical_default()
             .map(|m| format!("{}:{}", m.provider_name, m.entry.id));
-        if bootstrap_files {
-            source::bootstrap(&paths, first.as_deref(), &mut notices)?;
-        }
+        source::bootstrap(&paths, first.as_deref(), &mut notices)?;
         let layers = Layers::read(&paths, &mut notices);
         #[cfg(feature = "browser")]
         let web_rules = Arc::new(rules::load(&paths, &mut notices));
@@ -57,9 +51,5 @@ impl Config {
                 runtime: Mutex::new(Vec::new()),
             }),
         })
-    }
-
-    pub fn reload(&self) -> anyhow::Result<Config> {
-        Self::read(self.inner.paths.clone(), false)
     }
 }
